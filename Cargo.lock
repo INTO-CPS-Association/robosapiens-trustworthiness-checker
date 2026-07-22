@@ -730,13 +730,13 @@ version = "0.1.0"
 dependencies = [
  "contiguous-tree-macros",
  "ecow",
- "serde",
 ]
 
 [[package]]
 name = "contiguous-tree-macros"
 version = "0.1.0"
 dependencies = [
+ "contiguous-tree",
  "proc-macro2",
  "quote",
  "syn",

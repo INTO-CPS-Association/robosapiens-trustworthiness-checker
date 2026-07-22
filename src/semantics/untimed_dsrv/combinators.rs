@@ -1,5 +1,6 @@
 use crate::core::StreamData;
 use crate::core::Value;
+use crate::core::values::operations::{self as value_operations, BinaryValueOp, UnaryValueOp};
 use crate::semantics::AsyncConfig;
 use crate::semantics::StreamContext;
 use crate::{OutputStream, VarName};
@@ -21,6 +22,18 @@ use tracing::debug;
 use crate::lang::dsrv::ast::DynamicExprScope;
 
 pub use super::dynamic::{defer, dynamic};
+
+fn unwrap_value(result: Result<Value, value_operations::ValueOpError>) -> Value {
+    result.unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn eval_binary(operation: BinaryValueOp, left: Value, right: Value) -> Value {
+    unwrap_value(value_operations::binary(operation, left, right))
+}
+
+fn eval_unary(operation: UnaryValueOp, operand: Value) -> Value {
+    unwrap_value(value_operations::unary(operation, operand))
+}
 
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
@@ -94,46 +107,19 @@ pub fn stream_lift2(
 }
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Bool(x), Value::Bool(y)) => Value::Bool(x && y),
-            (x, y) => panic!("Invalid boolean AND with values: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::And, x, y), x, y)
 }
 
 pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Bool(x), Value::Bool(y)) => Value::Bool(x || y),
-            (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Or, x, y), x, y)
 }
 
 pub fn implication(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Bool(x), Value::Bool(y)) => Value::Bool(!x || y),
-            (x, y) => panic!("Invalid boolean OR with values: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Implication, x, y), x, y)
 }
 
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |x| match x {
-            Value::Bool(b) => Value::Bool(!b),
-            x => panic!("Invalid boolean NOT with value: {:?}", x),
-        },
-        x,
-    )
+    stream_lift1(|x| eval_unary(UnaryValueOp::Not, x), x)
 }
 
 // Semantic detail: deferred == deferred === deferred
@@ -141,71 +127,23 @@ pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
 // For the old, value equality, you can use:
 // default(x == y, is_defined(x) == is_defined(y))
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| Value::Bool(x == y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Equal, x, y), x, y)
 }
 
 pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Bool(x <= y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 <= b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a <= b as f64),
-            (Value::Float(a), Value::Float(b)) => Value::Bool(a <= b),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
-            (Value::Str(a), Value::Str(b)) => Value::Bool(a <= b),
-            (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::LessEqual, x, y), x, y)
 }
 
 pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Bool(x < y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) < b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a < b as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Bool(x < y),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
-            (Value::Str(a), Value::Str(b)) => Value::Bool(a < b),
-            (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Less, x, y), x, y)
 }
 
 pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Bool(x >= y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool(a as f64 >= b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a >= b as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Bool(x >= y),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
-            (Value::Str(a), Value::Str(b)) => Value::Bool(a >= b),
-            (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::GreaterEqual, x, y), x, y)
 }
 
 pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Bool(x > y),
-            (Value::Int(a), Value::Float(b)) => Value::Bool((a as f64) > b),
-            (Value::Float(a), Value::Int(b)) => Value::Bool(a > b as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Bool(x > y),
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
-            (Value::Str(a), Value::Str(b)) => Value::Bool(a > b),
-            (x, y) => panic!("Invalid comparison with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Greater, x, y), x, y)
 }
 
 pub fn val(x: Value) -> OutputStream<Value> {
@@ -288,8 +226,8 @@ pub fn if_stm(
 // If we knew which variable the expression is assigned to, we could have a
 // sindex_rec implementation that is implemented more or less like normal sindex,
 // and sindex which is implemented like below.
-// (The correct call would need to be evaluated in semantics.rs where the ExprKind
-// is still available).
+// (The correct call would need to be evaluated in semantics.rs where the syntax
+// node is still available).
 pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
     fn sindex_base(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
         if let Ok(i) = usize::try_from(i) {
@@ -308,16 +246,7 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     stream_lift2(
         |x, y| {
             debug!("Executing plus operation");
-            let result = match (x, y) {
-                (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
-                (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 + y),
-                (Value::Float(x), Value::Int(y)) => Value::Float(x + y as f64),
-                (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                _ => {
-                    panic!("Cannot add incompatible types")
-                }
-            };
-            result
+            eval_binary(BinaryValueOp::Add, x, y)
         },
         x,
         y,
@@ -325,70 +254,23 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
 }
 
 pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 % y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x % y as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Float(x % y),
-            (x, y) => panic!("Invalid modulo with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Mod, x, y), x, y)
 }
 
 pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 - y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x - y as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-            (x, y) => panic!("Invalid subtraction with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Sub, x, y), x, y)
 }
 
 pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 * y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x * y as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-            (x, y) => panic!("Invalid multiplication with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Mul, x, y), x, y)
 }
 
 pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
-            (Value::Int(x), Value::Float(y)) => Value::Float(x as f64 / y),
-            (Value::Float(x), Value::Int(y)) => Value::Float(x / y as f64),
-            (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-            (x, y) => panic!("Invalid division with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Div, x, y), x, y)
 }
 
 pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(
-        |x, y| match (x, y) {
-            (Value::Str(x), Value::Str(y)) => Value::Str(format!("{x}{y}").into()),
-            (x, y) => panic!("Invalid concatenation with types: {:?}, {:?}", x, y),
-        },
-        x,
-        y,
-    )
+    stream_lift2(|x, y| eval_binary(BinaryValueOp::Concat, x, y), x, y)
 }
 pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> OutputStream<Value>
 where
@@ -570,25 +452,7 @@ pub fn tuple(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
 
 pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
-        move |l, idx| {
-            match (l, idx) {
-                (Value::List(l), Value::Int(idx)) => {
-                    if idx >= 0 {
-                        if let Some(val) = l.get(idx as usize) {
-                            val.clone()
-                        } else {
-                            panic!("List index out of bounds: {}", idx);
-                        }
-                    } else {
-                        panic!("List index must be non-negative: {}", idx); // For now
-                    }
-                }
-                (l, idx) => panic!(
-                    "Invalid list index. Expected List and Int expressions. Received: List.get({:?}, {:?})",
-                    l, idx
-                ),
-            }
-        },
+        |list, index| unwrap_value(value_operations::list_index(list, index)),
         x,
         i,
     )
@@ -596,16 +460,7 @@ pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Va
 
 pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
-        move |l, val| match l {
-            Value::List(mut l) => {
-                l.push(val);
-                Value::List(l)
-            }
-            l => panic!(
-                "Invalid list append. Expected List and Value expressions. Received: List.append({:?}, {:?})",
-                l, val
-            ),
-        },
+        |list, value| unwrap_value(value_operations::list_append(list, value)),
         x,
         y,
     )
@@ -613,70 +468,22 @@ pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<V
 
 pub fn lconcat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
     stream_lift2(
-        move |l1, l2| match (l1, l2) {
-            (Value::List(mut l1), Value::List(l2)) => {
-                l1.extend(l2);
-                Value::List(l1)
-            }
-            (l1, l2) => panic!(
-                "Invalid list concatenation. Expected List and List expressions. Received: List.concat({:?}, {:?})",
-                l1, l2
-            ),
-        },
+        |left, right| unwrap_value(value_operations::list_concat(left, right)),
         x,
         y,
     )
 }
 
 pub fn lhead(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        move |l| match l {
-            Value::List(l) => {
-                if let Some(val) = l.first() {
-                    val.clone()
-                } else {
-                    panic!("List is empty");
-                }
-            }
-            l => panic!(
-                "Invalid list head. Expected List expression. Received: List.head({:?})",
-                l
-            ),
-        },
-        x,
-    )
+    stream_lift1(|list| unwrap_value(value_operations::list_head(list)), x)
 }
 
 pub fn ltail(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        move |l| match l {
-            Value::List(l) => {
-                if let Some(val) = l.get(1..) {
-                    Value::List(val.into())
-                } else {
-                    panic!("List is empty");
-                }
-            }
-            l => panic!(
-                "Invalid list tail. Expected List expression. Received: List.tail({:?})",
-                l
-            ),
-        },
-        x,
-    )
+    stream_lift1(|list| unwrap_value(value_operations::list_tail(list)), x)
 }
 
 pub fn llen(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        move |l| match l {
-            Value::List(l) => Value::Int(l.len() as i64),
-            l => panic!(
-                "Invalid list len. Expected List expression. Received: List.len({:?})",
-                l
-            ),
-        },
-        x,
-    )
+    stream_lift1(|list| unwrap_value(value_operations::list_len(list)), x)
 }
 
 pub fn tget(x: OutputStream<Value>, idx: usize) -> OutputStream<Value> {
@@ -723,35 +530,14 @@ pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> 
 
 pub fn mget(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
     stream_lift1(
-        move |xs| match xs {
-            Value::Map(map) => {
-                if let Some(val) = map.get(&k) {
-                    val.clone()
-                } else {
-                    panic!("Missing key for map get: {}", k);
-                }
-            }
-            v => panic!(
-                "Invalid map get. Expected Map expression. Received: Map.get({:?})",
-                v
-            ),
-        },
+        move |map| unwrap_value(value_operations::map_get(map, &k)),
         xs,
     )
 }
 
 pub fn mremove(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
     stream_lift1(
-        move |xs| match xs {
-            Value::Map(mut map) => {
-                map.remove(&k);
-                Value::Map(map)
-            }
-            v => panic!(
-                "Invalid map remove. Expected Map expression. Received: Map.remove({:?})",
-                v
-            ),
-        },
+        move |map| unwrap_value(value_operations::map_remove(map, &k)),
         xs,
     )
 }
@@ -762,16 +548,7 @@ pub fn minsert(
     v: OutputStream<Value>,
 ) -> OutputStream<Value> {
     stream_lift2(
-        move |m_val, val| match m_val {
-            Value::Map(mut map) => {
-                map.insert(k.clone(), val);
-                Value::Map(map)
-            }
-            v => panic!(
-                "Invalid map insert. Expected Map expression. Received: Map.insert({:?})",
-                v
-            ),
-        },
+        move |map, value| unwrap_value(value_operations::map_insert(map, &k, value)),
         xs,
         v,
     )
@@ -779,67 +556,29 @@ pub fn minsert(
 
 pub fn mhas_key(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
     stream_lift1(
-        move |xs| match xs {
-            Value::Map(map) => Value::Bool(map.contains_key(&k)),
-            v => panic!(
-                "Invalid map has_key. Expected Map expression. Received: Map.has_key({:?})",
-                v
-            ),
-        },
+        move |map| unwrap_value(value_operations::map_has_key(map, &k)),
         xs,
     )
 }
 
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |v| match v {
-            Value::Float(v) => v.sin().into(),
-            _ => panic!("Invalid type of angle input stream"),
-        },
-        v,
-    )
+    stream_lift1(|v| eval_unary(UnaryValueOp::Sin, v), v)
 }
 
 pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |v| match v {
-            Value::Float(v) => v.cos().into(),
-            _ => panic!("Invalid type of angle input stream"),
-        },
-        v,
-    )
+    stream_lift1(|v| eval_unary(UnaryValueOp::Cos, v), v)
 }
 
 pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |v| match v {
-            Value::Float(v) => v.tan().into(),
-            _ => panic!("Invalid type of angle input stream"),
-        },
-        v,
-    )
+    stream_lift1(|v| eval_unary(UnaryValueOp::Tan, v), v)
 }
 
 pub fn neg(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |v| match v {
-            Value::Int(v) => (-v).into(),
-            Value::Float(v) => (-v).into(),
-            x => panic!("Invalid unary minus with type: {:?}", x),
-        },
-        v,
-    )
+    stream_lift1(|v| eval_unary(UnaryValueOp::Neg, v), v)
 }
 
 pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(
-        |v| match v {
-            Value::Int(v) => v.abs().into(),
-            Value::Float(v) => v.abs().into(),
-            x => panic!("Invalid abs with type: {:?}", x),
-        },
-        v,
-    )
+    stream_lift1(|v| eval_unary(UnaryValueOp::Abs, v), v)
 }
 
 #[cfg(test)]
@@ -865,6 +604,27 @@ mod combinator_tests {
         let res: Vec<Value> = not(x).collect().await;
         let exp: Vec<Value> = vec![Value::Bool(false), Value::Bool(true)];
         assert_eq!(res, exp)
+    }
+
+    #[apply(async_test)]
+    async fn test_unordered_float_comparisons_are_false() {
+        let comparisons: [(
+            &str,
+            fn(OutputStream<Value>, OutputStream<Value>) -> OutputStream<Value>,
+        ); 4] = [("<", lt), ("<=", le), (">", gt), (">=", ge)];
+
+        for (name, comparison) in comparisons {
+            let left: OutputStream<Value> =
+                Box::pin(stream::iter([Value::Float(f64::NAN), Value::Int(1)]));
+            let right: OutputStream<Value> =
+                Box::pin(stream::iter([Value::Int(1), Value::Float(f64::NAN)]));
+
+            assert_eq!(
+                comparison(left, right).collect::<Vec<_>>().await,
+                vec![Value::Bool(false), Value::Bool(false)],
+                "{name} should be false with NaN on either side"
+            );
+        }
     }
 
     #[apply(async_test)]

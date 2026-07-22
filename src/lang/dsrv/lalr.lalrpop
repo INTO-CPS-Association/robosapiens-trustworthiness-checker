@@ -1,7 +1,8 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, STopDecl, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, ExprId, VarOrNodeName};
+use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, ExprId, VarOrNodeName};
+use crate::lang::dsrv::parser::STopDecl;
 use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;

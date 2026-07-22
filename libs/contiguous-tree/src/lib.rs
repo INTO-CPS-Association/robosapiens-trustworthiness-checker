@@ -37,9 +37,9 @@
 //! }
 //!
 //! let mut builder = TermBuilder::with_capacity(3);
-//! let left = builder.Number(1);
-//! let right = builder.Number(2);
-//! let root = builder.Add(left, right);
+//! let left = builder.alloc_default(TermKind::Number(1));
+//! let right = builder.alloc_default(TermKind::Number(2));
+//! let root = builder.alloc_default(TermKind::Add(left, right));
 //! let term = Term::new(TermHandle::new(builder.finish_arena(), root));
 //!
 //! assert_eq!(term.as_ref().postorder().count(), 3);
@@ -57,31 +57,26 @@ mod transform;
 
 pub use arena::{Arena, ArenaId, IdRange};
 pub use cursor::{Children, ContextCursor, Postorder, TreeCursor, TreeCursorExt, try_zip_with};
-pub use fields::{ResolvedFields, ResolvedIds, ResolvedIdsBorrowed};
+pub use fields::{KeyedFields, ResolvedFields, ResolvedIds};
 pub use fold::{FoldNode, fold, try_fold};
 pub use handle::{NodeAnnotations, TreeHandle, TreeStorage};
 pub use node::{ChildIds, TreeNode, TreeNodeMut, map_child_ids};
-
-/// Dependencies used by generated code. Not part of the application-facing API.
-#[doc(hidden)]
-pub mod __private {
-    pub use serde;
-}
+pub use transform::CloneTreeError;
 
 pub use contiguous_tree_macros::{TreeCursor, tree_schema};
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Arena, ArenaId, ChildIds, ContextCursor, IdRange, ResolvedFields, ResolvedIds, TreeCursor,
-        TreeCursorExt, TreeNode, TreeNodeMut,
+        Arena, ArenaId, ChildIds, CloneTreeError, ContextCursor, IdRange, ResolvedFields,
+        ResolvedIds, TreeCursor, TreeCursorExt, TreeNode, TreeNodeMut,
     };
     use ecow::{EcoString, EcoVec, eco_vec};
 
     crate::tree_schema! {
         pub tree Fixture {
             internals: pub(crate),
-            owned_constructors: pub(crate),
+            owned_constructors: #[cfg(test)] pub(crate),
             metadata: offset: u32 = 0,
             id: u32,
             key: EcoString,
@@ -145,12 +140,17 @@ mod tests {
 
     #[test]
     fn generated_schema_covers_every_field_shape() {
+        let empty_fields = FixtureFields::default();
+        assert!(empty_fields.iter().next().is_none());
+
         let mut builder = FixtureBuilder::with_capacity(6);
-        let leaf = builder.Leaf("leaf".into());
-        let unary = builder.Unary(leaf);
-        let offset = builder.Offset(2);
-        let sequence = builder.Sequence(eco_vec![unary, offset]);
-        let record = builder.Record([(EcoString::from("value"), sequence)].into_iter().collect());
+        let leaf = builder.alloc_default(FixtureKind::Leaf("leaf".into()));
+        let unary = builder.alloc_default(FixtureKind::Unary(leaf));
+        let offset = builder.alloc_default(FixtureKind::Offset(2));
+        let sequence = builder.alloc_default(FixtureKind::Sequence(eco_vec![unary, offset]));
+        let record = builder.alloc_default(FixtureKind::Record(
+            [(EcoString::from("value"), sequence)].into_iter().collect(),
+        ));
         let fixture = Fixture::new(FixtureHandle::new(builder.finish_arena(), record));
 
         let FixtureView::Record(fields) = fixture.as_ref().view() else {
@@ -200,7 +200,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     struct TestCursor<'arena> {
         arena: &'arena Arena<TestId, TestNode>,
         id: TestId,
@@ -212,6 +212,10 @@ mod tests {
 
         fn id(self) -> Self::Id {
             self.id
+        }
+
+        fn same_node(self, other: Self) -> bool {
+            std::ptr::eq(self.arena, other.arena) && self.id == other.id
         }
 
         fn child_ids(self) -> Self::ChildIds {
@@ -300,6 +304,80 @@ mod tests {
             copied.clone_tree_from(cursor, |cursor| cursor.arena.get(cursor.id).clone());
         assert_eq!(copied_root, root);
         assert_eq!(copied, arena);
+    }
+
+    #[test]
+    fn clone_tree_with_rewrites_replacements_and_reports_cycles() {
+        let mut source = Arena::default();
+        let first = source.push_tree(TestNode(vec![]));
+        let root = source.push_tree(TestNode(vec![first]));
+        let second = source.push_tree(TestNode(vec![]));
+        let cursor = |id| TestCursor { arena: &source, id };
+
+        let mut target = Arena::default();
+        let rewritten = target
+            .try_clone_tree_with(
+                cursor(root),
+                |node| {
+                    Ok::<_, std::convert::Infallible>((node.id == first).then(|| cursor(second)))
+                },
+                |node| node.arena.get(node.id).clone(),
+            )
+            .unwrap();
+        assert_eq!(target.subtree_len(rewritten), 2);
+
+        let mut target = Arena::default();
+        let cycle = target
+            .try_clone_tree_with(
+                cursor(root),
+                |node| {
+                    Ok::<_, std::convert::Infallible>(if node.id == first {
+                        Some(cursor(second))
+                    } else if node.id == second {
+                        Some(cursor(first))
+                    } else {
+                        None
+                    })
+                },
+                |node| node.arena.get(node.id).clone(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            cycle,
+            CloneTreeError::ReplacementCycle { cursors } if cursors.len() == 3
+        ));
+    }
+
+    #[test]
+    fn clone_tree_with_policy_errors_stop_sibling_traversal() {
+        let mut source = Arena::default();
+        let first = source.push_tree(TestNode(vec![]));
+        let second = source.push_tree(TestNode(vec![]));
+        let root = source.push_tree(TestNode(vec![first, second]));
+        let root = TestCursor {
+            arena: &source,
+            id: root,
+        };
+        let mut visited_second = false;
+        let mut target = Arena::default();
+
+        let error = target
+            .try_clone_tree_with(
+                root,
+                |node| {
+                    if node.id == first {
+                        Err("stopped")
+                    } else {
+                        visited_second |= node.id == second;
+                        Ok(None)
+                    }
+                },
+                |node| node.arena.get(node.id).clone(),
+            )
+            .unwrap_err();
+
+        assert_eq!(error, CloneTreeError::Policy("stopped"));
+        assert!(!visited_second);
     }
 
     #[test]

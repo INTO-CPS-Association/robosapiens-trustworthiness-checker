@@ -9,7 +9,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 use std::fmt;
 
-use super::OutputStream;
+use super::super::OutputStream;
 
 pub type RuntimeFunctionCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;

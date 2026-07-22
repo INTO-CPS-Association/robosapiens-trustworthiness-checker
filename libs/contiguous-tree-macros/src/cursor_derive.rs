@@ -91,6 +91,9 @@ fn expand_delegate(
             type ChildIds = <#target as contiguous_tree::TreeCursor>::ChildIds;
 
             fn id(self) -> Self::Id { contiguous_tree::TreeCursor::id(self.#field) }
+            fn same_node(self, other: Self) -> bool {
+                contiguous_tree::TreeCursor::same_node(self.#field, other.#field)
+            }
             fn child_ids(self) -> Self::ChildIds {
                 contiguous_tree::TreeCursor::child_ids(self.#field)
             }

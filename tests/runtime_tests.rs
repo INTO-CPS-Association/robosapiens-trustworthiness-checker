@@ -5,9 +5,7 @@ use smol::LocalExecutor;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::core::{
-    Runtime, RuntimeSpec, Semantics, StreamType, StreamTypeAscription,
-};
+use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, StreamType};
 use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::io::{file, map};
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
@@ -15,10 +13,12 @@ use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{
-    InputStream, Value, dsrv_spec, lang::dsrv::parser::parse_str, parse_file,
+    InputStream, Value, dsrv_spec,
+    lang::dsrv::parser::{parse_sexpr, parse_str},
+    parse_file,
     runtime::RuntimeBuilder,
 };
-use trustworthiness_checker::{VarName, async_test, sexpr};
+use trustworthiness_checker::{VarName, async_test};
 use winnow::Parser;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1276,44 +1276,25 @@ s = latch(Struct("id": 1), Struct("id": 2))
     }
 
     let mut ctx = BTreeMap::new();
-    for (expr, expected) in [
+    for (source, expected) in [
         (
-            sexpr!(Dynamic(
-                Val(Value::Str("Map(\"x\": 1)".into())),
-                StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
-            )),
+            r#"dynamic("Map(\"x\": 1)": Map<Int>)"#,
             StreamType::Map(Box::new(StreamType::Int)),
         ),
         (
-            sexpr!(Dynamic(
-                Val(Value::Str("Struct(\"id\": 1)".into())),
-                StreamTypeAscription::Ascribed(StreamType::Struct(
-                    vec![("id".into(), StreamType::Int)].into(),
-                    false,
-                )),
-            )),
+            r#"dynamic("Struct(\"id\": 1)": Struct<id: Int>)"#,
             StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
         ),
         (
-            sexpr!(Defer(
-                Val(Value::Str("Map(\"x\": 1)".into())),
-                StreamTypeAscription::Ascribed(StreamType::Map(Box::new(StreamType::Int))),
-                []
-            )),
+            r#"defer("Map(\"x\": 1)": Map<Int>)"#,
             StreamType::Map(Box::new(StreamType::Int)),
         ),
         (
-            sexpr!(Defer(
-                Val(Value::Str("Struct(\"id\": 1)".into())),
-                StreamTypeAscription::Ascribed(StreamType::Struct(
-                    vec![("id".into(), StreamType::Int)].into(),
-                    false,
-                )),
-                []
-            )),
+            r#"defer("Struct(\"id\": 1)": Struct<id: Int>)"#,
             StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
         ),
     ] {
+        let expr = parse_sexpr(source).expect("dynamic/defer fixture should parse");
         trustworthiness_checker::lang::dsrv::type_checker::type_check_expression(
             &expr, &expected, &mut ctx,
         )

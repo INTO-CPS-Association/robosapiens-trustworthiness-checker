@@ -204,15 +204,17 @@ fn check(
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<TCType, SemanticError> {
+    use ExprView::*;
+
     let (typ, _resolved_operator) = match expr.view() {
-        ExprView::Val(Value::Deferred | Value::NoVal) => {
+        Val(Value::Deferred | Value::NoVal) => {
             return Err(SemanticError::UnsupportedLiteral(
                 "Deferred and NoVal are runtime states, not source literals".to_owned(),
                 Some(expr.span()),
             ));
         }
-        ExprView::Val(value) => (value_type(value, expected)?, None),
-        ExprView::Var(var) => (
+        Val(value) => (value_type(value, expected)?, None),
+        Var(var) => (
             context
                 .get(var)
                 .map(TCType::from_stream_type)
@@ -224,14 +226,14 @@ fn check(
                 })?,
             None,
         ),
-        ExprView::BinOp(lhs, rhs, parsed) => {
+        BinOp(lhs, rhs, parsed) => {
             // The result constraint is not an operand constraint: comparisons
             // produce `Bool` while comparing values of another type.
             let lhs = check(lhs, None, context)?;
             let rhs = check(rhs, None, context)?;
             resolve_binary(expr, parsed, &lhs, &rhs)?
         }
-        ExprView::If(cond, yes, no) => {
+        If(cond, yes, no) => {
             require(
                 check(cond, Some(&TCType::Bool), context)?,
                 &TCType::Bool,
@@ -244,9 +246,8 @@ fn check(
                 None,
             )
         }
-        ExprView::SIndex(value, _) => (check(value, expected, context)?, None),
-        ExprView::Dynamic(source, result_type, scope)
-        | ExprView::Defer(source, result_type, scope) => {
+        SIndex(value, _) => (check(value, expected, context)?, None),
+        Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
             validate_runtime_scope(expr, scope, context)?;
             require(
                 check(source, Some(&TCType::Str), context)?,
@@ -259,19 +260,16 @@ fn check(
             };
             (typ, None)
         }
-        ExprView::Update(a, b)
-        | ExprView::Default(a, b)
-        | ExprView::Latch(a, b)
-        | ExprView::Init(a, b) => {
+        Update(a, b) | Default(a, b) | Latch(a, b) | Init(a, b) => {
             let a = check(a, expected, context)?;
             let b = check(b, Some(&a), context)?;
             (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
         }
-        ExprView::IsDefined(value) | ExprView::When(value) => {
+        IsDefined(value) | When(value) => {
             check(value, None, context)?;
             (TCType::Bool, None)
         }
-        ExprView::Not(value) => {
+        Not(value) => {
             require(
                 check(value, Some(&TCType::Bool), context)?,
                 &TCType::Bool,
@@ -279,7 +277,7 @@ fn check(
             )?;
             (TCType::Bool, None)
         }
-        ExprView::Neg(value) => {
+        Neg(value) => {
             let typ = check(value, expected, context)?;
             if !matches!(typ, TCType::Int | TCType::Float) {
                 return Err(error(
@@ -290,7 +288,7 @@ fn check(
             }
             (typ, None)
         }
-        ExprView::Lambda(params, body) => {
+        Lambda(params, body) => {
             let frame_start = context.bindings.len();
             context.bindings.extend(params.iter().cloned());
             let result = check(body, None, context);
@@ -306,7 +304,7 @@ fn check(
                 None,
             )
         }
-        ExprView::Apply(function, args) => {
+        Apply(function, args) => {
             let function = check(function, None, context)?;
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -328,7 +326,7 @@ fn check(
             }
             (*result, None)
         }
-        ExprView::Fix(function) => {
+        Fix(function) => {
             let function = check(function, None, context)?;
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -352,7 +350,7 @@ fn check(
             require(params[0].clone(), &fixed, expr)?;
             (fixed, None)
         }
-        ExprView::Partial(function, args) => {
+        Partial(function, args) => {
             let function = check(function, None, context)?;
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -376,12 +374,12 @@ fn check(
                 None,
             )
         }
-        ExprView::List(items) => {
+        List(items) => {
             let expected_element = expected.and_then(TCType::list_element_type);
             let element = check_elements(expr, items, expected_element, context)?;
             (TCType::list(element), None)
         }
-        ExprView::Tuple(items) => {
+        Tuple(items) => {
             let expected_items = match expected {
                 Some(TCType::Tuple(items)) => Some(items),
                 _ => None,
@@ -396,7 +394,7 @@ fn check(
             }
             (TCType::Tuple(types), None)
         }
-        ExprView::LIndex(list, index) => {
+        LIndex(list, index) => {
             require(
                 check(index, Some(&TCType::Int), context)?,
                 &TCType::Int,
@@ -412,7 +410,7 @@ fn check(
             };
             (*element, None)
         }
-        ExprView::LAppend(list, value) => {
+        LAppend(list, value) => {
             let list_type = check(list, expected, context)?;
             let TCType::List(element) = list_type else {
                 return Err(error(
@@ -424,12 +422,12 @@ fn check(
             require(check(value, Some(&element), context)?, &element, expr)?;
             (TCType::List(element), None)
         }
-        ExprView::LConcat(a, b) => {
+        LConcat(a, b) => {
             let a = check(a, expected, context)?;
             let b = check(b, Some(&a), context)?;
             (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
         }
-        ExprView::LHead(list) => {
+        LHead(list) => {
             let TCType::List(element) = check(list, None, context)? else {
                 return Err(error(
                     expr,
@@ -439,7 +437,7 @@ fn check(
             };
             (*element, None)
         }
-        ExprView::LTail(list) => {
+        LTail(list) => {
             let typ = check(list, expected, context)?;
             if !matches!(typ, TCType::List(_)) {
                 return Err(error(
@@ -450,7 +448,7 @@ fn check(
             }
             (typ, None)
         }
-        ExprView::LLen(list) => {
+        LLen(list) => {
             let typ = check(list, None, context)?;
             if !matches!(typ, TCType::List(_)) {
                 return Err(error(
@@ -461,7 +459,7 @@ fn check(
             }
             (TCType::Int, None)
         }
-        ExprView::LMap(function, list) => {
+        LMap(function, list) => {
             let list = check(list, None, context)?;
             let TCType::List(input) = list else {
                 return Err(error(
@@ -487,7 +485,7 @@ fn check(
             }
             (TCType::List(output), None)
         }
-        ExprView::LFilter(function, list) => {
+        LFilter(function, list) => {
             let list = check(list, expected, context)?;
             let TCType::List(input) = &list else {
                 return Err(error(
@@ -513,7 +511,7 @@ fn check(
             }
             (list, None)
         }
-        ExprView::LFold(function, init, list) => {
+        LFold(function, init, list) => {
             let accumulator = check(init, expected, context)?;
             let TCType::List(element) = check(list, None, context)? else {
                 return Err(error(
@@ -543,7 +541,7 @@ fn check(
             }
             (accumulator, None)
         }
-        ExprView::Map(fields) => {
+        Map(fields) => {
             reject_duplicate_fields(expr, &fields)?;
             let expected_value = expected.and_then(TCType::map_value_type);
             let value = check_fields(
@@ -554,7 +552,7 @@ fn check(
             )?;
             (TCType::map(value), None)
         }
-        ExprView::ObjectLiteral(fields) if matches!(expected, Some(TCType::Map(_))) => {
+        ObjectLiteral(fields) if matches!(expected, Some(TCType::Map(_))) => {
             reject_duplicate_fields(expr, &fields)?;
             let expected_value = expected.and_then(TCType::map_value_type);
             let value = check_fields(
@@ -565,7 +563,7 @@ fn check(
             )?;
             (TCType::map(value), None)
         }
-        ExprView::Struct(fields) => {
+        Struct(fields) => {
             reject_duplicate_fields(expr, &fields)?;
             let Some(TCType::Struct(expected_fields, allow_extra)) = expected else {
                 if context.annotations.is_some() {
@@ -608,7 +606,7 @@ fn check(
             }
             (expected.cloned().expect("matched expected Struct"), None)
         }
-        ExprView::ObjectLiteral(fields) => {
+        ObjectLiteral(fields) => {
             reject_duplicate_fields(expr, &fields)?;
             let expected_fields = match expected {
                 Some(TCType::Struct(fields, _)) => Some(fields),
@@ -675,7 +673,7 @@ fn check(
             };
             (checked, None)
         }
-        ExprView::MGet(map, key) => match check(map, None, context)? {
+        MGet(map, key) => match check(map, None, context)? {
             TCType::Map(value) => (*value, None),
             TCType::Struct(fields, _) => (
                 fields
@@ -699,7 +697,7 @@ fn check(
                 ));
             }
         },
-        ExprView::SGet(value, key) => match check(value, None, context)? {
+        SGet(value, key) => match check(value, None, context)? {
             TCType::Struct(fields, _) => (
                 fields
                     .iter()
@@ -735,7 +733,7 @@ fn check(
                 ));
             }
         },
-        ExprView::MInsert(map, key, value) => {
+        MInsert(map, key, value) => {
             let map_type = check(map, expected, context)?;
             let element = match &map_type {
                 TCType::Map(element) => element.as_ref(),
@@ -761,7 +759,7 @@ fn check(
             require(check(value, Some(element), context)?, element, expr)?;
             (map_type, None)
         }
-        ExprView::MRemove(map, _) => {
+        MRemove(map, _) => {
             let typ = check(map, expected, context)?;
             if !matches!(typ, TCType::Map(_)) {
                 return Err(error(
@@ -772,7 +770,7 @@ fn check(
             }
             (typ, None)
         }
-        ExprView::MHasKey(map, _) => {
+        MHasKey(map, _) => {
             let typ = check(map, None, context)?;
             if !matches!(typ, TCType::Map(_) | TCType::Struct(_, _)) {
                 return Err(error(
@@ -783,7 +781,7 @@ fn check(
             }
             (TCType::Bool, None)
         }
-        ExprView::Sin(value) | ExprView::Cos(value) | ExprView::Tan(value) => {
+        Sin(value) | Cos(value) | Tan(value) => {
             require(
                 check(value, Some(&TCType::Float), context)?,
                 &TCType::Float,
@@ -791,7 +789,7 @@ fn check(
             )?;
             (TCType::Float, None)
         }
-        ExprView::Abs(value) => {
+        Abs(value) => {
             let typ = check(value, expected, context)?;
             if !matches!(typ, TCType::Int | TCType::Float) {
                 return Err(error(
@@ -802,8 +800,8 @@ fn check(
             }
             (typ, None)
         }
-        ExprView::MonitoredAt(_, _) => (TCType::Bool, None),
-        ExprView::Dist(_, _) => (TCType::Int, None),
+        MonitoredAt(_, _) => (TCType::Bool, None),
+        Dist(_, _) => (TCType::Int, None),
     };
     if let Some(expected) = expected {
         require(typ.clone(), expected, expr)?;

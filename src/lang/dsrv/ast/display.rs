@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display, Error};
+use std::fmt::{self, Debug, Display, Error};
 
 use crate::core::{StreamTypeAscription, VarName};
 
@@ -28,8 +28,8 @@ impl serde::Serialize for CheckedExpr {
 }
 
 impl Debug for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&crate::lang::dsrv::span::strip_span(self))
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.as_ref(), f)
     }
 }
 
@@ -45,13 +45,6 @@ impl serde::Serialize for Expr {
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.as_ref(), f)
-    }
-}
-
-impl Debug for ExprRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: do we need a native debug implementation
-        Display::fmt(self, f)
     }
 }
 

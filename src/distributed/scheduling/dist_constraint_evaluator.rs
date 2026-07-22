@@ -3,17 +3,19 @@ use std::{
     rc::Rc,
 };
 
-use contiguous_tree::TreeCursorExt;
-
 use async_stream::stream;
-use ecow::{EcoString, EcoVec};
+use ecow::EcoVec;
 use futures::{FutureExt, StreamExt, future::pending, pin_mut};
 
 use crate::{
-    DsrvSpecification, OutputStream, Specification, Value, VarName,
-    distributed::distribution_graphs::{LabelledDistributionGraph, NodeName},
-    lang::dsrv::ast::{BoolBinOp, CompBinOp, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp},
+    DsrvSpecification, OutputStream, Value, VarName,
+    distributed::{
+        distribution_constraint::{ConstraintProfile, DistributionConstraintPlan},
+        distribution_graphs::{LabelledDistributionGraph, NodeName},
+    },
 };
+
+pub use crate::distributed::distribution_constraint::ConstraintLoweringError;
 
 #[cfg(test)]
 const COMPACT_CONSTRAINT_EVALUATION_INTERVAL: std::time::Duration =
@@ -50,6 +52,44 @@ pub type PlacementLabellingStream = OutputStream<Rc<PlacementLabelling>>;
 pub type ConstraintInputEvent = (usize, Value);
 pub type ConstraintInputBatch = Vec<ConstraintInputEvent>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DistConstraintEvaluatorError {
+    Lowering(ConstraintLoweringError),
+    MissingInputs { variables: BTreeSet<VarName> },
+    DuplicateInputs { variables: BTreeSet<VarName> },
+}
+
+impl std::fmt::Display for DistConstraintEvaluatorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lowering(error) => error.fmt(f),
+            Self::MissingInputs { variables } => write!(
+                f,
+                "Compact distribution constraint input index is missing required variables: {variables:?}"
+            ),
+            Self::DuplicateInputs { variables } => write!(
+                f,
+                "Compact distribution constraint input index contains duplicate variables: {variables:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DistConstraintEvaluatorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Lowering(error) => Some(error),
+            Self::MissingInputs { .. } | Self::DuplicateInputs { .. } => None,
+        }
+    }
+}
+
+impl From<ConstraintLoweringError> for DistConstraintEvaluatorError {
+    fn from(error: ConstraintLoweringError) -> Self {
+        Self::Lowering(error)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConstraintInputIndex {
     vars: EcoVec<VarName>,
@@ -78,6 +118,14 @@ impl ConstraintInputIndex {
 
     fn initial_values(&self) -> Vec<Value> {
         vec![Value::NoVal; self.vars.len()]
+    }
+
+    fn bindings(&self, values: &[Value]) -> BTreeMap<VarName, Value> {
+        self.vars
+            .iter()
+            .cloned()
+            .zip(values.iter().cloned())
+            .collect()
     }
 }
 
@@ -112,14 +160,57 @@ pub fn dist_constraint_stream(
 pub fn dist_constraint_event_stream(
     spec: DsrvSpecification,
     constraints: Vec<VarName>,
+    labelling_stream: PlacementLabellingStream,
+    input_index: ConstraintInputIndex,
+    input_events: OutputStream<ConstraintInputBatch>,
+) -> OutputStream<bool> {
+    try_dist_constraint_event_stream(
+        spec,
+        constraints,
+        labelling_stream,
+        input_index,
+        input_events,
+    )
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_dist_constraint_event_stream(
+    spec: DsrvSpecification,
+    constraints: Vec<VarName>,
     mut labelling_stream: PlacementLabellingStream,
     input_index: ConstraintInputIndex,
     mut input_events: OutputStream<ConstraintInputBatch>,
-) -> OutputStream<bool> {
-    assert_supported_constraints(&spec, &constraints);
+) -> Result<OutputStream<bool>, DistConstraintEvaluatorError> {
+    let plan =
+        DistributionConstraintPlan::lower(&spec, constraints, ConstraintProfile::CompactEvaluator)?;
+
+    let mut seen_inputs = BTreeSet::new();
+    let duplicate_inputs = input_index
+        .vars
+        .iter()
+        .filter(|variable| !seen_inputs.insert((*variable).clone()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !duplicate_inputs.is_empty() {
+        return Err(DistConstraintEvaluatorError::DuplicateInputs {
+            variables: duplicate_inputs,
+        });
+    }
+
+    let missing_inputs = plan
+        .input_dependencies()
+        .difference(&seen_inputs)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !missing_inputs.is_empty() {
+        return Err(DistConstraintEvaluatorError::MissingInputs {
+            variables: missing_inputs,
+        });
+    }
+
     let mut latest_inputs = input_index.initial_values();
 
-    Box::pin(stream! {
+    Ok(Box::pin(stream! {
         let mut latest_labelling = None;
         let mut labelling_done = false;
         let mut inputs_done = false;
@@ -173,21 +264,19 @@ pub fn dist_constraint_event_stream(
                 continue;
             };
 
-            let mut evaluator = TickEvaluator {
-                spec: &spec,
-                labelling,
-                input_index: &input_index,
-                env: &latest_inputs,
-                cache: BTreeMap::new(),
-                stack: Vec::new(),
+            let bindings = input_index.bindings(&latest_inputs);
+            let monitors_at = |variable: &VarName, node: &NodeName| {
+                labelling.monitors_at(variable, node)
             };
-
-            let holds = constraints.iter().all(|constraint| {
-                matches!(evaluator.eval_var(constraint), Value::Bool(true))
+            let holds = plan.roots().iter().all(|constraint| {
+                matches!(
+                    plan.evaluate_var(constraint, &bindings, Some(&monitors_at)),
+                    Some(Value::Bool(true))
+                )
             });
             yield holds;
         }
-    })
+    }))
 }
 
 fn record_latest_input(latest_inputs: &mut [Value], index: usize, value: Value) {
@@ -199,255 +288,23 @@ fn record_latest_input(latest_inputs: &mut [Value], index: usize, value: Value) 
     }
 }
 
+pub fn try_dist_constraint_input_vars(
+    spec: &DsrvSpecification,
+    constraints: &[VarName],
+) -> Result<BTreeSet<VarName>, ConstraintLoweringError> {
+    DistributionConstraintPlan::lower(
+        spec,
+        constraints.iter().cloned(),
+        ConstraintProfile::CompactEvaluator,
+    )
+    .map(|plan| plan.input_dependencies().clone())
+}
+
 pub fn dist_constraint_input_vars(
     spec: &DsrvSpecification,
     constraints: &[VarName],
 ) -> BTreeSet<VarName> {
-    let input_vars = spec.input_vars();
-    let mut deps = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    for constraint in constraints {
-        collect_var_deps(spec, &input_vars, constraint, &mut seen, &mut deps);
-    }
-    deps
-}
-
-fn collect_var_deps(
-    spec: &DsrvSpecification,
-    input_vars: &BTreeSet<VarName>,
-    var: &VarName,
-    seen: &mut BTreeSet<VarName>,
-    deps: &mut BTreeSet<VarName>,
-) {
-    if input_vars.contains(var) {
-        deps.insert(var.clone());
-        return;
-    }
-    if !seen.insert(var.clone()) {
-        return;
-    }
-    let expr = spec
-        .var_expr(var)
-        .unwrap_or_else(|| panic!("Unknown variable `{var}` in distribution constraint"));
-    collect_expr_deps(spec, input_vars, expr.as_ref(), seen, deps);
-}
-
-fn collect_expr_deps(
-    spec: &DsrvSpecification,
-    input_vars: &BTreeSet<VarName>,
-    expr: ExprRef<'_>,
-    seen: &mut BTreeSet<VarName>,
-    deps: &mut BTreeSet<VarName>,
-) {
-    for node in expr.postorder() {
-        match node.view() {
-            ExprView::If(..)
-            | ExprView::Val(_)
-            | ExprView::MonitoredAt(_, _)
-            | ExprView::BinOp(..)
-            | ExprView::Not(_)
-            | ExprView::Neg(_)
-            | ExprView::Abs(_)
-            | ExprView::MGet(_, _)
-            | ExprView::SGet(_, _) => {}
-            ExprView::Var(var) => collect_var_deps(spec, input_vars, var, seen, deps),
-            ExprView::Dist(_, _) => {
-                panic!("dist(...) is unsupported in compact distribution constraints")
-            }
-            _ => panic!(
-                "Unsupported expression in compact distribution constraint evaluator: {:?}",
-                node.kind()
-            ),
-        }
-    }
-}
-
-fn assert_supported_constraints(spec: &DsrvSpecification, constraints: &[VarName]) {
-    for constraint in constraints {
-        let expr = spec
-            .var_expr(constraint)
-            .unwrap_or_else(|| panic!("Distribution constraint `{constraint}` has no expression"));
-        assert_supported_expr(expr.as_ref());
-    }
-}
-
-fn assert_supported_expr(expr: ExprRef<'_>) {
-    for node in expr.postorder() {
-        match node.view() {
-            ExprView::If(..)
-            | ExprView::Val(_)
-            | ExprView::Var(_)
-            | ExprView::MonitoredAt(_, _)
-            | ExprView::BinOp(..)
-            | ExprView::Not(_)
-            | ExprView::Neg(_)
-            | ExprView::Abs(_)
-            | ExprView::MGet(_, _)
-            | ExprView::SGet(_, _) => {}
-            ExprView::Dist(_, _) => {
-                panic!("dist(...) is unsupported in compact distribution constraints")
-            }
-            _ => panic!(
-                "Unsupported expression in compact distribution constraint evaluator: {:?}",
-                node.kind()
-            ),
-        }
-    }
-}
-
-struct TickEvaluator<'a> {
-    spec: &'a DsrvSpecification,
-    labelling: &'a PlacementLabelling,
-    input_index: &'a ConstraintInputIndex,
-    env: &'a [Value],
-    cache: BTreeMap<VarName, Value>,
-    stack: Vec<VarName>,
-}
-
-impl TickEvaluator<'_> {
-    fn eval_var(&mut self, var: &VarName) -> Value {
-        if let Some(index) = self.input_index.index_of(var) {
-            return self.env[index].clone();
-        }
-        if let Some(value) = self.cache.get(var) {
-            return value.clone();
-        }
-        if self.stack.iter().any(|candidate| candidate == var) {
-            panic!("Cycle while evaluating distribution constraint variable `{var}`");
-        }
-
-        let expr = self
-            .spec
-            .var_expr(var)
-            .unwrap_or_else(|| panic!("Unknown variable `{var}` in distribution constraint"));
-        self.stack.push(var.clone());
-        let value = self.eval_expr(expr.as_ref());
-        self.stack.pop();
-        self.cache.insert(var.clone(), value.clone());
-        value
-    }
-
-    fn eval_expr(&mut self, expr: ExprRef<'_>) -> Value {
-        match expr.view() {
-            ExprView::If(cond, then_expr, else_expr) => match self.eval_expr(cond) {
-                Value::Bool(true) => self.eval_expr(then_expr),
-                Value::Bool(false) => self.eval_expr(else_expr),
-                _ => Value::NoVal,
-            },
-            ExprView::Val(value) => value.clone(),
-            ExprView::Var(var) => self.eval_var(var),
-            ExprView::BinOp(left, right, op) => {
-                let left = self.eval_expr(left);
-                let right = self.eval_expr(right);
-                eval_binop(left, right, op)
-            }
-            ExprView::Not(child) => match self.eval_expr(child) {
-                Value::Bool(value) => Value::Bool(!value),
-                _ => Value::NoVal,
-            },
-            ExprView::Neg(child) => match self.eval_expr(child) {
-                Value::Int(value) => Value::Int(-value),
-                Value::Float(value) => Value::Float(-value),
-                _ => Value::NoVal,
-            },
-            ExprView::Abs(child) => match self.eval_expr(child) {
-                Value::Int(value) => Value::Int(value.abs()),
-                Value::Float(value) => Value::Float(value.abs()),
-                _ => Value::NoVal,
-            },
-            ExprView::MGet(child, key) | ExprView::SGet(child, key) => {
-                match self.eval_expr(child) {
-                    Value::Map(map) => map.get(key).cloned().unwrap_or(Value::NoVal),
-                    _ => Value::NoVal,
-                }
-            }
-            ExprView::MonitoredAt(var, node) => Value::Bool(self.labelling.monitors_at(var, node)),
-            ExprView::Dist(_, _) => panic!("dist(...) is unsupported in compact evaluator"),
-            _ => panic!("unsupported expression in compact distribution constraint evaluator"),
-        }
-    }
-}
-
-fn eval_binop(left: Value, right: Value, op: &SBinOp) -> Value {
-    match op {
-        SBinOp::BOp(BoolBinOp::And) => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Value::Bool(left && right),
-            _ => Value::NoVal,
-        },
-        SBinOp::BOp(BoolBinOp::Or) => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Value::Bool(left || right),
-            _ => Value::NoVal,
-        },
-        SBinOp::BOp(BoolBinOp::Impl) => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Value::Bool(!left || right),
-            _ => Value::NoVal,
-        },
-        SBinOp::COp(op) => eval_comparison(left, right, op),
-        SBinOp::NOp(op) => eval_numeric(left, right, op),
-        SBinOp::SOp(StrBinOp::Concat) => match (left, right) {
-            (Value::Str(left), Value::Str(right)) => {
-                let mut out = EcoString::from(left.as_str());
-                out.push_str(right.as_str());
-                Value::Str(out)
-            }
-            _ => Value::NoVal,
-        },
-    }
-}
-
-fn eval_comparison(left: Value, right: Value, op: &CompBinOp) -> Value {
-    match op {
-        CompBinOp::Eq => Value::Bool(left == right),
-        CompBinOp::Le => compare_numbers(left, right, |left, right| left <= right),
-        CompBinOp::Lt => compare_numbers(left, right, |left, right| left < right),
-        CompBinOp::Ge => compare_numbers(left, right, |left, right| left >= right),
-        CompBinOp::Gt => compare_numbers(left, right, |left, right| left > right),
-    }
-}
-
-fn eval_numeric(left: Value, right: Value, op: &NumericalBinOp) -> Value {
-    match (left, right) {
-        (Value::Int(left), Value::Int(right)) => match op {
-            NumericalBinOp::Add => Value::Int(left + right),
-            NumericalBinOp::Sub => Value::Int(left - right),
-            NumericalBinOp::Mul => Value::Int(left * right),
-            NumericalBinOp::Div => Value::Int(left / right),
-            NumericalBinOp::Mod => Value::Int(left % right),
-        },
-        (left, right) => {
-            let Some(left) = number_as_f64(left) else {
-                return Value::NoVal;
-            };
-            let Some(right) = number_as_f64(right) else {
-                return Value::NoVal;
-            };
-            match op {
-                NumericalBinOp::Add => Value::Float(left + right),
-                NumericalBinOp::Sub => Value::Float(left - right),
-                NumericalBinOp::Mul => Value::Float(left * right),
-                NumericalBinOp::Div => Value::Float(left / right),
-                NumericalBinOp::Mod => Value::Float(left % right),
-            }
-        }
-    }
-}
-
-fn compare_numbers(left: Value, right: Value, f: impl FnOnce(f64, f64) -> bool) -> Value {
-    let Some(left) = number_as_f64(left) else {
-        return Value::NoVal;
-    };
-    let Some(right) = number_as_f64(right) else {
-        return Value::NoVal;
-    };
-    Value::Bool(f(left, right))
-}
-
-fn number_as_f64(value: Value) -> Option<f64> {
-    match value {
-        Value::Int(value) => Some(value as f64),
-        Value::Float(value) => Some(value),
-        _ => None,
-    }
+    try_dist_constraint_input_vars(spec, constraints).unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[cfg(test)]
@@ -623,18 +480,65 @@ distX = monitored_at(x, "B")
         let input_index = ConstraintInputIndex::new(Vec::<VarName>::new());
         let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
 
-        let result: Vec<_> = dist_constraint_event_stream(
+        let stream = try_dist_constraint_event_stream(
             spec,
             vec!["distX".into()],
             labelling_stream,
             input_index,
             input_events,
         )
-        .take(1)
-        .collect()
-        .await;
+        .expect("input-independent constraint should accept an empty input index");
+        let result: Vec<_> = stream.take(1).collect().await;
 
         assert_eq!(result, vec![true]);
+    }
+
+    #[test]
+    fn dist_constraint_evaluator_rejects_missing_required_input() {
+        let spec = parse_str("in gate\nout distX\ndistX = gate").unwrap();
+        let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
+        let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
+
+        let error = try_dist_constraint_event_stream(
+            spec,
+            vec!["distX".into()],
+            labelling_stream,
+            ConstraintInputIndex::new(Vec::<VarName>::new()),
+            input_events,
+        )
+        .err()
+        .expect("missing required input should be rejected");
+
+        assert_eq!(
+            error,
+            DistConstraintEvaluatorError::MissingInputs {
+                variables: BTreeSet::from(["gate".into()]),
+            }
+        );
+    }
+
+    #[test]
+    fn dist_constraint_evaluator_rejects_duplicate_input_variables() {
+        let spec = parse_str("in gate\nout distX\ndistX = gate").unwrap();
+        let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
+        let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
+
+        let error = try_dist_constraint_event_stream(
+            spec,
+            vec!["distX".into()],
+            labelling_stream,
+            ConstraintInputIndex::new(["gate".into(), "gate".into()]),
+            input_events,
+        )
+        .err()
+        .expect("duplicate input variables should be rejected");
+
+        assert_eq!(
+            error,
+            DistConstraintEvaluatorError::DuplicateInputs {
+                variables: BTreeSet::from(["gate".into()]),
+            }
+        );
     }
 
     #[apply(async_test)]

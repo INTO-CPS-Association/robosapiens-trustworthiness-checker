@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use syn::{
-    Expr, Ident, Token, Type, Visibility, braced, parenthesized,
+    Attribute, Expr, Ident, Token, Type, Visibility, braced, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
@@ -10,7 +10,7 @@ mod keyword {
     syn::custom_keyword!(tree);
     syn::custom_keyword!(child);
     syn::custom_keyword!(children);
-    syn::custom_keyword!(borrowed_children);
+
     syn::custom_keyword!(keyed_children);
     syn::custom_keyword!(data);
     syn::custom_keyword!(into_data);
@@ -25,7 +25,7 @@ mod keyword {
 pub(super) enum FieldKind {
     Child,
     Children,
-    BorrowedChildren,
+
     KeyedChildren,
     Borrowed(Type),
     IntoOwned(Type),
@@ -38,10 +38,7 @@ impl FieldKind {
     }
 
     fn is_collection(&self) -> bool {
-        matches!(
-            self,
-            Self::Children | Self::BorrowedChildren | Self::KeyedChildren
-        )
+        matches!(self, Self::Children | Self::KeyedChildren)
     }
 }
 
@@ -61,9 +58,6 @@ impl Parse for Field {
         } else if input.peek(keyword::children) {
             input.parse::<keyword::children>()?;
             FieldKind::Children
-        } else if input.peek(keyword::borrowed_children) {
-            input.parse::<keyword::borrowed_children>()?;
-            FieldKind::BorrowedChildren
         } else if input.peek(keyword::keyed_children) {
             input.parse::<keyword::keyed_children>()?;
             FieldKind::KeyedChildren
@@ -78,7 +72,7 @@ impl Parse for Field {
             FieldKind::Copied(parenthesized_type(input)?)
         } else {
             return Err(input.error(
-                "expected child, children, borrowed_children, keyed_children, data(T), into_data(T), or copy(T)",
+                "expected child, children, keyed_children, data(T), into_data(T), or copy(T)",
             ));
         };
         let owned_default = if input.peek(Token![=]) {
@@ -164,10 +158,15 @@ impl Variant {
     }
 }
 
+pub(super) struct OwnedConstructors {
+    pub(super) attributes: Vec<Attribute>,
+    pub(super) visibility: Visibility,
+}
+
 pub(crate) struct TreeSchema {
     pub(super) visibility: Visibility,
     pub(super) internals: Visibility,
-    pub(super) owned_constructors: Option<Visibility>,
+    pub(super) owned_constructors: Option<OwnedConstructors>,
     pub(super) root: Ident,
     pub(super) metadata_name: Ident,
     pub(super) metadata: Type,
@@ -219,6 +218,7 @@ impl Parse for TreeSchema {
             } else if content.peek(keyword::owned_constructors) {
                 let name: Ident = content.parse()?;
                 content.parse::<Token![:]>()?;
+                let attributes = content.call(Attribute::parse_outer)?;
                 let visibility: Visibility = content.parse()?;
                 if matches!(visibility, Visibility::Inherited) {
                     return Err(syn::Error::new(
@@ -226,7 +226,14 @@ impl Parse for TreeSchema {
                         "owned_constructors requires an explicit visibility",
                     ));
                 }
-                set_once(&mut owned_constructors, visibility, &name)?;
+                set_once(
+                    &mut owned_constructors,
+                    OwnedConstructors {
+                        attributes,
+                        visibility,
+                    },
+                    &name,
+                )?;
             } else if content.peek(keyword::id) {
                 parse_type_setting(&content, &mut id)?;
             } else if content.peek(keyword::key) {
@@ -326,8 +333,29 @@ mod tests {
         }
     }
 
-    fn parse(schema: &str) {
-        assert!(syn::parse_str::<TreeSchema>(schema).is_ok())
+    #[test]
+    fn accepts_outer_attributes_on_owned_constructors() {
+        let schema = syn::parse_str::<TreeSchema>(
+            "pub tree Expr {
+                internals: pub(crate),
+                owned_constructors: #[cfg(test)] #[allow(dead_code)] pub(crate),
+                metadata: m: () = (),
+                id: u32,
+                key: String,
+                children: Vec,
+                keyed_children: Vec,
+            }",
+        )
+        .unwrap();
+        let owned_constructors = schema.owned_constructors.unwrap();
+
+        assert!(matches!(
+            owned_constructors.visibility,
+            syn::Visibility::Restricted(_)
+        ));
+        assert_eq!(owned_constructors.attributes.len(), 2);
+        assert!(owned_constructors.attributes[0].path().is_ident("cfg"));
+        assert!(owned_constructors.attributes[1].path().is_ident("allow"));
     }
 
     #[test]
@@ -372,13 +400,6 @@ mod tests {
         assert!(
             error("pub tree Expr { Node(rest: children, first: child), }")
                 .contains("fixed children must precede")
-        );
-    }
-
-    #[test]
-    fn accepts_borrowed_children() {
-        parse(
-            "pub tree Expr {\n            internals: pub(crate),\n            metadata: m: () = (),\n            id: u32,\n            key: String,\n            children: Vec,\n            keyed_children: Vec,\n            Node(rest: borrowed_children),\n        }",
         );
     }
 }

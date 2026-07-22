@@ -50,6 +50,19 @@ pub struct CheckedExprRef<'arena> {
     cursor: ContextCursor<ExprRef<'arena>, &'arena TypeAnnotations>,
 }
 
+/// Internal cursor used by consumers that accept checked or unchecked syntax.
+#[derive(Clone, Copy)]
+enum CheckContext<'arena> {
+    Unchecked,
+    Checked(&'arena TypeAnnotations),
+}
+
+#[derive(Clone, Copy, contiguous_tree::TreeCursor)]
+#[tree_cursor(delegate = cursor, target = ExprRef<'arena>)]
+pub(crate) struct ExprCursor<'arena> {
+    cursor: ContextCursor<ExprRef<'arena>, CheckContext<'arena>>,
+}
+
 impl CheckedExpr {
     pub(crate) fn new(expr: Expr, types: Vec<TCType>, type_info: Rc<TypeInfo>) -> Self {
         assert_eq!(expr.arena().len(), types.len());
@@ -72,8 +85,8 @@ impl CheckedExpr {
         self.expr.as_ref().with_annotations(&self.checked)
     }
 
-    pub(crate) fn into_parts(self) -> (Expr, Rc<TypeAnnotations>) {
-        (self.expr, self.checked)
+    pub(crate) fn cursor<'arena>(&'arena self, expr: ExprRef<'arena>) -> CheckedExprRef<'arena> {
+        CheckedExprRef::new(expr, &self.checked)
     }
 }
 
@@ -112,7 +125,7 @@ impl<'arena> CheckedExprRef<'arena> {
         self.expr().view_with(self)
     }
 
-    pub fn kind(self) -> &'arena ExprKind {
+    pub(crate) fn kind(self) -> &'arena ExprKind {
         self.expr().kind()
     }
 
@@ -129,6 +142,50 @@ impl<'arena> CheckedExprRef<'arena> {
     }
 
     pub fn type_info(self) -> &'arena TypeInfo {
-        self.cursor.context().variable_types.as_ref()
+        self.shared_type_info().as_ref()
+    }
+
+    pub(crate) fn shared_type_info(self) -> &'arena Rc<TypeInfo> {
+        self.cursor.context().shared_type_info()
+    }
+
+    pub(crate) fn erased(self) -> ExprCursor<'arena> {
+        ExprCursor::checked(self.expr(), self.cursor.context())
+    }
+}
+
+impl<'arena> ExprCursor<'arena> {
+    pub(crate) fn unchecked(expr: ExprRef<'arena>) -> Self {
+        Self {
+            cursor: ContextCursor::new(expr, CheckContext::Unchecked),
+        }
+    }
+
+    fn checked(expr: ExprRef<'arena>, checked: &'arena TypeAnnotations) -> Self {
+        Self {
+            cursor: ContextCursor::new(expr, CheckContext::Checked(checked)),
+        }
+    }
+
+    pub(crate) fn expr(self) -> ExprRef<'arena> {
+        self.cursor.cursor()
+    }
+
+    pub(crate) fn view(self) -> ExprView<'arena, Self> {
+        self.expr().view_with(self)
+    }
+
+    pub(crate) fn typ(self) -> Option<&'arena TCType> {
+        match self.cursor.context() {
+            CheckContext::Unchecked => None,
+            CheckContext::Checked(checked) => Some(checked.type_of(self.expr().id())),
+        }
+    }
+
+    pub(crate) fn shared_type_info(self) -> Option<&'arena Rc<TypeInfo>> {
+        match self.cursor.context() {
+            CheckContext::Unchecked => None,
+            CheckContext::Checked(checked) => Some(checked.shared_type_info()),
+        }
     }
 }

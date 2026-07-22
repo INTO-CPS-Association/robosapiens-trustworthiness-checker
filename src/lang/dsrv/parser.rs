@@ -18,8 +18,21 @@ use self::lalr::{ExprParser, TopDeclsParser};
 
 use crate::{
     DsrvSpecification,
-    lang::dsrv::ast::{Expr, ExprArena, ExprBuilder, STopDecl},
+    core::{StreamType, VarName},
+    lang::dsrv::{
+        ast::{Expr, ExprArena, ExprBuilder, ExprId},
+        span::Span,
+    },
 };
+
+/// A parser-local top-level DSRV declaration.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum STopDecl {
+    Input(VarName, Option<StreamType>, Span),
+    Output(VarName, Option<StreamType>, Span),
+    Aux(VarName, Option<StreamType>, Span),
+    Assignment(VarName, ExprId, Span),
+}
 
 pub fn parse_sexpr(input: &str) -> Result<Expr, Error> {
     let mut builder = ExprBuilder::for_source(input);
@@ -147,7 +160,7 @@ mod tests {
 
     use crate::VarName;
     use crate::lang::dsrv::ast::NumericalBinOp;
-    use crate::lang::dsrv::ast::{Expr, ExprHandle, ExprView, SBinOp};
+    use crate::lang::dsrv::ast::{Expr, ExprView, SBinOp};
     use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
@@ -185,7 +198,7 @@ mod tests {
     fn stopdecl_to_string(result: &Result<(ExprArena, STopDecl), Error>) -> String {
         match result {
             Ok((arena, STopDecl::Assignment(name, root, span))) => {
-                let expr = Expr::new(ExprHandle::new(arena.clone(), *root));
+                let expr = Expr::from_arena_root(arena.clone(), *root);
                 format!("Ok(Assignment({name:?}, {}, {span:?}))", strip_span(&expr))
             }
             Ok((_, declaration)) => format!("Ok({declaration:?})"),
@@ -929,7 +942,7 @@ mod tests {
     fn test_parse_defer() {
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"defer(x)"#).unwrap()),
-            r#"Ok(Defer(Var(VarName::new("x")), Unascribed, []))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Unascribed, Automatic))"#
         )
     }
 
@@ -1110,15 +1123,15 @@ mod tests {
     fn test_parse_dynamic_type_ascription() {
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"dynamic(x: Int)"#).unwrap()),
-            r#"Ok(Dynamic(Var(VarName::new("x")), Ascribed(Int)))"#
+            r#"Ok(Dynamic(Var(VarName::new("x")), Ascribed(Int), Automatic))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"dynamic(x: Int, {x, y})"#).unwrap()),
-            r#"Ok(RestrictedDynamic(Var(VarName::new("x")), Ascribed(Int), [VarName::new("x"), VarName::new("y")]))"#
+            r#"Ok(Dynamic(Var(VarName::new("x")), Ascribed(Int), Explicit([VarName::new("x"), VarName::new("y")])))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"defer(x: Int)"#).unwrap()),
-            r#"Ok(Defer(Var(VarName::new("x")), Ascribed(Int), []))"#
+            r#"Ok(Defer(Var(VarName::new("x")), Ascribed(Int), Automatic))"#
         );
     }
 
@@ -1169,7 +1182,7 @@ mod tests {
     #[test]
     fn keyed_expression_fields_preserve_source_order() {
         let expr = parse_sexpr(r#"Map("z": 1, "a": 2, "m": 3)"#).unwrap();
-        let crate::ExprKind::Map(fields) = expr.as_ref().kind() else {
+        let crate::lang::dsrv::ast::ExprKind::Map(fields) = expr.as_ref().kind() else {
             panic!("expected a map expression");
         };
         assert_eq!(
@@ -1210,23 +1223,23 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"robot.id"#).unwrap()),
-            r#"Ok(SGet(Var(VarName::new("robot")), id))"#
+            r#"Ok(SGet(Var(VarName::new("robot")), "id"))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"robot.pose.x + 1"#).unwrap()),
-            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot")), pose), x), Val(Int(1)), NOp(Add)))"#
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"Struct("id": 1).id"#).unwrap()),
-            r#"Ok(SGet(Struct({"id": Val(Int(1))}), id))"#
+            r#"Ok(SGet(Struct({"id": Val(Int(1))}), "id"))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"robot.sensor_value"#).unwrap()),
-            r#"Ok(SGet(Var(VarName::new("robot")), sensor_value))"#
+            r#"Ok(SGet(Var(VarName::new("robot")), "sensor_value"))"#
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr(r#"robot_A.pose.x + 1"#).unwrap()),
-            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot_A")), pose), x), Val(Int(1)), NOp(Add)))"#
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot_A")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
         );
     }
 
@@ -1401,7 +1414,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_sexpr("dynamic(!s)").unwrap()),
-            r#"Ok(Dynamic(Not(Var(VarName::new("s"))), Unascribed))"#
+            r#"Ok(Dynamic(Not(Var(VarName::new("s"))), Unascribed, Automatic))"#
         );
     }
 

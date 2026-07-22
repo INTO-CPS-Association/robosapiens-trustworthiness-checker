@@ -29,14 +29,16 @@ macro_rules! define_config {
 /// Construct a DSRV expression for tests.
 ///
 /// The syntax intentionally mirrors `ExprKind` while omitting boxes and operator enum wrappers.
+#[cfg(test)]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __dsrv_construct_node {
     ($builder:ident; $variant:ident($($field:expr),* $(,)?)) => {
-        $builder.$variant($($field),*)
+        $builder.alloc_default($crate::lang::dsrv::ast::ExprKind::$variant($($field),*))
     };
 }
 
+#[cfg(test)]
 #[macro_export]
 macro_rules! sexpr {
     ($variant:ident $args:tt) => {
@@ -48,6 +50,7 @@ macro_rules! sexpr {
     };
 }
 
+#[cfg(test)]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __sexpr_op {
@@ -95,6 +98,7 @@ macro_rules! __sexpr_op {
     };
 }
 
+#[cfg(test)]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __sexpr_node {

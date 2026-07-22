@@ -1,18 +1,16 @@
 //! Localisation and auxiliary-expression expansion for distributed DSRV specifications.
-//!
-//! Transformations build new expression storage with [`ExprBuilder`] rather
-//! than mutating trees that may be shared by several specification roots.
 
 use static_assertions::assert_obj_safe;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 
 use tracing::debug;
 
-use crate::lang::dsrv::ast::{DsrvSpecification, Expr, ExprBuilder, ExprId, ExprRef};
+use crate::lang::dsrv::ast::{DsrvSpecification, ExprView, RewriteForestError, rewrite_forest};
+use crate::lang::dsrv::span::Span;
 
+use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
-use crate::{ExprKind, VarName};
 
 pub trait LocalitySpec: Debug {
     fn local_vars(&self) -> Vec<VarName>;
@@ -52,42 +50,38 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
-fn copy_inlining_aux(
-    expression: ExprRef<'_>,
-    spec: &DsrvSpecification,
-    aux_vars: &BTreeSet<VarName>,
-    visiting: &mut BTreeSet<VarName>,
-    target: &mut ExprBuilder,
-) -> ExprId {
-    if let ExprKind::Var(var) = expression.kind() {
-        if aux_vars.contains(var) {
-            assert!(
-                visiting.insert(var.clone()),
-                "Recursive/cyclic aux definition detected while localising at aux variable {var:?}",
-            );
-            let expanded_expr = spec
-                .exprs
-                .get(var)
-                .unwrap_or_else(|| panic!("Aux variable {var:?} does not have a definition"));
-            let expanded =
-                copy_inlining_aux(expanded_expr.as_ref(), spec, aux_vars, visiting, target);
-            visiting.remove(var);
-            return expanded;
+/// A failure while localising a DSRV specification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DsrvLocalisationError {
+    MissingAuxDefinition { variable: VarName },
+    MonitoredAtAux { variable: VarName, node: NodeName },
+    Dist,
+    CyclicReplacement { replacement_spans: Vec<Span> },
+}
+
+impl fmt::Display for DsrvLocalisationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingAuxDefinition { variable } => {
+                write!(
+                    formatter,
+                    "aux variable `{variable}` does not have a definition"
+                )
+            }
+            Self::MonitoredAtAux { variable, node } => write!(
+                formatter,
+                "localisation of monitored_at({variable}, {node}) is not allowed because `{variable}` is an aux variable"
+            ),
+            Self::Dist => formatter.write_str("dist(...) is unsupported during DSRV localisation"),
+            Self::CyclicReplacement { replacement_spans } => write!(
+                formatter,
+                "cyclic aux replacement expansion through spans {replacement_spans:?}"
+            ),
         }
     }
-
-    if matches!(expression.kind(), ExprKind::MonitoredAt(var, _) if aux_vars.contains(var)) {
-        panic!("Localisation of monitored_at expression with aux variable is not allowed");
-    }
-    if matches!(expression.kind(), ExprKind::Dist(_, _)) {
-        unimplemented!("Dist currently unsupported");
-    }
-
-    let node = contiguous_tree::map_child_ids(expression.kind(), |child| {
-        copy_inlining_aux(expression.child(child), spec, aux_vars, visiting, target)
-    });
-    target.alloc(node, expression.span())
 }
+
+impl std::error::Error for DsrvLocalisationError {}
 
 fn dependency_closure(
     spec: &DsrvSpecification,
@@ -101,6 +95,13 @@ fn dependency_closure(
         }
         if let Some(root) = spec.exprs.get(&var) {
             root.visit_stream_dependencies(|dependency| pending.push(dependency.clone()));
+            // Placement references are not runtime stream dependencies, but aux variables used in
+            // monitored_at must remain visible so localisation can reject them structurally.
+            root.visit_free_variables(|dependency| {
+                if spec.aux_vars.contains(dependency) {
+                    pending.push(dependency.clone());
+                }
+            });
         }
     }
     reachable
@@ -120,31 +121,39 @@ fn prune_to_dependency_closure(
     spec
 }
 
-fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
+fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLocalisationError> {
     let aux_vars = spec.aux_vars.clone();
     for aux in &aux_vars {
-        assert!(
-            spec.exprs.contains_key(aux),
-            "Aux variable {aux:?} does not have a definition"
-        );
+        if !spec.exprs.contains_key(aux) {
+            return Err(DsrvLocalisationError::MissingAuxDefinition {
+                variable: aux.clone(),
+            });
+        }
     }
 
-    let capacity = spec.exprs.values().map(|expr| expr.arena().len()).sum();
-    let mut builder = ExprBuilder::with_capacity(capacity);
-    let mut exprs = BTreeMap::new();
-    for (var, root) in &spec.exprs {
-        if aux_vars.contains(var) {
-            continue;
+    let roots = spec
+        .roots()
+        .filter(|(var, _)| spec.output_vars.contains(*var) && !aux_vars.contains(*var))
+        .map(|(var, root)| (var.clone(), root))
+        .collect::<BTreeMap<_, _>>();
+    let compact_forest = rewrite_forest(roots, |expression| match expression.view() {
+        ExprView::Var(var) if aux_vars.contains(var) => Ok(spec.var_expr_ref(var)),
+        ExprView::MonitoredAt(var, node) if aux_vars.contains(var) => {
+            Err(DsrvLocalisationError::MonitoredAtAux {
+                variable: var.clone(),
+                node: node.clone(),
+            })
         }
-        let root = copy_inlining_aux(
-            root.as_ref(),
-            &spec,
-            &aux_vars,
-            &mut BTreeSet::new(),
-            &mut builder,
-        );
-        exprs.insert(var.clone(), root);
-    }
+        ExprView::Dist(_, _) => Err(DsrvLocalisationError::Dist),
+        _ => Ok(None),
+    })
+    .map_err(|error| match error {
+        RewriteForestError::Policy(error) => error,
+        RewriteForestError::ReplacementCycle { replacement_spans } => {
+            DsrvLocalisationError::CyclicReplacement { replacement_spans }
+        }
+    })?;
+    let (arena, exprs) = compact_forest.into_arena_and_roots();
 
     let output_vars = spec.output_vars.difference(&aux_vars).cloned().collect();
     let type_annotations = spec
@@ -153,64 +162,75 @@ fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
 
-    DsrvSpecification::from_arena(
+    Ok(DsrvSpecification::from_arena(
         spec.input_vars,
         output_vars,
-        builder.finish_arena(),
+        arena,
         exprs,
         type_annotations,
         std::iter::empty(),
-    )
+    ))
+}
+
+#[cfg(test)]
+fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
+    try_inline_aux(spec).unwrap_or_else(|error| panic!("Failed to inline aux variables: {error}"))
+}
+
+fn finish_localisation(
+    mut spec: DsrvSpecification,
+    original: &DsrvSpecification,
+    local_set: &BTreeSet<VarName>,
+) -> DsrvSpecification {
+    debug_assert!(spec.exprs.keys().all(|var| local_set.contains(var)));
+    let needed_inputs = spec
+        .exprs
+        .values()
+        .flat_map(|expression| expression.stream_dependencies())
+        .collect::<HashSet<_>>();
+    spec.input_vars = original
+        .input_vars
+        .iter()
+        .chain(
+            original
+                .output_vars
+                .iter()
+                .chain(original.aux_vars.iter())
+                .filter(|var| !local_set.contains(*var)),
+        )
+        .filter(|var| needed_inputs.contains(*var))
+        .cloned()
+        .collect();
+    spec.output_vars.retain(|var| local_set.contains(var));
+    spec.aux_vars.retain(|var| local_set.contains(var));
+    spec.stream_vars = spec
+        .output_vars
+        .iter()
+        .cloned()
+        .chain(spec.aux_vars.iter().cloned())
+        .collect();
+
+    debug!("Local expression inputs: {:?}", needed_inputs);
+    spec
+}
+
+impl DsrvSpecification {
+    /// Localise this specification without panicking on unsupported aux expansion.
+    pub fn try_localise(
+        &self,
+        locality_spec: &impl LocalitySpec,
+    ) -> Result<Self, DsrvLocalisationError> {
+        let local_vars = locality_spec.local_vars();
+        let spec = try_inline_aux(prune_to_dependency_closure(self.clone(), &local_vars))?;
+        let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
+        Ok(finish_localisation(spec, self, &local_set))
+    }
 }
 
 impl Localisable for DsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
-        let local_vars = locality_spec.local_vars();
-        let spec = inline_aux(prune_to_dependency_closure(self.clone(), &local_vars));
-        let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
-
-        let output_vars = spec
-            .output_vars
-            .intersection(&local_set)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let aux_vars = spec
-            .aux_vars
-            .intersection(&local_set)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let exprs = spec
-            .exprs
-            .iter()
-            .filter(|(var, _)| local_set.contains(*var))
-            .map(|(var, root)| (var.clone(), root.clone()))
-            .collect::<BTreeMap<_, _>>();
-
-        let needed_inputs = exprs
-            .values()
-            .flat_map(Expr::stream_dependencies)
-            .collect::<HashSet<_>>();
-        let input_vars = spec
-            .input_vars
-            .iter()
-            .chain(
-                self.output_vars
-                    .iter()
-                    .chain(self.aux_vars.iter())
-                    .filter(|var| !local_set.contains(*var)),
-            )
-            .filter(|var| needed_inputs.contains(*var))
-            .cloned()
-            .collect();
-
-        debug!("Local expression inputs: {:?}", needed_inputs);
-        DsrvSpecification::new(
-            input_vars,
-            output_vars,
-            exprs,
-            spec.type_annotations.clone(),
-            aux_vars,
-        )
+        self.try_localise(locality_spec)
+            .unwrap_or_else(|error| panic!("Failed to localise DSRV specification: {error}"))
     }
 }
 #[cfg(test)]
@@ -219,7 +239,7 @@ mod tests {
     use std::vec;
 
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::Expr;
+    use crate::lang::dsrv::ast::{Expr, TreeCursorExt};
     use crate::lang::dsrv::span::strip_span;
     use crate::sexpr;
     use proptest::prelude::*;
@@ -484,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Recursive/cyclic aux definition detected")]
+    #[should_panic(expected = "cyclic aux replacement expansion")]
     fn test_inline_aux_cycle_panics() {
         let h1: VarName = "h1".into();
         let h2: VarName = "h2".into();
@@ -505,6 +525,133 @@ mod tests {
         );
 
         let _ = inline_aux(spec);
+    }
+
+    #[test]
+    fn try_localise_reports_missing_aux_definition() {
+        let missing: VarName = "missing".into();
+        let output: VarName = "output".into();
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([missing.clone(), output.clone()]),
+            BTreeMap::from([(output.clone(), sexpr!(Var(missing.clone())))]),
+            BTreeMap::new(),
+            [missing.clone()],
+        );
+
+        assert_eq!(
+            spec.try_localise(&vec![output]).unwrap_err(),
+            DsrvLocalisationError::MissingAuxDefinition { variable: missing }
+        );
+    }
+
+    #[test]
+    fn try_localise_reports_monitored_at_aux() {
+        let helper: VarName = "helper".into();
+        let output: VarName = "output".into();
+        let spec = crate::lang::dsrv::parser::parse_str(
+            "aux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)",
+        )
+        .expect("spec should parse");
+
+        assert!(matches!(
+            spec.try_localise(&vec![output]),
+            Err(DsrvLocalisationError::MonitoredAtAux { variable, .. }) if variable == helper
+        ));
+    }
+
+    #[test]
+    fn try_localise_reports_dist() {
+        let output: VarName = "output".into();
+        let spec = crate::lang::dsrv::parser::parse_str("out output\noutput = dist(A, B)")
+            .expect("spec should parse");
+
+        assert_eq!(
+            spec.try_localise(&vec![output]).unwrap_err(),
+            DsrvLocalisationError::Dist
+        );
+    }
+
+    #[test]
+    fn try_localise_reports_cyclic_aux_replacement() {
+        let first: VarName = "first".into();
+        let second: VarName = "second".into();
+        let output: VarName = "output".into();
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([first.clone(), second.clone(), output.clone()]),
+            BTreeMap::from([
+                (first.clone(), sexpr!(Var(second.clone()))),
+                (second.clone(), sexpr!(Var(first.clone()))),
+                (output.clone(), sexpr!(Var(first.clone()))),
+            ]),
+            BTreeMap::new(),
+            [first, second],
+        );
+
+        assert!(matches!(
+            spec.try_localise(&vec![output]),
+            Err(DsrvLocalisationError::CyclicReplacement { .. })
+        ));
+    }
+
+    #[test]
+    fn localisation_finalisation_preserves_the_compact_rewrite_arena() {
+        let helper: VarName = "helper".into();
+        let first: VarName = "first".into();
+        let second: VarName = "second".into();
+        let spec = DsrvSpecification::new(
+            BTreeSet::from(["input".into()]),
+            BTreeSet::from([helper.clone(), first.clone(), second.clone()]),
+            BTreeMap::from([
+                (helper.clone(), sexpr!(Not(Var("input")))),
+                (first.clone(), sexpr!(Var(helper.clone()))),
+                (
+                    second.clone(),
+                    sexpr!(BinOp(Var(helper.clone()), And, Val(true))),
+                ),
+            ]),
+            BTreeMap::new(),
+            [helper],
+        );
+
+        let local_set = BTreeSet::from([first, second]);
+        let pruned = prune_to_dependency_closure(
+            spec.clone(),
+            &local_set.iter().cloned().collect::<Vec<_>>(),
+        );
+        let rewritten = try_inline_aux(pruned).unwrap();
+        let rewrite_arena = rewritten
+            .exprs()
+            .values()
+            .next()
+            .expect("local roots should exist")
+            .arena() as *const _ as usize;
+
+        let localised = finish_localisation(rewritten, &spec, &local_set);
+        let final_arena = localised
+            .exprs()
+            .values()
+            .next()
+            .expect("local roots should exist")
+            .arena() as *const _ as usize;
+        assert_eq!(
+            final_arena, rewrite_arena,
+            "finalisation must not rebuild syntax"
+        );
+
+        let reachable_nodes = localised
+            .exprs()
+            .values()
+            .map(|root| root.as_ref().postorder().len())
+            .sum::<usize>();
+        assert_eq!(localised.arena_len(), reachable_nodes);
+        let roots = localised.exprs().values().collect::<Vec<_>>();
+        assert!(
+            roots
+                .windows(2)
+                .all(|roots| roots[0].shares_storage_with(roots[1]))
+        );
     }
 
     proptest! {

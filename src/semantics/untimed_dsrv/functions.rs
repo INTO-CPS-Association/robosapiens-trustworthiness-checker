@@ -8,7 +8,7 @@ use crate::core::OutputStream;
 use crate::core::RuntimeFunction;
 use crate::core::StreamType;
 use crate::core::Value;
-use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprKind, ExprRef, ExprView, TypeAnnotations};
+use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprRef, ExprView};
 use crate::semantics::{AsyncConfig, StreamContext};
 use async_stream::stream;
 use contiguous_tree::TreeCursorExt;
@@ -23,11 +23,11 @@ pub(super) struct ScopedExpr {
     owner: Option<VarName>,
 }
 
-/// Type-checking state retained while an expression moves through lexical scopes.
+/// AST-owned checking state retained while an expression moves through lexical scopes.
 #[derive(Clone)]
 enum ExprPhase {
     Unchecked,
-    Checked(Rc<TypeAnnotations>),
+    Checked(CheckedExpr),
 }
 
 /// An immutable lexical frame. Arguments retain the scope in which they were created.
@@ -128,10 +128,9 @@ impl ScopedExpr {
         }
     }
 
-    pub(super) fn checked(expr: CheckedExpr) -> Self {
-        let (expr, checked) = expr.into_parts();
+    pub(super) fn checked(checked: CheckedExpr) -> Self {
         Self {
-            expr,
+            expr: checked.expr().clone(),
             phase: ExprPhase::Checked(checked),
             environment: None,
             owner: None,
@@ -153,11 +152,11 @@ impl ScopedExpr {
 
     pub(super) fn typ<'a>(
         &'a self,
-        expr: ExprRef<'_>,
+        expr: ExprRef<'a>,
     ) -> Option<&'a crate::lang::dsrv::type_checker::TCType> {
         match &self.phase {
             ExprPhase::Unchecked => None,
-            ExprPhase::Checked(checked) => Some(checked.type_of(expr.id())),
+            ExprPhase::Checked(checked) => Some(checked.cursor(expr).typ()),
         }
     }
 
@@ -166,7 +165,7 @@ impl ScopedExpr {
     ) -> Option<&Rc<crate::lang::dsrv::type_checker::TypeInfo>> {
         match &self.phase {
             ExprPhase::Unchecked => None,
-            ExprPhase::Checked(checked) => Some(checked.shared_type_info()),
+            ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_info()),
         }
     }
 
@@ -289,7 +288,7 @@ pub(crate) fn bind_expression_for_benchmark(
 
 fn value_expression(value: Value, template: &ScopedExpr) -> ScopedExpr {
     ScopedExpr {
-        expr: Expr::with_span(ExprKind::Val(value), template.expr.as_ref().span()),
+        expr: Expr::value_with_span(value, template.expr.as_ref().span()),
         phase: ExprPhase::Unchecked,
         environment: template.environment.clone(),
         owner: template.owner.clone(),
@@ -315,6 +314,8 @@ pub(super) fn make_function<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
+    use ExprView::*;
+
     let callable_ctx = Rc::new(ctx.subcontext(0));
     let param_names = params
         .iter()
@@ -338,13 +339,13 @@ where
         temporal: body.as_ref().postorder().any(|node| {
             matches!(
                 node.view(),
-                ExprView::SIndex(_, _)
-                    | ExprView::Init(_, _)
-                    | ExprView::When(_)
-                    | ExprView::Update(_, _)
-                    | ExprView::Latch(_, _)
-                    | ExprView::Dynamic(_, _, _)
-                    | ExprView::Defer(_, _, _)
+                SIndex(_, _)
+                    | Init(_, _)
+                    | When(_)
+                    | Update(_, _)
+                    | Latch(_, _)
+                    | Dynamic(_, _, _)
+                    | Defer(_, _, _)
             )
         }),
         context: Rc::clone(&callable_ctx),

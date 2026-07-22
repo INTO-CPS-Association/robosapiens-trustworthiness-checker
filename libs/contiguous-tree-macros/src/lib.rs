@@ -11,6 +11,7 @@ mod tree_schema;
 /// ```text
 /// pub tree Expr {
 ///     internals: pub(crate),
+///     owned_constructors: #[cfg(test)] pub(crate),
 ///     metadata: span: Span = Span::default(),
 ///     id: u32,
 ///     key: String,
@@ -50,13 +51,16 @@ mod tree_schema;
 /// `internals` controls the visibility of generated storage types such as
 /// `ExprArena`, `ExprNode`, and `ExprHandle`; the declared tree visibility is
 /// used for the language-facing root, ID, kind, reference, view, builder, and
-/// keyed-field types.
+/// keyed-field types. The optional `owned_constructors` setting generates
+/// variant-named constructors with the requested visibility. Outer attributes
+/// between `:` and the visibility are applied to the constructor `impl`, so
+/// `owned_constructors: #[cfg(test)] pub(crate),` makes them test-only.
 ///
 /// `children` and `keyed_children` name generic collection constructors, not
 /// fully instantiated types. For example, use `EcoVec`, not `EcoVec<ExprId>`.
 /// For an element type `T`, both collections must support cloning, equality,
-/// debug formatting, serialization, slice access, and an inherent
-/// `make_mut(&mut self) -> &mut [T]` operation. The keyed collection is
+/// debug formatting, slice access, and an inherent `make_mut(&mut self) ->
+/// &mut [T]` operation. The keyed collection is
 /// instantiated with `(Key, Id)` and must additionally support `Default`,
 /// `FromIterator<T>`, and owned `IntoIterator<Item = T>`. `EcoVec` satisfies
 /// this contract.

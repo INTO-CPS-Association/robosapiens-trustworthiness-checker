@@ -1,7 +1,7 @@
 use super::super::plan::*;
 use super::super::*;
 use super::plan_executor::{PlanEvalContext, PlanExecutor};
-use super::value_ops::propagated_special;
+use super::value_evaluation::propagated_special;
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 

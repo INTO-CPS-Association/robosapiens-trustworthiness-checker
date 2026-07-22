@@ -79,21 +79,23 @@ impl<'arena> ExprRef<'arena> {
     }
 
     fn visit_semantic_variables(self, include_monitored: bool, visit: &mut impl FnMut(&VarName)) {
+        use ExprView::*;
+
         let mut binding_depths = BTreeMap::<&VarName, usize>::new();
         let mut pending = vec![FreeVariableEvent::Expression(self)];
 
         while let Some(event) = pending.pop() {
             match event {
                 FreeVariableEvent::Expression(expr) => match expr.view() {
-                    ExprView::Var(var) if !binding_depths.contains_key(var) => {
+                    Var(var) if !binding_depths.contains_key(var) => {
                         visit(var);
                     }
-                    ExprView::MonitoredAt(var, _)
+                    MonitoredAt(var, _)
                         if include_monitored && !binding_depths.contains_key(var) =>
                     {
                         visit(var);
                     }
-                    ExprView::Dynamic(source, _, scope) | ExprView::Defer(source, _, scope) => {
+                    Dynamic(source, _, scope) | Defer(source, _, scope) => {
                         for var in scope
                             .iter()
                             .filter(|var| !binding_depths.contains_key(*var))
@@ -102,7 +104,7 @@ impl<'arena> ExprRef<'arena> {
                         }
                         pending.push(FreeVariableEvent::Expression(source));
                     }
-                    ExprView::Lambda(params, body) => {
+                    Lambda(params, body) => {
                         for (name, _) in params {
                             *binding_depths.entry(name).or_default() += 1;
                         }

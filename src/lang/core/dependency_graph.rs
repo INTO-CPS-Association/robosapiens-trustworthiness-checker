@@ -271,8 +271,8 @@ impl DepGraph {
     }
 }
 
-// ExprKind specific dependency resolution:
-// Traverses the sexpr and returns a DepGraph of its dependencies to other variables
+// Expression dependency resolution:
+// Traverses the expression and returns a DepGraph of its dependencies to other variables
 // NOTE: The graph returned here may have multiple edges to the same node.
 // Can be combined by calling `combine_edges`. This is not done in this function for efficiency
 fn add_sexpr_dependencies(

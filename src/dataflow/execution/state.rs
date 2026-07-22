@@ -142,7 +142,7 @@ impl SIndexValueHistory {
         );
         self.pending = true;
         let previous = self.read();
-        super::value_ops::stream_lift_value(previous, &mut self.output_last)
+        super::value_evaluation::stream_lift_value(previous, &mut self.output_last)
     }
 
     pub(in crate::dataflow) fn commit_pending(&mut self, value: Value) {
@@ -153,7 +153,7 @@ impl SIndexValueHistory {
     }
 
     pub(in crate::dataflow) fn lift_current(&mut self, value: Value) -> Value {
-        super::value_ops::stream_lift_value(value, &mut self.output_last)
+        super::value_evaluation::stream_lift_value(value, &mut self.output_last)
     }
 
     pub(in crate::dataflow) fn reset(&mut self) {

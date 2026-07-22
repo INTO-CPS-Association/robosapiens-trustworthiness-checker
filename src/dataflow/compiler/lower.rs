@@ -1,24 +1,20 @@
 //! Lowering from DSRV expression views into executable dataflow plans.
 //!
-//! Checked and unchecked inputs share the same [`ExprRef`](crate::lang::dsrv::ast::ExprRef)
-//! traversal; checked lowering additionally looks up immutable type annotations.
+//! Checked and unchecked inputs share an AST-owned cursor. Its child cursors
+//! preserve the phase and expose annotations only when they are present.
 
 use super::super::plan::*;
 use super::super::*;
-use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprRefs, ExprView, SBinOp, TypeAnnotations};
+use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView, SBinOp};
 use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
 
-struct PlanBuilder<'annotations> {
+struct PlanBuilder {
     nodes: Vec<UnboundOp>,
-    annotations: Option<&'annotations TypeAnnotations>,
 }
 
-impl<'annotations> PlanBuilder<'annotations> {
-    fn new(annotations: Option<&'annotations TypeAnnotations>) -> Self {
-        Self {
-            nodes: Vec::new(),
-            annotations,
-        }
+impl PlanBuilder {
+    fn new() -> Self {
+        Self { nodes: Vec::new() }
     }
 
     fn push(&mut self, op: UnboundOp) -> UnboundRef {
@@ -32,39 +28,33 @@ impl<'annotations> PlanBuilder<'annotations> {
     }
 }
 
-fn lower_branch(
-    expr: ExprRef<'_>,
-    annotations: Option<&TypeAnnotations>,
-    build: impl FnOnce(ExprRef<'_>, &mut PlanBuilder<'_>) -> UnboundRef,
-) -> UnboundPlanBody {
-    let mut builder = PlanBuilder::new(annotations);
-    let output = build(expr, &mut builder);
-    builder.finish(output)
-}
-
-pub(in crate::dataflow) fn lower_expr_plan(expr: Expr) -> UnboundPlanBody {
-    lower_expr_ref_plan(expr.as_ref(), None)
-}
-
-pub(in crate::dataflow) fn lower_checked_expr_plan(expr: CheckedExpr) -> UnboundPlanBody {
-    let (expr, checked) = expr.into_parts();
-    lower_expr_ref_plan(expr.as_ref(), Some(&checked))
-}
-
-fn lower_expr_ref_plan(
-    expr: ExprRef<'_>,
-    annotations: Option<&TypeAnnotations>,
-) -> UnboundPlanBody {
-    let mut builder = PlanBuilder::new(annotations);
+fn lower_branch(expr: ExprCursor<'_>) -> UnboundPlanBody {
+    let mut builder = PlanBuilder::new();
     let output = lower_expr(expr, &mut builder);
     builder.finish(output)
 }
 
-fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
+pub(in crate::dataflow) fn lower_expr_plan(expr: Expr) -> UnboundPlanBody {
+    lower_expr_ref_plan(ExprCursor::unchecked(expr.as_ref()))
+}
+
+pub(in crate::dataflow) fn lower_checked_expr_plan(expr: CheckedExpr) -> UnboundPlanBody {
+    lower_expr_ref_plan(expr.as_ref().erased())
+}
+
+fn lower_expr_ref_plan(expr: ExprCursor<'_>) -> UnboundPlanBody {
+    let mut builder = PlanBuilder::new();
+    let output = lower_expr(expr, &mut builder);
+    builder.finish(output)
+}
+
+fn lower_expr(expr: ExprCursor<'_>, builder: &mut PlanBuilder) -> UnboundRef {
+    use ExprView::*;
+
     match expr.view() {
-        ExprView::Val(value) => UnboundRef::Const(value.clone()),
-        ExprView::Var(var) => UnboundRef::External(var.clone()),
-        ExprView::BinOp(lhs, rhs, op) => {
+        Val(value) => UnboundRef::Const(value.clone()),
+        Var(var) => UnboundRef::External(var.clone()),
+        BinOp(lhs, rhs, op) => {
             let lhs = lower_expr(lhs, builder);
             let rhs = lower_expr(rhs, builder);
             builder.push(UnboundOp::Binary {
@@ -73,104 +63,104 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
                 rhs,
             })
         }
-        ExprView::Not(arg) => lower_unary(builder, DataflowUnaryOp::Not, arg),
-        ExprView::Neg(arg) => lower_unary(builder, DataflowUnaryOp::Neg, arg),
-        ExprView::Sin(arg) => lower_unary(builder, DataflowUnaryOp::Sin, arg),
-        ExprView::Cos(arg) => lower_unary(builder, DataflowUnaryOp::Cos, arg),
-        ExprView::Tan(arg) => lower_unary(builder, DataflowUnaryOp::Tan, arg),
-        ExprView::Abs(arg) => lower_unary(builder, DataflowUnaryOp::Abs, arg),
-        ExprView::If(cond, then_value, else_value) => {
+        Not(arg) => lower_unary(builder, DataflowUnaryOp::Not, arg),
+        Neg(arg) => lower_unary(builder, DataflowUnaryOp::Neg, arg),
+        Sin(arg) => lower_unary(builder, DataflowUnaryOp::Sin, arg),
+        Cos(arg) => lower_unary(builder, DataflowUnaryOp::Cos, arg),
+        Tan(arg) => lower_unary(builder, DataflowUnaryOp::Tan, arg),
+        Abs(arg) => lower_unary(builder, DataflowUnaryOp::Abs, arg),
+        If(cond, then_value, else_value) => {
             let cond = lower_expr(cond, builder);
-            let then_branch = lower_branch(then_value, builder.annotations, lower_expr);
-            let else_branch = lower_branch(else_value, builder.annotations, lower_expr);
+            let then_branch = lower_branch(then_value);
+            let else_branch = lower_branch(else_value);
             builder.push(UnboundOp::If {
                 cond,
                 then_branch,
                 else_branch,
             })
         }
-        ExprView::SIndex(input, offset) => {
+        SIndex(input, offset) => {
             let input = lower_expr(input, builder);
             builder.push(UnboundOp::SIndex { input, offset })
         }
-        ExprView::Default(input, fallback) => {
+        Default(input, fallback) => {
             let input = lower_expr(input, builder);
             let fallback = lower_expr(fallback, builder);
             builder.push(UnboundOp::Default { input, fallback })
         }
-        ExprView::Update(base, update) => {
+        Update(base, update) => {
             let base = lower_expr(base, builder);
             let update = lower_expr(update, builder);
             builder.push(UnboundOp::Update { base, update })
         }
-        ExprView::IsDefined(input) => {
+        IsDefined(input) => {
             let input = lower_expr(input, builder);
             builder.push(UnboundOp::IsDefined { input })
         }
-        ExprView::When(input) => {
+        When(input) => {
             let input = lower_expr(input, builder);
             builder.push(UnboundOp::When { input })
         }
-        ExprView::Latch(value, trigger) => {
+        Latch(value, trigger) => {
             let value = lower_expr(value, builder);
             let trigger = lower_expr(trigger, builder);
             builder.push(UnboundOp::Latch { value, trigger })
         }
-        ExprView::Init(input, initial) => {
+        Init(input, initial) => {
             let input = lower_expr(input, builder);
             let initial = lower_expr(initial, builder);
             builder.push(UnboundOp::Init { input, initial })
         }
-        ExprView::List(items) => {
+        List(items) => {
             let items = lower_exprs(items, builder);
             builder.push(UnboundOp::List(items))
         }
-        ExprView::Tuple(items) => {
+        Tuple(items) => {
             let items = lower_exprs(items, builder);
             builder.push(UnboundOp::Tuple(items))
         }
-        ExprView::Map(items) | ExprView::Struct(items) | ExprView::ObjectLiteral(items) => {
+        Map(items) | Struct(items) | ObjectLiteral(items) => {
             let items = items
                 .iter()
                 .map(|(key, value)| (key.clone(), lower_expr(value, builder)))
                 .collect();
             builder.push(UnboundOp::Map(items))
         }
-        ExprView::LIndex(list, index) => {
+        LIndex(list, index) => {
             let list = lower_expr(list, builder);
             let index = lower_expr(index, builder);
             builder.push(UnboundOp::LIndex { list, index })
         }
-        ExprView::LAppend(list, value) => {
+        LAppend(list, value) => {
             let list = lower_expr(list, builder);
             let value = lower_expr(value, builder);
             builder.push(UnboundOp::LAppend { list, value })
         }
-        ExprView::LConcat(lhs, rhs) => {
+        LConcat(lhs, rhs) => {
             let lhs = lower_expr(lhs, builder);
             let rhs = lower_expr(rhs, builder);
             builder.push(UnboundOp::LConcat { lhs, rhs })
         }
-        ExprView::LHead(list) => {
+        LHead(list) => {
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::LHead { list })
         }
-        ExprView::LTail(list) => {
+        LTail(list) => {
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::LTail { list })
         }
-        ExprView::LLen(list) => {
+        LLen(list) => {
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::LLen { list })
         }
-        ExprView::MGet(map, key) => {
+        MGet(map, key) => {
             let map = lower_expr(map, builder);
             builder.push(UnboundOp::MGet {
                 map,
                 key: key.clone(),
             })
         }
-        ExprView::SGet(value, key) => {
+        SGet(value, key) => {
             let value = lower_expr(value, builder);
             if let Ok(index) = key.parse::<usize>() {
                 builder.push(UnboundOp::TGet {
@@ -184,14 +174,14 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
                 })
             }
         }
-        ExprView::MRemove(map, key) => {
+        MRemove(map, key) => {
             let map = lower_expr(map, builder);
             builder.push(UnboundOp::MRemove {
                 map,
                 key: key.clone(),
             })
         }
-        ExprView::MInsert(map, key, value) => {
+        MInsert(map, key, value) => {
             let map = lower_expr(map, builder);
             let value = lower_expr(value, builder);
             builder.push(UnboundOp::MInsert {
@@ -200,43 +190,41 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
                 value,
             })
         }
-        ExprView::MHasKey(map, key) => {
+        MHasKey(map, key) => {
             let map = lower_expr(map, builder);
             builder.push(UnboundOp::MHasKey {
                 map,
                 key: key.clone(),
             })
         }
-        ExprView::Dynamic(source, _, scope) => lower_dynamic_expr(
+        Dynamic(source, _, scope) => lower_dynamic_expr(
             builder,
             source,
             DataflowDynamicScope::from_ast(scope.clone()),
             DataflowDynamicMode::Dynamic,
-            builder
-                .annotations
-                .map(|checked| (checked.shared_type_info(), checked.type_of(expr.id())))
+            expr.shared_type_info()
+                .zip(expr.typ())
                 .map(|(info, typ)| (Rc::clone(info), typ.clone())),
         ),
-        ExprView::Defer(source, _, scope) => lower_dynamic_expr(
+        Defer(source, _, scope) => lower_dynamic_expr(
             builder,
             source,
             DataflowDynamicScope::from_ast(scope.clone()),
             DataflowDynamicMode::Defer,
-            builder
-                .annotations
-                .map(|checked| (checked.shared_type_info(), checked.type_of(expr.id())))
+            expr.shared_type_info()
+                .zip(expr.typ())
                 .map(|(info, typ)| (Rc::clone(info), typ.clone())),
         ),
-        ExprView::Lambda(params, body) => {
-            let func = lower_function(params.clone(), body, builder.annotations);
+        Lambda(params, body) => {
+            let func = lower_function(params.clone(), body);
             builder.push(UnboundOp::Function { func })
         }
-        ExprView::Apply(func, args) => {
+        Apply(func, args) => {
             if let Some(value) = lower_direct_fix_apply(func, args.clone(), builder) {
                 return value;
             }
-            if let ExprView::Lambda(params, body) = func.view() {
-                let function = lower_function(params.clone(), body, builder.annotations);
+            if let Lambda(params, body) = func.view() {
+                let function = lower_function(params.clone(), body);
                 let args = lower_exprs(args, builder);
                 return builder.push(UnboundOp::DirectApply {
                     func: function,
@@ -250,8 +238,8 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
                 args,
             })
         }
-        ExprView::Partial(func, args) => {
-            let display = format!("partial({func}, ...)").into();
+        Partial(func, args) => {
+            let display = format!("partial({}, ...)", func.expr()).into();
             let lowered_func = lower_expr(func, builder);
             let args = lower_exprs(args, builder);
             builder.push(UnboundOp::Partial {
@@ -260,39 +248,42 @@ fn lower_expr(expr: ExprRef<'_>, builder: &mut PlanBuilder<'_>) -> UnboundRef {
                 display,
             })
         }
-        ExprView::Fix(func) => {
-            let display = format!("fix({func})").into();
+        Fix(func) => {
+            let display = format!("fix({})", func.expr()).into();
             let func = lower_expr(func, builder);
             builder.push(UnboundOp::Fix { func, display })
         }
-        ExprView::LMap(func, list) => {
+        LMap(func, list) => {
             let func = lower_expr(func, builder);
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::ListMap { func, list })
         }
-        ExprView::LFilter(func, list) => {
+        LFilter(func, list) => {
             let func = lower_expr(func, builder);
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::ListFilter { func, list })
         }
-        ExprView::LFold(func, init, list) => {
+        LFold(func, init, list) => {
             let func = lower_expr(func, builder);
             let init = lower_expr(init, builder);
             let list = lower_expr(list, builder);
             builder.push(UnboundOp::ListFold { func, init, list })
         }
-        ExprView::MonitoredAt(_, _) | ExprView::Dist(_, _) => {
+        MonitoredAt(_, _) | Dist(_, _) => {
             panic!("dataflow semantics does not support distributed AST operations")
         }
     }
 }
 
-fn lower_unary(builder: &mut PlanBuilder<'_>, op: DataflowUnaryOp, arg: ExprRef<'_>) -> UnboundRef {
+fn lower_unary(builder: &mut PlanBuilder, op: DataflowUnaryOp, arg: ExprCursor<'_>) -> UnboundRef {
     let arg = lower_expr(arg, builder);
     builder.push(UnboundOp::Unary { op, arg })
 }
 
-fn lower_exprs(items: ExprRefs<'_>, builder: &mut PlanBuilder<'_>) -> Vec<UnboundRef> {
+fn lower_exprs<'arena>(
+    items: impl IntoIterator<Item = ExprCursor<'arena>>,
+    builder: &mut PlanBuilder,
+) -> Vec<UnboundRef> {
     items
         .into_iter()
         .map(|item| lower_expr(item, builder))
@@ -300,8 +291,8 @@ fn lower_exprs(items: ExprRefs<'_>, builder: &mut PlanBuilder<'_>) -> Vec<Unboun
 }
 
 fn lower_dynamic_expr(
-    builder: &mut PlanBuilder<'_>,
-    input: ExprRef<'_>,
+    builder: &mut PlanBuilder,
+    input: ExprCursor<'_>,
     scope: DataflowDynamicScope,
     mode: DataflowDynamicMode,
     typed: Option<(Rc<TypeInfo>, TCType)>,
@@ -317,29 +308,30 @@ fn lower_dynamic_expr(
 
 fn lower_function(
     params: EcoVec<(VarName, StreamType)>,
-    body: ExprRef<'_>,
-    annotations: Option<&TypeAnnotations>,
+    body: ExprCursor<'_>,
 ) -> UnboundFunctionDef {
     let params_display = params
         .iter()
         .map(|(name, typ)| format!("{}: {}", name, typ))
         .collect::<Vec<_>>()
         .join(", ");
-    let display = format!("\\{} -> {}", params_display, body).into();
+    let display = format!("\\{} -> {}", params_display, body.expr()).into();
     let params = params.into_iter().map(|(name, _)| name).collect();
-    let body = lower_expr_ref_plan(body, annotations);
+    let body = lower_expr_ref_plan(body);
     UnboundFunctionDef::new(params, body, display)
 }
 
-fn lower_direct_fix_apply(
-    func: ExprRef<'_>,
-    args: ExprRefs<'_>,
-    builder: &mut PlanBuilder<'_>,
+fn lower_direct_fix_apply<'arena>(
+    func: ExprCursor<'arena>,
+    args: impl IntoIterator<Item = ExprCursor<'arena>>,
+    builder: &mut PlanBuilder,
 ) -> Option<UnboundRef> {
-    let ExprView::Fix(fixed_func) = func.view() else {
+    use ExprView::*;
+
+    let Fix(fixed_func) = func.view() else {
         return None;
     };
-    let ExprView::Lambda(params, body) = fixed_func.view() else {
+    let Lambda(params, body) = fixed_func.view() else {
         return None;
     };
     let (self_name, _) = params.first()?;
@@ -349,13 +341,13 @@ fn lower_direct_fix_apply(
         .skip(1)
         .map(|(name, _)| name.clone())
         .collect();
-    let mut body = lower_expr_ref_plan(body, builder.annotations);
+    let mut body = lower_expr_ref_plan(body);
     specialize_recursive_self_calls(&mut body, self_name);
     let args = lower_exprs(args, builder);
     Some(lower_direct_recursive_apply(
         function_params,
         body,
-        func.to_string().into(),
+        func.expr().to_string().into(),
         args,
         builder,
     ))
@@ -366,7 +358,7 @@ fn lower_direct_recursive_apply(
     body: UnboundPlanBody,
     display: EcoString,
     args: Vec<UnboundRef>,
-    builder: &mut PlanBuilder<'_>,
+    builder: &mut PlanBuilder,
 ) -> UnboundRef {
     let function = UnboundFunctionDef::new(params, body, display);
     builder.push(UnboundOp::DirectFixApply {

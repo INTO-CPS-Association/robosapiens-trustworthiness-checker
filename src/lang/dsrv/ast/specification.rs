@@ -5,21 +5,10 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use crate::core::{Specification, StreamType, VarName};
-use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::type_checker::TCType;
 
-use super::{
-    CheckedExpr, CheckedExprRef, Expr, ExprArena, ExprHandle, ExprId, ExprRef, TypeAnnotations,
-};
-
-/// A top-level DSRV declaration produced by the parsers.
-#[derive(Clone, PartialEq, Debug, serde::Serialize)]
-pub enum STopDecl {
-    Input(VarName, Option<StreamType>, Span),
-    Output(VarName, Option<StreamType>, Span),
-    Aux(VarName, Option<StreamType>, Span),
-    Assignment(VarName, ExprId, Span),
-}
+use super::checked::TypeAnnotations;
+use super::{CheckedExpr, CheckedExprRef, Expr, ExprArena, ExprId, ExprRef};
 
 /// An unchecked DSRV specification.
 #[derive(Clone, PartialEq, serde::Serialize)]
@@ -211,11 +200,11 @@ impl DsrvSpecification {
         #[cfg(debug_assertions)]
         arena.assert_forest(exprs.values().copied());
         let entries = exprs.into_iter().collect::<Vec<_>>();
-        let handles = ExprHandle::forest(arena, entries.iter().map(|(_, root)| *root));
+        let expressions = Expr::forest(arena, entries.iter().map(|(_, root)| *root));
         let exprs = entries
             .into_iter()
-            .zip(handles)
-            .map(|((name, _), tree)| (name, Expr::new(tree)))
+            .zip(expressions)
+            .map(|((name, _), expression)| (name, expression))
             .collect();
         Self {
             input_vars,
@@ -328,8 +317,7 @@ mod tests {
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
     use crate::lang::dsrv::ast::{
-        CheckedExpr, DsrvSpecification, DynamicExprScope, ExprArena, ExprHandle, ExprId, ExprKind,
-        SBinOp,
+        CheckedExpr, DsrvSpecification, DynamicExprScope, ExprArena, ExprId, ExprKind, SBinOp,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_sexpr;
@@ -604,7 +592,7 @@ mod tests {
             ExprKind::BinOp(left, right, SBinOp::NOp(NumericalBinOp::Add)),
             Span::default(),
         );
-        let laid_out_differently = Expr::new(ExprHandle::new(arena, root));
+        let laid_out_differently = Expr::from_arena_root(arena, root);
 
         assert_eq!(built, laid_out_differently);
     }

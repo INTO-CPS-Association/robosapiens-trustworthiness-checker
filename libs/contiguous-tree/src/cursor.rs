@@ -8,6 +8,7 @@ pub trait TreeCursor: Copy {
     type ChildIds: DoubleEndedIterator<Item = Self::Id> + ExactSizeIterator;
 
     fn id(self) -> Self::Id;
+    fn same_node(self, other: Self) -> bool;
 
     fn child_ids(self) -> Self::ChildIds;
     fn child(self, id: Self::Id) -> Self;
@@ -86,6 +87,10 @@ where
 
     fn id(self) -> Self::Id {
         self.cursor.id()
+    }
+
+    fn same_node(self, other: Self) -> bool {
+        self.cursor.same_node(other.cursor)
     }
 
     fn child_ids(self) -> Self::ChildIds {

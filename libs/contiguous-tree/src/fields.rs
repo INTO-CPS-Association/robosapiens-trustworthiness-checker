@@ -1,8 +1,146 @@
 //! Stored child collections resolved into borrowed tree cursors.
 
-use std::borrow::Borrow;
+use std::{borrow::Borrow, fmt, marker::PhantomData};
 
 use crate::TreeCursor;
+
+/// Keyed values in source order, backed by a configurable collection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyedFields<Key, Value, Storage> {
+    storage: Storage,
+    marker: PhantomData<fn() -> (Key, Value)>,
+}
+
+impl<Key, Value, Storage> Default for KeyedFields<Key, Value, Storage>
+where
+    Storage: Default,
+{
+    fn default() -> Self {
+        Self {
+            storage: Storage::default(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<Key, Value, Storage> KeyedFields<Key, Value, Storage>
+where
+    Storage: AsRef<[(Key, Value)]>,
+{
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&Key, &Value)> + ExactSizeIterator {
+        self.as_slice().iter().map(|(key, value)| (key, value))
+    }
+
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &Key> + ExactSizeIterator {
+        self.as_slice().iter().map(|(key, _)| key)
+    }
+
+    pub fn values(&self) -> impl DoubleEndedIterator<Item = &Value> + ExactSizeIterator {
+        self.as_slice().iter().map(|(_, value)| value)
+    }
+
+    pub fn get<Q>(&self, key: &Q) -> Option<Value>
+    where
+        Key: Borrow<Q>,
+        Value: Copy,
+        Q: Eq + ?Sized,
+    {
+        self.as_slice()
+            .iter()
+            .rev()
+            .find(|(found, _)| found.borrow() == key)
+            .map(|(_, value)| *value)
+    }
+
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        Key: Borrow<Q>,
+        Value: Copy,
+        Q: Eq + ?Sized,
+    {
+        self.get(key).is_some()
+    }
+
+    pub fn duplicate_key(&self) -> Option<&Key>
+    where
+        Key: Eq,
+    {
+        duplicate_key(self.as_slice())
+    }
+
+    pub fn as_slice(&self) -> &[(Key, Value)] {
+        self.storage.as_ref()
+    }
+
+    #[doc(hidden)]
+    pub fn make_mut_with<'fields>(
+        &'fields mut self,
+        make_mut: impl FnOnce(&'fields mut Storage) -> &'fields mut [(Key, Value)],
+    ) -> &'fields mut [(Key, Value)] {
+        make_mut(&mut self.storage)
+    }
+}
+
+impl<Key, Value, Storage> FromIterator<(Key, Value)> for KeyedFields<Key, Value, Storage>
+where
+    Storage: FromIterator<(Key, Value)>,
+{
+    fn from_iter<Items: IntoIterator<Item = (Key, Value)>>(items: Items) -> Self {
+        Self {
+            storage: items.into_iter().collect(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<Key, Value, Storage> From<Storage> for KeyedFields<Key, Value, Storage> {
+    fn from(storage: Storage) -> Self {
+        Self {
+            storage,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<Key, Value, Storage> IntoIterator for KeyedFields<Key, Value, Storage>
+where
+    Storage: IntoIterator<Item = (Key, Value)>,
+{
+    type Item = (Key, Value);
+    type IntoIter = Storage::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.storage.into_iter()
+    }
+}
+
+impl<'fields, Key, Value, Storage> IntoIterator for &'fields KeyedFields<Key, Value, Storage>
+where
+    Storage: AsRef<[(Key, Value)]>,
+{
+    type Item = (&'fields Key, &'fields Value);
+    type IntoIter = std::iter::Map<
+        std::slice::Iter<'fields, (Key, Value)>,
+        fn(&(Key, Value)) -> (&Key, &Value),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        fn split<Key, Value>((key, value): &(Key, Value)) -> (&Key, &Value) {
+            (key, value)
+        }
+        self.as_slice().iter().map(split)
+    }
+}
+
+/// Return the first key that repeats an earlier key in source order.
+pub fn duplicate_key<Key: Eq, Value>(fields: &[(Key, Value)]) -> Option<&Key> {
+    fields.iter().enumerate().find_map(|(index, (key, _))| {
+        fields[..index]
+            .iter()
+            .any(|(previous, _)| previous == key)
+            .then_some(key)
+    })
+}
 
 /// IDs from a stored collection resolved through their parent cursor.
 #[derive(Clone)]
@@ -14,6 +152,16 @@ pub struct ResolvedIds<Cursor, IDs> {
 impl<Cursor, IDs> ResolvedIds<Cursor, IDs> {
     pub fn new(parent: Cursor, ids: IDs) -> Self {
         Self { parent, ids }
+    }
+}
+
+impl<Cursor, IDs> fmt::Debug for ResolvedIds<Cursor, IDs>
+where
+    Cursor: TreeCursor + fmt::Debug,
+    IDs: Iterator<Item = Cursor::Id> + Clone,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.clone()).finish()
     }
 }
 
@@ -50,91 +198,21 @@ where
 {
 }
 
-/// IDs from a stored collection resolved through their parent cursor.
-///
-/// This variant stores IDs as a borrowed slice and supports pattern-friendly
-/// copying while iterating.
-#[derive(Clone, Copy)]
-pub struct ResolvedIdsBorrowed<'arena, Cursor: TreeCursor> {
-    parent: Cursor,
-    ids: &'arena [Cursor::Id],
-    index: usize,
-    end: usize,
-}
-
-impl<'arena, Cursor> ResolvedIdsBorrowed<'arena, Cursor>
-where
-    Cursor: TreeCursor,
-    Cursor::Id: Copy,
-{
-    pub fn new(parent: Cursor, ids: &'arena [Cursor::Id]) -> Self {
-        let end = ids.len();
-        Self {
-            parent,
-            ids,
-            index: 0,
-            end,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.end.saturating_sub(self.index)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl<'arena, Cursor> Iterator for ResolvedIdsBorrowed<'arena, Cursor>
-where
-    Cursor: TreeCursor,
-    Cursor::Id: Copy,
-{
-    type Item = Cursor;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            return None;
-        }
-        let id = self.ids[self.index];
-        self.index += 1;
-        Some(self.parent.child(id))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl<'arena, Cursor> DoubleEndedIterator for ResolvedIdsBorrowed<'arena, Cursor>
-where
-    Cursor: TreeCursor,
-    Cursor::Id: Copy,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            return None;
-        }
-        self.end -= 1;
-        let id = self.ids[self.end];
-        Some(self.parent.child(id))
-    }
-}
-
-impl<'arena, Cursor> ExactSizeIterator for ResolvedIdsBorrowed<'arena, Cursor>
-where
-    Cursor: TreeCursor,
-    Cursor::Id: Copy,
-{
-}
-
 /// Keyed child IDs resolved through their parent cursor.
 #[derive(Clone, Copy)]
 pub struct ResolvedFields<'fields, Cursor: TreeCursor, Key> {
     parent: Cursor,
     fields: &'fields [(Key, Cursor::Id)],
+}
+
+impl<Cursor, Key> fmt::Debug for ResolvedFields<'_, Cursor, Key>
+where
+    Cursor: TreeCursor + fmt::Debug,
+    Key: fmt::Debug,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_map().entries(self.iter()).finish()
+    }
 }
 
 impl<'fields, Cursor: TreeCursor, Key> ResolvedFields<'fields, Cursor, Key> {
@@ -179,14 +257,6 @@ impl<'fields, Cursor: TreeCursor, Key> ResolvedFields<'fields, Cursor, Key> {
     where
         Key: Eq,
     {
-        self.fields
-            .iter()
-            .enumerate()
-            .find_map(|(index, (key, _))| {
-                self.fields[..index]
-                    .iter()
-                    .any(|(previous, _)| previous == key)
-                    .then_some(key)
-            })
+        duplicate_key(self.fields)
     }
 }

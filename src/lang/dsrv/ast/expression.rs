@@ -14,7 +14,8 @@ use std::fmt::{Debug, Display};
 use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
-use super::{CheckedExprRef, SBinOp, TypeAnnotations};
+use super::checked::TypeAnnotations;
+use super::{CheckedExprRef, SBinOp};
 use crate::core::{StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
@@ -31,7 +32,7 @@ pub enum DynamicExprScope {
 contiguous_tree::tree_schema! {
     pub tree Expr {
         internals: pub(crate),
-        owned_constructors: pub(crate),
+        owned_constructors: #[cfg(test)] pub(crate),
         metadata: span: Span = Span::default(),
         id: u32,
         key: EcoString,
@@ -105,16 +106,29 @@ impl ExprBuilder {
     }
 
     pub fn finish(self, root: ExprId) -> Expr {
-        Expr::new(ExprHandle::new(self.arena, root))
+        Expr::from_arena_root(self.arena, root)
+    }
+}
+
+impl Expr {
+    pub(crate) fn from_arena_root(arena: ExprArena, root: ExprId) -> Self {
+        Self::new(ExprHandle::new(arena, root))
+    }
+
+    pub(crate) fn forest(arena: ExprArena, roots: impl IntoIterator<Item = ExprId>) -> Vec<Self> {
+        ExprHandle::forest(arena, roots)
+            .into_iter()
+            .map(Self::new)
+            .collect()
     }
 }
 
 // Programmatic construction helpers that are not schema variant constructors.
 #[allow(non_snake_case)]
 impl Expr {
-    pub(crate) fn with_span(node: ExprKind, span: Span) -> Self {
+    pub(crate) fn value_with_span(value: Value, span: Span) -> Self {
         let mut arena = ExprArena::with_capacity(1);
-        let root = arena.alloc(node, span);
+        let root = arena.alloc(ExprKind::Val(value), span);
         Self::new(ExprHandle::new(arena, root))
     }
 
@@ -309,7 +323,7 @@ mod tests {
         let node_count = expression.as_ref().fold(|node| match node.cursor().kind() {
             ExprKind::ObjectLiteral(fields) => {
                 1 + node
-                    .fields(fields.raw_slice())
+                    .fields(fields.as_slice())
                     .map(|(_, size)| size)
                     .sum::<usize>()
             }
@@ -339,6 +353,21 @@ mod tests {
             items
                 .into_iter()
                 .all(|item| matches!(item.view(), ExprView::Val(_)))
+        );
+    }
+
+    #[test]
+    fn generated_debug_resolves_sequence_and_keyed_children() {
+        let list = Expr::List(vec![Expr::Val(1), Expr::Val(2)].into());
+        assert_eq!(
+            format!("{:?}", list.as_ref()),
+            "List([Val(Int(1)), Val(Int(2))])"
+        );
+
+        let object = Expr::ObjectLiteral([("answer".into(), Expr::Val(42))]);
+        assert_eq!(
+            format!("{:?}", object.as_ref()),
+            "ObjectLiteral({\"answer\": Val(Int(42))})"
         );
     }
 

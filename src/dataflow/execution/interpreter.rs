@@ -4,7 +4,7 @@ use super::dynamic::*;
 use super::functions::*;
 use super::plan_executor::*;
 use super::state::*;
-use super::value_ops::*;
+use super::value_evaluation::*;
 
 /// Evaluates one node at one logical tick and is shared by every execution mode.
 pub(in crate::dataflow) fn eval_node_at(

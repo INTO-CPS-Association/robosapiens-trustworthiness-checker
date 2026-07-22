@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use super::combinators as mc;
+use super::core_evaluation;
 use super::dynamic;
 pub(crate) use super::functions::bind_expression_for_benchmark;
 use super::functions::{
@@ -14,7 +15,7 @@ use crate::core::{
     OutputStream, PartialStreamValue, from_typed_partial_stream, to_typed_partial_stream,
 };
 use crate::lang::dsrv::ast::{
-    BoolBinOp, CheckedExpr, CompBinOp, Expr, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp,
+    BoolBinOp, CheckedExpr, CompBinOp, Expr, ExprRef, ExprView, NumericalBinOp, SBinOp,
 };
 use crate::lang::dsrv::type_checker::TCType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
@@ -88,6 +89,8 @@ pub(super) fn evaluate_ref<'a, AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
+    use ExprView::*;
+
     debug!("Creating async stream for expression: {:?}", node);
     let owner = owner.or_else(|| expression.owner().cloned());
     let evaluate = |child| {
@@ -100,85 +103,12 @@ where
         )
     };
     let own_child = |child| expression.scope(child);
+    if let Some(stream) = core_evaluation::evaluate(node, &evaluate) {
+        return stream;
+    }
+
     match node.view() {
-        ExprView::Val(v) => {
-            debug!("Constant value: {:?}", v);
-            mc::val(v.clone())
-        }
-        ExprView::BinOp(e1, e2, op) => {
-            debug!("Binary operation: {:?} {:?} {:?}", e1, op, e2);
-            let e1 = evaluate(e1);
-            let e2 = evaluate(e2);
-            match op {
-                SBinOp::NOp(NumericalBinOp::Add) => {
-                    debug!("Performing addition operation");
-                    mc::plus(e1, e2)
-                }
-                SBinOp::NOp(NumericalBinOp::Sub) => {
-                    debug!("Performing subtraction operation");
-                    mc::minus(e1, e2)
-                }
-                SBinOp::NOp(NumericalBinOp::Mul) => {
-                    debug!("Performing multiplication operation");
-                    mc::mult(e1, e2)
-                }
-                SBinOp::NOp(NumericalBinOp::Div) => {
-                    debug!("Performing division operation");
-                    mc::div(e1, e2)
-                }
-                SBinOp::NOp(NumericalBinOp::Mod) => {
-                    debug!("Performing modulo operation");
-                    mc::modulo(e1, e2)
-                }
-                SBinOp::BOp(BoolBinOp::Or) => {
-                    debug!("Performing logical OR operation");
-                    mc::or(e1, e2)
-                }
-                SBinOp::BOp(BoolBinOp::And) => {
-                    debug!("Performing logical AND operation");
-                    mc::and(e1, e2)
-                }
-                SBinOp::BOp(BoolBinOp::Impl) => {
-                    debug!("Performing logical IMPLICATION operation");
-                    mc::implication(e1, e2)
-                }
-                SBinOp::SOp(StrBinOp::Concat) => {
-                    debug!("Performing string concatenation");
-                    mc::concat(e1, e2)
-                }
-                SBinOp::COp(CompBinOp::Eq) => {
-                    debug!("Performing equality comparison");
-                    mc::eq(e1, e2)
-                }
-                SBinOp::COp(CompBinOp::Le) => {
-                    debug!("Performing less than or equal comparison");
-                    mc::le(e1, e2)
-                }
-                SBinOp::COp(CompBinOp::Lt) => {
-                    debug!("Performing less than comparison");
-                    mc::lt(e1, e2)
-                }
-                SBinOp::COp(CompBinOp::Ge) => {
-                    debug!("Performing greater than or equal comparison");
-                    mc::ge(e1, e2)
-                }
-                SBinOp::COp(CompBinOp::Gt) => {
-                    debug!("Performing greater than comparison");
-                    mc::gt(e1, e2)
-                }
-            }
-        }
-        ExprView::Not(x) => {
-            debug!("Performing logical NOT operation");
-            let x = evaluate(x);
-            mc::not(x)
-        }
-        ExprView::Neg(x) => {
-            debug!("Performing numeric negation");
-            let x = evaluate(x);
-            mc::neg(x)
-        }
-        ExprView::Var(v) => {
+        Var(v) => {
             debug!("Accessing variable: {:?}", v);
             if let Some(stream) = expression.resolve_stream(v) {
                 return stream;
@@ -188,7 +118,7 @@ where
                 None => mc::var::<AC>(ctx, v.clone()),
             }
         }
-        ExprView::Dynamic(source, _, scope) => {
+        Dynamic(source, _, scope) => {
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
                     .shared_type_info()
@@ -197,7 +127,7 @@ where
             let e = evaluate(source);
             dynamic::dynamic_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
         }
-        ExprView::Defer(source, _, scope) => {
+        Defer(source, _, scope) => {
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
                     .shared_type_info()
@@ -206,80 +136,7 @@ where
             let e = evaluate(source);
             dynamic::defer_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
         }
-        ExprView::Update(e1, e2) => {
-            let e1 = evaluate(e1);
-            let e2 = evaluate(e2);
-            mc::update(e1, e2)
-        }
-        ExprView::Default(e, d) => {
-            let e = evaluate(e);
-            let d = evaluate(d);
-            mc::default(e, d)
-        }
-        ExprView::IsDefined(e) => {
-            let e = evaluate(e);
-            mc::is_defined(e)
-        }
-        ExprView::When(e) => {
-            let e = evaluate(e);
-            mc::when(e)
-        }
-        ExprView::Latch(e1, e2) => {
-            let e1 = evaluate(e1);
-            let e2 = evaluate(e2);
-            mc::latch(e1, e2)
-        }
-        ExprView::Init(e1, e2) => {
-            let e1 = evaluate(e1);
-            let e2 = evaluate(e2);
-            mc::init(e1, e2)
-        }
-        ExprView::SIndex(e, i) => {
-            let e = evaluate(e);
-            mc::sindex(e, i)
-        }
-        ExprView::If(b, e1, e2) => {
-            let b = evaluate(b);
-            let e1 = evaluate(e1);
-            let e2 = evaluate(e2);
-            mc::if_stm(b, e1, e2)
-        }
-        ExprView::List(exprs) => {
-            let exprs: Vec<_> = exprs.into_iter().map(|e| evaluate(e)).collect();
-            mc::list(exprs)
-        }
-        ExprView::Tuple(exprs) => {
-            let exprs: Vec<_> = exprs.into_iter().map(|e| evaluate(e)).collect();
-            mc::tuple(exprs)
-        }
-        ExprView::LIndex(e, i) => {
-            let e = evaluate(e);
-            let i = evaluate(i);
-            mc::lindex(e, i)
-        }
-        ExprView::LAppend(lst, el) => {
-            let lst = evaluate(lst);
-            let el = evaluate(el);
-            mc::lappend(lst, el)
-        }
-        ExprView::LConcat(lst1, lst2) => {
-            let lst1 = evaluate(lst1);
-            let lst2 = evaluate(lst2);
-            mc::lconcat(lst1, lst2)
-        }
-        ExprView::LHead(lst) => {
-            let lst = evaluate(lst);
-            mc::lhead(lst)
-        }
-        ExprView::LTail(lst) => {
-            let lst = evaluate(lst);
-            mc::ltail(lst)
-        }
-        ExprView::LLen(lst) => {
-            let lst = evaluate(lst);
-            mc::llen(lst)
-        }
-        ExprView::Lambda(params, body) => {
+        Lambda(params, body) => {
             let params_display = params
                 .iter()
                 .map(|(name, typ)| format!("{}: {}", name, typ))
@@ -289,25 +146,23 @@ where
             let display = format!("\\{} -> {}", params_display, body.expr).into();
             mc::val(make_function::<AC>(display, params.clone(), body, ctx))
         }
-        ExprView::Apply(func, args) => eval_apply::<AC>(
+        Apply(func, args) => eval_apply::<AC>(
             own_child(func),
             args.into_iter().map(&own_child).collect(),
             ctx,
         ),
-        ExprView::Fix(func) => eval_fix::<AC>(own_child(func), ctx),
-        ExprView::Partial(func, args) => eval_partial::<AC>(
+        Fix(func) => eval_fix::<AC>(own_child(func), ctx),
+        Partial(func, args) => eval_partial::<AC>(
             own_child(func),
             args.into_iter().map(&own_child).collect(),
             ctx,
         ),
-        ExprView::LMap(func, list) => eval_list_map::<AC>(own_child(func), own_child(list), ctx),
-        ExprView::LFilter(func, list) => {
-            eval_list_filter::<AC>(own_child(func), own_child(list), ctx)
-        }
-        ExprView::LFold(func, init, list) => {
+        LMap(func, list) => eval_list_map::<AC>(own_child(func), own_child(list), ctx),
+        LFilter(func, list) => eval_list_filter::<AC>(own_child(func), own_child(list), ctx),
+        LFold(func, init, list) => {
             eval_list_fold::<AC>(own_child(func), own_child(init), own_child(list), ctx)
         }
-        ExprView::Map(map) | ExprView::Struct(map) | ExprView::ObjectLiteral(map) => {
+        Map(map) | Struct(map) | ObjectLiteral(map) => {
             let checked_type = expression.typ(node);
             let map: BTreeMap<_, _> = map
                 .iter()
@@ -316,11 +171,7 @@ where
                 .collect();
             mc::map(map)
         }
-        ExprView::MGet(map, k) => {
-            let map = evaluate(map);
-            mc::mget(map, k.clone())
-        }
-        ExprView::SGet(value, key) => {
+        SGet(value, key) => {
             let value_type = expression.typ(value).cloned();
             let value = evaluate(value);
             match (value_type, key.parse::<usize>()) {
@@ -328,41 +179,13 @@ where
                 _ => mc::mget(value, key.clone()),
             }
         }
-        ExprView::MRemove(map, k) => {
-            let map = evaluate(map);
-            mc::mremove(map, k.clone())
-        }
-        ExprView::MInsert(map, k, v) => {
-            let map = evaluate(map);
-            let v = evaluate(v);
-            mc::minsert(map, k.clone(), v)
-        }
-        ExprView::MHasKey(map, k) => {
-            let map = evaluate(map);
-            mc::mhas_key(map, k.clone())
-        }
-        ExprView::MonitoredAt(_, _) => {
+        MonitoredAt(_, _) => {
             unimplemented!("Function monitored_at only supported in distributed semantics")
         }
-        ExprView::Dist(_, _) => {
+        Dist(_, _) => {
             unimplemented!("Function dist only supported in distributed semantics")
         }
-        ExprView::Sin(v) => {
-            let v = evaluate(v);
-            mc::sin(v)
-        }
-        ExprView::Cos(v) => {
-            let v = evaluate(v);
-            mc::cos(v)
-        }
-        ExprView::Tan(v) => {
-            let v = evaluate(v);
-            mc::tan(v)
-        }
-        ExprView::Abs(v) => {
-            let v = evaluate(v);
-            mc::abs(v)
-        }
+        _ => unreachable!("shared DSRV expression was not dispatched"),
     }
 }
 
@@ -389,10 +212,12 @@ fn evaluate_float_typed<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
+    use ExprView::*;
+
     let node = expression.as_ref();
     match node.view() {
-        ExprView::Val(Value::Float(value)) => typed::val(*value),
-        ExprView::Var(name) => {
+        Val(Value::Float(value)) => typed::val(*value),
+        Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)
             } else {
@@ -404,7 +229,7 @@ where
                 }
             }
         }
-        ExprView::BinOp(left, right, SBinOp::NOp(operator)) => {
+        BinOp(left, right, SBinOp::NOp(operator)) => {
             let left = evaluate_float_typed::<AC>(expression.scope(left), context);
             let right = evaluate_float_typed::<AC>(expression.scope(right), context);
             match operator {
@@ -415,34 +240,24 @@ where
                 NumericalBinOp::Mod => typed::rem(left, right),
             }
         }
-        ExprView::Default(input, default) => typed::default(
+        Default(input, default) => typed::default(
             evaluate_float_typed::<AC>(expression.scope(input), context),
             evaluate_float_typed::<AC>(expression.scope(default), context),
         ),
-        ExprView::SIndex(input, index) => typed::sindex(
+        SIndex(input, index) => typed::sindex(
             evaluate_float_typed::<AC>(expression.scope(input), context),
             index,
         ),
-        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+        If(condition, then_expr, else_expr) => typed::if_stream(
             evaluate_bool_typed::<AC>(expression.scope(condition), context),
             evaluate_float_typed::<AC>(expression.scope(then_expr), context),
             evaluate_float_typed::<AC>(expression.scope(else_expr), context),
         ),
-        ExprView::Neg(value) => {
-            typed::neg(evaluate_float_typed::<AC>(expression.scope(value), context))
-        }
-        ExprView::Sin(value) => {
-            typed::sin(evaluate_float_typed::<AC>(expression.scope(value), context))
-        }
-        ExprView::Cos(value) => {
-            typed::cos(evaluate_float_typed::<AC>(expression.scope(value), context))
-        }
-        ExprView::Tan(value) => {
-            typed::tan(evaluate_float_typed::<AC>(expression.scope(value), context))
-        }
-        ExprView::Abs(value) => {
-            typed::abs(evaluate_float_typed::<AC>(expression.scope(value), context))
-        }
+        Neg(value) => typed::neg(evaluate_float_typed::<AC>(expression.scope(value), context)),
+        Sin(value) => typed::sin(evaluate_float_typed::<AC>(expression.scope(value), context)),
+        Cos(value) => typed::cos(evaluate_float_typed::<AC>(expression.scope(value), context)),
+        Tan(value) => typed::tan(evaluate_float_typed::<AC>(expression.scope(value), context)),
+        Abs(value) => typed::abs(evaluate_float_typed::<AC>(expression.scope(value), context)),
         _ => evaluate_typed::<f64, AC>(expression, context),
     }
 }
@@ -461,10 +276,12 @@ fn evaluate_int_typed<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
+    use ExprView::*;
+
     let node = expression.as_ref();
     match node.view() {
-        ExprView::Val(Value::Int(value)) => typed::val(*value),
-        ExprView::Var(name) => {
+        Val(Value::Int(value)) => typed::val(*value),
+        Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)
             } else {
@@ -476,7 +293,7 @@ where
                 }
             }
         }
-        ExprView::BinOp(left, right, SBinOp::NOp(operator)) => {
+        BinOp(left, right, SBinOp::NOp(operator)) => {
             let left = evaluate_int_typed::<AC>(expression.scope(left), context);
             let right = evaluate_int_typed::<AC>(expression.scope(right), context);
             match operator {
@@ -487,22 +304,20 @@ where
                 NumericalBinOp::Mod => typed::rem(left, right),
             }
         }
-        ExprView::Default(input, default) => typed::default(
+        Default(input, default) => typed::default(
             evaluate_int_typed::<AC>(expression.scope(input), context),
             evaluate_int_typed::<AC>(expression.scope(default), context),
         ),
-        ExprView::SIndex(input, index) => typed::sindex(
+        SIndex(input, index) => typed::sindex(
             evaluate_int_typed::<AC>(expression.scope(input), context),
             index,
         ),
-        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+        If(condition, then_expr, else_expr) => typed::if_stream(
             evaluate_bool_typed::<AC>(expression.scope(condition), context),
             evaluate_int_typed::<AC>(expression.scope(then_expr), context),
             evaluate_int_typed::<AC>(expression.scope(else_expr), context),
         ),
-        ExprView::Neg(value) => {
-            typed::neg(evaluate_int_typed::<AC>(expression.scope(value), context))
-        }
+        Neg(value) => typed::neg(evaluate_int_typed::<AC>(expression.scope(value), context)),
         _ => evaluate_typed::<i64, AC>(expression, context),
     }
 }
@@ -521,10 +336,12 @@ fn evaluate_bool_typed<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
+    use ExprView::*;
+
     let node = expression.as_ref();
     match node.view() {
-        ExprView::Val(Value::Bool(value)) => typed::val(*value),
-        ExprView::Var(name) => {
+        Val(Value::Bool(value)) => typed::val(*value),
+        Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)
             } else {
@@ -536,10 +353,8 @@ where
                 }
             }
         }
-        ExprView::Not(input) => {
-            typed::not(evaluate_bool_typed::<AC>(expression.scope(input), context))
-        }
-        ExprView::BinOp(left, right, SBinOp::BOp(operator)) => {
+        Not(input) => typed::not(evaluate_bool_typed::<AC>(expression.scope(input), context)),
+        BinOp(left, right, SBinOp::BOp(operator)) => {
             let left = evaluate_bool_typed::<AC>(expression.scope(left), context);
             let right = evaluate_bool_typed::<AC>(expression.scope(right), context);
             match operator {
@@ -548,7 +363,7 @@ where
                 BoolBinOp::Impl => typed::implies(left, right),
             }
         }
-        ExprView::BinOp(left, right, SBinOp::COp(operator))
+        BinOp(left, right, SBinOp::COp(operator))
             if matches!(expression.typ(left), Some(TCType::Int)) =>
         {
             let left = evaluate_int_typed::<AC>(expression.scope(left), context);
@@ -561,7 +376,7 @@ where
                 CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
             }
         }
-        ExprView::BinOp(left, right, SBinOp::COp(operator))
+        BinOp(left, right, SBinOp::COp(operator))
             if matches!(expression.typ(left), Some(TCType::Float)) =>
         {
             let left = evaluate_float_typed::<AC>(expression.scope(left), context);
@@ -574,15 +389,15 @@ where
                 CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
             }
         }
-        ExprView::Default(input, default) => typed::default(
+        Default(input, default) => typed::default(
             evaluate_bool_typed::<AC>(expression.scope(input), context),
             evaluate_bool_typed::<AC>(expression.scope(default), context),
         ),
-        ExprView::SIndex(input, index) => typed::sindex(
+        SIndex(input, index) => typed::sindex(
             evaluate_bool_typed::<AC>(expression.scope(input), context),
             index,
         ),
-        ExprView::If(condition, then_expr, else_expr) => typed::if_stream(
+        If(condition, then_expr, else_expr) => typed::if_stream(
             evaluate_bool_typed::<AC>(expression.scope(condition), context),
             evaluate_bool_typed::<AC>(expression.scope(then_expr), context),
             evaluate_bool_typed::<AC>(expression.scope(else_expr), context),
@@ -675,17 +490,19 @@ mod tests {
 
     #[test]
     fn checked_lexical_frame_preserves_node_annotations() {
+        use ExprView::*;
+
         let source =
             "in property: Str\nout result: Int\nresult = (\\p: Str -> dynamic(p : Int))(property)";
         let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
         let checked = type_check(spec, false).unwrap();
         let expression = ScopedExpr::checked(checked.var_expr(&"result".into()).unwrap());
-        let ExprView::Apply(function, mut args) = expression.as_ref().view() else {
+        let Apply(function, mut args) = expression.as_ref().view() else {
             panic!("expected application");
         };
         let argument = expression.scope(args.next().expect("application has an argument"));
         let function = expression.scope(function);
-        let ExprView::Lambda(params, body) = function.as_ref().view() else {
+        let Lambda(params, body) = function.as_ref().view() else {
             panic!("expected lambda");
         };
 
@@ -696,7 +513,7 @@ mod tests {
 
         assert!(framed.typ(framed.as_ref()).is_some());
         assert!(framed.shared_type_info().is_some());
-        let ExprView::Dynamic(source, _, _) = framed.as_ref().view() else {
+        let Dynamic(source, _, _) = framed.as_ref().view() else {
             panic!("expected dynamic expression");
         };
         let source = framed.scope(source);

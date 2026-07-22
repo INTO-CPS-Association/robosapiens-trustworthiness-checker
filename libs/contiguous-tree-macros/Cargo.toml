@@ -13,4 +13,5 @@ quote = "1.0.45"
 syn = { version = "2.0.118", features = ["full"] }
 
 [dev-dependencies]
+contiguous-tree = { path = "../contiguous-tree" }
 trybuild = "1"

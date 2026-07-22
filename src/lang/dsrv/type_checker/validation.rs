@@ -62,16 +62,18 @@ fn validate_expression(
     expression: ExprRef<'_>,
     context: &mut AstValidationContext<'_>,
 ) -> Result<(), SemanticError> {
+    use ExprView::*;
+
     match expression.view() {
-        ExprView::Val(Value::Deferred | Value::NoVal) => Err(SemanticError::UnsupportedLiteral(
+        Val(Value::Deferred | Value::NoVal) => Err(SemanticError::UnsupportedLiteral(
             "Deferred and NoVal are runtime states, not source literals".to_owned(),
             Some(expression.span()),
         )),
-        ExprView::Var(var) if !context.contains(var) => Err(SemanticError::UndeclaredVariable(
+        Var(var) if !context.contains(var) => Err(SemanticError::UndeclaredVariable(
             format!("undeclared variable {var}"),
             Some(expression.span()),
         )),
-        ExprView::Lambda(parameters, body) => {
+        Lambda(parameters, body) => {
             let frame_start = context.bindings.len();
             context
                 .bindings
@@ -80,15 +82,15 @@ fn validate_expression(
             context.bindings.truncate(frame_start);
             result
         }
-        ExprView::Dynamic(source, _, scope) | ExprView::Defer(source, _, scope) => {
+        Dynamic(source, _, scope) | Defer(source, _, scope) => {
             validate_runtime_scope(expression, scope, context)?;
             validate_expression(source, context)
         }
-        ExprView::Map(fields) | ExprView::Struct(fields) | ExprView::ObjectLiteral(fields) => {
+        Map(fields) | Struct(fields) | ObjectLiteral(fields) => {
             validate_unique_fields(expression, &fields)?;
             validate_children(expression, context)
         }
-        ExprView::Dist(_, _) | ExprView::MonitoredAt(_, _) if !context.distributed => {
+        Dist(_, _) | MonitoredAt(_, _) if !context.distributed => {
             // TODO: do we want to handle distribution constraint this way, or
             // silently ignore them outside of the distributed runtime
             return Err(SemanticError::UnsupportedDistributionConstraint(

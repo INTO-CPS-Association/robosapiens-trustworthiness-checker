@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::rc::Rc;
 use std::time::Instant;
 
 use async_stream::stream;
-use contiguous_tree::TreeCursorExt;
 use sat_solver::sat::cnf::Cnf;
 use sat_solver::sat::literal::PackedLiteral;
 use sat_solver::sat::solver::{Solver, SolverImpls};
@@ -11,13 +11,64 @@ use tracing::{info, warn};
 
 use crate::{
     DsrvSpecification, Value, VarName,
-    distributed::distribution_graphs::{
-        DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
+    distributed::{
+        distribution_constraint::{
+            ConstraintExpr, ConstraintExprKind, ConstraintProfile, DistributionConstraintPlan,
+        },
+        distribution_graphs::{
+            DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph, NodeName,
+        },
+        scheduling::planning_context::PlanningContextSnapshot,
     },
-    distributed::scheduling::planning_context::PlanningContextSnapshot,
-    lang::dsrv::ast::{BoolBinOp, ExprKind, ExprRef, ExprView, SBinOp},
-    semantics::{AsyncConfig, MonitoringSemantics, distributed::localisation::Localisable},
+    lang::dsrv::ast::{BoolBinOp, SBinOp},
+    semantics::{
+        AsyncConfig, MonitoringSemantics,
+        distributed::localisation::{DsrvLocalisationError, Localisable},
+    },
 };
+
+pub use crate::distributed::distribution_constraint::ConstraintLoweringError;
+
+/// An error constructing the SAT distribution-constraint consumer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SatSolverConstructionError {
+    Localisation(DsrvLocalisationError),
+    ConstraintLowering(ConstraintLoweringError),
+}
+
+impl fmt::Display for SatSolverConstructionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Localisation(error) => {
+                write!(formatter, "failed to localise SAT constraints: {error}")
+            }
+            Self::ConstraintLowering(error) => {
+                write!(formatter, "failed to lower SAT constraints: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SatSolverConstructionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Localisation(error) => Some(error),
+            Self::ConstraintLowering(error) => Some(error),
+        }
+    }
+}
+
+impl From<DsrvLocalisationError> for SatSolverConstructionError {
+    fn from(error: DsrvLocalisationError) -> Self {
+        Self::Localisation(error)
+    }
+}
+
+impl From<ConstraintLoweringError> for SatSolverConstructionError {
+    fn from(error: ConstraintLoweringError) -> Self {
+        Self::ConstraintLowering(error)
+    }
+}
 
 /// SAT-backed solver specialized for distribution constraints expressible
 /// using `monitored_at(var, node)` and boolean connectives.
@@ -40,6 +91,8 @@ where
     pub planning_binding_candidates: BTreeSet<VarName>,
     pub dist_constraint_set: HashSet<VarName>,
     pub default_planning_context: Option<PlanningContextSnapshot>,
+    constraint_plan: DistributionConstraintPlan,
+    binding_plans: Vec<DistributionConstraintPlan>,
     _semantics: std::marker::PhantomData<S>,
     _config: std::marker::PhantomData<AC>,
 }
@@ -56,19 +109,57 @@ where
         spec: DsrvSpecification,
         default_planning_context: Option<PlanningContextSnapshot>,
     ) -> Self {
-        let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
-        let localised_dist_spec = spec.localise(&dist_constraints);
-        let local_input_vars = localised_dist_spec.input_vars();
-        let required_planning_inputs = local_input_vars
-            .iter()
-            .cloned()
-            .into_iter()
-            .filter(|var| var.to_string().ends_with("Pose"))
-            .collect();
-        let planning_binding_candidates =
-            planning_binding_candidates(&spec, local_input_vars.iter().cloned());
+        Self::try_new(
+            dist_constraints,
+            output_vars,
+            spec,
+            default_planning_context,
+        )
+        .unwrap_or_else(|error| panic!("Invalid SAT distribution constraint: {error}"))
+    }
 
-        Self {
+    pub fn try_new(
+        dist_constraints: Vec<VarName>,
+        output_vars: Vec<VarName>,
+        spec: DsrvSpecification,
+        default_planning_context: Option<PlanningContextSnapshot>,
+    ) -> Result<Self, SatSolverConstructionError> {
+        let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
+        let localised_dist_spec = spec.try_localise(&dist_constraints)?;
+        let constraint_plan = DistributionConstraintPlan::lower(
+            &localised_dist_spec,
+            dist_constraints.iter().cloned(),
+            ConstraintProfile::Sat,
+        )?;
+        let local_input_vars = localised_dist_spec.input_vars();
+        let binding_roots = local_input_vars
+            .iter()
+            .filter(|variable| spec.var_expr_ref(variable).is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        // Full-spec helper evaluation is an optional planning aid, not part of SAT constraint
+        // validity. Lower roots independently so one unsupported helper does not reject an
+        // otherwise valid localised constraint boundary.
+        let binding_plans = binding_roots
+            .into_iter()
+            .filter_map(|root| {
+                DistributionConstraintPlan::lower(&spec, [root], ConstraintProfile::Sat).ok()
+            })
+            .collect::<Vec<_>>();
+        let required_planning_inputs = required_planning_bindings(&constraint_plan, &binding_plans)
+            .into_iter()
+            .collect();
+        let planning_binding_candidates = binding_plans
+            .iter()
+            .flat_map(|plan| {
+                plan.definitions()
+                    .keys()
+                    .cloned()
+                    .chain(plan.input_dependencies().iter().cloned())
+            })
+            .collect();
+
+        Ok(Self {
             dist_constraints,
             output_vars,
             spec,
@@ -77,9 +168,11 @@ where
             planning_binding_candidates,
             dist_constraint_set,
             default_planning_context,
+            constraint_plan,
+            binding_plans,
             _semantics: std::marker::PhantomData,
             _config: std::marker::PhantomData,
-        }
+        })
     }
 
     pub fn possible_labelled_dist_graph_stream(
@@ -132,8 +225,7 @@ where
                 }
                 if let Some(val) = eval_bound_var(
                     v,
-                    &self.spec,
-                    graph.as_ref(),
+                    &self.binding_plans,
                     &context_bindings_full_spec,
                     &mut successful_eval_cache,
                 ) {
@@ -168,9 +260,8 @@ where
         if let Some(labelled) = try_build_labelled_graph_from_guarded_monitored_choices(
             &graph,
             &self.output_vars,
-            &self.dist_constraints,
             &self.dist_constraint_set,
-            &spec,
+            &self.constraint_plan,
             &state,
         ) {
             let assigned_streams = labelled.node_labels.values().map(Vec::len).sum::<usize>();
@@ -219,15 +310,15 @@ where
         let compile_started = Instant::now();
         let mut top_lits = Vec::new();
 
-        for c in &self.dist_constraints {
-            let expr = spec.var_expr_ref(c).unwrap_or_else(|| {
-                panic!(
-                    "Missing expression for distribution constraint variable `{}`",
-                    c
-                )
-            });
-            let lit = compile_expr_to_lit(expr, &spec, &mut state)
-                .unwrap_or_else(|e| panic!("Failed to compile SAT constraint `{}`: {}", c, e));
+        for constraint in self.constraint_plan.roots() {
+            let expression = self
+                .constraint_plan
+                .expression(constraint)
+                .expect("validated SAT constraint plan is missing a root");
+            let lit = compile_expr_to_lit(expression, &self.constraint_plan, &mut state)
+                .unwrap_or_else(|error| {
+                    panic!("Failed to compile SAT constraint `{constraint}`: {error}")
+                });
             top_lits.push(lit);
         }
 
@@ -312,30 +403,168 @@ where
     }
 }
 
-fn planning_binding_candidates(
-    spec: &DsrvSpecification,
-    roots: impl IntoIterator<Item = VarName>,
+fn required_planning_bindings(
+    constraint_plan: &DistributionConstraintPlan,
+    binding_plans: &[DistributionConstraintPlan],
 ) -> BTreeSet<VarName> {
-    let mut candidates = BTreeSet::new();
-    let mut pending = roots.into_iter().collect::<Vec<_>>();
+    required_concrete_inputs(constraint_plan)
+        .into_iter()
+        .flat_map(|variable| {
+            binding_plans
+                .iter()
+                .find(|plan| {
+                    plan.roots().contains(&variable) && plan.monitored_streams().is_empty()
+                })
+                .map_or_else(
+                    || BTreeSet::from([variable]),
+                    |plan| plan.input_dependencies().clone(),
+                )
+        })
+        .collect()
+}
 
-    while let Some(var) = pending.pop() {
-        if !candidates.insert(var.clone()) {
-            continue;
-        }
-
-        if let Some(expr) = spec.exprs().get(&var) {
-            expr.visit_free_variables(|dependency| pending.push(dependency.clone()));
+fn required_concrete_inputs(plan: &DistributionConstraintPlan) -> BTreeSet<VarName> {
+    let mut required = BTreeSet::new();
+    for root in plan.roots() {
+        if let Some(expression) = plan.expression(root) {
+            collect_required_concrete_inputs(expression, plan, &mut required);
         }
     }
+    required
+}
 
-    candidates
+fn collect_required_concrete_inputs(
+    expression: &ConstraintExpr,
+    plan: &DistributionConstraintPlan,
+    required: &mut BTreeSet<VarName>,
+) {
+    use ConstraintExprKind as E;
+
+    if is_symbolically_compilable(expression, plan, &mut BTreeSet::new()) {
+        return;
+    }
+
+    match &expression.kind {
+        E::Not(value) => collect_required_concrete_inputs(value, plan, required),
+        E::Binary(left, right, SBinOp::BOp(_)) => {
+            collect_required_concrete_inputs(left, plan, required);
+            collect_required_concrete_inputs(right, plan, required);
+        }
+        E::If(condition, then_expr, else_expr) => {
+            collect_required_concrete_inputs(condition, plan, required);
+            collect_required_concrete_inputs(then_expr, plan, required);
+            collect_required_concrete_inputs(else_expr, plan, required);
+        }
+        _ => collect_input_dependencies(expression, plan, required, &mut BTreeSet::new()),
+    }
+}
+
+fn is_symbolically_compilable(
+    expression: &ConstraintExpr,
+    plan: &DistributionConstraintPlan,
+    visiting: &mut BTreeSet<VarName>,
+) -> bool {
+    use ConstraintExprKind as E;
+
+    if matches!(
+        plan.evaluate_expr(expression, &BTreeMap::new(), None),
+        Some(Value::Bool(_))
+    ) {
+        return true;
+    }
+
+    match &expression.kind {
+        E::Value(Value::Bool(_)) | E::MonitoredAt(_, _) => true,
+        E::Variable(variable) if plan.input_dependencies().contains(variable) => true,
+        E::Variable(variable) => {
+            if !visiting.insert(variable.clone()) {
+                return false;
+            }
+            let compilable = plan
+                .expression(variable)
+                .is_some_and(|definition| is_symbolically_compilable(definition, plan, visiting));
+            visiting.remove(variable);
+            compilable
+        }
+        E::Not(value) => is_symbolically_compilable(value, plan, visiting),
+        E::Binary(left, right, SBinOp::BOp(_))
+        | E::Binary(left, right, SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq)) => {
+            is_symbolically_compilable(left, plan, visiting)
+                && is_symbolically_compilable(right, plan, visiting)
+        }
+        E::If(condition, then_expr, else_expr) => {
+            is_symbolically_compilable(condition, plan, visiting)
+                && is_symbolically_compilable(then_expr, plan, visiting)
+                && is_symbolically_compilable(else_expr, plan, visiting)
+        }
+        _ => false,
+    }
+}
+
+fn collect_input_dependencies(
+    expression: &ConstraintExpr,
+    plan: &DistributionConstraintPlan,
+    dependencies: &mut BTreeSet<VarName>,
+    visiting: &mut BTreeSet<VarName>,
+) {
+    use ConstraintExprKind as E;
+
+    match &expression.kind {
+        E::Value(_) | E::MonitoredAt(_, _) => {}
+        E::Variable(variable) if plan.input_dependencies().contains(variable) => {
+            dependencies.insert(variable.clone());
+        }
+        E::Variable(variable) => {
+            if visiting.insert(variable.clone()) {
+                if let Some(definition) = plan.expression(variable) {
+                    collect_input_dependencies(definition, plan, dependencies, visiting);
+                }
+                visiting.remove(variable);
+            }
+        }
+        E::If(condition, then_expr, else_expr) => {
+            collect_input_dependencies(condition, plan, dependencies, visiting);
+            collect_input_dependencies(then_expr, plan, dependencies, visiting);
+            collect_input_dependencies(else_expr, plan, dependencies, visiting);
+        }
+        E::Binary(left, right, _)
+        | E::ListIndex(left, right)
+        | E::ListAppend(left, right)
+        | E::ListConcat(left, right) => {
+            collect_input_dependencies(left, plan, dependencies, visiting);
+            collect_input_dependencies(right, plan, dependencies, visiting);
+        }
+        E::Not(value)
+        | E::Neg(value)
+        | E::Abs(value)
+        | E::ListHead(value)
+        | E::ListTail(value)
+        | E::ListLen(value)
+        | E::MapGet(value, _)
+        | E::MapRemove(value, _)
+        | E::MapHasKey(value, _) => {
+            collect_input_dependencies(value, plan, dependencies, visiting);
+        }
+        E::List(items) => {
+            for item in items {
+                collect_input_dependencies(item, plan, dependencies, visiting);
+            }
+        }
+        E::Map(entries) => {
+            for value in entries.values() {
+                collect_input_dependencies(value, plan, dependencies, visiting);
+            }
+        }
+        E::MapInsert(map, _, value) => {
+            collect_input_dependencies(map, plan, dependencies, visiting);
+            collect_input_dependencies(value, plan, dependencies, visiting);
+        }
+    }
 }
 
 fn eval_bound_var(
     var: &VarName,
-    spec: &DsrvSpecification,
-    graph: &DistributionGraph,
+    plans: &[DistributionConstraintPlan],
     value_bindings: &BTreeMap<VarName, Value>,
     successful_eval_cache: &mut BTreeMap<VarName, Value>,
 ) -> Option<Value> {
@@ -343,11 +572,9 @@ fn eval_bound_var(
         return Some(val);
     }
 
-    let expr = spec.var_expr_ref(var)?;
-    let mut st_full = CnfCompilerState::new(graph);
-    st_full.value_bindings = value_bindings.clone();
-    let val = eval_const_expr(expr, spec, &st_full)?;
-
+    let val = plans
+        .iter()
+        .find_map(|plan| plan.evaluate_var(var, value_bindings, None))?;
     if matches!(val, Value::NoVal | Value::Deferred) {
         return None;
     }
@@ -366,21 +593,15 @@ enum GuardedChoice {
 fn try_build_labelled_graph_from_guarded_monitored_choices(
     graph: &Rc<DistributionGraph>,
     output_vars: &[VarName],
-    dist_constraints: &[VarName],
     dist_constraint_set: &HashSet<VarName>,
-    spec: &DsrvSpecification,
+    plan: &DistributionConstraintPlan,
     st: &CnfCompilerState,
 ) -> Option<LabelledDistributionGraph> {
-    let mut constrained_streams = BTreeSet::new();
-    for c in dist_constraints {
-        collect_monitored_streams(spec.var_expr_ref(c)?, spec, &mut constrained_streams);
-    }
-
     let mut placements = BTreeMap::<VarName, NodeName>::new();
 
-    for c in dist_constraints {
-        let expr = spec.var_expr_ref(c)?;
-        let choices = guarded_monitored_choices(expr, spec, st).ok()?;
+    for constraint in plan.roots() {
+        let expression = plan.expression(constraint)?;
+        let choices = guarded_monitored_choices(expression, plan, st).ok()?;
         match choices {
             GuardedChoice::True => {}
             GuardedChoice::False => return None,
@@ -401,39 +622,17 @@ fn try_build_labelled_graph_from_guarded_monitored_choices(
         graph,
         output_vars,
         dist_constraint_set,
-        &constrained_streams,
+        plan.monitored_streams(),
         placements,
     ))
 }
 
-fn collect_monitored_streams(
-    expr: ExprRef<'_>,
-    spec: &DsrvSpecification,
-    streams: &mut BTreeSet<VarName>,
-) {
-    match expr.kind() {
-        ExprKind::MonitoredAt(v, _) => {
-            streams.insert(v.clone());
-        }
-        ExprKind::Var(v) => {
-            if let Some(definition) = spec.var_expr_ref(v) {
-                collect_monitored_streams(definition, spec, streams);
-            }
-        }
-        _ => {
-            for child in expr.children() {
-                collect_monitored_streams(child, spec, streams);
-            }
-        }
-    }
-}
-
 fn guarded_monitored_choices(
-    expr: ExprRef<'_>,
-    spec: &DsrvSpecification,
+    expression: &ConstraintExpr,
+    plan: &DistributionConstraintPlan,
     st: &CnfCompilerState,
 ) -> Result<GuardedChoice, ()> {
-    if let Some(value) = eval_const_expr(expr, spec, st) {
+    if let Some(value) = plan.evaluate_expr(expression, &st.value_bindings, None) {
         return match value {
             Value::Bool(true) => Ok(GuardedChoice::True),
             Value::Bool(false) | Value::NoVal | Value::Deferred => Ok(GuardedChoice::False),
@@ -441,31 +640,36 @@ fn guarded_monitored_choices(
         };
     }
 
-    match expr.view() {
-        ExprView::MonitoredAt(v, n) => Ok(GuardedChoice::Choices(vec![(v.clone(), n.clone())])),
-        ExprView::Var(v) => {
-            let expr = spec.var_expr_ref(v).ok_or(())?;
-            guarded_monitored_choices(expr, spec, st)
+    match &expression.kind {
+        ConstraintExprKind::MonitoredAt(variable, node) => Ok(GuardedChoice::Choices(vec![(
+            variable.clone(),
+            node.clone(),
+        )])),
+        ConstraintExprKind::Variable(variable) => {
+            let expression = plan.expression(variable).ok_or(())?;
+            guarded_monitored_choices(expression, plan, st)
         }
-        ExprView::If(cond, then_e, else_e) => match eval_const_expr(cond, spec, st) {
-            Some(Value::Bool(true)) => guarded_monitored_choices(then_e, spec, st),
-            Some(Value::Bool(false) | Value::NoVal | Value::Deferred) => {
-                guarded_monitored_choices(else_e, spec, st)
+        ConstraintExprKind::If(condition, then_expr, else_expr) => {
+            match plan.evaluate_expr(condition, &st.value_bindings, None) {
+                Some(Value::Bool(true)) => guarded_monitored_choices(then_expr, plan, st),
+                Some(Value::Bool(false) | Value::NoVal | Value::Deferred) => {
+                    guarded_monitored_choices(else_expr, plan, st)
+                }
+                _ => Err(()),
             }
-            _ => Err(()),
-        },
-        ExprView::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And)) => {
-            let lhs = guarded_monitored_choices(lhs, spec, st)?;
-            let rhs = guarded_monitored_choices(rhs, spec, st)?;
-            guarded_choice_and(lhs, rhs)
         }
-        ExprView::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or)) => {
-            let lhs = guarded_monitored_choices(lhs, spec, st)?;
-            let rhs = guarded_monitored_choices(rhs, spec, st)?;
-            Ok(guarded_choice_or(lhs, rhs))
+        ConstraintExprKind::Binary(left, right, SBinOp::BOp(BoolBinOp::And)) => {
+            let left = guarded_monitored_choices(left, plan, st)?;
+            let right = guarded_monitored_choices(right, plan, st)?;
+            guarded_choice_and(left, right)
         }
-        ExprView::BinOp(_, _, _) | ExprView::Not(_) => {
-            if let Some(value) = eval_const_expr(expr, spec, st) {
+        ConstraintExprKind::Binary(left, right, SBinOp::BOp(BoolBinOp::Or)) => {
+            let left = guarded_monitored_choices(left, plan, st)?;
+            let right = guarded_monitored_choices(right, plan, st)?;
+            Ok(guarded_choice_or(left, right))
+        }
+        ConstraintExprKind::Binary(_, _, _) | ConstraintExprKind::Not(_) => {
+            if let Some(value) = plan.evaluate_expr(expression, &st.value_bindings, None) {
                 match value {
                     Value::Bool(true) => Ok(GuardedChoice::True),
                     Value::Bool(false) | Value::NoVal | Value::Deferred => Ok(GuardedChoice::False),
@@ -564,6 +768,8 @@ struct CnfCompilerState {
     atoms_to_var_node: BTreeMap<usize, (VarName, NodeName)>,
     // bound substitutions from planning context for non-constraint variables
     value_bindings: BTreeMap<VarName, Value>,
+    // unresolved boolean inputs, interned so every occurrence has the same SAT identity
+    symbolic_input_atoms: BTreeMap<VarName, Lit>,
     // streams appearing in monitored_at(...)
     constrained_streams: BTreeSet<VarName>,
     // declared distribution-constraint variables passed to the solver
@@ -586,6 +792,15 @@ impl CnfCompilerState {
         let id = self.next_var_id;
         self.next_var_id = self.next_var_id.saturating_add(1);
         id
+    }
+
+    fn atom_for_symbolic_input(&mut self, variable: &VarName) -> Result<Lit, SatCompileError> {
+        if let Some(literal) = self.symbolic_input_atoms.get(variable) {
+            return Ok(*literal);
+        }
+        let literal = sat_literal(self)?;
+        self.symbolic_input_atoms.insert(variable.clone(), literal);
+        Ok(literal)
     }
 
     fn atom_for_monitored_at(&mut self, v: VarName, n: NodeName) -> Lit {
@@ -704,623 +919,98 @@ impl std::fmt::Display for SatCompileError {
 
 impl std::error::Error for SatCompileError {}
 
-fn eval_const_expr(
-    expr: ExprRef<'_>,
-    spec: &crate::DsrvSpecification,
-    st: &CnfCompilerState,
-) -> Option<Value> {
-    match expr.view() {
-        ExprView::Val(v) => Some(v.clone()),
-        ExprView::Var(v) => {
-            if let Some(bound) = st.value_bindings.get(v) {
-                return Some(bound.clone());
-            }
-            let inner = spec.var_expr_ref(v)?;
-            eval_const_expr(inner, spec, st)
-        }
-        ExprView::List(items) => {
-            let mut out = ecow::EcoVec::new();
-            for item in items {
-                out.push(eval_const_expr(item, spec, st)?);
-            }
-            Some(Value::List(out))
-        }
-        ExprView::LIndex(list, idx) => {
-            let list_v = eval_const_expr(list, spec, st)?;
-            let idx_v = eval_const_expr(idx, spec, st)?;
-            match (list_v, idx_v) {
-                (Value::List(l), Value::Int(i)) if i >= 0 => l.get(i as usize).cloned(),
-                _ => None,
-            }
-        }
-        ExprView::LAppend(list, el) => {
-            let list_v = eval_const_expr(list, spec, st)?;
-            let el_v = eval_const_expr(el, spec, st)?;
-            match list_v {
-                Value::List(mut l) => {
-                    l.push(el_v);
-                    Some(Value::List(l))
-                }
-                _ => None,
-            }
-        }
-        ExprView::LConcat(list1, list2) => {
-            let list1_v = eval_const_expr(list1, spec, st)?;
-            let list2_v = eval_const_expr(list2, spec, st)?;
-            match (list1_v, list2_v) {
-                (Value::List(mut l1), Value::List(l2)) => {
-                    l1.extend(l2);
-                    Some(Value::List(l1))
-                }
-                _ => None,
-            }
-        }
-        ExprView::LHead(list) => {
-            let list_v = eval_const_expr(list, spec, st)?;
-            match list_v {
-                Value::List(l) => l.first().cloned(),
-                _ => None,
-            }
-        }
-        ExprView::LTail(list) => {
-            let list_v = eval_const_expr(list, spec, st)?;
-            match list_v {
-                Value::List(l) => {
-                    let tail = l.get(1..)?;
-                    Some(Value::List(tail.into()))
-                }
-                _ => None,
-            }
-        }
-        ExprView::LLen(list) => {
-            let list_v = eval_const_expr(list, spec, st)?;
-            match list_v {
-                Value::List(l) => Some(Value::Int(l.len() as i64)),
-                _ => None,
-            }
-        }
-        ExprView::Map(map) | ExprView::Struct(map) | ExprView::ObjectLiteral(map) => {
-            let mut out = BTreeMap::new();
-            for (k, v) in map.iter() {
-                out.insert(k.clone(), eval_const_expr(v, spec, st)?);
-            }
-            Some(Value::Map(out))
-        }
-        ExprView::MGet(map, k) | ExprView::SGet(map, k) => {
-            let map_v = eval_const_expr(map, spec, st)?;
-            match map_v {
-                Value::Map(m) => m.get(k).cloned(),
-                _ => None,
-            }
-        }
-        ExprView::MRemove(map, k) => {
-            let map_v = eval_const_expr(map, spec, st)?;
-            match map_v {
-                Value::Map(mut m) => {
-                    m.remove(k);
-                    Some(Value::Map(m))
-                }
-                _ => None,
-            }
-        }
-        ExprView::MInsert(map, k, v) => {
-            let map_v = eval_const_expr(map, spec, st)?;
-            let val_v = eval_const_expr(v, spec, st)?;
-            match map_v {
-                Value::Map(mut m) => {
-                    m.insert(k.clone(), val_v);
-                    Some(Value::Map(m))
-                }
-                _ => None,
-            }
-        }
-        ExprView::MHasKey(map, k) => {
-            let map_v = eval_const_expr(map, spec, st)?;
-            match map_v {
-                Value::Map(m) => Some(Value::Bool(m.contains_key(k))),
-                _ => None,
-            }
-        }
-        ExprView::If(c, t, e) => {
-            let c_v = eval_const_expr(c, spec, st)?;
-            match c_v {
-                Value::Bool(true) => eval_const_expr(t, spec, st),
-                Value::Bool(false) => eval_const_expr(e, spec, st),
-                _ => None,
-            }
-        }
-        ExprView::Not(e) => {
-            let v = eval_const_expr(e, spec, st)?;
-            match v {
-                Value::Bool(b) => Some(Value::Bool(!b)),
-                _ => None,
-            }
-        }
-        ExprView::Neg(e) => {
-            let v = eval_const_expr(e, spec, st)?;
-            match v {
-                Value::Int(i) => i.checked_neg().map(Value::Int),
-                Value::Float(f) => Some(Value::Float(-f)),
-                _ => None,
-            }
-        }
-        ExprView::Abs(e) => {
-            let v = eval_const_expr(e, spec, st)?;
-            match v {
-                Value::Int(i) => i.checked_abs().map(Value::Int),
-                Value::Float(f) => Some(Value::Float(f.abs())),
-                _ => None,
-            }
-        }
-        ExprView::BinOp(lhs, rhs, op) => {
-            let l = eval_const_expr(lhs, spec, st)?;
-            let r = eval_const_expr(rhs, spec, st)?;
-            match (op, l, r) {
-                (
-                    crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::And),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(a && b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Or),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(a || b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::BOp(crate::lang::dsrv::ast::BoolBinOp::Impl),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(!a || b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq),
-                    a,
-                    b,
-                ) => Some(Value::Bool(a == b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a <= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool((a as f64) <= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a <= (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool(a <= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(a <= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Le),
-                    Value::Str(a),
-                    Value::Str(b),
-                ) => Some(Value::Bool(a <= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a < b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool((a as f64) < b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a < (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool(a < b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(!a & b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Lt),
-                    Value::Str(a),
-                    Value::Str(b),
-                ) => Some(Value::Bool(a < b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a >= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool((a as f64) >= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a >= (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool(a >= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(a >= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Ge),
-                    Value::Str(a),
-                    Value::Str(b),
-                ) => Some(Value::Bool(a >= b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a > b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool((a as f64) > b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Bool(a > (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Bool(a > b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Bool(a),
-                    Value::Bool(b),
-                ) => Some(Value::Bool(a & !b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Gt),
-                    Value::Str(a),
-                    Value::Str(b),
-                ) => Some(Value::Bool(a > b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Add,
-                    ),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Int(a + b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Add,
-                    ),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Float((a as f64) + b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Add,
-                    ),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Float(a + (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Add,
-                    ),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Float(a + b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Sub,
-                    ),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Int(a - b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Sub,
-                    ),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Float((a as f64) - b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Sub,
-                    ),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Float(a - (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Sub,
-                    ),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Float(a - b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mul,
-                    ),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Int(a * b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mul,
-                    ),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Float((a as f64) * b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mul,
-                    ),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Float(a * (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mul,
-                    ),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Float(a * b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Div,
-                    ),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Int(a / b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Div,
-                    ),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Float((a as f64) / b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Div,
-                    ),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Float(a / (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Div,
-                    ),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Float(a / b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mod,
-                    ),
-                    Value::Int(a),
-                    Value::Int(b),
-                ) => Some(Value::Int(a % b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mod,
-                    ),
-                    Value::Int(a),
-                    Value::Float(b),
-                ) => Some(Value::Float((a as f64) % b)),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mod,
-                    ),
-                    Value::Float(a),
-                    Value::Int(b),
-                ) => Some(Value::Float(a % (b as f64))),
-                (
-                    crate::lang::dsrv::ast::SBinOp::NOp(
-                        crate::lang::dsrv::ast::NumericalBinOp::Mod,
-                    ),
-                    Value::Float(a),
-                    Value::Float(b),
-                ) => Some(Value::Float(a % b)),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
 fn compile_expr_to_lit(
-    expr: ExprRef<'_>,
-    spec: &crate::DsrvSpecification,
+    expression: &ConstraintExpr,
+    plan: &DistributionConstraintPlan,
     st: &mut CnfCompilerState,
 ) -> Result<Lit, SatCompileError> {
-    match expr.view() {
-        ExprView::MonitoredAt(v, n) => Ok(st.atom_for_monitored_at(v.clone(), n.clone())),
+    use ConstraintExprKind as E;
 
-        ExprView::Val(Value::Bool(true)) => {
-            let x = i32::try_from(st.fresh_var())
-                .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-            st.cnf.push(vec![x]);
-            Ok(x)
+    match &expression.kind {
+        E::MonitoredAt(variable, node) => {
+            Ok(st.atom_for_monitored_at(variable.clone(), node.clone()))
         }
-        ExprView::Val(Value::Bool(false)) => {
-            let x = i32::try_from(st.fresh_var())
-                .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-            st.cnf.push(vec![-x]);
-            Ok(x)
+        E::Value(value) => constant_to_lit(value.clone(), st),
+        E::Not(value) => Ok(-compile_expr_to_lit(value, plan, st)?),
+        E::Binary(left, right, SBinOp::BOp(BoolBinOp::And)) => {
+            let left = compile_expr_to_lit(left, plan, st)?;
+            let right = compile_expr_to_lit(right, plan, st)?;
+            Ok(st.tseitin_and(left, right))
         }
-
-        ExprView::Not(e) => {
-            let a = compile_expr_to_lit(e, spec, st)?;
-            Ok(-a)
+        E::Binary(left, right, SBinOp::BOp(BoolBinOp::Or)) => {
+            let left = compile_expr_to_lit(left, plan, st)?;
+            let right = compile_expr_to_lit(right, plan, st)?;
+            Ok(st.tseitin_or(left, right))
         }
-
-        ExprView::BinOp(
-            lhs,
-            rhs,
-            SBinOp::BOp(BoolBinOp::And),
-        ) => {
-            let a = compile_expr_to_lit(lhs, spec, st)?;
-            let b = compile_expr_to_lit(rhs, spec, st)?;
-            Ok(st.tseitin_and(a, b))
+        E::Binary(left, right, SBinOp::BOp(BoolBinOp::Impl)) => {
+            let left = compile_expr_to_lit(left, plan, st)?;
+            let right = compile_expr_to_lit(right, plan, st)?;
+            Ok(st.tseitin_impl(left, right))
         }
-
-        ExprView::BinOp(
-            lhs,
-            rhs,
-            SBinOp::BOp(BoolBinOp::Or),
-        ) => {
-            let a = compile_expr_to_lit(lhs, spec, st)?;
-            let b = compile_expr_to_lit(rhs, spec, st)?;
-            Ok(st.tseitin_or(a, b))
-        }
-
-        ExprView::BinOp(
-            lhs,
-            rhs,
-            SBinOp::BOp(BoolBinOp::Impl),
-        ) => {
-            let a = compile_expr_to_lit(lhs, spec, st)?;
-            let b = compile_expr_to_lit(rhs, spec, st)?;
-            Ok(st.tseitin_impl(a, b))
-        }
-
-        ExprView::BinOp(
-            lhs,
-            rhs,
-            crate::lang::dsrv::ast::SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq),
-        ) => {
-            let lhs_expr = lhs;
-            let rhs_expr = rhs;
-            if let (Some(l), Some(r)) = (
-                eval_const_expr(lhs_expr, spec, st),
-                eval_const_expr(rhs_expr, spec, st),
+        E::Binary(left, right, SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq)) => {
+            if let (Some(left_value), Some(right_value)) = (
+                plan.evaluate_expr(left, &st.value_bindings, None),
+                plan.evaluate_expr(right, &st.value_bindings, None),
             ) {
-                let x = i32::try_from(st.fresh_var())
-                    .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-                if l == r {
-                    st.add_clause1(x);
-                } else {
-                    st.add_clause1(-x);
-                }
-                Ok(x)
+                constant_to_lit(Value::Bool(left_value == right_value), st)
             } else {
-                let a = compile_expr_to_lit(lhs_expr, spec, st)?;
-                let b = compile_expr_to_lit(rhs_expr, spec, st)?;
-                Ok(st.tseitin_eq(a, b))
+                let left = compile_expr_to_lit(left, plan, st)?;
+                let right = compile_expr_to_lit(right, plan, st)?;
+                Ok(st.tseitin_eq(left, right))
             }
         }
-
-        ExprView::If(cond, then_e, else_e) => {
-            let c = compile_expr_to_lit(cond, spec, st)?;
-            let t = compile_expr_to_lit(then_e, spec, st)?;
-            let e = compile_expr_to_lit(else_e, spec, st)?;
-            Ok(st.tseitin_ite(c, t, e))
+        E::If(condition, then_expr, else_expr) => {
+            let condition = compile_expr_to_lit(condition, plan, st)?;
+            let then_expr = compile_expr_to_lit(then_expr, plan, st)?;
+            let else_expr = compile_expr_to_lit(else_expr, plan, st)?;
+            Ok(st.tseitin_ite(condition, then_expr, else_expr))
         }
-
-        ExprView::Var(v) => {
-            if let Some(const_v) = eval_const_expr(expr, spec, st) {
-                let x = i32::try_from(st.fresh_var())
-                    .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-                match const_v {
-                    Value::Bool(true) => {
-                        st.add_clause1(x);
-                        return Ok(x);
-                    }
-                    Value::Bool(false) => {
-                        st.add_clause1(-x);
-                        return Ok(x);
-                    }
-                    Value::NoVal | Value::Deferred => {
-                        st.add_clause1(-x);
-                        return Ok(x);
-                    }
-                    _ => {}
-                }
+        E::Variable(variable) => {
+            if let Some(value) = plan.evaluate_expr(expression, &st.value_bindings, None) {
+                return constant_to_lit(value, st);
             }
-
-            let is_dist_constraint = spec.var_expr_ref(v).is_some_and(|e| {
-                matches!(
-                    e.view(),
-                    ExprView::MonitoredAt(_, _)
-                        | ExprView::If(_, _, _)
-                        | ExprView::Not(_)
-                        | ExprView::BinOp(_, _, _)
-                        | ExprView::Val(Value::Bool(_))
-                )
-            });
-            if is_dist_constraint {
-                let inlined = spec
-                    .var_expr_ref(v)
-                    .ok_or_else(|| SatCompileError::UnknownConstraintVar(v.clone()))?;
-                compile_expr_to_lit(inlined, spec, st)
-            } else if spec.input_vars.contains(v) {
-                // Unresolved input booleans are treated as symbolic SAT variables.
-                // This preserves satisfiability exploration when context data does not
-                // bind all inputs yet.
-                let x = i32::try_from(st.fresh_var())
-                    .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-                Ok(x)
+            if let Some(definition) = plan.expression(variable) {
+                compile_expr_to_lit(definition, plan, st)
+            } else if plan.input_dependencies().contains(variable) {
+                // Unresolved input booleans remain symbolic, preserving satisfiability
+                // exploration while reusing one SAT identity for every occurrence.
+                st.atom_for_symbolic_input(variable)
             } else {
-                Err(SatCompileError::UnsupportedExpr(format!(
-                    "Unsupported unresolved variable in SAT constraint compilation: `{}`. \
-This SAT solver requires non-input variables in distribution constraints to be resolvable \
-(after localisation and planning-context substitution). Nested/indirect aux-variable chains that \
-leave unresolved vars are currently unsupported.",
-                    v
-                )))
+                Err(SatCompileError::UnknownConstraintVar(variable.clone()))
             }
         }
-
-        ExprView::Dist(_, _) => Err(SatCompileError::UnsupportedExpr(
-            "SAT monitored_at solver supports only monitored_at(...) + boolean logic; dist(...) is unsupported".to_string(),
-        )),
-        ExprView::SIndex(_, _) => Err(SatCompileError::UnsupportedExpr(
-            "SAT monitored_at solver supports only timeless constraints; time-indexed expressions are unsupported".to_string(),
-        )),
-
         _ => {
-            if let Some(v) = eval_const_expr(expr, spec, st) {
-                let x = i32::try_from(st.fresh_var())
-                    .unwrap_or_else(|_| panic!("SAT variable id exceeds i32 range"));
-                match v {
-                    Value::Bool(true) => {
-                        st.add_clause1(x);
-                        Ok(x)
-                    }
-                    Value::Bool(false) | Value::NoVal | Value::Deferred => {
-                        st.add_clause1(-x);
-                        Ok(x)
-                    }
-                    _ => Err(SatCompileError::UnsupportedExpr(format!(
-                        "Unsupported non-boolean constant expression in SAT constraint compilation: {:?}",
-                        v
-                    ))),
-                }
+            if let Some(value) = plan.evaluate_expr(expression, &st.value_bindings, None) {
+                constant_to_lit(value, st)
             } else {
                 Err(SatCompileError::UnsupportedExpr(format!(
-                    "Unsupported distribution-constraint expression for SAT monitored_at solver: {:?}",
-                    expr.kind()
+                    "Unsupported distribution-constraint expression for SAT monitored_at solver: {} at {}..{}",
+                    expression.display, expression.span.start, expression.span.end
                 )))
             }
-        },
+        }
     }
 }
 
+fn constant_to_lit(value: Value, st: &mut CnfCompilerState) -> Result<Lit, SatCompileError> {
+    let literal = sat_literal(st)?;
+    match value {
+        Value::Bool(true) => st.add_clause1(literal),
+        Value::Bool(false) | Value::NoVal | Value::Deferred => st.add_clause1(-literal),
+        value => {
+            return Err(SatCompileError::UnsupportedExpr(format!(
+                "Unsupported non-boolean constant expression in SAT constraint compilation: {value:?}"
+            )));
+        }
+    }
+    Ok(literal)
+}
+
+fn sat_literal(st: &mut CnfCompilerState) -> Result<Lit, SatCompileError> {
+    i32::try_from(st.fresh_var()).map_err(|_| {
+        SatCompileError::UnsupportedExpr("SAT variable id exceeds i32 range".to_string())
+    })
+}
 fn solve_with_sat_solver(state: &CnfCompilerState) -> Option<HashMap<usize, bool>> {
     let cnf: Cnf<PackedLiteral> = Cnf::new(state.cnf.clone());
     let mut solver: SolverImpls = SolverImpls::new(cnf);
@@ -1568,12 +1258,17 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
         st.value_bindings.insert("b1".into(), Value::Bool(false));
         st.value_bindings.insert("b2".into(), Value::Bool(true));
 
+        let plan = DistributionConstraintPlan::lower(
+            &spec,
+            [VarName::new("distX")],
+            ConstraintProfile::Sat,
+        )
+        .unwrap();
         let labelled = try_build_labelled_graph_from_guarded_monitored_choices(
             &graph,
             &vec!["x".into(), "distX".into()],
-            &vec!["distX".into()],
             &HashSet::from(["distX".into()]),
-            &spec,
+            &plan,
             &st,
         )
         .expect("multi-robot guarded monitored_at shape should use fast path");
@@ -1601,6 +1296,96 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
         }));
 
         assert!(res.is_err(), "expected panic for unsupported dist(...)");
+    }
+
+    #[test]
+    fn sat_solver_try_new_returns_structured_error_for_unsupported_constraint() {
+        let spec = parse_str("in x\nout c\nc = dist(A, B)").unwrap();
+
+        let result =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["x".into(), "c".into()],
+                spec,
+                None,
+            );
+
+        assert!(matches!(
+            result,
+            Err(SatSolverConstructionError::Localisation(
+                DsrvLocalisationError::Dist
+            ))
+        ));
+    }
+
+    #[test]
+    fn sat_solver_lowers_constraints_at_the_localised_boundary() {
+        let spec = parse_str(
+            "in x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)",
+        )
+        .expect("spec should parse");
+
+        let result =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["x".into(), "upstream".into(), "c".into()],
+                spec,
+                None,
+            );
+
+        let solver = result.expect("upstream SIndex is outside the localised SAT constraint");
+        assert!(
+            solver
+                .localised_dist_spec
+                .input_vars()
+                .contains(&"upstream".into())
+        );
+        assert!(
+            !solver
+                .planning_binding_candidates
+                .contains(&"upstream".into())
+        );
+    }
+
+    #[test]
+    fn sat_solver_try_new_returns_localisation_error_for_monitored_at_aux() {
+        let spec = parse_str("aux helper\nout c\nhelper = true\nc = monitored_at(helper, A)")
+            .expect("spec should parse");
+
+        let result =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["c".into()],
+                spec,
+                None,
+            );
+
+        assert!(matches!(
+            result,
+            Err(SatSolverConstructionError::Localisation(
+                DsrvLocalisationError::MonitoredAtAux { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn sat_solver_try_new_wraps_localised_constraint_lowering_errors() {
+        let spec = parse_str("in x\nout c\nc = x[1]").expect("spec should parse");
+
+        let result =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["x".into(), "c".into()],
+                spec,
+                None,
+            );
+
+        assert!(matches!(
+            result,
+            Err(SatSolverConstructionError::ConstraintLowering(
+                ConstraintLoweringError::UnsupportedExpression { .. }
+            ))
+        ));
     }
 
     #[apply(crate::async_test)]
@@ -1846,8 +1631,10 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
-        let res = compile_expr_to_lit(expr, &spec, &mut st);
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
+                .unwrap();
+        let res = compile_expr_to_lit(plan.expression(&VarName::new("c")).unwrap(), &plan, &mut st);
 
         assert!(
             res.is_err(),
@@ -1872,8 +1659,15 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr_ref(&VarName::new("c2")).expect("expr exists");
-        let lit = compile_expr_to_lit(expr, &spec, &mut st).expect("compile succeeds");
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c2")], ConstraintProfile::Sat)
+                .unwrap();
+        let lit = compile_expr_to_lit(
+            plan.expression(&VarName::new("c2")).unwrap(),
+            &plan,
+            &mut st,
+        )
+        .expect("compile succeeds");
 
         let a_lit = st.atom_for_monitored_at(VarName::new("x"), "A".into());
         assert_eq!(lit, a_lit);
@@ -1899,8 +1693,11 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         st.value_bindings
             .insert(VarName::new("b"), Value::Bool(true));
 
-        let expr = crate::lang::dsrv::ast::Expr::Var(VarName::new("b"));
-        let lit = compile_expr_to_lit(expr.as_ref(), &spec, &mut st).expect("compiles");
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
+                .unwrap();
+        let lit = compile_expr_to_lit(plan.expression(&VarName::new("c")).unwrap(), &plan, &mut st)
+            .expect("compiles");
 
         assert!(st.cnf.iter().any(|c| c == &vec![lit]));
     }
@@ -1923,12 +1720,80 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
         let mut st = CnfCompilerState::new(&graph);
 
-        let expr = crate::lang::dsrv::ast::Expr::Var(VarName::new("b"));
-        let res = compile_expr_to_lit(expr.as_ref(), &spec, &mut st);
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("d")], ConstraintProfile::Sat)
+                .unwrap();
+        let expression = match &plan.expression(&VarName::new("d")).unwrap().kind {
+            ConstraintExprKind::Binary(left, _, _) => left,
+            _ => panic!("expected binary constraint"),
+        };
+        let res = compile_expr_to_lit(expression, &plan, &mut st);
         assert!(
             res.is_ok(),
             "unresolved input vars in SAT constraints should compile to symbolic literals"
         );
+    }
+
+    #[test]
+    fn unresolved_input_occurrences_share_one_sat_identity() {
+        let spec = parse_str("in gate\nout c\nc = gate && !gate").expect("spec should parse");
+        let graph = simple_dist_graph();
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
+                .unwrap();
+        let mut state = CnfCompilerState::new(&graph);
+
+        let top = compile_expr_to_lit(
+            plan.expression(&VarName::new("c")).unwrap(),
+            &plan,
+            &mut state,
+        )
+        .expect("boolean input constraint should compile");
+        state.add_clause1(top);
+
+        assert_eq!(state.symbolic_input_atoms.len(), 1);
+        assert!(
+            solve_with_sat_solver(&state).is_none(),
+            "gate && !gate must remain unsatisfiable when gate is unresolved"
+        );
+    }
+
+    #[test]
+    fn solver_requires_bindings_only_for_non_symbolic_input_expressions() {
+        let spec = parse_str(
+            "in gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)",
+        )
+        .expect("spec should parse");
+
+        let solver =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["x".into(), "c".into()],
+                spec,
+                None,
+            )
+            .expect("constraint should construct before runtime bindings arrive");
+
+        assert_eq!(solver.required_planning_inputs, vec!["threshold".into()]);
+    }
+
+    #[test]
+    fn solver_waits_for_leaf_bindings_when_a_required_local_input_is_derived() {
+        let spec = parse_str(
+            "in threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)",
+        )
+        .expect("spec should parse");
+
+        let solver =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["c".into()],
+                vec!["upstream".into(), "x".into(), "c".into()],
+                spec,
+                None,
+            )
+            .expect("derived local input should have a full-spec binding plan");
+
+        assert_eq!(solver.required_planning_inputs, vec!["threshold".into()]);
     }
 
     #[test]
@@ -2051,10 +1916,9 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
             graph,
         });
 
-        let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
-
-        let res = compile_expr_to_lit(expr, &spec, &mut st);
+        let _st = CnfCompilerState::new(&graph);
+        let res =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat);
         assert!(res.is_err(), "time-indexed expression should be rejected");
     }
 
@@ -2075,9 +1939,10 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         });
 
         let mut st = CnfCompilerState::new(&graph);
-        let expr = spec.var_expr_ref(&VarName::new("c")).expect("expr exists");
-
-        let res = compile_expr_to_lit(expr, &spec, &mut st);
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
+                .unwrap();
+        let res = compile_expr_to_lit(plan.expression(&VarName::new("c")).unwrap(), &plan, &mut st);
         assert!(
             res.is_err(),
             "non-boolean arithmetic expression should be rejected"

@@ -11,11 +11,9 @@ pub trait ArenaId: Copy {
 }
 
 /// Contiguous indexed storage for tree nodes.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Arena<Id, Node> {
     nodes: Vec<Node>,
-    #[serde(skip)]
     id: PhantomData<fn() -> Id>,
 }
 

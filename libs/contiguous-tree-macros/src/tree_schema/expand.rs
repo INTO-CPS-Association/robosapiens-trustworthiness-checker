@@ -2,7 +2,7 @@
 //!
 
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, Type};
+use syn::{Ident, Type};
 
 use super::keyed_fields;
 use super::schema::{FieldKind, TreeSchema, Variant};
@@ -61,31 +61,6 @@ impl Variant {
         quote!(#kind::#name( #( #fields ),* ) => { #( #visited )* })
     }
 
-    fn builder_method(
-        &self,
-        kind: &Ident,
-        id: &Ident,
-        children: &Type,
-        keyed_fields: &Ident,
-        metadata_default: &Expr,
-    ) -> proc_macro2::TokenStream {
-        let name = &self.name;
-        let field_names = self
-            .fields
-            .iter()
-            .map(|field| &field.name)
-            .collect::<Vec<_>>();
-        let field_types = self
-            .fields
-            .iter()
-            .map(|field| stored_type(&field.kind, id, children, keyed_fields));
-        quote! {
-            pub fn #name(&mut self, #( #field_names: #field_types ),*) -> #id {
-                self.alloc(#kind::#name( #( #field_names ),*), #metadata_default)
-            }
-        }
-    }
-
     fn owned_constructor(
         &self,
         visibility: &syn::Visibility,
@@ -105,7 +80,6 @@ impl Variant {
         let parameter_types = constructor_fields.iter().map(|field| match &field.kind {
             FieldKind::Child => quote!(Box<impl Into<#root>>),
             FieldKind::Children => quote!(#children<#root>),
-            FieldKind::BorrowedChildren => quote!(#children<#root>),
             FieldKind::KeyedChildren => quote!(impl IntoIterator<Item = (#key, #root)>),
             FieldKind::Borrowed(typ) => quote!(#typ),
             FieldKind::IntoOwned(typ) => quote!(impl Into<#typ>),
@@ -118,9 +92,6 @@ impl Variant {
             }
             match &field.kind {
                 FieldKind::Child => quote!(let #field_name: #root = (*#field_name).into();),
-                FieldKind::BorrowedChildren => quote!(
-                    let #field_name: Vec<#root> = #field_name.into_iter().collect();
-                ),
                 FieldKind::Children => quote!(
                     let #field_name: Vec<#root> = #field_name.into_iter().collect();
                 ),
@@ -138,9 +109,7 @@ impl Variant {
             let field_name = &field.name;
             match field.kind {
                 FieldKind::Child => quote!(owned_children.push(#field_name);),
-                FieldKind::Children | FieldKind::BorrowedChildren => {
-                    quote!(owned_children.extend(#field_name);)
-                }
+                FieldKind::Children => quote!(owned_children.extend(#field_name);),
                 FieldKind::KeyedChildren => quote!(owned_children.extend(#field_name.1);),
                 FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => quote!(),
             }
@@ -149,9 +118,7 @@ impl Variant {
             let field_name = &field.name;
             match &field.kind {
                 FieldKind::Child => quote!(ids.next().expect("missing fixed child ID")),
-                FieldKind::Children | FieldKind::BorrowedChildren => {
-                    quote!(ids.by_ref().collect::<#children<_>>())
-                }
+                FieldKind::Children => quote!(ids.by_ref().collect::<#children<_>>()),
                 FieldKind::KeyedChildren => quote!(#field_name.0.into_iter()
                     .zip(ids.by_ref())
                     .collect::<#keyed_children<_>>()
@@ -180,10 +147,7 @@ impl Variant {
             .fields
             .iter()
             .map(|field| {
-                if matches!(
-                    field.kind,
-                    FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren
-                ) {
+                if matches!(field.kind, FieldKind::Child | FieldKind::Children) {
                     format_ident!("_left_{}", field.name)
                 } else {
                     format_ident!("left_{}", field.name)
@@ -194,10 +158,7 @@ impl Variant {
             .fields
             .iter()
             .map(|field| {
-                if matches!(
-                    field.kind,
-                    FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren
-                ) {
+                if matches!(field.kind, FieldKind::Child | FieldKind::Children) {
                     format_ident!("_right_{}", field.name)
                 } else {
                     format_ident!("right_{}", field.name)
@@ -209,7 +170,7 @@ impl Variant {
             .iter()
             .zip(left.iter().zip(right.iter()))
             .filter_map(|(field, (left, right))| match &field.kind {
-                FieldKind::Child | FieldKind::Children | FieldKind::BorrowedChildren => None,
+                FieldKind::Child | FieldKind::Children => None,
                 FieldKind::KeyedChildren => Some(quote!(
                     #left.iter().map(|(key, _)| key).eq(#right.iter().map(|(key, _)| key))
                 )),
@@ -338,12 +299,6 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         .iter()
         .map(|variant| variant.visit_mut_arm(&kind))
         .collect::<Vec<_>>();
-    let builder_methods = variants
-        .iter()
-        .map(|variant| {
-            variant.builder_method(&kind, &id, &children, &keyed_fields, &metadata_default)
-        })
-        .collect::<Vec<_>>();
     let payload_arms = variants
         .iter()
         .map(|variant| variant.payload_equality_arm(&kind))
@@ -354,7 +309,9 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         .collect::<Vec<_>>();
     let keyed_fields_definition =
         keyed_fields::expand(&visibility, &key, &id, &keyed_fields, &keyed_children);
-    let owned_constructor_impl = owned_constructors.map(|constructor_visibility| {
+    let owned_constructor_impl = owned_constructors.map(|owned_constructors| {
+        let constructor_attributes = owned_constructors.attributes;
+        let constructor_visibility = owned_constructors.visibility;
         let methods = variants.iter().map(|variant| {
             variant.owned_constructor(
                 &constructor_visibility,
@@ -366,6 +323,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             )
         });
         quote! {
+            #( #constructor_attributes )*
             #[doc(hidden)]
             #[allow(non_snake_case, clippy::boxed_local)]
             impl #root {
@@ -390,7 +348,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
 
     quote! {
         #[doc = #id_doc]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, contiguous_tree::__private::serde::Serialize)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #visibility struct #id(#id_type);
 
         impl #id {
@@ -424,7 +382,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         #keyed_fields_definition
 
         #[doc = #kind_doc]
-        #[derive(Clone, PartialEq, Debug, contiguous_tree::__private::serde::Serialize)]
+        #[derive(Clone, PartialEq, Debug)]
         #visibility enum #kind {
             #( #stored_variants, )*
         }
@@ -437,6 +395,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         }
 
         #[doc = #view_doc]
+        #[derive(Debug)]
         #visibility enum #view<
             'arena,
             #cursor: contiguous_tree::TreeCursor<Id = #id> + 'arena = #reference<'arena>,
@@ -445,14 +404,14 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         }
 
         #[doc = #node_doc]
-        #[derive(Clone, Debug, PartialEq, contiguous_tree::__private::serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq)]
         #internals struct #node {
             pub(crate) node: #kind,
             pub(crate) #metadata_name: #metadata,
         }
 
         #[doc = #arena_doc]
-        #[derive(Clone, Debug, Default, PartialEq, contiguous_tree::__private::serde::Serialize)]
+        #[derive(Clone, Debug, Default, PartialEq)]
         #internals struct #arena {
             #internals nodes: contiguous_tree::Arena<#id, #node>,
         }
@@ -550,11 +509,23 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 self.nodes.clone_tree_from(root, |cursor| cursor.node().clone())
             }
 
+            /// Clone a subtree while recursively replacing selected source subtrees.
+            pub(crate) fn try_clone_subtree_with<'source, Error>(
+                &mut self,
+                root: #reference<'source>,
+                replace: impl FnMut(#reference<'source>) -> Result<Option<#reference<'source>>, Error>,
+            ) -> Result<#id, contiguous_tree::CloneTreeError<#reference<'source>, Error>> {
+                self.nodes.try_clone_tree_with(
+                    root,
+                    replace,
+                    |cursor| cursor.node().clone(),
+                )
+            }
+
             pub(crate) fn duplicate_key(&self) -> Option<&#key> {
-                self.nodes.iter().find_map(|(_, node)| match &node.node {
-                    #( #duplicate_key_arms, )*
-                    _ => None,
-                })
+                self.nodes
+                    .iter()
+                    .find_map(|(_, node)| node.node.duplicate_key())
             }
         }
 
@@ -582,6 +553,11 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 self.arena.alloc(node, metadata)
             }
 
+            /// Allocate a node using the schema's default metadata value.
+            pub fn alloc_default(&mut self, node: #kind) -> #id {
+                self.alloc(node, #metadata_default)
+            }
+
             pub(crate) fn get(&self, id: #id) -> &#node {
                 self.arena.get(id)
             }
@@ -595,9 +571,24 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 self.arena.clone_subtree(root)
             }
 
+            /// Clone a subtree while recursively replacing selected source subtrees.
+            pub(crate) fn try_clone_subtree_with<'source, Error>(
+                &mut self,
+                root: #reference<'source>,
+                replace: impl FnMut(#reference<'source>) -> Result<Option<#reference<'source>>, Error>,
+            ) -> Result<#id, contiguous_tree::CloneTreeError<#reference<'source>, Error>> {
+                self.arena.try_clone_subtree_with(root, replace)
+            }
+
             #[doc(hidden)]
             pub fn clone_tree(&mut self, tree: &#root) -> #id {
                 self.arena.clone_tree(tree)
+            }
+        }
+
+        impl std::fmt::Debug for #reference<'_> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Debug::fmt(&self.view(), formatter)
             }
         }
 
@@ -647,10 +638,8 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             }
 
             pub(crate) fn duplicate_key(self) -> Option<&'arena #key> {
-                contiguous_tree::Postorder::new(self).find_map(|node| match node.kind() {
-                    #( #duplicate_key_arms, )*
-                    _ => None,
-                })
+                contiguous_tree::Postorder::new(self)
+                    .find_map(|node| node.kind().duplicate_key())
             }
         }
 
@@ -673,6 +662,13 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 match (self, other) {
                     #( #payload_arms, )*
                     _ => false,
+                }
+            }
+
+            pub(crate) fn duplicate_key(&self) -> Option<&#key> {
+                match self {
+                    #( #duplicate_key_arms, )*
+                    _ => None,
                 }
             }
         }
@@ -713,6 +709,10 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 self.id()
             }
 
+            fn same_node(self, other: Self) -> bool {
+                std::ptr::eq(self.arena, other.arena) && self.id == other.id
+            }
+
             fn child_ids(self) -> Self::ChildIds {
                 self.kind().child_ids()
             }
@@ -724,12 +724,6 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             fn subtree_ids(self) -> contiguous_tree::IdRange<Self::Id> {
                 self.arena.subtree_ids(self.id())
             }
-        }
-
-        #[doc(hidden)]
-        #[allow(non_snake_case)]
-        impl #builder {
-            #( #builder_methods )*
         }
 
         #owned_constructor_impl
@@ -745,7 +739,7 @@ fn stored_type(
     match kind {
         FieldKind::Child => quote!(#id),
         FieldKind::Children => quote!(#children<#id>),
-        FieldKind::BorrowedChildren => quote!(#children<#id>),
+
         FieldKind::KeyedChildren => quote!(#keyed),
         FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) | FieldKind::Copied(typ) => {
             quote!(#typ)
@@ -760,9 +754,7 @@ fn view_type(kind: &FieldKind, cursor: &Ident, id: &Ident, key: &Type) -> proc_m
             #cursor,
             std::iter::Copied<std::slice::Iter<'arena, #id>>
         >),
-        FieldKind::BorrowedChildren => {
-            quote!(contiguous_tree::ResolvedIdsBorrowed<'arena, #cursor>)
-        }
+
         FieldKind::KeyedChildren => {
             quote!(contiguous_tree::ResolvedFields<'arena, #cursor, #key>)
         }
@@ -777,11 +769,9 @@ fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::Toke
         FieldKind::Children => {
             quote!(contiguous_tree::ResolvedIds::new(#cursor, #field.iter().copied()))
         }
-        FieldKind::BorrowedChildren => {
-            quote!(contiguous_tree::ResolvedIdsBorrowed::new(#cursor, #field.as_slice()))
-        }
+
         FieldKind::KeyedChildren => {
-            quote!(contiguous_tree::ResolvedFields::new(#cursor, #field.raw_slice()))
+            quote!(contiguous_tree::ResolvedFields::new(#cursor, #field.as_slice()))
         }
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) => quote!(#field),
         FieldKind::Copied(_) => quote!(*#field),
@@ -791,8 +781,8 @@ fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::Toke
 fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(ids.push(*#field);),
-        FieldKind::Children | FieldKind::BorrowedChildren => quote!(ids.extend_slice(#field);),
-        FieldKind::KeyedChildren => quote!(ids.extend_keyed(#field.raw_slice());),
+        FieldKind::Children => quote!(ids.extend_slice(#field);),
+        FieldKind::KeyedChildren => quote!(ids.extend_keyed(#field.as_slice());),
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
             quote!(let _ = #field;)
         }
@@ -802,10 +792,12 @@ fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
 fn visit(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(visit(#field);),
-        FieldKind::Children | FieldKind::BorrowedChildren => {
-            quote!(#field.make_mut().iter_mut().for_each(&mut visit);)
-        }
-        FieldKind::KeyedChildren => quote!(for (_, child) in #field.make_mut() { visit(child); }),
+        FieldKind::Children => quote!(#field.make_mut().iter_mut().for_each(&mut visit);),
+        FieldKind::KeyedChildren => quote!(
+            for (_, child) in #field.make_mut_with(|storage| storage.make_mut()) {
+                visit(child);
+            }
+        ),
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
             quote!(let _ = #field;)
         }
