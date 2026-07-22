@@ -44,7 +44,13 @@ nav a.active {
 
 .metadata {
   color: #59636e;
-  margin: 1.5rem 0;
+  margin: 1.5rem 0 0.35rem;
+}
+
+.dashboard-hint {
+  color: #59636e;
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem;
 }
 
 .search {
@@ -95,8 +101,18 @@ nav a.active {
 
 .chart-card h3 {
   font-size: 1rem;
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.45rem;
   overflow-wrap: anywhere;
+}
+
+.chart-card.full-width {
+  grid-column: 1 / -1;
+}
+
+.chart-description {
+  color: #59636e;
+  font-size: 0.875rem;
+  margin: 0 0 0.75rem;
 }
 
 .chart-container {
@@ -104,23 +120,34 @@ nav a.active {
   position: relative;
 }
 
-.commit-history {
-  display: flex;
-  gap: 0.75rem;
-  margin-top: 0.65rem;
-  overflow-x: auto;
-  padding: 0.25rem 0;
+.chart-card.full-width .chart-container {
+  height: 360px;
 }
 
-.commit-history a {
-  color: #0969da;
-  flex: none;
+.benchmark-series {
+  display: grid;
+  gap: 0.2rem 0.75rem;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0.8rem 0 0;
+}
+
+.benchmark-series dt {
+  color: #59636e;
   font-size: 0.75rem;
-  text-decoration: none;
+  font-weight: 600;
 }
 
-.commit-history a:hover {
-  text-decoration: underline;
+.benchmark-series dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.benchmark-series code {
+  background: #f6f8fa;
+  border-radius: 0.25rem;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+  padding: 0.1rem 0.25rem;
 }
 
 .empty-state {
@@ -141,6 +168,15 @@ nav a.active {
     flex-direction: column;
     gap: 1rem;
   }
+
+  .benchmark-series {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.1rem;
+  }
+
+  .benchmark-series dd:not(:last-child) {
+    margin-bottom: 0.4rem;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -150,15 +186,14 @@ nav a.active {
   }
 
   .metadata,
+  .dashboard-hint,
+  .chart-description,
+  .benchmark-series dt,
   .empty-state {
     color: #8d96a0;
   }
 
   nav a {
-    color: #58a6ff;
-  }
-
-  .commit-history a {
     color: #58a6ff;
   }
 
@@ -176,5 +211,9 @@ nav a.active {
 
   .section-title {
     border-color: #30363d;
+  }
+
+  .benchmark-series code {
+    background: #0d1117;
   }
 }

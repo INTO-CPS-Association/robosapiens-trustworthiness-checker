@@ -1,141 +1,155 @@
 "use strict";
 
-// Ordered by user impact and regression risk. Missing series are ignored, so
-// pipeline and frame-prototype cards appear after their first recorded run.
 const IMPORTANT_SECTIONS = [
   {
-    title: "Dataflow and SemiSync runtimes",
+    title: "Overall runtime",
     cards: [
       {
-        title: "Recursive typed semantics",
+        title: "MAPLE sequence — 25,000 inputs",
+        description: "End-to-end execution of the typed MAPLE sequence monitor.",
         series: [
-          ["Dataflow", "dataflow_semantics_recursive/dataflow_typed_runtime/50000"],
-          ["SemiSync", "dataflow_semantics_recursive/semisync_typed_runtime/50000"],
+          {
+            label: "Dataflow",
+            name: "maple_sequence/maple_sequence_typed_dataflow/25000",
+          },
+          {
+            label: "Async stream runtime",
+            name: "maple_sequence/maple_sequence_typed_async/25000",
+          },
         ],
       },
       {
-        title: "Stream-dependency typed semantics",
+        title: "Dynamic expression workload — 50% dynamic, 100,000 inputs",
+        description:
+          "Paper workload exercising deferred expression parsing, compilation and evaluation over a large stream.",
         series: [
-          ["Dataflow", "dataflow_semantics_stream_dependency/dataflow_typed_runtime/50000"],
-          ["SemiSync", "dataflow_semantics_stream_dependency/semisync_typed_runtime/50000"],
+          {
+            label: "Dataflow",
+            name: "dyn_paper/dyn_paper_50_dataflow/100000",
+          },
+          {
+            label: "Async stream runtime",
+            name: "dyn_paper/dyn_paper_50/100000",
+          },
         ],
       },
       {
-        title: "Time-dependent property",
+        title: "Stateful reconfiguration — moving average, 10% reconfiguration",
+        description:
+          "End-to-end runtime reconfiguration between recursive moving-average windows, with and without context transfer.",
         series: [
-          ["Dataflow", "time_dependent_property/dsrv_default_window_dataflow/10000"],
-          ["SemiSync", "time_dependent_property/dsrv_default_window_semisync/10000"],
+          {
+            label: "Context transfer enabled",
+            name: "rec_moving_average/reconf_ct_on_percent_10/100",
+          },
+          {
+            label: "Context transfer disabled",
+            name: "rec_moving_average/reconf_ct_off_percent_10/100",
+          },
         ],
       },
       {
-        title: "Threshold property",
+        title: "Time-dependent property — 10,000 inputs",
+        description: "Runtime evaluation using stream history, defaults and a three-step temporal window.",
         series: [
-          ["Dataflow", "threshold_property/dsrv_dataflow/10000"],
-          ["SemiSync", "threshold_property/dsrv_semisync/10000"],
-        ],
-      },
-      {
-        title: "Deferred evaluation",
-        series: [
-          ["Dataflow", "dup_defer/dup_defer_untyped_dataflow/25000"],
-          ["SemiSync", "dup_defer/dup_defer_untyped_semisync/25000"],
-        ],
-      },
-      {
-        title: "Arithmetic typed semantics",
-        series: [
-          ["Dataflow", "dataflow_semantics_arithmetic/dataflow_typed_runtime/50000"],
-          ["SemiSync", "dataflow_semantics_arithmetic/semisync_typed_runtime/50000"],
-        ],
-      },
-      {
-        title: "Simple runtime baseline",
-        series: [
-          ["Dataflow", "simple_add/simple_add_untyped_dataflow/25000"],
-          ["SemiSync", "simple_add/simple_add_untyped_little/25000"],
+          {
+            label: "Dataflow",
+            name: "time_dependent_property/dsrv_default_window_dataflow/10000",
+          },
+          {
+            label: "SemiSync",
+            name: "time_dependent_property/dsrv_default_window_semisync/10000",
+          },
         ],
       },
     ],
   },
   {
-    title: "MSTLO",
+    title: "Parsing and compilation",
     cards: [
       {
-        title: "Threshold monitoring",
+        title: "LALR parser — 10,000 varied expressions",
+        description:
+          "Parses a deterministic specification containing varied arithmetic, Boolean, string, collection, dynamic and stream-index expressions.",
         series: [
-          ["Runtime qualitative", "threshold_property/mstlo_runtime_qual/10000"],
-          ["Runtime quantitative", "threshold_property/mstlo_runtime_quant/10000"],
-          ["Direct qualitative", "threshold_property/mstlo_direct_qual/10000"],
-          ["Direct quantitative", "threshold_property/mstlo_direct_quant/10000"],
+          {
+            label: "LALR parser",
+            name: "parse_small_varied_inputs/parsing_lalrpop/10000",
+          },
         ],
       },
       {
-        title: "Time-dependent monitoring",
-        series: [
-          ["Runtime qualitative", "time_dependent_property/mstlo_globally_window_qual/10000"],
-          ["Runtime quantitative", "time_dependent_property/mstlo_globally_window_quant/10000"],
-          ["Direct qualitative", "time_dependent_property/mstlo_direct_globally_window_qual/10000"],
-          ["Direct quantitative", "time_dependent_property/mstlo_direct_globally_window_quant/10000"],
+        kind: "stacked-pipeline",
+        fullWidth: true,
+        title: "Typed compilation pipeline — 1,024 assignments",
+        description:
+          "Stacked end-to-end compilation time. Remaining dataflow compilation is derived from the complete pipeline total after subtracting the independently measured preceding phases.",
+        phases: [
+          {
+            label: "LALR parsing",
+            name: "compilation_phases/lalr_parse/1024",
+          },
+          {
+            label: "Strict type checking",
+            name: "compilation_phases/strict_type_check/1024",
+          },
+          {
+            label: "Typed dependency graph",
+            name: "compilation_phases/typed_dependency_graph/1024",
+          },
         ],
-      },
-      {
-        title: "Output-stream scaling",
-        series: [
-          ["Runtime (8 outputs)", "threshold_property_diagnostics/mstlo_runtime_output_streams/8"],
-          ["Direct (8 outputs)", "threshold_property_diagnostics/mstlo_direct_output_streams/8"],
-        ],
+        total: {
+          label: "Complete typed pipeline",
+          name: "compilation_phases/parse_typecheck_compile_typed/1024",
+        },
       },
     ],
   },
   {
-    title: "Compilation pipeline",
+    title: "Reference comparisons",
     cards: [
       {
-        title: "Parsing",
-        series: [["LALR parsing", "compilation_phases/lalr_parse/1024"]],
-      },
-      {
-        title: "Type checking",
-        series: [["Strict type checking", "compilation_phases/strict_type_check/1024"]],
-      },
-      {
-        title: "Dependency-graph construction",
+        title: "Threshold monitoring — 10,000 inputs",
+        description: "Complete runtime and direct-monitor comparison for a simple threshold property.",
         series: [
-          ["Untyped", "compilation_phases/untyped_dependency_graph/1024"],
-          ["Typed", "compilation_phases/typed_dependency_graph/1024"],
+          {
+            label: "DSRV dataflow",
+            name: "threshold_property/dsrv_dataflow/10000",
+          },
+          {
+            label: "DSRV SemiSync",
+            name: "threshold_property/dsrv_semisync/10000",
+          },
+          {
+            label: "MSTLO runtime qualitative",
+            name: "threshold_property/mstlo_runtime_qual/10000",
+          },
+          {
+            label: "MSTLO direct qualitative",
+            name: "threshold_property/mstlo_direct_qual/10000",
+          },
         ],
       },
       {
-        title: "Dataflow compilation",
+        title: "Temporal monitoring — 10,000 inputs",
+        description: "Runtime and direct-monitor comparison for a bounded globally property.",
         series: [
-          ["Untyped", "compilation_phases/dataflow_compile_untyped/1024"],
-          ["Typed", "compilation_phases/dataflow_compile_typed/1024"],
-        ],
-      },
-      {
-        title: "Complete typed pipeline",
-        series: [["Parse + type check + compile", "compilation_phases/parse_typecheck_compile_typed/1024"]],
-      },
-    ],
-  },
-  {
-    title: "Frame and dynamic-expression safeguards",
-    cards: [
-      {
-        title: "Production-frame execution",
-        series: [["Evaluate plan", "indexed_arena_production_comparison/evaluate_production_arena_plan/8191"]],
-      },
-      {
-        title: "Production-frame compilation",
-        series: [["Compile arena", "indexed_arena_production_comparison/compile_production_arena/8191"]],
-      },
-      {
-        title: "Dynamic-expression lifecycle",
-        series: [
-          ["Dynamic first compile", "dataflow_dynamic_phases/dynamic_first_compile"],
-          ["Dynamic cached tick", "dataflow_dynamic_phases/dynamic_cached_tick"],
-          ["Defer first compile", "dataflow_dynamic_phases/defer_first_compile"],
-          ["Defer cached tick", "dataflow_dynamic_phases/defer_cached_tick"],
+          {
+            label: "DSRV dataflow",
+            name: "time_dependent_property/dsrv_default_window_dataflow/10000",
+          },
+          {
+            label: "DSRV SemiSync",
+            name: "time_dependent_property/dsrv_default_window_semisync/10000",
+          },
+          {
+            label: "MSTLO runtime qualitative",
+            name: "time_dependent_property/mstlo_globally_window_qual/10000",
+          },
+          {
+            label: "MSTLO direct qualitative",
+            name: "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+          },
         ],
       },
     ],
@@ -183,40 +197,97 @@ function dateAndCommit(run) {
   return `${date} · ${run.commit.id.slice(0, 8)}`;
 }
 
+function cardSources(cardDefinition) {
+  if (cardDefinition.kind === "stacked-pipeline") {
+    return [...cardDefinition.phases, cardDefinition.total];
+  }
+  return cardDefinition.series;
+}
+
+function cardHasData(cardDefinition, availableNames) {
+  const sources = cardSources(cardDefinition);
+  if (cardDefinition.kind === "stacked-pipeline") {
+    return sources.every(({ name }) => availableNames.has(name));
+  }
+  return sources.some(({ name }) => availableNames.has(name));
+}
+
 function destroyCharts() {
   chartInstances.splice(0).forEach((chart) => chart.destroy());
   chartsElement.replaceChildren();
 }
 
-function renderCard(cardDefinition, runs, availableNames) {
-  const series = cardDefinition.series
-    .map(([label, name]) => ({ label, name }))
-    .filter(({ name }) => availableNames.has(name));
-  if (series.length === 0) return false;
-
-  const relevantRuns = runs.filter((run) => series.some(({ name }) => benchmarkFor(run, name)));
+function createCard(cardDefinition, sources) {
   const card = document.createElement("article");
   card.className = "chart-card";
+  if (cardDefinition.fullWidth) card.classList.add("full-width");
+
   const title = document.createElement("h3");
   title.textContent = cardDefinition.title;
+  card.append(title);
+
+  if (cardDefinition.description) {
+    const description = document.createElement("p");
+    description.className = "chart-description";
+    description.textContent = cardDefinition.description;
+    card.append(description);
+  }
+
   const container = document.createElement("div");
   container.className = "chart-container";
   const canvas = document.createElement("canvas");
   container.append(canvas);
+  card.append(container);
 
-  const history = document.createElement("div");
-  history.className = "commit-history";
-  history.setAttribute("aria-label", "Benchmark commits");
-  relevantRuns.forEach((run) => {
-    const link = document.createElement("a");
-    link.href = run.commit.url;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = dateAndCommit(run);
-    history.append(link);
+  const names = document.createElement("dl");
+  names.className = "benchmark-series";
+  sources.forEach(({ label, name }) => {
+    const seriesLabel = document.createElement("dt");
+    seriesLabel.textContent = label;
+    const benchmarkName = document.createElement("dd");
+    const code = document.createElement("code");
+    code.textContent = name;
+    benchmarkName.append(code);
+    names.append(seriesLabel, benchmarkName);
   });
-  card.append(title, container, history);
+  card.append(names);
   chartsElement.append(card);
+
+  return canvas;
+}
+
+function interactionOptions(relevantRuns) {
+  return {
+    hover: {
+      onHover: (event, elements) => {
+        event.target.style.cursor = elements.length > 0 ? "pointer" : "default";
+      },
+    },
+    onClick: (_event, elements) => {
+      if (elements.length > 0) {
+        window.open(relevantRuns[elements[0]._index].commit.url, "_blank", "noopener");
+      }
+    },
+    tooltips: {
+      mode: "index",
+      intersect: false,
+      callbacks: {
+        title: (items) => dateAndCommit(relevantRuns[items[0].index]),
+        label: (item, data) =>
+          `${data.datasets[item.datasetIndex].label}: ${readableDuration(item.yLabel)}`,
+        afterBody: (items) => relevantRuns[items[0].index].commit.message.split("\n")[0],
+      },
+    },
+  };
+}
+
+function renderLineCard(cardDefinition, runs, availableNames) {
+  const series = cardDefinition.series.filter(({ name }) => availableNames.has(name));
+  if (series.length === 0) return false;
+
+  const relevantRuns = runs.filter((run) => series.some(({ name }) => benchmarkFor(run, name)));
+  const canvas = createCard(cardDefinition, series);
+  const interaction = interactionOptions(relevantRuns);
 
   chartInstances.push(
     new Chart(canvas.getContext("2d"), {
@@ -243,16 +314,8 @@ function renderCard(cardDefinition, runs, availableNames) {
       options: {
         maintainAspectRatio: false,
         legend: { display: series.length > 1, position: "bottom" },
-        hover: {
-          onHover: (event, elements) => {
-            event.target.style.cursor = elements.length > 0 ? "pointer" : "default";
-          },
-        },
-        onClick: (_event, elements) => {
-          if (elements.length > 0) {
-            window.open(relevantRuns[elements[0]._index].commit.url, "_blank", "noopener");
-          }
-        },
+        hover: interaction.hover,
+        onClick: interaction.onClick,
         scales: {
           xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 8, maxRotation: 0 } }],
           yAxes: [
@@ -262,28 +325,91 @@ function renderCard(cardDefinition, runs, availableNames) {
             },
           ],
         },
-        tooltips: {
-          mode: "index",
-          intersect: false,
-          callbacks: {
-            title: (items) => dateAndCommit(relevantRuns[items[0].index]),
-            label: (item, data) => `${data.datasets[item.datasetIndex].label}: ${readableDuration(item.yLabel)}`,
-            afterBody: (items) => relevantRuns[items[0].index].commit.message.split("\n")[0],
-          },
-        },
+        tooltips: interaction.tooltips,
       },
     }),
   );
   return true;
 }
 
+function renderStackedPipeline(cardDefinition, runs) {
+  const sources = cardSources(cardDefinition);
+  const relevantRuns = runs.filter((run) =>
+    sources.every(({ name }) => benchmarkFor(run, name) !== undefined),
+  );
+  if (relevantRuns.length === 0) return false;
+
+  const canvas = createCard(cardDefinition, sources);
+  const interaction = interactionOptions(relevantRuns);
+  const phaseValues = cardDefinition.phases.map(({ name }) =>
+    relevantRuns.map((run) => valueInNanoseconds(benchmarkFor(run, name))),
+  );
+  const remainingValues = relevantRuns.map((run, runIndex) => {
+    const total = valueInNanoseconds(benchmarkFor(run, cardDefinition.total.name));
+    const measuredPhases = phaseValues.reduce((sum, values) => sum + values[runIndex], 0);
+    return Math.max(0, total - measuredPhases);
+  });
+  const datasets = cardDefinition.phases.map(({ label }, index) => ({
+    label,
+    data: phaseValues[index],
+    backgroundColor: COLORS[index % COLORS.length],
+    borderColor: COLORS[index % COLORS.length],
+    borderWidth: 1,
+  }));
+  datasets.push({
+    label: "Remaining dataflow compilation (derived)",
+    data: remainingValues,
+    backgroundColor: COLORS[cardDefinition.phases.length % COLORS.length],
+    borderColor: COLORS[cardDefinition.phases.length % COLORS.length],
+    borderWidth: 1,
+  });
+
+  chartInstances.push(
+    new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: relevantRuns.map(dateAndCommit),
+        datasets,
+      },
+      options: {
+        maintainAspectRatio: false,
+        legend: { display: true, position: "bottom" },
+        hover: interaction.hover,
+        onClick: interaction.onClick,
+        scales: {
+          xAxes: [
+            {
+              stacked: true,
+              ticks: { autoSkip: true, maxTicksLimit: 8, maxRotation: 0 },
+            },
+          ],
+          yAxes: [
+            {
+              stacked: true,
+              scaleLabel: { display: true, labelString: "End-to-end compilation time" },
+              ticks: { beginAtZero: true, callback: readableDuration },
+            },
+          ],
+        },
+        tooltips: interaction.tooltips,
+      },
+    }),
+  );
+  return true;
+}
+
+function renderCard(cardDefinition, runs, availableNames) {
+  if (cardDefinition.kind === "stacked-pipeline") {
+    return renderStackedPipeline(cardDefinition, runs);
+  }
+  return renderLineCard(cardDefinition, runs, availableNames);
+}
+
 function renderImportant(runs, availableNames) {
   destroyCharts();
   let renderedCards = 0;
   IMPORTANT_SECTIONS.forEach((section) => {
-    const availableCards = section.cards.filter((card) =>
-      card.series.some(([_label, name]) => availableNames.has(name)),
-    );
+    const availableCards = section.cards.filter((card) => cardHasData(card, availableNames));
     if (availableCards.length === 0) return;
 
     const heading = document.createElement("h2");
@@ -299,7 +425,16 @@ function renderImportant(runs, availableNames) {
 
 function renderAll(names, runs, availableNames) {
   destroyCharts();
-  names.forEach((name) => renderCard({ title: name, series: [[name, name]] }, runs, availableNames));
+  names.forEach((name) =>
+    renderCard(
+      {
+        title: name,
+        series: [{ label: "Benchmark ID", name }],
+      },
+      runs,
+      availableNames,
+    ),
+  );
   emptyState.hidden = names.length !== 0;
 }
 
