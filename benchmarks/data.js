@@ -49980,6 +49980,12 @@ window.BENCHMARK_DATA = {
             "unit": "ns/iter"
           },
           {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 16165247.392857142,
+            "range": "\u00b1 148044.55549358885",
+            "unit": "ns/iter"
+          },
+          {
             "name": "compilation_phases/strict_type_check/1024",
             "value": 894819,
             "range": "\u00b1 68438",
@@ -53439,6 +53445,12 @@ window.BENCHMARK_DATA = {
             "name": "compilation_phases/parse_typecheck_compile_typed/32",
             "value": 705691,
             "range": "\u00b1 2637",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 10070883.6875,
+            "range": "\u00b1 296372.21475062426",
             "unit": "ns/iter"
           },
           {
