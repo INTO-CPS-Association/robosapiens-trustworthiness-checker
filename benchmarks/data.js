@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784760481515,
+  "lastUpdate": 1784762541052,
   "repoUrl": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker",
   "entries": {
     "RoboSAPIENS Criterion benchmarks": [
@@ -56859,6 +56859,174 @@ window.BENCHMARK_DATA = {
             "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
             "value": 3725954,
             "range": "± 29284",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "committer": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "distinct": true,
+          "id": "92ea2006bf3480739083e4eab049f287b5a019ed",
+          "message": "Large improvements to internal and external API boundaries",
+          "timestamp": "2026-07-23T00:59:46+02:00",
+          "tree_id": "4cd045d1937af5b1e5685adabfeaa011333abcbb",
+          "url": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/commit/92ea2006bf3480739083e4eab049f287b5a019ed"
+        },
+        "date": 1784762540781,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "maple_sequence/maple_sequence_untyped_async/25000",
+            "value": 268409826,
+            "range": "± 2144199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_semisync/25000",
+            "value": 173884400,
+            "range": "± 978380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_dataflow/25000",
+            "value": 38580842,
+            "range": "± 238307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50/100000",
+            "value": 444103934,
+            "range": "± 1143132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_semisync/100000",
+            "value": 458606620,
+            "range": "± 2049566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow/100000",
+            "value": 320228357,
+            "range": "± 1080882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_async/25000",
+            "value": 109556888,
+            "range": "± 447527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_dataflow/25000",
+            "value": 43120788,
+            "range": "± 64547",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_semisync/25000",
+            "value": 60446821,
+            "range": "± 135354",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_on_percent_10/100",
+            "value": 7051417,
+            "range": "± 69556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_off_percent_10/100",
+            "value": 7266932,
+            "range": "± 162374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_small_varied_inputs/parsing_lalrpop/10000",
+            "value": 16234793,
+            "range": "± 72337",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/lalr_parse/1024",
+            "value": 10291937,
+            "range": "± 45615",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/strict_type_check/1024",
+            "value": 807510,
+            "range": "± 32141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/typed_dependency_graph/1024",
+            "value": 231398,
+            "range": "± 3257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 16866774,
+            "range": "± 186811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_semisync/10000",
+            "value": 12225622,
+            "range": "± 79311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow/10000",
+            "value": 1889644,
+            "range": "± 5366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_runtime_qual/10000",
+            "value": 5541327,
+            "range": "± 9232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_direct_qual/10000",
+            "value": 2159935,
+            "range": "± 4568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_semisync/10000",
+            "value": 20848348,
+            "range": "± 36701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow/10000",
+            "value": 3946066,
+            "range": "± 7887",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_globally_window_qual/10000",
+            "value": 7055116,
+            "range": "± 25084",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+            "value": 3718629,
+            "range": "± 8958",
             "unit": "ns/iter"
           }
         ]
