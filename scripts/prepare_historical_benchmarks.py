@@ -177,7 +177,24 @@ criterion_main!(benches);
 
 def ensure_pipeline(repo: Path) -> None:
     path = repo / "benches/backfill_compilation_phases.rs"
-    if not path.exists():
+    existing = repo / "benches/compilation_phases.rs"
+    if existing.exists():
+        source = existing.read_text()
+        source_id = '"parse_typecheck_compile_typed"'
+        target_id = '"parse_typecheck_dependency_compile_typed"'
+        if target_id not in source:
+            _, end, block = benchmark_block(source, source_id)
+            clone = block.replace(source_id, target_id, 1)
+            compile_call = "black_box(DataflowMonitor::try_compile_checked(typed).unwrap())"
+            clone = clone.replace(
+                compile_call,
+                "black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));\n"
+                "                    " + compile_call,
+                1,
+            )
+            source = source[:end] + "\n" + clone + source[end:]
+        path.write_text(source)
+    else:
         cargo = (repo / "Cargo.toml").read_text()
         allocator = (
             "tikv_jemallocator" if "tikv-jemallocator" in cargo else "jemallocator"

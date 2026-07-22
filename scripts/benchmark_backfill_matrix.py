@@ -11,6 +11,8 @@ from typing import Any
 
 PREFIX = "window.BENCHMARK_DATA = "
 DATAFLOW_INTRODUCTION = "9f0f006d16a999c6297fa2ef10f17f23f2bb86ba"
+DYNAMIC_SEMISYNC_INTRODUCTION = "b5c9613a272bf6fa9d271bb6926880d45eb9eb55"
+MAPLE_DATAFLOW_INTRODUCTION = "c37e53f84acec84d229d84cb2edba6888e2b4d73"
 
 
 def load_data(path: Path) -> dict[str, Any]:
@@ -49,7 +51,6 @@ def main() -> None:
         always_available = {
             "dup-semisync": "dup_defer/dup_defer_untyped_semisync/25000",
             "dyn-async": "dyn_paper/dyn_paper_50/100000",
-            "dyn-semisync": "dyn_paper/dyn_paper_50_semisync/100000",
             "maple-async": "maple_sequence/maple_sequence_untyped_async/25000",
             "maple-semisync": "maple_sequence/maple_sequence_untyped_semisync/25000",
         }
@@ -59,17 +60,26 @@ def main() -> None:
             if not has(benches, name)
         )
 
+        if is_ancestor(DYNAMIC_SEMISYNC_INTRODUCTION, sha) and not has(
+            benches, "dyn_paper/dyn_paper_50_semisync/100000"
+        ):
+            requested.append("dyn-semisync")
+
         if is_ancestor(DATAFLOW_INTRODUCTION, sha):
             dataflow_benchmarks = {
                 "dup-dataflow": "dup_defer/dup_defer_untyped_dataflow/25000",
                 "dyn-dataflow": "dyn_paper/dyn_paper_50_dataflow/100000",
-                "maple-dataflow": "maple_sequence/maple_sequence_untyped_dataflow/25000",
             }
             requested.extend(
                 benchmark
                 for benchmark, name in dataflow_benchmarks.items()
                 if not has(benches, name)
             )
+            if is_ancestor(MAPLE_DATAFLOW_INTRODUCTION, sha) and not has(
+                benches, "maple_sequence/maple_sequence_untyped_dataflow/25000"
+            ):
+                requested.append("maple-dataflow")
+
             pipeline = [
                 "compilation_phases/lalr_parse/1024",
                 "compilation_phases/strict_type_check/1024",
