@@ -4,35 +4,36 @@ use std::rc::Rc;
 
 use contiguous_tree::{ContextCursor, TreeCursorExt};
 
-use super::{Expr, ExprId, ExprKind, ExprRef, ExprView};
+use super::{Expr, ExprArena, ExprId, ExprKind, ExprRef, ExprView};
 use crate::lang::dsrv::span::Span;
-use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
+use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 
-/// Immutable type-checking results shared by every checked expression handle.
+pub(crate) type ExprTypes = contiguous_tree::NodeAnnotations<ExprArena, TCType>;
+pub(crate) type ExprTypesBuilder = contiguous_tree::NodeAnnotationsBuilder<ExprArena, TCType>;
+
+/// Immutable checked types shared by every checked expression handle.
 #[derive(Clone, Debug)]
-pub(crate) struct TypeAnnotations {
-    node_types: contiguous_tree::NodeAnnotations<ExprId, TCType>,
-    variable_types: Rc<TypeInfo>,
+pub(crate) struct CheckedTypes {
+    expr_types: ExprTypes,
+    environment: Rc<StreamTypeEnvironment>,
 }
 
-impl TypeAnnotations {
-    pub(crate) fn new(types: Vec<TCType>, variable_types: Rc<TypeInfo>) -> Self {
+impl CheckedTypes {
+    pub(crate) fn new(expr_types: ExprTypes, environment: Rc<StreamTypeEnvironment>) -> Self {
         Self {
-            node_types: contiguous_tree::NodeAnnotations::new(types),
-            variable_types,
+            expr_types,
+            environment,
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.node_types.len()
+    pub(crate) fn type_of(&self, expr: ExprRef<'_>) -> &TCType {
+        self.expr_types
+            .get(expr)
+            .expect("checked expression belongs to the typed tree or forest")
     }
 
-    pub(crate) fn type_of(&self, id: ExprId) -> &TCType {
-        self.node_types.get(id)
-    }
-
-    pub(crate) fn shared_type_info(&self) -> &Rc<TypeInfo> {
-        &self.variable_types
+    pub(crate) fn shared_type_environment(&self) -> &Rc<StreamTypeEnvironment> {
+        &self.environment
     }
 }
 
@@ -40,21 +41,21 @@ impl TypeAnnotations {
 #[derive(Clone)]
 pub struct CheckedExpr {
     pub(super) expr: Expr,
-    checked: Rc<TypeAnnotations>,
+    checked: Rc<CheckedTypes>,
 }
 
-/// A borrowed syntax cursor paired with guaranteed type annotations.
+/// A borrowed syntax cursor paired with its checked type.
 #[derive(Clone, Copy, contiguous_tree::TreeCursor)]
 #[tree_cursor(delegate = cursor, target = ExprRef<'arena>)]
 pub struct CheckedExprRef<'arena> {
-    cursor: ContextCursor<ExprRef<'arena>, &'arena TypeAnnotations>,
+    cursor: ContextCursor<ExprRef<'arena>, &'arena CheckedTypes>,
 }
 
 /// Internal cursor used by consumers that accept checked or unchecked syntax.
 #[derive(Clone, Copy)]
 enum CheckContext<'arena> {
     Unchecked,
-    Checked(&'arena TypeAnnotations),
+    Checked(&'arena CheckedTypes),
 }
 
 #[derive(Clone, Copy, contiguous_tree::TreeCursor)]
@@ -64,12 +65,16 @@ pub(crate) struct ExprCursor<'arena> {
 }
 
 impl CheckedExpr {
-    pub(crate) fn new(expr: Expr, types: Vec<TCType>, type_info: Rc<TypeInfo>) -> Self {
-        assert_eq!(expr.arena().len(), types.len());
-        Self::from_annotations(expr, Rc::new(TypeAnnotations::new(types, type_info)))
+    pub(crate) fn new(
+        expr: Expr,
+        expr_types: ExprTypes,
+        environment: Rc<StreamTypeEnvironment>,
+    ) -> Self {
+        let checked = Rc::new(CheckedTypes::new(expr_types, environment));
+        Self::from_checked_types(expr, checked)
     }
 
-    pub(super) fn from_annotations(expr: Expr, checked: Rc<TypeAnnotations>) -> Self {
+    pub(super) fn from_checked_types(expr: Expr, checked: Rc<CheckedTypes>) -> Self {
         Self { expr, checked }
     }
 
@@ -78,11 +83,11 @@ impl CheckedExpr {
     }
 
     pub fn typ(&self) -> &TCType {
-        self.checked.type_of(self.expr.id())
+        self.checked.type_of(self.expr.as_ref())
     }
 
     pub fn as_ref(&self) -> CheckedExprRef<'_> {
-        self.expr.as_ref().with_annotations(&self.checked)
+        self.expr.as_ref().with_checked_types(&self.checked)
     }
 
     pub(crate) fn cursor<'arena>(&'arena self, expr: ExprRef<'arena>) -> CheckedExprRef<'arena> {
@@ -95,7 +100,7 @@ impl PartialEq for CheckedExpr {
         if Rc::ptr_eq(&self.checked, &other.checked) && self.expr.same_root(&other.expr) {
             return true;
         }
-        if self.checked.variable_types != other.checked.variable_types {
+        if self.checked.environment != other.checked.environment {
             return false;
         }
 
@@ -110,8 +115,11 @@ impl PartialEq for CheckedExpr {
 }
 
 impl<'arena> CheckedExprRef<'arena> {
-    pub(super) fn new(expr: ExprRef<'arena>, checked: &'arena TypeAnnotations) -> Self {
-        debug_assert_eq!(checked.len(), expr.arena().len());
+    pub(super) fn new(expr: ExprRef<'arena>, checked: &'arena CheckedTypes) -> Self {
+        assert!(
+            checked.expr_types.get(expr).is_some(),
+            "checked type belongs to different expression storage or scope"
+        );
         Self {
             cursor: ContextCursor::new(expr, checked),
         }
@@ -138,15 +146,15 @@ impl<'arena> CheckedExprRef<'arena> {
     }
 
     pub fn typ(self) -> &'arena TCType {
-        self.cursor.context().type_of(self.id())
+        self.cursor.context().type_of(self.expr())
     }
 
-    pub fn type_info(self) -> &'arena TypeInfo {
-        self.shared_type_info().as_ref()
+    pub fn type_environment(self) -> &'arena StreamTypeEnvironment {
+        self.shared_type_environment().as_ref()
     }
 
-    pub(crate) fn shared_type_info(self) -> &'arena Rc<TypeInfo> {
-        self.cursor.context().shared_type_info()
+    pub(crate) fn shared_type_environment(self) -> &'arena Rc<StreamTypeEnvironment> {
+        self.cursor.context().shared_type_environment()
     }
 
     pub(crate) fn erased(self) -> ExprCursor<'arena> {
@@ -161,7 +169,7 @@ impl<'arena> ExprCursor<'arena> {
         }
     }
 
-    fn checked(expr: ExprRef<'arena>, checked: &'arena TypeAnnotations) -> Self {
+    fn checked(expr: ExprRef<'arena>, checked: &'arena CheckedTypes) -> Self {
         Self {
             cursor: ContextCursor::new(expr, CheckContext::Checked(checked)),
         }
@@ -178,14 +186,14 @@ impl<'arena> ExprCursor<'arena> {
     pub(crate) fn typ(self) -> Option<&'arena TCType> {
         match self.cursor.context() {
             CheckContext::Unchecked => None,
-            CheckContext::Checked(checked) => Some(checked.type_of(self.expr().id())),
+            CheckContext::Checked(checked) => Some(checked.type_of(self.expr())),
         }
     }
 
-    pub(crate) fn shared_type_info(self) -> Option<&'arena Rc<TypeInfo>> {
+    pub(crate) fn shared_type_environment(self) -> Option<&'arena Rc<StreamTypeEnvironment>> {
         match self.cursor.context() {
             CheckContext::Unchecked => None,
-            CheckContext::Checked(checked) => Some(checked.shared_type_info()),
+            CheckContext::Checked(checked) => Some(checked.shared_type_environment()),
         }
     }
 }

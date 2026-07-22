@@ -10,12 +10,11 @@ use trustworthiness_checker::VarName;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
-    OutputStream, Value,
+    DsrvSpecification, OutputStream, Value,
     core::Runtime,
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
     io::testing::ManualOutputHandler,
-    lang::dsrv::parser::parse_str,
     runtime::RuntimeBuilder,
     runtime::distributed::DistAsyncRuntimeBuilder,
     semantics::distributed::semantics::DistributedSemantics,
@@ -24,8 +23,9 @@ type TestDistSemantics = DistributedSemantics;
 type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSemantics>;
 
 fn parse_spec(source: &str) -> trustworthiness_checker::DsrvSpecification {
-    let input = source;
-    parse_str(input).unwrap()
+    (source)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse")
 }
 
 #[apply(async_test)]

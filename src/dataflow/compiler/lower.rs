@@ -1,12 +1,12 @@
 //! Lowering from DSRV expression views into executable dataflow plans.
 //!
 //! Checked and unchecked inputs share an AST-owned cursor. Its child cursors
-//! preserve the phase and expose annotations only when they are present.
+//! preserve the phase and expose checked types only when they are present.
 
 use super::super::plan::*;
 use super::super::*;
 use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView, SBinOp};
-use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
+use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 
 struct PlanBuilder {
     nodes: Vec<UnboundOp>,
@@ -202,18 +202,18 @@ fn lower_expr(expr: ExprCursor<'_>, builder: &mut PlanBuilder) -> UnboundRef {
             source,
             DataflowDynamicScope::from_ast(scope.clone()),
             DataflowDynamicMode::Dynamic,
-            expr.shared_type_info()
+            expr.shared_type_environment()
                 .zip(expr.typ())
-                .map(|(info, typ)| (Rc::clone(info), typ.clone())),
+                .map(|(environment, typ)| (Rc::clone(environment), typ.clone())),
         ),
         Defer(source, _, scope) => lower_dynamic_expr(
             builder,
             source,
             DataflowDynamicScope::from_ast(scope.clone()),
             DataflowDynamicMode::Defer,
-            expr.shared_type_info()
+            expr.shared_type_environment()
                 .zip(expr.typ())
-                .map(|(info, typ)| (Rc::clone(info), typ.clone())),
+                .map(|(environment, typ)| (Rc::clone(environment), typ.clone())),
         ),
         Lambda(params, body) => {
             let func = lower_function(params.clone(), body);
@@ -295,7 +295,7 @@ fn lower_dynamic_expr(
     input: ExprCursor<'_>,
     scope: DataflowDynamicScope,
     mode: DataflowDynamicMode,
-    typed: Option<(Rc<TypeInfo>, TCType)>,
+    typed: Option<(Rc<StreamTypeEnvironment>, TCType)>,
 ) -> UnboundRef {
     let input = lower_expr(input, builder);
     builder.push(UnboundOp::Dynamic(UnboundDynamicSpec {

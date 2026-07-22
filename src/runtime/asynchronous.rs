@@ -1241,7 +1241,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        InputStream, Value,
+        DsrvSpecification, InputStream, Value,
         dsrv_fixtures::{TestConfig, TestRuntime, spec_simple_add_monitor},
         io::testing::NullOutputHandler,
     };
@@ -1262,7 +1262,7 @@ mod tests {
     #[apply(async_test)]
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
         let source = spec_simple_add_monitor();
-        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
+        let spec = source.parse::<DsrvSpecification>().unwrap();
         let output = Box::new(NullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),

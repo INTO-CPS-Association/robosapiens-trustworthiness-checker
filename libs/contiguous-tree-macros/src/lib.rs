@@ -1,7 +1,10 @@
 //! Procedural macros for contiguous postorder trees.
 
 use proc_macro::TokenStream;
-use syn::{DeriveInput, parse_macro_input};
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::quote;
+use syn::{DeriveInput, Ident, parse_macro_input};
 
 mod cursor_derive;
 mod tree_schema;
@@ -10,7 +13,7 @@ mod tree_schema;
 ///
 /// ```text
 /// pub tree Expr {
-///     internals: pub(crate),
+///     schema: pub(crate),
 ///     owned_constructors: #[cfg(test)] pub(crate),
 ///     metadata: span: Span = Span::default(),
 ///     id: u32,
@@ -33,25 +36,34 @@ mod tree_schema;
 /// | `children` | collection of IDs | iterator of child cursors |
 /// | `keyed_children` | ordered key/ID collection | ordered key/cursor view |
 /// | `data(T)` | owned `T` | `&T` |
+/// | `into_data(T)` | owned `T` (constructor accepts `Into<T>`) | `&T` |
 /// | `copy(T)` | owned `T` | copied `T` |
 ///
-/// For a root named `Expr`, the public interface consists of:
+/// For a root named `Expr`, the generated types are:
 ///
 /// | Generated type | Role |
 /// |----------------|------|
-/// | `Expr` | owning tree root |
-/// | `ExprRef<'a>` | borrowed traversal cursor |
-/// | `ExprView<'a, C>` | node view with child IDs resolved to cursors |
-/// | `ExprKind` | stored node payload using `ExprId` for children |
-/// | `ExprId` | typed node ID |
-/// | `ExprBuilder` | bottom-up construction |
-/// | `ExprFields` | keyed children in source order |
-/// | `ExprArena`, `ExprNode`, `ExprHandle` | storage implementation |
+/// | `Expr` | language-facing owning tree root |
+/// | `ExprRef<'a>` | language-facing borrowed traversal cursor |
+/// | `ExprView<'a, C>` | language-facing node view with child IDs resolved to cursors |
+/// | `ExprId` | language-facing typed node ID |
+/// | `ExprKind` | schema-author node payload using `ExprId` for children |
+/// | `ExprBuilder` | schema-author bottom-up allocator with validated completion methods |
+/// | `ExprForest` | schema-author ordered owning forest backed by one shared arena |
+/// | `ExprFields` | schema-author keyed children in source order |
+/// | `ExprArena` | schema-author storage with safe ID, kind, and metadata accessors |
 ///
-/// `internals` controls the visibility of generated storage types such as
-/// `ExprArena`, `ExprNode`, and `ExprHandle`; the declared tree visibility is
-/// used for the language-facing root, ID, kind, reference, view, builder, and
-/// keyed-field types. The optional `owned_constructors` setting generates
+/// The declared tree visibility is used for `Expr`, `ExprRef`, `ExprView`, and
+/// `ExprId`. The optional `schema` setting controls `ExprKind`, `ExprBuilder`,
+/// `ExprForest`, `ExprArena`, keyed fields, and schema-facing aliases and
+/// methods; it defaults to `pub(crate)`. Raw node storage and handle aliases are
+/// implementation-private.
+///
+/// `ExprBuilder::finish(root)` returns `Result<Expr, ForestError>`, while
+/// `ExprBuilder::finish_forest(roots)` returns `Result<ExprForest, ForestError>`.
+/// `ExprForest` provides `new`, `len`, `is_empty`, `root_ids`, `roots` (borrowed
+/// cursors), and `into_roots` (owning `Expr` values), all at schema visibility.
+/// The optional `owned_constructors` setting generates
 /// variant-named constructors with the requested visibility. Outer attributes
 /// between `:` and the visibility are applied to the constructor `impl`, so
 /// `owned_constructors: #[cfg(test)] pub(crate),` makes them test-only.
@@ -66,13 +78,30 @@ mod tree_schema;
 /// this contract.
 #[proc_macro]
 pub fn tree_schema(input: TokenStream) -> TokenStream {
-    tree_schema::expand(input)
+    match runtime_crate_path() {
+        Ok(runtime) => tree_schema::expand(input, &runtime),
+        Err(error) => error.into_compile_error().into(),
+    }
 }
 
 /// Delegate `TreeCursor` through a transparent cursor wrapper.
 #[proc_macro_derive(TreeCursor, attributes(tree_cursor))]
 pub fn derive_tree_cursor(input: TokenStream) -> TokenStream {
-    cursor_derive::expand(parse_macro_input!(input as DeriveInput))
+    let input = parse_macro_input!(input as DeriveInput);
+    runtime_crate_path()
+        .and_then(|runtime| cursor_derive::expand(input, &runtime))
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+fn runtime_crate_path() -> syn::Result<TokenStream2> {
+    match crate_name("contiguous-tree")
+        .map_err(|error| syn::Error::new(Span::call_site(), error.to_string()))?
+    {
+        FoundCrate::Itself => Ok(quote!(::contiguous_tree)),
+        FoundCrate::Name(name) => {
+            let name = Ident::new(&name, Span::call_site());
+            Ok(quote!(::#name))
+        }
+    }
 }

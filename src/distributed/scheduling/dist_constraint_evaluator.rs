@@ -316,10 +316,7 @@ mod tests {
 
     use macro_rules_attribute::apply;
 
-    use crate::{
-        async_test, distributed::distribution_graphs::DistributionGraph,
-        lang::dsrv::parser::parse_str,
-    };
+    use crate::{async_test, distributed::distribution_graphs::DistributionGraph};
 
     use super::*;
 
@@ -348,7 +345,9 @@ in gate
 out distX
 distX = if gate then monitored_at(x, "B") else true
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -378,7 +377,9 @@ in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -410,7 +411,9 @@ in gate
 out distX
 distX = gate
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_streams = BTreeMap::from([(
@@ -442,7 +445,9 @@ in gate
 out distX
 distX = gate && monitored_at(x, "A")
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(vec!["gate".into()]);
@@ -474,7 +479,9 @@ distX = gate && monitored_at(x, "A")
 out distX
 distX = monitored_at(x, "B")
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(Vec::<VarName>::new());
@@ -495,7 +502,9 @@ distX = monitored_at(x, "B")
 
     #[test]
     fn dist_constraint_evaluator_rejects_missing_required_input() {
-        let spec = parse_str("in gate\nout distX\ndistX = gate").unwrap();
+        let spec = ("in gate\nout distX\ndistX = gate")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
         let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
 
@@ -519,7 +528,9 @@ distX = monitored_at(x, "B")
 
     #[test]
     fn dist_constraint_evaluator_rejects_duplicate_input_variables() {
-        let spec = parse_str("in gate\nout distX\ndistX = gate").unwrap();
+        let spec = ("in gate\nout distX\ndistX = gate")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
         let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
 
@@ -550,7 +561,9 @@ in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(vec!["gate".into()]);
@@ -582,7 +595,9 @@ distX = if gate then monitored_at(x, "A") else true
 out distX
 distX = dist(A, B) == 1
 "#;
-        let spec = parse_str(src).unwrap();
+        let spec = (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::repeat(labelling));
         let _ = dist_constraint_stream(

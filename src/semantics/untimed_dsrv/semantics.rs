@@ -121,7 +121,7 @@ where
         Dynamic(source, _, scope) => {
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
-                    .shared_type_info()
+                    .shared_type_environment()
                     .map(|info| (Rc::clone(info), expected))
             });
             let e = evaluate(source);
@@ -130,7 +130,7 @@ where
         Defer(source, _, scope) => {
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
-                    .shared_type_info()
+                    .shared_type_environment()
                     .map(|info| (Rc::clone(info), expected))
             });
             let e = evaluate(source);
@@ -476,9 +476,11 @@ mod tests {
     use crate::async_test;
     use crate::core::StreamTypeAscription;
     use crate::dsrv_fixtures::TestConfig;
-    use crate::lang::dsrv::ast::Expr;
-    use crate::lang::dsrv::parser::parse_sexpr;
-    use crate::lang::dsrv::type_checker::type_check;
+    use crate::lang::dsrv::parser::parse_expr;
+    use crate::lang::dsrv::{
+        TypeCheckOptions,
+        ast::{CheckedDsrvSpecification, Expr},
+    };
     use crate::runtime::asynchronous::Context;
     use crate::runtime::builder::CheckedValueConfig;
     use crate::semantics::StreamContext;
@@ -494,8 +496,7 @@ mod tests {
 
         let source =
             "in property: Str\nout result: Int\nresult = (\\p: Str -> dynamic(p : Int))(property)";
-        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
-        let checked = type_check(spec, false).unwrap();
+        let checked = source.parse::<CheckedDsrvSpecification>().unwrap();
         let expression = ScopedExpr::checked(checked.var_expr(&"result".into()).unwrap());
         let Apply(function, mut args) = expression.as_ref().view() else {
             panic!("expected application");
@@ -512,7 +513,7 @@ mod tests {
             .unwrap();
 
         assert!(framed.typ(framed.as_ref()).is_some());
-        assert!(framed.shared_type_info().is_some());
+        assert!(framed.shared_type_environment().is_some());
         let Dynamic(source, _, _) = framed.as_ref().view() else {
             panic!("expected dynamic expression");
         };
@@ -525,8 +526,11 @@ mod tests {
     async fn checked_float_arithmetic_and_comparison_are_specialised(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let specification = crate::dsrv_spec!("out result: Bool\nresult = (1.5 + 2.0) < 4.0");
-        let checked = type_check(specification, false).unwrap();
+        let checked = CheckedDsrvSpecification::parse_with(
+            "out result: Bool\nresult = (1.5 + 2.0) < 4.0",
+            TypeCheckOptions::STRICT,
+        )
+        .unwrap();
         let expression = checked.var_expr(&"result".into()).unwrap();
         let context = Context::<CheckedValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
 
@@ -544,9 +548,11 @@ mod tests {
     async fn checked_float_default_repeats_known_values_across_no_val(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let specification =
-            crate::dsrv_spec!("in x: Float\nout result: Float\nresult = default(x, 2.0)");
-        let checked = type_check(specification, false).unwrap();
+        let checked = CheckedDsrvSpecification::parse_with(
+            "in x: Float\nout result: Float\nresult = default(x, 2.0)",
+            TypeCheckOptions::STRICT,
+        )
+        .unwrap();
         let expression = checked.var_expr(&"result".into()).unwrap();
         let input = Box::pin(futures::stream::iter([Value::Float(1.0), Value::NoVal]));
         let mut context =
@@ -566,7 +572,7 @@ mod tests {
     #[apply(async_test)]
     async fn lexical_function_arguments_keep_temporal_state(executor: Rc<LocalExecutor<'static>>) {
         let source = "(\\f: (Int -> Int) -> f(x))(\\v: Int -> v[1])";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["x".into()],
@@ -587,7 +593,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into()],
@@ -611,7 +617,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let source = "(if choose then \\v: Int -> v[1] + bias else \\v: Int -> v + v)(x)";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into(), "bias".into()],
@@ -636,7 +642,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let source = "(if choose then \\v: Int -> bias[1] else \\v: Int -> bias[1])(x)";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into(), "bias".into()],
@@ -659,7 +665,7 @@ mod tests {
     #[apply(async_test)]
     async fn partial_functions_preserve_stream_bindings(executor: Rc<LocalExecutor<'static>>) {
         let source = "partial(\\a: Int, b: Int -> a[1] + b, x)(y)";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["x".into(), "y".into()],
@@ -683,7 +689,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let source = "(if choose then \\v: Int -> v[1] else \\v: Int -> v[1])(x)";
-        let expression = parse_sexpr(source).unwrap();
+        let expression = parse_expr(source).unwrap();
         let mut context = Context::<TestConfig>::new(
             executor,
             vec!["choose".into(), "x".into()],

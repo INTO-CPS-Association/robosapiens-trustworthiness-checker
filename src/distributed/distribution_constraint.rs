@@ -506,14 +506,11 @@ fn eval_binary(left: Value, right: Value, operator: &SBinOp) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::parser::parse_str;
 
     #[test]
     fn lowering_collects_transitive_inputs_and_monitored_streams_once() {
-        let spec = parse_str(
-            "in gate\nout x\nout constraint\nhelper = gate && monitored_at(x, A)\nconstraint = helper",
-        )
-        .unwrap();
+        let spec = ("in gate\nout x\nout constraint\nhelper = gate && monitored_at(x, A)\nconstraint = helper").parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let plan = DistributionConstraintPlan::lower(
             &spec,
@@ -535,7 +532,9 @@ mod tests {
 
     #[test]
     fn lowering_reports_unsupported_form_with_span_and_display() {
-        let spec = parse_str("out constraint\nconstraint = dist(A, B) == 1").unwrap();
+        let spec = ("out constraint\nconstraint = dist(A, B) == 1")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let error = DistributionConstraintPlan::lower(
             &spec,
@@ -553,7 +552,9 @@ mod tests {
 
     #[test]
     fn sat_profile_accepts_constant_collections_but_compact_profile_rejects_them() {
-        let spec = parse_str("out constraint\nconstraint = List.len(List(1, 2)) == 2").unwrap();
+        let spec = ("out constraint\nconstraint = List.len(List(1, 2)) == 2")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         assert!(
             DistributionConstraintPlan::lower(

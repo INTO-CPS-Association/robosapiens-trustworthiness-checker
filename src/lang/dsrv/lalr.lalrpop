@@ -2,7 +2,7 @@ use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
 use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, ExprId, VarOrNodeName};
-use crate::lang::dsrv::parser::STopDecl;
+use crate::lang::dsrv::parser::Declaration;
 use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
@@ -49,15 +49,7 @@ PlacementNode: NodeName = {
 // Macros / generic helpers
 // -----------------------------------------------------------------------------
 
-// Box<T> helper
-Box<T>: Box<T> = {
-    <T> => Box::new(<>),
-}
 
-// Box a spanned expression.
-Node<T>: ExprId = {
-    <e:T> => e,
-}
 
 // A list of elements separated by Sep
 SepList<T, Sep>: EcoVec<T> = {
@@ -172,79 +164,79 @@ ContainerExpr: ExprId = {
 // -----------------------------------------------------------------------------
 
 SpecialKeywords: ExprId = {
-  <l:@L> "dynamic" "(" <e: Node<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Node<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Node<Expr>> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Node<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Node<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Node<Expr>> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Node<Expr>> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Unascribed, DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Node<Expr>> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Unascribed, DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Node<Expr>> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Ascribed(t), DynamicExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "update" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "update" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Update(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "default" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "default" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Default(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "is_defined" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "is_defined" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::IsDefined(e), Span::new(l as u32, r as u32)),
-  <l:@L> "when" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "when" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::When(e), Span::new(l as u32, r as u32)),
-  <l:@L> "latch" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "latch" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Latch(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "init" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "init" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Init(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.get" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.get" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LIndex(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.concat" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.concat" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LConcat(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.append" "(" <e1: Node<Expr>> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.append" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LAppend(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.head" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.head" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LHead(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.tail" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.tail" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LTail(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.len" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.len" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LLen(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.map" "(" <f: Node<Expr>> "," <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.map" "(" <f: Expr> "," <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LMap(f, e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.filter" "(" <f: Node<Expr>> "," <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.filter" "(" <f: Expr> "," <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LFilter(f, e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.fold" "(" <f: Node<Expr>> "," <init: Node<Expr>> "," <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "List.fold" "(" <f: Expr> "," <init: Expr> "," <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::LFold(f, init, e), Span::new(l as u32, r as u32)),
-  <l:@L> "fix" "(" <f: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "fix" "(" <f: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Fix(f), Span::new(l as u32, r as u32)),
-  <l:@L> "partial" "(" <f: Node<Expr>> <args:("," <Expr>)*> ")" <r:@R> =>
+  <l:@L> "partial" "(" <f: Expr> <args:("," <Expr>)*> ")" <r:@R> =>
        builder.alloc(ExprKind::Partial(f, args.into()), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.get" "(" <e: Node<Expr>> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.get" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
        builder.alloc(ExprKind::MGet(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.remove" "(" <e: Node<Expr>> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.remove" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
        builder.alloc(ExprKind::MRemove(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.has_key" "(" <e: Node<Expr>> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.has_key" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
        builder.alloc(ExprKind::MHasKey(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.insert" "(" <e1: Node<Expr>> "," <k: String> "," <e2: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "Map.insert" "(" <e1: Expr> "," <k: String> "," <e2: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::MInsert(e1, k, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "sin" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "sin" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Sin(e), Span::new(l as u32, r as u32)),
-  <l:@L> "cos" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "cos" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Cos(e), Span::new(l as u32, r as u32)),
-  <l:@L> "tan" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "tan" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Tan(e), Span::new(l as u32, r as u32)),
-  <l:@L> "abs" "(" <e: Node<Expr>> ")" <r:@R> =>
+  <l:@L> "abs" "(" <e: Expr> ")" <r:@R> =>
        builder.alloc(ExprKind::Abs(e), Span::new(l as u32, r as u32)),
   <l:@L> "monitored_at" "(" <v: Ident> "," <n: PlacementNode> ")" <r:@R> =>
        builder.alloc(ExprKind::MonitoredAt(v, n), Span::new(l as u32, r as u32)),
@@ -265,27 +257,25 @@ AtomBase: ExprId = {
     SpannedParen
 }
 
-CallSuffix: EcoVec<ExprId> = {
-    "(" <args: SepListOpt<Expr, ",">> ")" => args,
-}
+
 
 FieldName: EcoString = {
     <field: Ident> => field.name().into(),
     <idx: Uint> => idx.to_string().into(),
 }
 
-// Field access expression e.field. This is typed-struct-only shorthand.
+// Calls and field accesses allocate each prefix immediately, preserving postorder
+// construction and giving every generated node its exact source span.
 Atom: ExprId = {
-    <base: AtomBase> <calls:CallSuffix*> <fields:("." <FieldName>)*> <r:@R> => {
-        let span_start = builder.get(base).span.start;
-        let span_end = r as u32;
-        let called = calls.into_iter().fold(base, |expr, args| {
-            builder.alloc(ExprKind::Apply(expr, args), Span::new(span_start, span_end))
-        });
-        fields.into_iter().fold(called, |expr, field| {
-            builder.alloc(ExprKind::SGet(expr, field), Span::new(span_start, span_end))
-        })
-    }
+    AtomBase,
+    <base: Atom> "(" <args: SepListOpt<Expr, ",">> ")" <r:@R> => {
+        let start = builder.metadata(base).start;
+        builder.alloc(ExprKind::Apply(base, args), Span::new(start, r as u32))
+    },
+    <base: Atom> "." <field: FieldName> <r:@R> => {
+        let start = builder.metadata(base).start;
+        builder.alloc(ExprKind::SGet(base, field), Span::new(start, r as u32))
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -293,10 +283,10 @@ Atom: ExprId = {
 // -----------------------------------------------------------------------------
 
 UnaryExpr<Next>: ExprId = {
-   <l:@L> "-" <x: Node<UnaryExpr<Next>>> <r:@R> => {
+   <l:@L> "-" <x: UnaryExpr<Next>> <r:@R> => {
         builder.alloc(ExprKind::Neg(x), Span::new(l as u32, r as u32))
    },
-   <l:@L> "!" <b: Node<UnaryExpr<Next>>> <r:@R> => {
+   <l:@L> "!" <b: UnaryExpr<Next>> <r:@R> => {
         builder.alloc(ExprKind::Not(b), Span::new(l as u32, r as u32))
     },
     Next
@@ -314,7 +304,7 @@ MultExprHelp: SBinOp  = {
 };
 
 MultExpr<Next>: ExprId = {
-  <l:@L>  <lhs: Node<MultExpr<Next>>> <op: MultExprHelp> <rhs: Node<Next>> <r:@R> => {
+  <l:@L>  <lhs: MultExpr<Next>> <op: MultExprHelp> <rhs: Next> <r:@R> => {
     builder.alloc(ExprKind::BinOp(lhs, rhs, op), Span::new(l as u32, r as u32))
     },
     Next
@@ -327,7 +317,7 @@ AddExprHelp: SBinOp  = {
 };
 
 AddExpr<Next>: ExprId = {
-   <l:@L> <lhs: Node<AddExpr<Next>>> <op: AddExprHelp> <rhs: Node<Next>> <r:@R> => {
+   <l:@L> <lhs: AddExpr<Next>> <op: AddExprHelp> <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, op), Span::new(l as u32, r as u32))
     },
     Next
@@ -342,7 +332,7 @@ RelExprHelp: SBinOp = {
 }
 
 RelExpr<Next>: ExprId ={
-  <l:@L>  <lhs: Node<RelExpr<Next>>> <op: RelExprHelp> <rhs: Node<Next>> <r:@R> => {
+  <l:@L>  <lhs: RelExpr<Next>> <op: RelExprHelp> <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, op), Span::new(l as u32, r as u32))
     },
     Next
@@ -355,7 +345,7 @@ CompExprHelp: SBinOp = {
 }
 
 CompExpr<Next>: ExprId = {
-   <l:@L> <lhs: Node<CompExpr<Next>>> <op: CompExprHelp> <rhs: Node<Next>> <r:@R> => {
+   <l:@L> <lhs: CompExpr<Next>> <op: CompExprHelp> <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, op), Span::new(l as u32, r as u32))
     },
     Next
@@ -363,21 +353,21 @@ CompExpr<Next>: ExprId = {
 
 // Boolean
 AndExpr<Next>: ExprId = {
-  <l:@L>  <lhs: Node<AndExpr<Next>>> "&&" <rhs: Node<Next>> <r:@R> => {
+  <l:@L>  <lhs: AndExpr<Next>> "&&" <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And)), Span::new(l as u32, r as u32))
     },
     Next
 };
 
 OrExpr<Next>: ExprId = {
-   <l:@L> <lhs: Node<OrExpr<Next>>> "||" <rhs: Node<Next>> <r:@R> => {
+   <l:@L> <lhs: OrExpr<Next>> "||" <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or)), Span::new(l as u32, r as u32))
     },
     Next
 };
 
 ImplExpr<Next>: ExprId = {
-   <l:@L> <lhs: Node<ImplExpr<Next>>> "=>" <rhs: Node<Next>> <r:@R> => {
+   <l:@L> <lhs: ImplExpr<Next>> "=>" <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Impl)), Span::new(l as u32, r as u32))
     },
     Next
@@ -385,7 +375,7 @@ ImplExpr<Next>: ExprId = {
 
 // String concat
 ConcatExpr<Next>: ExprId = {
-   <l:@L> <lhs: Node<ConcatExpr<Next>>> "++" <rhs: Node<Next>> <r:@R> => {
+   <l:@L> <lhs: ConcatExpr<Next>> "++" <rhs: Next> <r:@R> => {
                 builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat)), Span::new(l as u32, r as u32))
     },
     Next
@@ -396,13 +386,13 @@ ConcatExpr<Next>: ExprId = {
 // -----------------------------------------------------------------------------
 
 Ifelse: ExprId = {
-   <l:@L>  "if" <c: Node<Expr>> "then" <i: Node<Expr>> "else" <e: Node<Expr>> <r:@R> => {
+   <l:@L>  "if" <c: Expr> "then" <i: Expr> "else" <e: Expr> <r:@R> => {
     builder.alloc(ExprKind::If(c, i, e), Span::new(l as u32, r as u32))
    }
 }
 
 LambdaExpr: ExprId = {
-   <l:@L> "\\" <params: SepList<LambdaParam, ",">> "->" <body: Node<Expr>> <r:@R> => {
+   <l:@L> "\\" <params: SepList<LambdaParam, ",">> "->" <body: Expr> <r:@R> => {
     builder.alloc(ExprKind::Lambda(params, body), Span::new(l as u32, r as u32))
    }
 }
@@ -475,31 +465,31 @@ pub Expr: ExprId = {
 // Top-level declarations
 // -----------------------------------------------------------------------------
 
-InputDecl: STopDecl = {
+InputDecl: Declaration = {
    <l:@L> "in" <id: Ident> <typ: TypeAnno?> <r:@R>=>
-   STopDecl::Input(id, typ, Span::new(l as u32, r as u32))
+   Declaration::Input(id, typ, Span::new(l as u32, r as u32))
 };
 
-OutputDecl: STopDecl = {
-   <l:@L> "out" <id: Ident> <typ: TypeAnno?> <r:@R> => STopDecl::Output(id, typ, Span::new(l as u32, r as u32)),
+OutputDecl: Declaration = {
+   <l:@L> "out" <id: Ident> <typ: TypeAnno?> <r:@R> => Declaration::Output(id, typ, Span::new(l as u32, r as u32)),
 };
 
-AuxDecl: STopDecl = {
-   <l:@L> "aux" <id: Ident> <typ: TypeAnno?> <r:@R> => STopDecl::Aux(id, typ, Span::new(l as u32, r as u32)),
-   <l:@L> "var" <id: Ident> <typ: TypeAnno?> <r:@R> => STopDecl::Aux(id, typ, Span::new(l as u32, r as u32)),
+AuxDecl: Declaration = {
+   <l:@L> "aux" <id: Ident> <typ: TypeAnno?> <r:@R> => Declaration::Aux(id, typ, Span::new(l as u32, r as u32)),
+   <l:@L> "var" <id: Ident> <typ: TypeAnno?> <r:@R> => Declaration::Aux(id, typ, Span::new(l as u32, r as u32)),
 };
 
-Assignment: STopDecl = {
-   <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => STopDecl::Assignment(var, expr, Span::new(l as u32, r as u32))
+Assignment: Declaration = {
+   <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => Declaration::Assignment(var, expr, Span::new(l as u32, r as u32))
 }
 
-pub TopDecl: STopDecl = {
+pub Declaration: Declaration = {
     InputDecl,
     OutputDecl,
     AuxDecl,
     Assignment
 }
 
-pub TopDecls: EcoVec<STopDecl> = {
-   TopDecl* => <>.into()
+pub Declarations: EcoVec<Declaration> = {
+   Declaration* => <>.into()
 }

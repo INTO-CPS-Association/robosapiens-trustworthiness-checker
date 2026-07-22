@@ -4,7 +4,7 @@ use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
 use crate::core::Value;
 use crate::lang::dsrv::ast::DynamicExprScope;
-use crate::lang::dsrv::type_checker::{TCType, TypeInfo, check_expression};
+use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{OutputStream, VarName};
 use async_stream::stream;
@@ -30,7 +30,7 @@ pub(crate) fn dynamic_checked<AC>(
     scope: DynamicExprScope,
     owner: Option<VarName>,
     history_length: usize,
-    checked: Option<(Rc<TypeInfo>, TCType)>,
+    checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
 ) -> OutputStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
@@ -103,10 +103,10 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = crate::lang::dsrv::parser::parse_sexpr(s.as_ref())
+                    let expr = crate::lang::dsrv::parser::parse_expr(s.as_ref())
                         .expect("Invalid dynamic str");
-                    let eval_output_stream = if let Some((type_info, expected)) = checked.clone() {
-                        let expr = check_expression(expr, &expected, &type_info)
+                    let eval_output_stream = if let Some((environment, expected)) = checked.clone() {
+                        let expr = check_expression(expr, &expected, &environment)
                             .unwrap_or_else(|errors| {
                                 panic!("Dynamic expression failed type checking: {errors:?}")
                             });
@@ -163,7 +163,7 @@ pub(crate) fn defer_checked<AC>(
     scope: DynamicExprScope,
     owner: Option<VarName>,
     history_length: usize,
-    checked: Option<(Rc<TypeInfo>, TCType)>,
+    checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
 ) -> OutputStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
@@ -195,10 +195,10 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = crate::lang::dsrv::parser::parse_sexpr(s.as_ref())
+                    let expr = crate::lang::dsrv::parser::parse_expr(s.as_ref())
                         .expect("Invalid defer str");
-                    let tmp_stream = if let Some((type_info, expected)) = checked.clone() {
-                        let expr = check_expression(expr, &expected, &type_info)
+                    let tmp_stream = if let Some((environment, expected)) = checked.clone() {
+                        let expr = check_expression(expr, &expected, &environment)
                             .unwrap_or_else(|errors| {
                                 panic!("Deferred expression failed type checking: {errors:?}")
                             });

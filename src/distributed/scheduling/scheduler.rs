@@ -451,7 +451,6 @@ mod tests {
             },
         },
         io::{config::TopicMapping, mqtt::dist_graph_provider::StaticDistGraphProvider},
-        lang::dsrv::parser::parse_str,
         stream_utils::channel_to_output_stream,
     };
 
@@ -504,7 +503,9 @@ out distX
 work = gate
 distX = gate && monitored_at(work, "A")
 "#;
-        parse_str(src).unwrap()
+        (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse")
     }
 
     fn graph_with_work_at_b() -> Rc<LabelledDistributionGraph> {

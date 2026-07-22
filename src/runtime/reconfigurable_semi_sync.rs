@@ -680,10 +680,9 @@ mod input_tick_tests {
 
     use super::{ReconfSemiSyncRuntime, ReconfSemiSyncRuntimeBuilder};
     use crate::{
-        OutputStream, Runtime, Value, VarName,
+        DsrvSpecification, OutputStream, Runtime, Value, VarName,
         core::OutputHandler,
         io::{InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec},
-        lang::dsrv::parser::parse_str,
         runtime::{
             RuntimeBuilder, builder::SemiSyncValueConfig, semi_sync::SemiSyncRuntimeBuilder,
         },
@@ -709,7 +708,7 @@ mod input_tick_tests {
     async fn reconfigurable_input_setup_errors_are_returned(
         executor: std::rc::Rc<smol::LocalExecutor<'static>>,
     ) {
-        let spec = parse_str("in x\nout z\nz = x").unwrap();
+        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
         let input_factory = InputStreamFactory::mqtt(Some(BTreeMap::new()), None);
         let (output_sender, _output_receiver) =
             bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
@@ -718,7 +717,7 @@ mod input_tick_tests {
             .output_var_names(spec.output_vars().clone());
 
         let runtime = ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics>::new()
-            .parse_spec(parse_str)
+            .parse_spec(|input| input.parse().map_err(anyhow::Error::from))
             .executor(executor)
             .model(spec)
             .input_factory(input_factory)
@@ -742,7 +741,7 @@ mod input_tick_tests {
     async fn reconfigurable_output_errors_are_returned(
         executor: std::rc::Rc<smol::LocalExecutor<'static>>,
     ) {
-        let spec = parse_str("in x\nout z\nz = x").unwrap();
+        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
         let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, TestSemantics>::new()
             .executor(executor.clone())
             .model(spec.clone())

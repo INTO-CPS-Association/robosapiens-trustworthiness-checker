@@ -5,7 +5,7 @@ use std::fmt;
 
 use contiguous_tree::CloneTreeError;
 
-use super::{ExprBuilder, ExprId, ExprRef};
+use super::{ExprBuilder, ExprForestMap, ExprRef};
 use crate::lang::dsrv::span::Span;
 
 /// A failure while rewriting keyed DSRV expression roots.
@@ -38,31 +38,6 @@ impl<PolicyError: std::error::Error + 'static> std::error::Error
     }
 }
 
-/// Compact shared storage and keyed root IDs produced by expression rewriting.
-#[derive(Debug)]
-pub(crate) struct CompactExprForest<Key> {
-    arena: super::ExprArena,
-    roots: BTreeMap<Key, ExprId>,
-}
-
-impl<Key: Ord> CompactExprForest<Key> {
-    pub(crate) fn into_arena_and_roots(self) -> (super::ExprArena, BTreeMap<Key, ExprId>) {
-        (self.arena, self.roots)
-    }
-
-    #[cfg(test)]
-    fn into_expressions(self) -> BTreeMap<Key, super::Expr> {
-        let (arena, roots) = self.into_arena_and_roots();
-        let entries = roots.into_iter().collect::<Vec<_>>();
-        let expressions = super::Expr::forest(arena, entries.iter().map(|(_, root)| *root));
-        entries
-            .into_iter()
-            .zip(expressions)
-            .map(|((key, _), expression)| (key, expression))
-            .collect()
-    }
-}
-
 /// Rewrite keyed expression roots into one compact shared arena.
 ///
 /// Replacement subtrees are themselves passed through `replace`, allowing transitive expansion.
@@ -70,7 +45,7 @@ impl<Key: Ord> CompactExprForest<Key> {
 pub(crate) fn rewrite_forest<'arena, Key, Policy, PolicyError>(
     roots: BTreeMap<Key, ExprRef<'arena>>,
     mut replace: Policy,
-) -> Result<CompactExprForest<Key>, RewriteForestError<PolicyError>>
+) -> Result<ExprForestMap<Key>, RewriteForestError<PolicyError>>
 where
     Key: Ord,
     Policy: FnMut(ExprRef<'arena>) -> Result<Option<ExprRef<'arena>>, PolicyError>,
@@ -94,10 +69,11 @@ where
         rewritten_roots.insert(key, rewritten);
     }
 
-    Ok(CompactExprForest {
-        arena: target.finish_arena(),
-        roots: rewritten_roots,
-    })
+    let (keys, roots): (Vec<_>, Vec<_>) = rewritten_roots.into_iter().unzip();
+    let forest = target
+        .finish_forest(roots)
+        .expect("cloned expression roots form a complete forest");
+    Ok(ExprForestMap::new(keys, forest).expect("rewritten root keys are sorted and unique"))
 }
 
 #[cfg(test)]
@@ -106,15 +82,22 @@ mod tests {
 
     use super::*;
     use crate::VarName;
-    use crate::lang::dsrv::ast::ExprView;
-    use crate::sexpr;
+    use crate::lang::dsrv::ast::{Expr, ExprView, NumericalBinOp, SBinOp};
     use contiguous_tree::TreeCursorExt;
 
     #[test]
     fn rewrites_multiple_roots_into_shared_compact_storage() {
-        let first = sexpr!(BinOp(Var("replace"), Add, Val(2)));
-        let second = sexpr!(Not(Var("keep")));
-        let replacement = sexpr!(BinOp(Val(3), Mul, Val(4)));
+        let first = Expr::BinOp(
+            Box::new(Expr::Var("replace".into())),
+            Box::new(Expr::Val(2)),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
+        let second = Expr::Not(Box::new(Expr::Var("keep".into())));
+        let replacement = Expr::BinOp(
+            Box::new(Expr::Val(3)),
+            Box::new(Expr::Val(4)),
+            SBinOp::NOp(NumericalBinOp::Mul),
+        );
         let roots = BTreeMap::from([("first", first), ("second", second)]);
         let replace: VarName = "replace".into();
 
@@ -130,29 +113,41 @@ mod tests {
                 })
             },
         )
-        .unwrap()
-        .into_expressions();
+        .unwrap();
 
         assert_eq!(
-            rewritten["first"],
-            sexpr!(BinOp(BinOp(Val(3), Mul, Val(4)), Add, Val(2)))
+            rewritten.get_owned(&"first").unwrap(),
+            Expr::BinOp(
+                Box::new(Expr::BinOp(
+                    Box::new(Expr::Val(3)),
+                    Box::new(Expr::Val(4)),
+                    SBinOp::NOp(NumericalBinOp::Mul),
+                )),
+                Box::new(Expr::Val(2)),
+                SBinOp::NOp(NumericalBinOp::Add),
+            )
         );
-        assert_eq!(rewritten["second"], sexpr!(Not(Var("keep"))));
-        assert!(rewritten["first"].shares_storage_with(&rewritten["second"]));
         assert_eq!(
-            rewritten["first"].arena().len(),
+            rewritten.get_owned(&"second").unwrap(),
+            Expr::Not(Box::new(Expr::Var("keep".into())))
+        );
+        let first = rewritten.get_owned(&"first").unwrap();
+        let second = rewritten.get_owned(&"second").unwrap();
+        assert!(first.shares_storage_with(&second));
+        assert_eq!(
+            rewritten.nodes().len(),
             rewritten
                 .values()
-                .map(|root| root.as_ref().postorder().len())
+                .map(|root| root.postorder().len())
                 .sum::<usize>()
         );
     }
 
     #[test]
     fn recursively_rewrites_replacements_and_reports_cycles() {
-        let a = sexpr!(Var("b"));
-        let b = sexpr!(Var("a"));
-        let root = sexpr!(Var("a"));
+        let a = Expr::Var("b".into());
+        let b = Expr::Var("a".into());
+        let root = Expr::Var("a".into());
         let a_name: VarName = "a".into();
         let b_name: VarName = "b".into();
 
@@ -175,7 +170,11 @@ mod tests {
 
     #[test]
     fn policy_errors_stop_before_later_siblings() {
-        let root = sexpr!(BinOp(Var("stop"), Add, Var("later")));
+        let root = Expr::BinOp(
+            Box::new(Expr::Var("stop".into())),
+            Box::new(Expr::Var("later".into())),
+            SBinOp::NOp(NumericalBinOp::Add),
+        );
         let stop: VarName = "stop".into();
         let later: VarName = "later".into();
         let mut visited_later = false;

@@ -4,11 +4,129 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use crate::core::{Specification, StreamType, VarName};
-use crate::lang::dsrv::type_checker::TCType;
+use contiguous_tree::TreeCursorExt;
+use serde::ser::SerializeMap;
 
-use super::checked::TypeAnnotations;
-use super::{CheckedExpr, CheckedExprRef, Expr, ExprArena, ExprId, ExprRef};
+use super::checked::{CheckedTypes, ExprTypes};
+use super::{CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
+use crate::core::{Specification, StreamType, VarName};
+use crate::lang::dsrv::span::Span;
+
+impl PartialEq for ExprForestMap<VarName> {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl serde::Serialize for ExprForestMap<VarName> {
+    fn serialize<Serializer: serde::Serializer>(
+        &self,
+        serializer: Serializer,
+    ) -> Result<Serializer::Ok, Serializer::Error> {
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (name, expression) in self.iter() {
+            map.serialize_entry(name, &expression)?;
+        }
+        map.end()
+    }
+}
+
+/// A declaration-level error in a forest-backed DSRV syntax tree.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum DsrvAstError {
+    #[error(
+        "stream {variable} is assigned more than once (first assignment at {first:?}, duplicate at {duplicate:?})"
+    )]
+    DuplicateAssignment {
+        variable: VarName,
+        first: Span,
+        duplicate: Span,
+    },
+
+    #[error("expression contains duplicate field {field:?}")]
+    DuplicateExpressionField { field: ecow::EcoString },
+
+    #[error("invalid expression forest: {0}")]
+    InvalidExpressionForest(#[from] contiguous_tree::ForestError),
+
+    #[error("invalid expression map: {0}")]
+    InvalidExpressionMap(#[from] contiguous_tree::ForestMapError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnvalidatedAssignment {
+    pub(crate) name: VarName,
+    pub(crate) span: Span,
+}
+
+/// A forest-backed specification whose declaration-level invariants are unchecked.
+pub(crate) struct UnvalidatedDsrvSpecification {
+    input_vars: BTreeSet<VarName>,
+    output_vars: BTreeSet<VarName>,
+    aux_vars: Vec<VarName>,
+    expressions: ExprForest,
+    assignments: Vec<UnvalidatedAssignment>,
+    type_annotations: BTreeMap<VarName, StreamType>,
+}
+
+impl UnvalidatedDsrvSpecification {
+    pub(crate) fn new(
+        input_vars: BTreeSet<VarName>,
+        output_vars: BTreeSet<VarName>,
+        aux_vars: Vec<VarName>,
+        expressions: ExprForest,
+        assignments: Vec<UnvalidatedAssignment>,
+        type_annotations: BTreeMap<VarName, StreamType>,
+    ) -> Self {
+        assert_eq!(
+            assignments.len(),
+            expressions.len(),
+            "each assignment declaration must describe one expression root"
+        );
+        Self {
+            input_vars,
+            output_vars,
+            aux_vars,
+            expressions,
+            assignments,
+            type_annotations,
+        }
+    }
+
+    pub(crate) fn validate(self) -> Result<DsrvSpecification, DsrvAstError> {
+        let mut first_assignments = BTreeMap::new();
+        for assignment in &self.assignments {
+            if let Some(first) = first_assignments.insert(&assignment.name, assignment.span) {
+                return Err(DsrvAstError::DuplicateAssignment {
+                    variable: assignment.name.clone(),
+                    first,
+                    duplicate: assignment.span,
+                });
+            }
+        }
+
+        if let Some(field) = self
+            .expressions
+            .nodes()
+            .find_map(|expression| expression.duplicate_key_here().cloned())
+        {
+            return Err(DsrvAstError::DuplicateExpressionField { field });
+        }
+
+        let names = self
+            .assignments
+            .into_iter()
+            .map(|assignment| assignment.name);
+        let exprs = ExprForestMap::from_unsorted(names, self.expressions)?;
+        Ok(DsrvSpecification::from_expression_forest(
+            self.input_vars,
+            self.output_vars,
+            exprs,
+            self.type_annotations,
+            self.aux_vars,
+        ))
+    }
+}
 
 /// An unchecked DSRV specification.
 #[derive(Clone, PartialEq, serde::Serialize)]
@@ -17,7 +135,7 @@ pub struct DsrvSpecification {
     pub(crate) output_vars: BTreeSet<VarName>,
     pub(crate) aux_vars: BTreeSet<VarName>,
     pub(crate) stream_vars: BTreeSet<VarName>,
-    pub(crate) exprs: BTreeMap<VarName, Expr>,
+    pub(crate) exprs: ExprForestMap<VarName>,
     pub(crate) type_annotations: BTreeMap<VarName, StreamType>,
 }
 
@@ -38,26 +156,14 @@ impl Debug for DsrvSpecification {
 #[derive(Clone, Debug)]
 pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
-    checked: Rc<TypeAnnotations>,
+    checked: Rc<CheckedTypes>,
 }
 
 impl CheckedDsrvSpecification {
-    pub(crate) fn new(spec: DsrvSpecification, types: Vec<TCType>) -> Self {
-        let arena_len = spec
-            .exprs
-            .values()
-            .next()
-            .map_or(0, |expr| expr.arena().len());
-        assert_eq!(
-            types.len(),
-            arena_len,
-            "every AST node must have a checked type"
-        );
-        let type_info = Rc::new(spec.type_annotations().clone());
-        Self {
-            spec,
-            checked: Rc::new(TypeAnnotations::new(types, type_info)),
-        }
+    pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
+        let environment = Rc::new(spec.type_annotations().clone());
+        let checked = Rc::new(CheckedTypes::new(expr_types, environment));
+        Self { spec, checked }
     }
 
     pub fn unchecked(&self) -> &DsrvSpecification {
@@ -68,24 +174,22 @@ impl CheckedDsrvSpecification {
         self.spec
             .exprs
             .iter()
-            .map(|(name, expr)| (name, expr.checked_ref(&self.checked)))
+            .map(|(name, expr)| (name, expr.with_checked_types(&self.checked)))
     }
 
     /// Every checked syntax node in allocation order.
     pub fn nodes(&self) -> impl DoubleEndedIterator<Item = CheckedExprRef<'_>> {
-        self.spec.arena().into_iter().flat_map(|arena| {
-            arena
-                .iter()
-                .map(|(id, _)| ExprRef::from_arena(arena, id).with_annotations(&self.checked))
-        })
+        self.spec
+            .exprs
+            .nodes()
+            .map(|expr| expr.with_checked_types(&self.checked))
     }
 
     pub fn var_expr(&self, var: &VarName) -> Option<CheckedExpr> {
         self.spec
             .exprs
-            .get(var)
-            .cloned()
-            .map(|expr| CheckedExpr::from_annotations(expr, self.checked.clone()))
+            .get_owned(var)
+            .map(|expr| CheckedExpr::from_checked_types(expr, self.checked.clone()))
     }
     pub fn input_vars(&self) -> &BTreeSet<VarName> {
         self.spec.input_vars()
@@ -103,10 +207,13 @@ impl CheckedDsrvSpecification {
         self.spec.type_annotations()
     }
     pub fn expressions(&self) -> impl Iterator<Item = (&VarName, CheckedExpr)> {
-        self.spec.exprs.iter().map(|(name, expr)| {
+        self.spec.exprs.keys().map(|name| {
             (
                 name,
-                CheckedExpr::from_annotations(expr.clone(), self.checked.clone()),
+                CheckedExpr::from_checked_types(
+                    self.spec.exprs.get_owned(name).unwrap(),
+                    self.checked.clone(),
+                ),
             )
         })
     }
@@ -140,71 +247,26 @@ impl Specification for CheckedDsrvSpecification {
 
 impl DsrvSpecification {
     pub fn roots(&self) -> impl DoubleEndedIterator<Item = (&VarName, ExprRef<'_>)> {
-        self.exprs.iter().map(|(name, expr)| (name, expr.as_ref()))
+        self.exprs.iter()
     }
 
     /// Every syntax node in allocation order. Assignment trees occupy disjoint ranges.
     pub fn nodes(&self) -> impl DoubleEndedIterator<Item = ExprRef<'_>> {
-        self.arena()
-            .into_iter()
-            .flat_map(|arena| arena.iter().map(|(id, _)| ExprRef::from_arena(arena, id)))
-    }
-    pub(crate) fn into_compact_arena(self) -> Self {
-        let mut arenas = self
-            .exprs
-            .values()
-            .map(|expr| expr.arena() as *const ExprArena as usize);
-        let Some(first) = arenas.next() else {
-            return self;
-        };
-        if arenas.all(|arena| arena == first) {
-            return self;
-        }
-        Self::new(
-            self.input_vars,
-            self.output_vars,
-            self.exprs,
-            self.type_annotations,
-            self.aux_vars,
-        )
+        self.exprs.nodes()
     }
 
-    pub(crate) fn arena_len(&self) -> usize {
-        self.arena().map_or(0, |arena| arena.len())
-    }
-
-    /// Shared storage containing every assignment root.
-    fn arena(&self) -> Option<&ExprArena> {
-        let mut expressions = self.exprs.values();
-        let first = expressions.next()?;
-        debug_assert!(expressions.all(|expr| first.shares_storage_with(expr)));
-        Some(first.arena())
-    }
-
-    pub(crate) fn from_arena(
+    pub(crate) fn from_expression_forest(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
-        arena: ExprArena,
-        exprs: BTreeMap<VarName, ExprId>,
+        exprs: ExprForestMap<VarName>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
     ) -> Self {
-        // `ExprArena::alloc` is crate-private, so debug validation is sufficient to catch bugs in
-        // internal builders without adding a second full traversal to production parsing.
         let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
         let stream_vars = output_vars
             .iter()
             .cloned()
             .chain(aux_vars.iter().cloned())
-            .collect();
-        #[cfg(debug_assertions)]
-        arena.assert_forest(exprs.values().copied());
-        let entries = exprs.into_iter().collect::<Vec<_>>();
-        let expressions = Expr::forest(arena, entries.iter().map(|(_, root)| *root));
-        let exprs = entries
-            .into_iter()
-            .zip(expressions)
-            .map(|((name, _), expression)| (name, expression))
             .collect();
         Self {
             input_vars,
@@ -227,27 +289,32 @@ impl DsrvSpecification {
     ) -> Self {
         // Copy each root independently so a root cannot accidentally include unrelated nodes
         // from its original expression.
-        let capacity = exprs.values().map(|expr| expr.arena().len()).sum();
-        let mut arena = ExprArena::with_capacity(capacity);
-        let roots = exprs
-            .iter()
-            .map(|(name, expr)| (name.clone(), arena.clone_tree(expr)))
-            .collect();
-        Self::from_arena(
-            input_vars,
-            output_vars,
-            arena,
-            roots,
-            type_annotations,
-            aux_vars,
-        )
+        let capacity = exprs.values().map(|expr| expr.as_ref().subtree_len()).sum();
+        let mut builder = ExprBuilder::with_capacity(capacity);
+        let mut names = Vec::with_capacity(exprs.len());
+        let mut roots = Vec::with_capacity(exprs.len());
+        for (name, expression) in &exprs {
+            names.push(name.clone());
+            roots.push(builder.clone_subtree(expression.as_ref()));
+        }
+        let forest = builder
+            .finish_forest(roots)
+            .expect("independently cloned expressions form a complete forest");
+        let exprs = ExprForestMap::new(names, forest)
+            .expect("specification expression names are sorted and unique");
+        Self::from_expression_forest(input_vars, output_vars, exprs, type_annotations, aux_vars)
     }
 
-    pub fn exprs(&self) -> &BTreeMap<VarName, Expr> {
-        &self.exprs
+    pub fn expressions(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&VarName, ExprRef<'_>)> + ExactSizeIterator + '_ {
+        self.exprs.iter()
     }
     pub fn var_expr_ref(&self, var: &VarName) -> Option<ExprRef<'_>> {
-        self.exprs.get(var).map(Expr::as_ref)
+        self.exprs.get(var)
+    }
+    pub fn var_expr(&self, var: &VarName) -> Option<Expr> {
+        self.exprs.get_owned(var)
     }
     pub fn input_vars(&self) -> &BTreeSet<VarName> {
         &self.input_vars
@@ -289,7 +356,7 @@ impl Specification for DsrvSpecification {
     }
 
     fn var_expr(&self, var: &VarName) -> Option<Expr> {
-        self.exprs.get(var).cloned()
+        self.exprs.get_owned(var)
     }
 
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
@@ -305,7 +372,7 @@ mod tests {
     use proptest::prelude::*;
     use tracing::info;
 
-    use crate::Specification;
+    use crate::TypeCheckOptions;
     use crate::VarName;
     use crate::core::{StreamType, StreamTypeAscription};
     use crate::dsrv_fixtures::{
@@ -317,29 +384,30 @@ mod tests {
         arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
     };
     use crate::lang::dsrv::ast::{
-        CheckedExpr, DsrvSpecification, DynamicExprScope, ExprArena, ExprId, ExprKind, SBinOp,
+        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, ExprBuilder,
+        ExprId, ExprKind, SBinOp,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
-    use crate::lang::dsrv::parser::parse_sexpr;
-    use crate::lang::dsrv::parser::parse_str;
-
-    use crate::lang::dsrv::type_checker::{TCType, type_check};
+    use crate::lang::dsrv::parser::parse_expr;
+    use crate::lang::dsrv::type_checker::TCType;
 
     fn checked_expression(source: &str) -> CheckedExpr {
-        let spec = crate::lang::dsrv::parser::parse_str(source).unwrap();
-        type_check(spec, false)
+        CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
             .unwrap()
             .var_expr(&VarName::new("y"))
             .unwrap()
     }
 
     #[test]
-    fn specification_roots_share_one_arena_and_disjoint_ranges() {
-        let specification = crate::lang::dsrv::parser::parse_str(
-            "in x: Int\nout first: Int\nout second: Int\nfirst = x + 1\nsecond = x + 2",
-        )
-        .unwrap();
-        let roots = specification.exprs().values().collect::<Vec<_>>();
+    fn specification_roots_share_storage_and_have_disjoint_ranges() {
+        let specification =
+            "in x: Int\nout first: Int\nout second: Int\nfirst = x + 1\nsecond = x + 2"
+                .parse::<DsrvSpecification>()
+                .unwrap();
+        let roots = specification
+            .expressions()
+            .map(|(_, expression)| expression)
+            .collect::<Vec<_>>();
 
         assert!(
             roots
@@ -350,8 +418,7 @@ mod tests {
         let ranges = roots
             .iter()
             .map(|root| {
-                root.as_ref()
-                    .postorder()
+                root.postorder()
                     .map(|node| node.id())
                     .collect::<BTreeSet<_>>()
             })
@@ -387,7 +454,7 @@ mod tests {
         assert!(root.children().all(|child| child.typ() == &TCType::Int));
         assert!(
             root.postorder()
-                .all(|node| node.type_info() == expression.as_ref().type_info())
+                .all(|node| { node.type_environment() == expression.as_ref().type_environment() })
         );
     }
 
@@ -431,7 +498,7 @@ mod tests {
 
     #[test]
     fn child_ids_preserve_source_order_for_each_node_shape() {
-        let ids = [0, 1, 2, 3].map(ExprId::new);
+        let ids = [0, 1, 2, 3].map(<ExprId as contiguous_tree::ArenaId>::from_index);
         let cases = [
             (ExprKind::Val(1.into()), vec![]),
             (ExprKind::Not(ids[0]), vec![ids[0]]),
@@ -475,7 +542,7 @@ mod tests {
         let mut visited = 0;
         for child in expr.as_ref().children() {
             visited += 1;
-            let _ = child.node();
+            let _ = child.kind();
         }
 
         assert_eq!(visited, 3);
@@ -506,8 +573,8 @@ mod tests {
 
     #[test]
     fn specification_construction_gives_each_assignment_its_own_type_context() {
-        let expr = parse_sexpr("1 + 2").unwrap();
-        let source_nodes = expr.arena().len();
+        let expr = parse_expr("1 + 2").unwrap();
+        let source_nodes = expr.as_ref().subtree_len();
         let spec = DsrvSpecification::new(
             BTreeSet::new(),
             BTreeSet::from(["a".into(), "b".into()]),
@@ -517,7 +584,7 @@ mod tests {
         );
         let a = spec.var_expr(&VarName::new("a")).unwrap();
         let b = spec.var_expr(&VarName::new("b")).unwrap();
-        assert_eq!(a.arena().len(), source_nodes * 2);
+        assert_eq!(spec.nodes().count(), source_nodes * 2);
         assert_ne!(a.id(), b.id());
     }
 
@@ -584,15 +651,19 @@ mod tests {
             SBinOp::NOp(NumericalBinOp::Add),
         );
 
-        let mut arena = ExprArena::default();
-        arena.alloc(ExprKind::Val(99.into()), Span::default());
-        let left = arena.alloc(ExprKind::Val(1.into()), Span::default());
-        let right = arena.alloc(ExprKind::Val(2.into()), Span::default());
-        let root = arena.alloc(
+        let mut builder = ExprBuilder::with_capacity(4);
+        let unrelated = builder.alloc(ExprKind::Val(99.into()), Span::default());
+        let left = builder.alloc(ExprKind::Val(1.into()), Span::default());
+        let right = builder.alloc(ExprKind::Val(2.into()), Span::default());
+        let root = builder.alloc(
             ExprKind::BinOp(left, right, SBinOp::NOp(NumericalBinOp::Add)),
             Span::default(),
         );
-        let laid_out_differently = Expr::from_arena_root(arena, root);
+        let mut roots = builder
+            .finish_forest([root, unrelated])
+            .unwrap()
+            .into_roots();
+        let laid_out_differently = roots.next().unwrap();
 
         assert_eq!(built, laid_out_differently);
     }
@@ -613,10 +684,10 @@ mod tests {
     }
 
     #[test]
-    fn parser_builds_nested_expressions_in_one_compact_arena() {
-        let expr = parse_sexpr("1 + 2 + 3 + 4").unwrap();
+    fn parser_builds_nested_expressions_in_one_compact_tree() {
+        let expr = parse_expr("1 + 2 + 3 + 4").unwrap();
 
-        assert_eq!(expr.arena().len(), 7);
+        assert_eq!(expr.as_ref().subtree_len(), 7);
         assert_eq!(
             strip_span(&expr),
             "BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Add))"
@@ -634,21 +705,21 @@ mod tests {
         #[test]
         fn test_prop_display_parse_roundtrip(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
-            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            let parsed = parse_expr(&formatted).expect("Display output should be parsable");
             prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
         fn test_prop_display_parse_roundtrip_int(e in arb_int_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
-            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            let parsed = parse_expr(&formatted).expect("Display output should be parsable");
             prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
         #[test]
         fn test_prop_display_parse_roundtrip_float(e in arb_float_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
-            let parsed = parse_sexpr(&formatted).expect("Display output should be parsable");
+            let parsed = parse_expr(&formatted).expect("Display output should be parsable");
             prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
@@ -656,7 +727,7 @@ mod tests {
         fn test_prop_display_parse_roundtrip_string(e in arb_string_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
             info!("Testing roundtrip on {formatted} ({e:?})");
-            let parsed = parse_sexpr(&formatted).expect(format!("Display output {formatted} should be parsable").as_str());
+            let parsed = parse_expr(&formatted).expect(format!("Display output {formatted} should be parsable").as_str());
             prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
@@ -671,7 +742,7 @@ mod tests {
         #[test]
         fn test_prop_display_parse_roundtrip_mixed(e in arb_mixed_sexpr(vec!["a".into(), "b".into()])) {
             let formatted = format!("{}", e);
-            let parsed = parse_sexpr(&formatted).expect("Mixed display output should be parsable");
+            let parsed = parse_expr(&formatted).expect("Mixed display output should be parsable");
             prop_assert_eq!(strip_span(&parsed), strip_span(&e));
         }
 
@@ -686,7 +757,9 @@ mod tests {
 
     #[test]
     fn test_display_simple_add() {
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = spec_simple_add_monitor()
+            .parse::<DsrvSpecification>()
+            .unwrap();
         let res = format!("{}", spec);
         let expected = "in x\nin y\nout z\nz = (x + y)\n";
         assert_eq!(res, expected);
@@ -694,7 +767,9 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_typed() {
-        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec = spec_simple_add_monitor_typed()
+            .parse::<DsrvSpecification>()
+            .unwrap();
         let res = format!("{}", spec);
         let expected = "in x: Int\nin y: Int\nout z: Int\nz = (x + y)\n";
         assert_eq!(res, expected);
@@ -702,7 +777,9 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_aux() {
-        let spec = parse_str(spec_simple_add_aux_monitor()).unwrap();
+        let spec = spec_simple_add_aux_monitor()
+            .parse::<DsrvSpecification>()
+            .unwrap();
         let res = format!("{}", spec);
         let expected = "in x\nin y\nout z\naux u\naux w\nu = x\nw = y\nz = (u + w)";
         assert_eq!(
@@ -713,7 +790,9 @@ mod tests {
 
     #[test]
     fn test_display_simple_add_aux_typed() {
-        let spec = parse_str(spec_simple_add_aux_typed_monitor()).unwrap();
+        let spec = spec_simple_add_aux_typed_monitor()
+            .parse::<DsrvSpecification>()
+            .unwrap();
         let res = format!("{}", spec);
         let expected =
             "in x: Int\nin y: Int\nout z: Int\naux u: Int\naux w: Int\nu = x\nw = y\nz = (u + w)";
@@ -725,7 +804,7 @@ mod tests {
 
     fn assert_display_roundtrips(expr: &Expr) {
         let formatted = format!("{}", expr);
-        let parsed = parse_sexpr(&formatted).expect("parser should parse display output");
+        let parsed = parse_expr(&formatted).expect("parser should parse display output");
         assert_eq!(strip_span(&parsed), strip_span(expr));
     }
 
@@ -764,7 +843,7 @@ mod tests {
         let expr = Expr::MGet(Box::new(Expr::Var("records".into())), "target".into());
         let formatted = format!("{}", expr);
 
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        let parsed_lalr = parse_expr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
     }
 
@@ -777,7 +856,7 @@ mod tests {
         );
         let formatted = format!("{}", expr);
 
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        let parsed_lalr = parse_expr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
     }
 
@@ -786,7 +865,7 @@ mod tests {
         let expr = Expr::MRemove(Box::new(Expr::Var("m".into())), "key".into());
         let formatted = format!("{}", expr);
 
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        let parsed_lalr = parse_expr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
     }
 
@@ -795,7 +874,7 @@ mod tests {
         let expr = Expr::MHasKey(Box::new(Expr::Var("m".into())), "key".into());
         let formatted = format!("{}", expr);
 
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        let parsed_lalr = parse_expr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
     }
 
@@ -804,7 +883,7 @@ mod tests {
         let expr = Expr::Map(BTreeMap::from([("quoted".into(), Expr::Val(true))]));
         let formatted = format!("{}", expr);
 
-        let parsed_lalr = parse_sexpr(&formatted).expect("LALR parser should parse display output");
+        let parsed_lalr = parse_expr(&formatted).expect("LALR parser should parse display output");
         assert_eq!(strip_span(&parsed_lalr), strip_span(&expr));
     }
 }

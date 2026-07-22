@@ -14,7 +14,7 @@ use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::dsrv_fixtures::simple_add_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -49,12 +49,12 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec =
-        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_simple_add_monitor()).unwrap();
-    let spec_typed =
-        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_simple_add_monitor_typed())
-            .unwrap();
-    let spec_typed = type_check(spec_typed.clone(), false).expect("Type check failed");
+    let spec = spec_simple_add_monitor()
+        .parse::<DsrvSpecification>()
+        .expect("simple-add benchmark specification should parse");
+    let spec_typed = spec_simple_add_monitor_typed()
+        .parse::<CheckedDsrvSpecification>()
+        .expect("typed simple-add benchmark specification should type check");
 
     for size in sizes {
         let input_stream_fn = || simple_add_input_stream(size);

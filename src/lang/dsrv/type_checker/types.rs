@@ -1,4 +1,4 @@
-//! Types stored as metadata alongside the DSRV AST.
+//! Checker types and the stream type environment retained by checked DSRV syntax.
 
 use ecow::{EcoString, EcoVec};
 use itertools::Itertools;
@@ -7,8 +7,10 @@ use crate::VarName;
 use crate::core::StreamType;
 use std::collections::BTreeMap;
 
-/// Type environment mapping variable names to their declared stream types.
-pub type TypeInfo = BTreeMap<VarName, StreamType>;
+/// Global environment mapping stream variables to their declared or inferred types.
+///
+/// Lambda-local bindings are layered separately while checking an expression.
+pub type StreamTypeEnvironment = BTreeMap<VarName, StreamType>;
 /// Type-checker–internal type representation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TCType {

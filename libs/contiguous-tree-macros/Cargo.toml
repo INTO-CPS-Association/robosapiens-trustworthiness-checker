@@ -8,10 +8,11 @@ license-file = "../../LICENSE.md"
 proc-macro = true
 
 [dependencies]
+proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.45"
 syn = { version = "2.0.118", features = ["full"] }
 
 [dev-dependencies]
-contiguous-tree = { path = "../contiguous-tree" }
+renamed-contiguous-tree = { package = "contiguous-tree", path = "../contiguous-tree" }
 trybuild = "1"

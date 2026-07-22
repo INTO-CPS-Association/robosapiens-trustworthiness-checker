@@ -12,9 +12,9 @@ use trustworthiness_checker::lang::core::dependency_graph::{
     DependencyGraphRoots, DependencyGraphSpec,
 };
 
-use trustworthiness_checker::lang::dsrv::parser::{parse_sexpr, parse_str};
+use trustworthiness_checker::lang::dsrv::parser::{parse_expr, parse_str};
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
-use trustworthiness_checker::{DsrvSpecification, Specification, VarName};
+use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, VarName};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -63,8 +63,12 @@ fn compilation_phases(c: &mut Criterion) {
 
     for assignments in [32, 256, 1024] {
         let source = compilation_input(assignments);
-        let parsed = parse_str(&source).expect("benchmark input should parse");
-        let typed = type_check(parsed.clone(), false).expect("benchmark input should type check");
+        let parsed = source
+            .parse::<DsrvSpecification>()
+            .expect("benchmark input should parse");
+        let typed = source
+            .parse::<CheckedDsrvSpecification>()
+            .expect("benchmark input should type check");
         DataflowMonitor::try_compile_untyped(parsed.clone())
             .expect("benchmark input should compile untyped");
         DataflowMonitor::try_compile_checked(typed.clone())
@@ -78,7 +82,11 @@ fn compilation_phases(c: &mut Criterion) {
         );
         group.bench_function(BenchmarkId::new("strict_type_check", assignments), |b| {
             b.iter_batched(
-                || parse_str(&source).expect("benchmark source should parse"),
+                || {
+                    source
+                        .parse::<DsrvSpecification>()
+                        .expect("benchmark source should parse")
+                },
                 |spec| black_box(type_check(spec, false).unwrap()),
                 BatchSize::SmallInput,
             )
@@ -155,8 +163,12 @@ fn compilation_phases(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
     for bindings in [8, 64, 256] {
         let source = lexical_binding_input(bindings);
-        let parsed = parse_str(&source).expect("lexical binding input should parse");
-        type_check(parsed.clone(), false).expect("lexical binding input should type check");
+        let parsed = source
+            .parse::<DsrvSpecification>()
+            .expect("lexical binding input should parse");
+        source
+            .parse::<CheckedDsrvSpecification>()
+            .expect("lexical binding input should type check");
         group.throughput(Throughput::Elements(bindings as u64));
         group.bench_function(BenchmarkId::from_parameter(bindings), |b| {
             b.iter_batched(
@@ -191,11 +203,9 @@ fn indexed_arena_comparison(c: &mut Criterion) {
     for depth in [5_u32, 8, 11] {
         let nodes = (1_u64 << (depth + 2)) - 1;
         let source = balanced_scalar_source(depth);
-        let typed = type_check(
-            parse_str(&source).expect("balanced scalar source should parse"),
-            false,
-        )
-        .expect("balanced scalar source should type check");
+        let typed = source
+            .parse::<CheckedDsrvSpecification>()
+            .expect("balanced scalar source should type check");
         let mut monitor = DataflowMonitor::try_compile_checked(typed.clone())
             .expect("balanced scalar source should compile");
 
@@ -207,7 +217,11 @@ fn indexed_arena_comparison(c: &mut Criterion) {
         );
         group.bench_function(BenchmarkId::new("typecheck_production_arena", nodes), |b| {
             b.iter_batched(
-                || parse_str(&source).expect("benchmark source should parse"),
+                || {
+                    source
+                        .parse::<DsrvSpecification>()
+                        .expect("benchmark source should parse")
+                },
                 |spec| black_box(type_check(spec, false).unwrap()),
                 BatchSize::SmallInput,
             )
@@ -250,7 +264,7 @@ fn specification_import(c: &mut Criterion) {
             .expect("fixture assignment has expected form");
         let roots = (0..assignments)
             .map(|index| {
-                let expr = parse_sexpr(expression).expect("fixture expression should parse");
+                let expr = parse_expr(expression).expect("fixture expression should parse");
                 (VarName::from(format!("value{index}")), expr)
             })
             .collect::<BTreeMap<_, _>>();
@@ -289,7 +303,9 @@ fn ast_traversal(c: &mut Criterion) {
     for depth in [8_u32, 11, 14] {
         let nodes = (1_u64 << (depth + 2)) - 1;
         let source = balanced_scalar_source(depth);
-        let spec = parse_str(&source).expect("balanced scalar source should parse");
+        let spec = source
+            .parse::<DsrvSpecification>()
+            .expect("benchmark fixture should parse");
         let expr = spec
             .var_expr(&VarName::new("z"))
             .expect("benchmark fixture has output z");

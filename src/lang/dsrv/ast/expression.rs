@@ -7,14 +7,14 @@
 //! the corresponding stored node data and typed IDs.
 //!
 //! Type checking does not construct another AST. [`CheckedExprRef`] traverses
-//! the same expression tree while carrying immutable [`TypeAnnotations`].
+//! the same expression tree while carrying immutable [`CheckedTypes`].
 
 use std::fmt::{Debug, Display};
 
 use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
-use super::checked::TypeAnnotations;
+use super::checked::CheckedTypes;
 use super::{CheckedExprRef, SBinOp};
 use crate::core::{StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
@@ -31,8 +31,8 @@ pub enum DynamicExprScope {
 // keyed-field support from a shared schema of DSRV expression forms.
 contiguous_tree::tree_schema! {
     pub tree Expr {
-        internals: pub(crate),
-        owned_constructors: #[cfg(test)] pub(crate),
+        schema: pub(crate),
+        owned_constructors: pub,
         metadata: span: Span = Span::default(),
         id: u32,
         key: EcoString,
@@ -100,26 +100,30 @@ contiguous_tree::tree_schema! {
     }
 }
 
-impl ExprBuilder {
-    pub(crate) fn for_source(source: &str) -> Self {
-        Self::with_capacity(source.len() / 4)
-    }
-
-    pub fn finish(self, root: ExprId) -> Expr {
-        Expr::from_arena_root(self.arena, root)
+impl ExprKind {
+    fn duplicate_key(&self) -> Option<&EcoString> {
+        match self {
+            Self::Map(fields) | Self::Struct(fields) | Self::ObjectLiteral(fields) => {
+                fields.duplicate_key()
+            }
+            _ => None,
+        }
     }
 }
 
-impl Expr {
-    pub(crate) fn from_arena_root(arena: ExprArena, root: ExprId) -> Self {
-        Self::new(ExprHandle::new(arena, root))
+impl<'arena> ExprRef<'arena> {
+    pub(crate) fn duplicate_key(self) -> Option<&'arena EcoString> {
+        self.postorder().find_map(Self::duplicate_key_here)
     }
 
-    pub(crate) fn forest(arena: ExprArena, roots: impl IntoIterator<Item = ExprId>) -> Vec<Self> {
-        ExprHandle::forest(arena, roots)
-            .into_iter()
-            .map(Self::new)
-            .collect()
+    pub(crate) fn duplicate_key_here(self) -> Option<&'arena EcoString> {
+        self.kind().duplicate_key()
+    }
+}
+
+impl ExprBuilder {
+    pub(crate) fn for_source(source: &str) -> Self {
+        Self::with_capacity(source.len() / 4)
     }
 }
 
@@ -127,9 +131,11 @@ impl Expr {
 #[allow(non_snake_case)]
 impl Expr {
     pub(crate) fn value_with_span(value: Value, span: Span) -> Self {
-        let mut arena = ExprArena::with_capacity(1);
-        let root = arena.alloc(ExprKind::Val(value), span);
-        Self::new(ExprHandle::new(arena, root))
+        let mut builder = ExprBuilder::with_capacity(1);
+        let root = builder.alloc(ExprKind::Val(value), span);
+        builder
+            .finish(root)
+            .expect("a single allocated expression is a valid tree")
     }
 
     #[cfg(test)]
@@ -195,11 +201,7 @@ impl DynamicExprScope {
 
 impl From<EcoVec<VarName>> for DynamicExprScope {
     fn from(vars: EcoVec<VarName>) -> Self {
-        if vars.is_empty() {
-            Self::Automatic
-        } else {
-            Self::Explicit(vars)
-        }
+        Self::Explicit(vars)
     }
 }
 
@@ -207,17 +209,13 @@ impl Expr {
     pub fn span(&self) -> Span {
         self.as_ref().span()
     }
-    pub(crate) fn checked_ref<'a>(&'a self, checked: &'a TypeAnnotations) -> CheckedExprRef<'a> {
-        self.as_ref().with_annotations(checked)
-    }
 }
 
 impl<'arena> ExprRef<'arena> {
-    pub(super) fn with_annotations(
+    pub(super) fn with_checked_types(
         self,
-        checked: &'arena TypeAnnotations,
+        checked: &'arena CheckedTypes,
     ) -> CheckedExprRef<'arena> {
-        debug_assert_eq!(checked.len(), self.arena().len());
         CheckedExprRef::new(self, checked)
     }
 
@@ -228,15 +226,16 @@ impl<'arena> ExprRef<'arena> {
 
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
-        self.same_root(other)
-            || self
-                .as_ref()
-                .try_zip_with::<std::convert::Infallible, _>(other.as_ref(), |left, right| {
-                    let left = left.node();
-                    let right = right.node();
-                    Ok(left.span == right.span && left.node.same_payload(&right.node))
-                })
-                .unwrap_or_else(|never| match never {})
+        self.same_root(other) || self.as_ref() == other.as_ref()
+    }
+}
+
+impl<'left, 'right> PartialEq<ExprRef<'right>> for ExprRef<'left> {
+    fn eq(&self, other: &ExprRef<'right>) -> bool {
+        self.try_zip_with::<std::convert::Infallible, _>(*other, |left, right| {
+            Ok(left.span() == right.span() && left.kind().same_payload(right.kind()))
+        })
+        .unwrap_or_else(|never| match never {})
     }
 }
 
@@ -245,8 +244,19 @@ mod tests {
     use std::convert::Infallible;
 
     use contiguous_tree::TreeCursorExt;
+    use ecow::EcoVec;
 
-    use crate::lang::dsrv::ast::{Expr, ExprBuilder, ExprKind, ExprView, NumericalBinOp, SBinOp};
+    use crate::lang::dsrv::ast::{
+        DynamicExprScope, Expr, ExprBuilder, ExprKind, ExprView, NumericalBinOp, SBinOp,
+    };
+
+    #[test]
+    fn empty_scope_conversion_remains_explicit() {
+        assert_eq!(
+            DynamicExprScope::from(EcoVec::new()),
+            DynamicExprScope::Explicit(EcoVec::new())
+        );
+    }
 
     fn tree(right: i64) -> Expr {
         Expr::If(
@@ -298,11 +308,25 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_expressions_support_semantic_equality_and_serialization() {
+        let left = tree(3);
+        let equal = tree(3);
+        let different = tree(4);
+
+        assert_eq!(left.as_ref(), equal.as_ref());
+        assert_ne!(left.as_ref(), different.as_ref());
+        assert_eq!(
+            serde_json::to_string(&left.as_ref()).unwrap(),
+            serde_json::to_string(&left).unwrap()
+        );
+    }
+
+    #[test]
     fn generated_cloning_preserves_the_selected_tree_and_spans() {
         let source = tree(3);
         let mut builder = ExprBuilder::with_capacity(0);
         let root = builder.clone_subtree(source.as_ref());
-        let cloned = builder.finish(root);
+        let cloned = builder.finish(root).unwrap();
 
         assert_eq!(cloned, source);
     }

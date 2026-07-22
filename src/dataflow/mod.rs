@@ -56,7 +56,7 @@
 //! ```
 //!
 //! The monitor is compiled once and evaluated many times. Compilation lowers each equation into a
-//! `compiler::compile::LoweredProgram`, derives a temporary [`crate::lang::core::DepGraph`] from
+//! `compiler::pipeline::LoweredProgram`, derives a temporary [`crate::lang::core::DepGraph`] from
 //! its free variables, topologically orders the plans, assigns environment slots, validates and
 //! binds references, and creates one stateful executor per computed stream. Evaluation then repeats
 //! the right-hand side of the figure for every logical tick: load the input row, execute stream
@@ -84,7 +84,7 @@
 //! This executable version exercises compilation and the public monitor interface directly:
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
+//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in x: Int\n\
@@ -94,7 +94,7 @@
 //!     alert = total > 20\n\
 //!     total = default(total[1], 0) + scaled\n\
 //!     scaled = x * 2";
-//! let spec = parse_str(source).expect("valid DSRV specification");
+//! let spec = source.parse::<DsrvSpecification>().expect("valid DSRV specification");
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).expect("valid dataflow");
 //! let outputs = monitor.output_vars().to_vec();
 //! let output_index = |name: &str| {
@@ -126,7 +126,7 @@
 //! - `External(VarName)` is an unresolved reference outside this plan body.
 //! - `Node(NodeId)` reads an earlier operation result in this body.
 //!
-//! `compiler::compile::LoweredProgram::build` collects every body's statically visible free
+//! `compiler::pipeline::LoweredProgram::build` collects every body's statically visible free
 //! variables and rejects names absent from the specification. It separately collects immediate
 //! free variables for scheduling: an operand read through a positive `SIndex` is historical and
 //! therefore does not add a same-tick edge. A temporary [`crate::lang::core::DepGraph`] is built
@@ -369,12 +369,11 @@
 //! ```
 //! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
-//! use trustworthiness_checker::lang::dsrv::parser::parse_str;
 //!
 //! let source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let spec = parse_str(source).unwrap();
+//! let spec = source.parse::<DsrvSpecification>().unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let output_vars = monitor.output_vars().to_vec();
@@ -461,7 +460,7 @@
 //!
 //! At evaluation, `execution::dynamic::eval_dynamic_value` compares the string with
 //! `execution::state::DynamicState::active`. A new string is parsed as a DSRV expression, optionally type
-//! checked using the `TypeInfo` and result type retained by a typed `DynamicSpec`, lowered by
+//! checked using the `StreamTypeEnvironment` and result type retained by a typed `DynamicSpec`, lowered by
 //! `compiler::lower`, checked against the resolved allow-list, and bound to the existing environment
 //! layout. Its free variables become the active scheduling edges for the containing stream. The
 //! resulting `plan::ExecutablePlan` is installed in a new `execution::plan_executor::PlanExecutor`.
@@ -489,12 +488,12 @@
 //! when the source changes:
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
+//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in source: Str\nin x: Int\nout z: Int\n\
 //!                   z = dynamic(source: Int)";
-//! let spec = parse_str(source).unwrap();
+//! let spec = source.parse::<DsrvSpecification>().unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let row = |source: Value, x: i64| {
@@ -534,12 +533,12 @@
 //! </figure>
 //!
 //! ```
-//! use trustworthiness_checker::{Value, VarName, lang::dsrv::parser::parse_str};
+//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in source: Str\nin x: Int\nout z: Int\n\
 //!                   z = defer(source: Int)";
-//! let spec = parse_str(source).unwrap();
+//! let spec = source.parse::<DsrvSpecification>().unwrap();
 //! let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let row = |source: Value, x: i64| {
@@ -577,7 +576,7 @@ use std::rc::Rc;
 
 use crate::core::{RuntimeFunction, StreamType, Value};
 use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
-use crate::lang::dsrv::type_checker::{TCType, TypeInfo};
+use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};
 

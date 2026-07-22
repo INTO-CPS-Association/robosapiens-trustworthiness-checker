@@ -81,7 +81,6 @@ pub fn type_check_gradual(
     mut spec: DsrvSpecification,
     distributed: bool,
 ) -> SemanticResult<CheckedDsrvSpecification> {
-    spec = spec.into_compact_arena();
     super::validation::validate_specification(&spec, distributed)?;
     let mut types = spec.type_annotations.clone();
     for input in &spec.input_vars {
@@ -114,7 +113,7 @@ pub fn type_check_gradual(
                 next.push(var);
                 continue;
             }
-            let expr = &spec.exprs[&var];
+            let expr = spec.exprs.get(&var).unwrap();
             let expected_stream = types.get(&var).cloned();
             let expected = expected_stream.as_ref().map(TCType::from_stream_type);
             match super::checker::infer_expression(expr, expected.as_ref(), &types) {
@@ -159,15 +158,14 @@ pub fn type_check_gradual(
     }
 
     spec.type_annotations = types.clone();
-    let annotations = super::checker::check_gradual_annotations(&spec, &root_types, &mut types)?;
-    Ok(CheckedDsrvSpecification::new(spec, annotations))
+    let expr_types = super::checker::check_gradual_expr_types(&spec, &root_types, &mut types)?;
+    Ok(CheckedDsrvSpecification::new(spec, expr_types))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
-    use crate::lang::dsrv::parser::parse_str;
     use crate::{Value, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
@@ -175,8 +173,7 @@ mod tests {
 
     #[test]
     fn gradual_type_check_infers_unary_minus_result_type() {
-        let checked = type_check_gradual(parse_str("out z\nz = -1").unwrap(), false)
-            .expect("gradual checking should infer numeric negation");
+        let checked = type_check_gradual("out z\nz = -1".parse().unwrap(), false).unwrap();
         assert_eq!(
             checked.type_annotations().get(&VarName::new("z")),
             Some(&StreamType::Int)
@@ -198,17 +195,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x]),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x]),
+            BTreeSet::from([y.clone()]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("gradual type check should infer y");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
@@ -228,17 +221,13 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x.clone()]),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x.clone()]),
+            BTreeSet::from([y.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("gradual type check should accept untyped x");
@@ -261,17 +250,13 @@ mod tests {
             (u.clone(), StreamType::Int),
             (z.clone(), StreamType::Int),
         ]);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x]),
-            output_vars: BTreeSet::from([z.clone()]),
-            aux_vars: BTreeSet::from([u.clone()]),
-            stream_vars: BTreeSet::from([z.clone(), u.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x]),
+            BTreeSet::from([z.clone()]),
+            exprs,
             type_annotations,
-        };
+            BTreeSet::from([u.clone()]),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("gradual type check should preserve aux vars");
@@ -286,17 +271,13 @@ mod tests {
         let y: VarName = "y_strict_missing".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([y]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         assert!(type_check(spec, false).is_err());
     }
@@ -330,17 +311,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(x.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x]),
-            output_vars: BTreeSet::from([y.clone(), z.clone()]),
-            stream_vars: BTreeSet::from([y.clone(), z.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x]),
+            BTreeSet::from([y.clone(), z.clone()]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("dependency chain should be inferred");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
@@ -356,17 +333,13 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(xs.clone(), Expr::List(EcoVec::new()));
         exprs.insert(m.clone(), Expr::Map(BTreeMap::new()));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([xs.clone(), m.clone()]),
-            stream_vars: BTreeSet::from([xs.clone(), m.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([xs.clone(), m.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("empty containers should fall back to Any");
@@ -390,17 +363,13 @@ mod tests {
         let x: VarName = "gradual_noval_x".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(x.clone(), Expr::Val(Value::NoVal));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([x.clone()]),
-            stream_vars: BTreeSet::from([x.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([x]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let errors =
             type_check_gradual(spec, false).expect_err("NoVal literal AST should be rejected");
@@ -419,17 +388,13 @@ mod tests {
         exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Bool);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([y]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         assert!(type_check_gradual(spec, false).is_err());
     }
@@ -444,17 +409,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([xs.clone()]),
-            stream_vars: BTreeSet::from([xs.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([xs]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         assert!(type_check_gradual(spec, false).is_err());
     }
@@ -466,17 +427,13 @@ mod tests {
         exprs.insert(y.clone(), Expr::Val(Value::Str("hello".into())));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Any);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([y.clone()]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("Any annotation should accept any value");
@@ -500,17 +457,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(z.clone(), StreamType::Int);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([z.clone()]),
-            stream_vars: BTreeSet::from([z]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let errors = type_check_gradual(spec, false).expect_err("contradiction should fail");
         assert!(!errors.is_empty());
@@ -530,17 +483,13 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([z.clone()]),
-            stream_vars: BTreeSet::from([z.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let errors = type_check_gradual(spec, false).expect_err("contradiction should fail");
         assert!(!errors.is_empty());
@@ -559,17 +508,13 @@ mod tests {
                 Expr::Val(Value::Str("a".into())).into(),
             ])),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([xs.clone()]),
-            stream_vars: BTreeSet::from([xs.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([xs.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("heterogeneous list should widen to Any");
@@ -590,17 +535,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([xs.clone()]),
-            stream_vars: BTreeSet::from([xs]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([xs]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let errors =
             type_check_gradual(spec, false).expect_err("homogeneous annotation should fail");
@@ -620,17 +561,13 @@ mod tests {
                 ("y".into(), Expr::Val(Value::Str("a".into())).into()),
             ])),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([m.clone()]),
-            stream_vars: BTreeSet::from([m.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([m.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("heterogeneous map should widen to Any");
         assert_eq!(typed.type_annotations().get(&m), Some(&StreamType::Any));
@@ -650,17 +587,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(m.clone(), StreamType::Map(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([m.clone()]),
-            stream_vars: BTreeSet::from([m]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([m]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let errors =
             type_check_gradual(spec, false).expect_err("homogeneous annotation should fail");
@@ -678,17 +611,13 @@ mod tests {
                 ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
             ])),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([robot.clone()]),
-            stream_vars: BTreeSet::from([robot.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([robot.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("struct fields should be inferred");
         assert_eq!(
@@ -729,17 +658,13 @@ mod tests {
             name.clone(),
             Expr::SGet(Box::new(Expr::Var(robot.clone())), "name".into()),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([name.clone()]),
-            stream_vars: BTreeSet::from([robot.clone(), name.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::from([robot]),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([name.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::from([robot]),
+        );
 
         let typed =
             type_check_gradual(spec, false).expect("field access should use inferred struct type");
@@ -772,17 +697,13 @@ mod tests {
                 false,
             ),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([robot.clone()]),
-            stream_vars: BTreeSet::from([robot]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([robot]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let errors =
             type_check_gradual(spec, false).expect_err("field annotation mismatch should fail");
@@ -807,17 +728,13 @@ mod tests {
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(c, StreamType::Bool);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([z.clone()]),
-            stream_vars: BTreeSet::from([z.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z.clone()]),
+            exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("heterogeneous if should widen to Any");
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
@@ -830,17 +747,13 @@ mod tests {
         let y: VarName = "gradual_pass_y".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(y.clone(), Expr::Var(x.clone()));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x.clone()]),
-            output_vars: BTreeSet::from([y.clone()]),
-            stream_vars: BTreeSet::from([y.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x.clone()]),
+            BTreeSet::from([y.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("passthrough should type check");
         assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
@@ -862,17 +775,13 @@ mod tests {
                 SBinOp::NOp(NumericalBinOp::Add),
             ),
         );
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([a.clone(), b.clone()]),
-            output_vars: BTreeSet::from([z.clone()]),
-            stream_vars: BTreeSet::from([z.clone()]),
-            exprs: exprs
-                .into_iter()
-                .map(|(name, expr)| (name, expr.into()))
-                .collect(),
-            type_annotations: BTreeMap::new(),
-            aux_vars: BTreeSet::new(),
-        };
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([a.clone(), b.clone()]),
+            BTreeSet::from([z.clone()]),
+            exprs,
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
 
         let typed = type_check_gradual(spec, false).expect("Any + Any widens to Any");
         assert_eq!(typed.type_annotations().get(&a), Some(&StreamType::Any));

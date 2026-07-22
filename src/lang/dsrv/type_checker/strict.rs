@@ -18,9 +18,7 @@ mod tests {
     use super::*;
     use crate::VarName;
     use crate::core::StreamType;
-    use crate::dsrv_spec;
     use crate::lang::dsrv::ast::Expr;
-    use crate::lang::dsrv::parser::parse_str;
     use crate::lang::dsrv::span::Span;
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
@@ -29,11 +27,11 @@ mod tests {
     #[test]
     fn unary_minus_accepts_int_and_float_and_rejects_non_numeric_values() {
         for source in ["out z: Int\nz = -1", "out z: Float\nz = -1.5"] {
-            type_check(parse_str(source).unwrap(), false)
-                .expect("numeric negation should type-check");
+            type_check(source.parse().unwrap(), false)
+                .expect("numeric negation should be accepted");
         }
 
-        let errors = type_check(parse_str("out z: Bool\nz = -true").unwrap(), false)
+        let errors = type_check("out z: Bool\nz = -true".parse().unwrap(), false)
             .expect_err("boolean negation should be rejected");
         assert!(errors.iter().any(|error| matches!(
             error,
@@ -51,14 +49,13 @@ mod tests {
         exprs.insert(var.clone(), Expr::List(EcoVec::new()));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(var.clone(), StreamType::List(Box::new(StreamType::Int)));
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::new(),
-            output_vars: BTreeSet::from([var.clone()]),
-            stream_vars: BTreeSet::from([var.clone()]),
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([var.clone()]),
             exprs,
             type_annotations,
-            aux_vars: BTreeSet::new(),
-        };
+            BTreeSet::new(),
+        );
         let result = type_check(spec, false);
         assert!(
             result.is_ok(),
@@ -84,14 +81,13 @@ mod tests {
             (u.clone(), StreamType::Int),
             (z.clone(), StreamType::Int),
         ]);
-        let spec = DsrvSpecification {
-            input_vars: BTreeSet::from([x]),
-            output_vars: BTreeSet::from([z.clone()]),
-            aux_vars: BTreeSet::from([u.clone()]),
-            stream_vars: BTreeSet::from([z.clone(), u.clone()]),
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x]),
+            BTreeSet::from([z.clone()]),
             exprs,
             type_annotations,
-        };
+            BTreeSet::from([u.clone()]),
+        );
 
         let typed = type_check(spec, false).expect("strict type check should preserve aux vars");
 
@@ -145,7 +141,7 @@ mod tests {
     fn top_level_type_error_uses_document_span() {
         let input = "in x: Int\nout z: Int\nz = x + true";
         let source = input;
-        let spec = parse_str(source).expect("spec should parse");
+        let spec = source.parse().unwrap();
 
         let errors = type_check(spec, false).expect_err("spec should fail type checking");
         let expected_start = input.find("x + true").expect("expression should exist") as u32;
@@ -168,7 +164,7 @@ mod tests {
     fn lalr_top_level_type_error_uses_document_span() {
         let input = "in x: Int\nout z: Int\nz = x + true";
         let source = input;
-        let spec = parse_str(source).expect("spec should parse");
+        let spec = source.parse().unwrap();
 
         let errors = type_check(spec, false).expect_err("spec should fail type checking");
         let expected_start = input.find("x + true").expect("expression should exist") as u32;
@@ -191,7 +187,7 @@ mod tests {
     fn annotation_mismatch_uses_expression_span() {
         let input = "out z: Bool\nz = 1";
         let source = input;
-        let spec = parse_str(source).expect("spec should parse");
+        let spec = source.parse().unwrap();
 
         let errors = type_check(spec, false).expect_err("spec should fail type checking");
         let expected_start = input.find('1').expect("expression should exist") as u32;
@@ -223,10 +219,9 @@ mod tests {
             let document = format!("in x: Int\nin source: Str\nout z: Int\nz = {expression}");
             let combinator_source = document.as_str();
             let lalr_source = document.as_str();
-            let specs = [
-                parse_str(combinator_source)
-                    .expect("combinator scope validation case should parse"),
-                parse_str(lalr_source).expect("LALR scope validation case should parse"),
+            let specs: [DsrvSpecification; 2] = [
+                combinator_source.parse().unwrap(),
+                lalr_source.parse().unwrap(),
             ];
             for spec in specs {
                 let errors =
@@ -244,7 +239,7 @@ mod tests {
     #[test]
     fn explicit_defer_scope_type_checks() {
         let document = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int, {x, source})";
-        type_check(parse_str(document).unwrap(), false).expect("explicit defer should type-check");
+        type_check(document.parse().unwrap(), false).expect("defer scope should type-check");
     }
 
     #[test]
@@ -252,13 +247,13 @@ mod tests {
         let source = "in n: Int\nin bias: Int\nout z: Int\n\
                       z = fix(\\self: (Int -> Int), k: Int -> \
                       if k == 0 then bias else self(k - 1) + 1)(n)";
-        type_check(parse_str(source).unwrap(), false)
-            .expect("fix should remove the recursive self parameter from the function type");
+        type_check(source.parse().unwrap(), false)
+            .expect("recursive function application should type-check");
     }
 
     #[test]
     fn checking_a_clone_does_not_annotate_or_poison_the_original() {
-        let original = dsrv_spec!("out z: Int\nz = 1");
+        let original: DsrvSpecification = "out z: Int\nz = 1".parse().unwrap();
         let checked = type_check(original.clone(), false).unwrap();
 
         assert_eq!(checked.var_expr(&"z".into()).unwrap().typ(), &TCType::Int);

@@ -21,9 +21,8 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
 
     use trustworthiness_checker::{
-        VarName,
+        DsrvSpecification, VarName,
         io::mqtt::{self, MqttOutputHandler},
-        lang::dsrv::parser::parse_str,
         semantics::distributed::localisation::Localisable,
     };
 
@@ -146,8 +145,12 @@ mod integration_tests {
     async fn manually_decomposed_monitor_test(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model1 = parse_str(spec_simple_add_decomposed_1()).expect("Model could not be parsed");
-        let model2 = parse_str(spec_simple_add_decomposed_2()).expect("Model could not be parsed");
+        let model1 = (spec_simple_add_decomposed_1())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let model2 = (spec_simple_add_decomposed_2())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
@@ -275,8 +278,12 @@ mod integration_tests {
     async fn test_localisation_distribution(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        let model1 = parse_str(spec_simple_add_decomposed_1()).expect("Model could not be parsed");
-        let model2 = parse_str(spec_simple_add_decomposed_2()).expect("Model could not be parsed");
+        let model1 = (spec_simple_add_decomposed_1())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let model2 = (spec_simple_add_decomposed_2())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];
@@ -423,8 +430,12 @@ mod integration_tests {
     async fn test_localisation_distribution_graphs(
         executor: Rc<LocalExecutor<'static>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let model1 = parse_str(spec_simple_add_decomposed_1()).expect("Model could not be parsed");
-        let model2 = parse_str(spec_simple_add_decomposed_2()).expect("Model could not be parsed");
+        let model1 = (spec_simple_add_decomposed_1())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let model2 = (spec_simple_add_decomposed_2())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let file_content =
             smol::fs::read_to_string("fixtures/simple_add_distribution_graph.json").await?;

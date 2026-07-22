@@ -1,7 +1,7 @@
 //! Expression checking for the DSRV AST.
 //!
-//! Checking records one type per [`ExprId`](crate::lang::dsrv::ast::ExprId).
-//! Postorder validation then verifies that every reachable node was annotated
+//! Checking infers one type per [`ExprId`](crate::lang::dsrv::ast::ExprId).
+//! Postorder validation verifies that every reachable expression has a type
 //! before the immutable results are attached to checked expression cursors.
 
 use std::borrow::Cow;
@@ -12,28 +12,28 @@ use contiguous_tree::TreeCursorExt;
 use ecow::EcoVec;
 
 use super::{SemanticError, SemanticResult, TypeErrorKind};
-use super::{TCType, TypeInfo};
+use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
 use crate::core::{StreamType, StreamTypeAscription, Value};
 use crate::lang::dsrv::ast::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr,
-    ExprFieldRefs, ExprRef, ExprRefs, ExprView, SBinOp,
+    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, SBinOp,
 };
 
 struct TypeContext<'types> {
-    types: Cow<'types, BTreeMap<VarName, StreamType>>,
-    bindings: Vec<(VarName, StreamType)>,
-    annotations: Option<Vec<Option<TCType>>>,
+    environment: Cow<'types, StreamTypeEnvironment>,
+    local_bindings: Vec<(VarName, StreamType)>,
+    expr_types: Option<ExprTypesBuilder>,
     owner: Option<VarName>,
 }
 
 impl TypeContext<'_> {
     fn get(&self, name: &VarName) -> Option<&StreamType> {
-        self.bindings
+        self.local_bindings
             .iter()
             .rev()
             .find_map(|(bound, typ)| (bound == name).then_some(typ))
-            .or_else(|| self.types.get(name))
+            .or_else(|| self.environment.get(name))
     }
 
     fn contains_key(&self, name: &VarName) -> bool {
@@ -45,13 +45,12 @@ pub fn check_specification(
     spec: DsrvSpecification,
     distributed: bool,
 ) -> SemanticResult<CheckedDsrvSpecification> {
-    let spec = spec.into_compact_arena();
     super::validation::validate_specification(&spec, distributed)?;
     let mut errors = Vec::new();
     let mut context = TypeContext {
-        types: Cow::Owned(spec.type_annotations().clone()),
-        bindings: Vec::new(),
-        annotations: Some(vec![None; spec.arena_len()]),
+        environment: Cow::Owned(spec.type_annotations().clone()),
+        local_bindings: Vec::new(),
+        expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
     };
     for (var, expr) in spec.roots() {
@@ -70,13 +69,13 @@ pub fn check_specification(
     }
     if errors.is_empty() {
         #[cfg(debug_assertions)]
-        assert_nodes_annotated(&spec, context.annotations.as_ref().unwrap());
-        let annotations = finish_annotations(
-            context
-                .annotations
-                .expect("strict checking records annotations"),
-        );
-        Ok(CheckedDsrvSpecification::new(spec, annotations))
+        assert_all_exprs_typed(&spec, context.expr_types.as_ref().unwrap());
+        let expr_types = context
+            .expr_types
+            .expect("strict checking records expression types")
+            .finish()
+            .expect("successful checking typed every expression");
+        Ok(CheckedDsrvSpecification::new(spec, expr_types))
     } else {
         Err(errors)
     }
@@ -85,82 +84,82 @@ pub fn check_specification(
 pub(crate) fn check_expression(
     expr: Expr,
     expected: &TCType,
-    type_info: &Rc<TypeInfo>,
+    environment: &Rc<StreamTypeEnvironment>,
 ) -> SemanticResult<CheckedExpr> {
     let mut context = TypeContext {
-        types: Cow::Borrowed(type_info.as_ref()),
-        bindings: Vec::new(),
-        annotations: Some(vec![None; expr.arena().len()]),
+        environment: Cow::Borrowed(environment.as_ref()),
+        local_bindings: Vec::new(),
+        expr_types: Some(expr.annotations_builder()),
         owner: None,
     };
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
     #[cfg(debug_assertions)]
-    assert_expr_annotated(expr.as_ref(), context.annotations.as_ref().unwrap());
-    let annotations = finish_annotations(
-        context
-            .annotations
-            .expect("expression checking records annotations"),
-    );
-    Ok(CheckedExpr::new(expr, annotations, Rc::clone(type_info)))
+    assert_expr_fully_typed(expr.as_ref(), context.expr_types.as_ref().unwrap());
+    let expr_types = context
+        .expr_types
+        .expect("expression checking records expression types")
+        .finish()
+        .expect("successful checking typed every expression");
+    Ok(CheckedExpr::new(expr, expr_types, Rc::clone(environment)))
 }
 
 /// Check a standalone expression against an expected stream type.
 pub fn type_check_expression(
     expr: &Expr,
     expected: &StreamType,
-    context: &mut super::TypeInfo,
+    environment: &mut super::StreamTypeEnvironment,
 ) -> SemanticResult<()> {
     check_expression(
         expr.clone(),
         &TCType::from_stream_type(expected),
-        &Rc::new(context.clone()),
+        &Rc::new(environment.clone()),
     )
     .map(|_| ())
 }
 
 #[cfg(debug_assertions)]
-fn assert_nodes_annotated(spec: &DsrvSpecification, annotations: &[Option<TCType>]) {
+fn assert_all_exprs_typed(spec: &DsrvSpecification, expr_types: &ExprTypesBuilder) {
     for expr in spec.nodes() {
         assert!(
-            annotations[expr.id().index()].is_some(),
-            "successful type checking left a reachable AST node unannotated"
+            expr_types.get(expr).is_some(),
+            "successful type checking left a reachable expression without a type"
         );
     }
 }
 
 #[cfg(debug_assertions)]
-fn assert_expr_annotated(expr: ExprRef<'_>, annotations: &[Option<TCType>]) {
+fn assert_expr_fully_typed(expr: ExprRef<'_>, expr_types: &ExprTypesBuilder) {
     for node in expr.postorder() {
         assert!(
-            annotations[node.id().index()].is_some(),
-            "successful type checking left a reachable AST node unannotated"
+            expr_types.get(node).is_some(),
+            "successful type checking left a reachable expression without a type"
         );
     }
 }
 
 pub(crate) fn infer_expression(
-    expr: &Expr,
+    expr: ExprRef<'_>,
     expected: Option<&TCType>,
-    types: &BTreeMap<VarName, StreamType>,
+    environment: &StreamTypeEnvironment,
 ) -> Result<TCType, SemanticError> {
     let mut context = TypeContext {
-        types: Cow::Borrowed(types),
-        bindings: Vec::new(),
-        annotations: None,
+        environment: Cow::Borrowed(environment),
+        local_bindings: Vec::new(),
+        expr_types: None,
         owner: None,
     };
-    check(expr.as_ref(), expected, &mut context)
+    check(expr, expected, &mut context)
 }
 
-pub(crate) fn check_gradual_annotations(
+pub(crate) fn check_gradual_expr_types(
     spec: &DsrvSpecification,
     root_types: &BTreeMap<VarName, TCType>,
-    types: &mut BTreeMap<VarName, StreamType>,
-) -> SemanticResult<Vec<TCType>> {
+    environment: &mut StreamTypeEnvironment,
+) -> SemanticResult<ExprTypes> {
     let mut context = TypeContext {
-        types: Cow::Owned(std::mem::take(types)),
-        bindings: Vec::new(),
-        annotations: Some(vec![None; spec.arena_len()]),
+        environment: Cow::Owned(std::mem::take(environment)),
+        local_bindings: Vec::new(),
+        expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
     };
     for (var, expr) in spec.roots() {
@@ -168,34 +167,29 @@ pub(crate) fn check_gradual_annotations(
         let expected = root_types
             .get(var)
             .cloned()
-            .unwrap_or_else(|| TCType::from_stream_type(&context.types[var]));
+            .unwrap_or_else(|| TCType::from_stream_type(&context.environment[var]));
         if expected == TCType::Any {
-            mark_as_any(expr, context.annotations.as_mut().unwrap());
+            assign_any_to_subtree(expr, context.expr_types.as_mut().unwrap());
         } else if let Err(error) = check(expr, Some(&expected), &mut context) {
-            *types = context.types.into_owned();
+            *environment = context.environment.into_owned();
             return Err(vec![error]);
         }
     }
-    *types = context.types.into_owned();
+    *environment = context.environment.into_owned();
     #[cfg(debug_assertions)]
-    assert_nodes_annotated(spec, context.annotations.as_ref().unwrap());
-    Ok(finish_annotations(
-        context
-            .annotations
-            .expect("gradual checking records annotations"),
-    ))
+    assert_all_exprs_typed(spec, context.expr_types.as_ref().unwrap());
+    Ok(context
+        .expr_types
+        .expect("gradual checking records expression types")
+        .finish()
+        .expect("successful gradual checking typed every expression"))
 }
 
-fn finish_annotations(annotations: Vec<Option<TCType>>) -> Vec<TCType> {
-    annotations
-        .into_iter()
-        .map(|typ| typ.expect("successful type checking must annotate every expression node"))
-        .collect()
-}
-
-fn mark_as_any(expr: ExprRef<'_>, annotations: &mut [Option<TCType>]) {
+fn assign_any_to_subtree(expr: ExprRef<'_>, expr_types: &mut ExprTypesBuilder) {
     for node in expr.postorder() {
-        annotations[node.id().index()] = Some(TCType::Any);
+        expr_types
+            .insert(node, TCType::Any)
+            .expect("expression belongs to the expression-type scope");
     }
 }
 
@@ -289,10 +283,10 @@ fn check(
             (typ, None)
         }
         Lambda(params, body) => {
-            let frame_start = context.bindings.len();
-            context.bindings.extend(params.iter().cloned());
+            let frame_start = context.local_bindings.len();
+            context.local_bindings.extend(params.iter().cloned());
             let result = check(body, None, context);
-            context.bindings.truncate(frame_start);
+            context.local_bindings.truncate(frame_start);
             (
                 TCType::Function(
                     params
@@ -566,7 +560,7 @@ fn check(
         Struct(fields) => {
             reject_duplicate_fields(expr, &fields)?;
             let Some(TCType::Struct(expected_fields, allow_extra)) = expected else {
-                if context.annotations.is_some() {
+                if context.expr_types.is_some() {
                     return Err(error(
                         expr,
                         TypeErrorKind::StructExpected,
@@ -806,8 +800,10 @@ fn check(
     if let Some(expected) = expected {
         require(typ.clone(), expected, expr)?;
     }
-    if let Some(annotations) = &mut context.annotations {
-        annotations[expr.id().index()] = Some(typ.clone());
+    if let Some(expr_types) = &mut context.expr_types {
+        expr_types
+            .insert(expr, typ.clone())
+            .expect("expression belongs to the expression-type scope");
     }
     Ok(typ)
 }

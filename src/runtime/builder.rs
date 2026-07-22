@@ -18,13 +18,11 @@ use crate::{
         args::{MstloAlgorithm, MstloSynchronizationStrategy},
     },
     core::{OutputHandler, RuntimeSpec, Semantics, StreamData, StreamType},
-    define_config,
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputStreamFactory, OutputHandlerBuilder},
     lang::dsrv::{
+        DsrvPipelineError, TypeCheckOptions,
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
-        parser::parse_str,
-        type_checker::{type_check, type_check_gradual},
     },
     lang::mstlo::MstloSpecification,
     runtime::{
@@ -45,6 +43,25 @@ use super::{
 };
 
 use static_assertions::assert_obj_safe;
+
+// Creates a struct name with the given name, and implements AsyncConfig for it with the specified
+// associated types.
+// E.g.: define_config!(ValueConfig, Val = Value, Expr = Expr, Ctx = Context, Spec = DsrvSpecification);
+// Creates the struct ValueConfig with AsyncConfig implementation where Val = Value, Expr = Expr,
+// Ctx = Context<ValueConfig>, and Spec = DsrvSpecification.
+macro_rules! define_config {
+    ($name:ident, Val=$val:ty, Expr=$expr:ty, Ctx=$ctx:ident, Spec=$spec:ty) => {
+        #[derive(Clone)]
+        pub struct $name;
+
+        impl AsyncConfig for $name {
+            type Val = $val;
+            type Expr = $expr;
+            type Ctx = $ctx<Self>;
+            type Spec = $spec;
+        }
+    };
+}
 
 // Various AsyncConfigs to use
 #[rustfmt::skip]
@@ -269,19 +286,33 @@ impl<
 struct TypeCheckingBuilder<Builder>(Builder);
 struct GradualTypeCheckingBuilder<Builder>(Builder);
 
+fn parse_unchecked_spec(input: &str) -> anyhow::Result<DsrvSpecification> {
+    input.parse().map_err(anyhow::Error::from)
+}
+
 fn parse_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecification> {
-    let spec = parse_str(input)?;
-    type_check(spec, false)
-        .map_err(|errors| anyhow::anyhow!("Reconfigured spec failed type checking: {:?}", errors))
+    CheckedDsrvSpecification::parse_with(input, TypeCheckOptions::STRICT).map_err(|error| {
+        match error {
+            DsrvPipelineError::Parse(error) => {
+                anyhow::Error::new(error).context("Failed to parse reconfigured specification")
+            }
+            DsrvPipelineError::TypeCheck(errors) => {
+                anyhow::anyhow!("Reconfigured spec failed type checking: {errors:?}")
+            }
+        }
+    })
 }
 
 fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecification> {
-    let spec = parse_str(input)?;
-    type_check_gradual(spec, false).map_err(|errors| {
-        anyhow::anyhow!(
-            "Reconfigured spec failed gradual type checking: {:?}",
-            errors
-        )
+    CheckedDsrvSpecification::parse_with(input, TypeCheckOptions::GRADUAL).map_err(|error| {
+        match error {
+            DsrvPipelineError::Parse(error) => {
+                anyhow::Error::new(error).context("Failed to parse reconfigured specification")
+            }
+            DsrvPipelineError::TypeCheck(errors) => {
+                anyhow::anyhow!("Reconfigured spec failed gradual type checking: {errors:?}")
+            }
+        }
     })
 }
 
@@ -302,7 +333,9 @@ impl<
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = type_check(model, false).expect("Model failed to type check");
+        let model = model
+            .type_check(TypeCheckOptions::STRICT)
+            .expect("Model failed to type check");
         Self(self.0.model(model))
     }
 
@@ -336,7 +369,9 @@ impl<
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = type_check_gradual(model, false).expect("Model failed to gradual type check");
+        let model = model
+            .type_check(TypeCheckOptions::GRADUAL)
+            .expect("Model failed to gradual type check");
         Self(self.0.model(model))
     }
 
@@ -1089,7 +1124,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         SemiSyncValueConfig,
                         UntimedDsrvSemantics,
                     >::new()
-                    .parse_spec(parse_str);
+                    .parse_spec(parse_unchecked_spec);
                     builder = builder.reconf_topic(reconf_topic);
                     builder = builder.use_context_transfer(use_context_transfer);
                     builder = builder.input_factory(input_factory.expect(

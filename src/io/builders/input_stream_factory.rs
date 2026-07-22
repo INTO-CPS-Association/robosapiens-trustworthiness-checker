@@ -450,8 +450,9 @@ impl InputStreamFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::parser::parse_str;
-    use crate::{Value, VarName, async_test, dsrv_fixtures::spec_simple_add_monitor};
+    use crate::{
+        DsrvSpecification, Value, VarName, async_test, dsrv_fixtures::spec_simple_add_monitor,
+    };
     use futures::StreamExt;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -500,7 +501,9 @@ mod tests {
         // the provided channel.
         // (Notice that we are transmitting through the opened manual input stream even though we do not
         // call `sender_channel` directly.)
-        let model = parse_str(spec_simple_add_monitor()).unwrap();
+        let model = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let (tx_x, fx) = Fanout::new();
         let (tx_y, fy) = Fanout::new();
@@ -559,7 +562,9 @@ mod tests {
     async fn test_manual_input_factory_multi_conc(ex: Rc<LocalExecutor<'static>>) {
         // Tests that two manual input streams opened from cloned factories can each
         // receive values through the same user channel.
-        let model = parse_str(spec_simple_add_monitor()).unwrap();
+        let model = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let (tx_x, fx) = Fanout::new();
         let (tx_y, fy) = Fanout::new();
@@ -602,7 +607,9 @@ mod tests {
     async fn test_manual_input_factory_sequential_rebuild(ex: Rc<LocalExecutor<'static>>) {
         // Tests that after dropping one stream, a new stream opened from a
         // clone still receives values through the same user channel.
-        let model = parse_str("in x\nout z\nz = x").unwrap();
+        let model = ("in x\nout z\nz = x")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let (tx_x, fx) = Fanout::new();
         let (_tx_y, fy) = Fanout::new();

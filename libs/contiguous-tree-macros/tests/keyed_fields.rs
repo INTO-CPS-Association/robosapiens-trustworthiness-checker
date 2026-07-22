@@ -1,6 +1,6 @@
 use std::{fmt, iter::FromIterator, ops::Deref};
 
-use contiguous_tree::tree_schema;
+use renamed_contiguous_tree::tree_schema;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Storage<T>(Vec<T>);
@@ -48,7 +48,7 @@ impl<T> IntoIterator for Storage<T> {
 
 tree_schema! {
     pub tree Fixture {
-        internals: pub(crate),
+        schema: pub(crate),
         metadata: metadata: () = (),
         id: u32,
         key: String,
@@ -60,10 +60,39 @@ tree_schema! {
     }
 }
 
+mod default_visibility {
+    use renamed_contiguous_tree::tree_schema;
+
+    tree_schema! {
+        pub tree DefaultFixture {
+            metadata: metadata: () = (),
+            id: u32,
+            key: String,
+            children: Storage,
+            keyed_children: Storage,
+
+            Leaf(value: data(String)),
+            Parent(child: child),
+        }
+    }
+}
+
 impl fmt::Display for FixtureFields {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} fields", self.iter().len())
     }
+}
+
+#[test]
+fn schema_visibility_defaults_to_crate() {
+    let mut builder = default_visibility::DefaultFixtureBuilder::with_capacity(2);
+    let leaf = builder.alloc_default(default_visibility::DefaultFixtureKind::Leaf(String::from(
+        "leaf",
+    )));
+    let root = builder.alloc_default(default_visibility::DefaultFixtureKind::Parent(leaf));
+    let tree = builder.finish(root).unwrap();
+
+    assert_eq!(tree.id(), root);
 }
 
 #[test]
@@ -100,4 +129,44 @@ fn generated_keyed_fields_preserve_the_delegated_api() {
     let empty = FixtureFields::default();
     assert!(empty.iter().next().is_none());
     assert!(format!("{empty:?}").contains("FixtureFields"));
+}
+
+#[test]
+fn generated_builder_finishes_validated_roots_and_forests() {
+    let mut single = FixtureBuilder::with_capacity(1);
+    let root = single.alloc_default(FixtureKind::Leaf());
+    assert_eq!(single.metadata(root), &());
+    let tree = single.finish(root).unwrap();
+    assert_eq!(tree.id(), root);
+
+    let mut multiple = FixtureBuilder::with_capacity(2);
+    let first = multiple.alloc_default(FixtureKind::Leaf());
+    let second = multiple.alloc_default(FixtureKind::Leaf());
+    let forest = multiple.finish_forest([first, second]).unwrap();
+    assert_eq!(forest.len(), 2);
+    assert!(!forest.is_empty());
+    assert_eq!(forest.root_ids(), &[first, second]);
+    assert_eq!(
+        forest.roots().map(FixtureRef::id).collect::<Vec<_>>(),
+        [first, second]
+    );
+    assert_eq!(
+        forest
+            .into_roots()
+            .map(|root| root.id())
+            .collect::<Vec<_>>(),
+        [first, second]
+    );
+}
+
+#[test]
+fn generated_builder_reports_incomplete_forests() {
+    let mut builder = FixtureBuilder::with_capacity(2);
+    let first = builder.alloc_default(FixtureKind::Leaf());
+    let _second = builder.alloc_default(FixtureKind::Leaf());
+
+    assert!(matches!(
+        builder.finish(first),
+        Err(renamed_contiguous_tree::ForestError::MissingRoot { index: 1 })
+    ));
 }

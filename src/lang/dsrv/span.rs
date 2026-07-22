@@ -61,7 +61,12 @@ impl From<&Span> for Range<usize> {
 
 #[cfg(test)]
 pub(crate) fn strip_span(expr: &Expr) -> String {
-    format!("{:?}", expr.as_ref())
+    strip_span_ref(expr.as_ref())
+}
+
+#[cfg(test)]
+pub(crate) fn strip_span_ref(expr: crate::lang::dsrv::ast::ExprRef<'_>) -> String {
+    format!("{expr:?}")
 }
 
 #[cfg(test)]

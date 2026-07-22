@@ -32,7 +32,6 @@ mod integration_tests {
         core::Runtime,
         dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
         io::mqtt::{self, MqttMessage, MqttOutputHandler},
-        lang::dsrv::parser::parse_str,
         runtime::RuntimeBuilder,
     };
 
@@ -123,7 +122,9 @@ mod integration_tests {
 
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output(executor: Rc<LocalExecutor<'static>>) {
-        let spec = parse_str(spec_simple_add_monitor()).expect("Model could not be parsed");
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let expected_outputs = vec![Value::Int(3), Value::Int(7)];
 
@@ -168,8 +169,9 @@ mod integration_tests {
 
     #[apply(async_test)]
     async fn test_add_monitor_mqtt_output_float(executor: Rc<LocalExecutor<'static>>) {
-        let spec =
-            parse_str(spec_simple_add_monitor_typed_float()).expect("Model could not be parsed");
+        let spec = (spec_simple_add_monitor_typed_float())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let mqtt_server = start_mqtt().await;
         let mqtt_port = TokioCompat::new(mqtt_server.get_host_port_ipv4(1883))
@@ -587,7 +589,9 @@ mod integration_tests {
         semantics: Semantics,
         client_suffix: &str,
     ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-        let spec: DsrvSpecification = parse_str(spec_src).unwrap();
+        let spec: DsrvSpecification = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
@@ -830,13 +834,14 @@ mod reconf_tests {
     use tc_testutils::mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt};
     use tc_testutils::streams::{TickSender, tick_stream, with_timeout, with_timeout_res};
     use tracing::info;
+    use trustworthiness_checker::DsrvSpecification;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::cli::args::OutputMode;
     use trustworthiness_checker::core::Runtime;
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::io::{InputStreamFactory, OutputHandlerBuilder};
-    use trustworthiness_checker::lang::dsrv::parser::parse_str;
+
     use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
@@ -844,6 +849,10 @@ mod reconf_tests {
 
     type TestRuntimeBuilder =
         ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics>;
+
+    fn parse_str(input: &str) -> anyhow::Result<DsrvSpecification> {
+        input.parse()
+    }
 
     // TODO: Thomas suggested implement a type of OutputHandler for these tests that uses mpsc channels because
     // this is possible while still being clonable
@@ -900,7 +909,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic MQTT input/output works as expected.
 
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let expected = vec![Value::Int(3), Value::Int(5), Value::Int(7)];
@@ -1037,7 +1048,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
 
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let in_len = xs.len();
@@ -1276,7 +1289,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -1486,7 +1501,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
-        let spec = parse_str(spec_acc_monitor()).unwrap();
+        let spec = (spec_acc_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -1691,7 +1708,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have two output streams,
         // and reconfigure into having one
 
-        let spec = parse_str(spec_assignment2_monitor()).unwrap();
+        let spec = (spec_assignment2_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(2), Value::Int(3)];
@@ -1868,7 +1887,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have one output streams,
         // and reconfigure into having two
 
-        let spec = parse_str(spec_assignment_monitor()).unwrap();
+        let spec = (spec_assignment_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(4), Value::Int(5)];
@@ -2038,7 +2059,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one
 
-        let spec = parse_str(spec_sindex()).unwrap();
+        let spec = (spec_sindex())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let in_len = xs.len();
         let expected = vec![

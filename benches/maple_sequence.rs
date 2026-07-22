@@ -13,7 +13,7 @@ use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -48,9 +48,12 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec =
-        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_maple_sequence()).unwrap();
-    let spec_typed = type_check(spec.clone(), false).expect("Type check failed");
+    let spec = spec_maple_sequence()
+        .parse::<DsrvSpecification>()
+        .expect("maple sequence benchmark specification should parse");
+    let spec_typed = spec_maple_sequence()
+        .parse::<CheckedDsrvSpecification>()
+        .expect("maple sequence benchmark specification should type check");
 
     for size in sizes {
         let input_stream_fn = || maple_valid_input_stream(size);

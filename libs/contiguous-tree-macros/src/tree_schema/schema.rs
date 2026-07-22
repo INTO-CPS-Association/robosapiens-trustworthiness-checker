@@ -16,7 +16,7 @@ mod keyword {
     syn::custom_keyword!(into_data);
     syn::custom_keyword!(copy);
     syn::custom_keyword!(metadata);
-    syn::custom_keyword!(internals);
+    syn::custom_keyword!(schema);
     syn::custom_keyword!(owned_constructors);
     syn::custom_keyword!(id);
     syn::custom_keyword!(key);
@@ -165,7 +165,7 @@ pub(super) struct OwnedConstructors {
 
 pub(crate) struct TreeSchema {
     pub(super) visibility: Visibility,
-    pub(super) internals: Visibility,
+    pub(super) schema_visibility: Visibility,
     pub(super) owned_constructors: Option<OwnedConstructors>,
     pub(super) root: Ident,
     pub(super) metadata_name: Ident,
@@ -175,6 +175,7 @@ pub(crate) struct TreeSchema {
     pub(super) key: Type,
     pub(super) children: Type,
     pub(super) keyed_children: Type,
+    pub(super) uses_keyed_children: bool,
     pub(super) variants: Vec<Variant>,
 }
 
@@ -187,7 +188,7 @@ impl Parse for TreeSchema {
         braced!(content in input);
 
         let mut metadata = None;
-        let mut internals = None;
+        let mut schema_visibility = None;
         let mut owned_constructors = None;
         let mut id = None;
         let mut key = None;
@@ -204,17 +205,17 @@ impl Parse for TreeSchema {
                 content.parse::<Token![=]>()?;
                 let default: Expr = content.parse()?;
                 set_once(&mut metadata, (field_name, typ, default), &name)?;
-            } else if content.peek(keyword::internals) {
+            } else if content.peek(keyword::schema) {
                 let name: Ident = content.parse()?;
                 content.parse::<Token![:]>()?;
                 let visibility: Visibility = content.parse()?;
                 if matches!(visibility, Visibility::Inherited) {
                     return Err(syn::Error::new(
                         name.span(),
-                        "internals requires an explicit visibility",
+                        "schema requires an explicit visibility",
                     ));
                 }
-                set_once(&mut internals, visibility, &name)?;
+                set_once(&mut schema_visibility, visibility, &name)?;
             } else if content.peek(keyword::owned_constructors) {
                 let name: Ident = content.parse()?;
                 content.parse::<Token![:]>()?;
@@ -258,9 +259,35 @@ impl Parse for TreeSchema {
         }
 
         validate_variants(&variants)?;
+        let uses_children = variants.iter().any(|variant| {
+            variant
+                .fields
+                .iter()
+                .any(|field| matches!(field.kind, FieldKind::Children))
+        });
+        let uses_keyed_children = variants.iter().any(|variant| {
+            variant
+                .fields
+                .iter()
+                .any(|field| matches!(field.kind, FieldKind::KeyedChildren))
+        });
+        let children = if uses_children {
+            children.ok_or_else(|| content.error("missing children setting"))?
+        } else {
+            children.unwrap_or_else(|| syn::parse_quote!(()))
+        };
+        let (key, keyed_children) = if uses_keyed_children {
+            (
+                key.ok_or_else(|| content.error("missing key setting"))?,
+                keyed_children.ok_or_else(|| content.error("missing keyed_children setting"))?,
+            )
+        } else {
+            (syn::parse_quote!(()), syn::parse_quote!(()))
+        };
+
         Ok(Self {
             visibility,
-            internals: internals.ok_or_else(|| content.error("missing internals setting"))?,
+            schema_visibility: schema_visibility.unwrap_or_else(|| syn::parse_quote!(pub(crate))),
             owned_constructors,
             root,
             metadata_name: metadata
@@ -275,10 +302,10 @@ impl Parse for TreeSchema {
                 .map(|(_, _, default)| default)
                 .expect("checked above"),
             id: id.ok_or_else(|| content.error("missing id setting"))?,
-            key: key.ok_or_else(|| content.error("missing key setting"))?,
-            children: children.ok_or_else(|| content.error("missing children setting"))?,
-            keyed_children: keyed_children
-                .ok_or_else(|| content.error("missing keyed_children setting"))?,
+            key,
+            children,
+            keyed_children,
+            uses_keyed_children,
             variants,
         })
     }
@@ -337,7 +364,7 @@ mod tests {
     fn accepts_outer_attributes_on_owned_constructors() {
         let schema = syn::parse_str::<TreeSchema>(
             "pub tree Expr {
-                internals: pub(crate),
+                schema: pub(crate),
                 owned_constructors: #[cfg(test)] #[allow(dead_code)] pub(crate),
                 metadata: m: () = (),
                 id: u32,
@@ -361,20 +388,94 @@ mod tests {
     #[test]
     fn rejects_duplicate_settings() {
         assert!(
-            error("pub tree Expr { internals: pub(crate), id: u32, id: u64, }")
+            error("pub tree Expr { schema: pub(crate), id: u32, id: u64, }")
                 .contains("duplicate tree setting")
         );
     }
 
     #[test]
-    fn requires_explicit_internal_visibility() {
+    fn rejects_the_removed_internals_setting() {
+        assert!(error("pub tree Expr { internals: pub(crate), }").contains("unknown tree setting"));
+    }
+
+    #[test]
+    fn defaults_schema_visibility_and_requires_an_explicit_override() {
+        let schema = syn::parse_str::<TreeSchema>(
+            "pub tree Expr {
+                metadata: m: () = (),
+                id: u32,
+                key: String,
+                children: Vec,
+                keyed_children: Vec,
+            }",
+        )
+        .unwrap();
+        assert!(matches!(
+            schema.schema_visibility,
+            syn::Visibility::Restricted(_)
+        ));
         assert!(
-            error("pub tree Expr { internals: , }")
-                .contains("internals requires an explicit visibility")
+            error("pub tree Expr { schema: , }").contains("schema requires an explicit visibility")
         );
         assert!(
             error("pub tree Expr { owned_constructors: , }")
                 .contains("owned_constructors requires an explicit visibility")
+        );
+    }
+
+    #[test]
+    fn collection_settings_are_required_only_when_used() {
+        syn::parse_str::<TreeSchema>(
+            "pub tree LeafOnly {
+                metadata: m: () = (),
+                id: u32,
+                Leaf(),
+            }",
+        )
+        .unwrap();
+        syn::parse_str::<TreeSchema>(
+            "pub tree WithUnusedSettings {
+                metadata: m: () = (),
+                id: u32,
+                key: String,
+                children: Vec,
+                keyed_children: Vec,
+                Leaf(),
+            }",
+        )
+        .unwrap();
+
+        assert!(
+            error(
+                "pub tree Sequence {
+                    metadata: m: () = (),
+                    id: u32,
+                    Sequence(items: children),
+                }"
+            )
+            .contains("missing children setting")
+        );
+        assert!(
+            error(
+                "pub tree Record {
+                    metadata: m: () = (),
+                    id: u32,
+                    keyed_children: Vec,
+                    Record(fields: keyed_children),
+                }"
+            )
+            .contains("missing key setting")
+        );
+        assert!(
+            error(
+                "pub tree Record {
+                    metadata: m: () = (),
+                    id: u32,
+                    key: String,
+                    Record(fields: keyed_children),
+                }"
+            )
+            .contains("missing keyed_children setting")
         );
     }
 

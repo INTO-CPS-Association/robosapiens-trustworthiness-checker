@@ -160,12 +160,12 @@ impl ScopedExpr {
         }
     }
 
-    pub(super) fn shared_type_info(
+    pub(super) fn shared_type_environment(
         &self,
-    ) -> Option<&Rc<crate::lang::dsrv::type_checker::TypeInfo>> {
+    ) -> Option<&Rc<crate::lang::dsrv::type_checker::StreamTypeEnvironment>> {
         match &self.phase {
             ExprPhase::Unchecked => None,
-            ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_info()),
+            ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_environment()),
         }
     }
 

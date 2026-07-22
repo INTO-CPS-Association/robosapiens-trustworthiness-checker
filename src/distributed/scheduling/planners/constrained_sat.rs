@@ -251,7 +251,6 @@ mod tests {
     use crate::VarName;
     use crate::distributed::scheduling::planning_context::PlanningContextSnapshot;
     use crate::dsrv_fixtures::TestDistConfig;
-    use crate::lang::dsrv::parser::parse_str;
     use crate::semantics::distributed::semantics::DistributedSemantics;
     use macro_rules_attribute::apply;
     use petgraph::graph::DiGraph;
@@ -296,8 +295,9 @@ d2 = h2
 d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 "#
         .trim();
-        let s = src;
-        parse_str(s).expect("aux SAT test spec should parse")
+        (src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse")
     }
 
     fn planning_snapshot(c1: bool, c2: bool, c3: bool) -> PlanningContextSnapshot {

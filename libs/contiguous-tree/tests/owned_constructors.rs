@@ -3,7 +3,7 @@ use ecow::{EcoString, EcoVec, eco_vec};
 
 tree_schema! {
     pub tree PublicTree {
-        internals: pub(crate),
+        schema: pub(crate),
         owned_constructors: pub,
         metadata: metadata: () = (),
         id: u32,

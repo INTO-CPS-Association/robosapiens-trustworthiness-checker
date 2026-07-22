@@ -11,10 +11,12 @@ use trustworthiness_checker::io::{file, map};
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
-use trustworthiness_checker::{DsrvSpecification, dsrv_fixtures::*};
 use trustworthiness_checker::{
-    InputStream, Value, dsrv_spec,
-    lang::dsrv::parser::{parse_sexpr, parse_str},
+    CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, dsrv_fixtures::*,
+};
+use trustworthiness_checker::{
+    InputStream, Value,
+    lang::dsrv::parser::{parse_expr, parse_str},
     parse_file,
     runtime::RuntimeBuilder,
 };
@@ -98,8 +100,9 @@ async fn run_typed_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let spec_input = spec_str;
-    let spec = parse_str(spec_input).unwrap();
+    let spec = (spec_str)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -218,8 +221,9 @@ async fn run_gradual_typed_runtime_with_spec(
     input_stream: BTreeMap<VarName, Vec<Value>>,
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
-    let spec_input = spec_str;
-    let spec = parse_str(spec_input).unwrap();
+    let spec = (spec_str)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
     let mut output_handler = Box::new(ManualOutputHandler::new(
         executor.clone(),
@@ -541,18 +545,24 @@ async fn test_gradual_typed_runtime_respects_explicit_annotations(
 fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
     // Missing annotations are a hard error for the strict checker, but the
     // gradual checker infers them.
-    let spec = dsrv_spec!("in gsx\nout gsz\ngsz = gsx + 1");
+    let source = "in gsx\nout gsz\ngsz = gsx + 1";
+    let spec = (source)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
     assert!(
-        type_check(spec.clone(), false).is_err(),
+        type_check(spec, false).is_err(),
         "strict checker should reject missing annotations"
     );
-    type_check_gradual(spec, false).expect("gradual checker should accept the spec");
+    CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+        .expect("test DSRV specification should type check gradually");
 }
 
 #[test]
 fn test_gradual_type_check_rejects_annotated_mismatch() {
     // A concrete static mismatch must remain an error under gradual typing.
-    let spec = dsrv_spec!("out gbz: Bool\ngbz = 1 + 1");
+    let spec = ("out gbz: Bool\ngbz = 1 + 1")
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
     assert!(type_check_gradual(spec, false).is_err());
 }
 
@@ -1068,8 +1078,9 @@ out echoed: Struct<x: Int, y: Int, ...>
 selected = Map.get(payload, "x")
 echoed = payload
 "#;
-    let spec_input = spec;
-    let spec = parse_str(spec_input).unwrap();
+    let spec = (spec)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
     let input_data = parse_file(
         |contents| {
             untimed_input_file
@@ -1142,14 +1153,12 @@ echoed = payload
 
 #[test]
 fn test_typed_object_literal_struct_fields_are_checked() {
-    let spec = dsrv_spec!(
-        r#"
+    (r#"
 out robot: Struct<id: Int, ...>
 robot = {"id": 1, "label": "robot"}
-"#
-    );
-    type_check(spec, false)
-        .expect("object literal with extra fields should type-check as a permissive struct");
+"#)
+    .parse::<CheckedDsrvSpecification>()
+    .expect("test DSRV specification should type check");
 
     let cases = [
         (
@@ -1208,8 +1217,9 @@ x = values.x
     ];
 
     for (spec_src, expected_error) in cases {
-        let spec_src = spec_src;
-        let spec = parse_str(spec_src).unwrap();
+        let spec = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let errors = type_check(spec, false).expect_err("object literal should not type-check");
         assert!(
             errors
@@ -1268,11 +1278,9 @@ s = latch(Struct("id": 1), Struct("id": 2))
     ];
 
     for spec_src in cases {
-        let spec_src = spec_src;
-        let spec = parse_str(spec_src).unwrap();
-        type_check(spec, false).unwrap_or_else(|errors| {
-            panic!("expected spec to type-check, got {errors:?}\n{spec_src}")
-        });
+        (spec_src)
+            .parse::<CheckedDsrvSpecification>()
+            .expect("test DSRV specification should type check");
     }
 
     let mut ctx = BTreeMap::new();
@@ -1294,7 +1302,7 @@ s = latch(Struct("id": 1), Struct("id": 2))
             StreamType::Struct(vec![("id".into(), StreamType::Int)].into(), false),
         ),
     ] {
-        let expr = parse_sexpr(source).expect("dynamic/defer fixture should parse");
+        let expr = parse_expr(source).expect("dynamic/defer fixture should parse");
         trustworthiness_checker::lang::dsrv::type_checker::type_check_expression(
             &expr, &expected, &mut ctx,
         )
@@ -1403,12 +1411,12 @@ updated = Map.insert(robot, "id", tick + 10)
 
 #[test]
 fn test_typed_semantics_reject_struct_constructor_assigned_to_map() {
-    let spec = dsrv_spec!(
-        r#"
+    let spec = (r#"
 out robot: Map<Int>
 robot = Struct("id": 7)
-"#
-    );
+"#)
+    .parse::<DsrvSpecification>()
+    .expect("test DSRV specification should parse");
 
     let errors =
         type_check(spec, false).expect_err("Struct constructor should not type-check as a Map");
@@ -1424,15 +1432,15 @@ async fn test_untyped_runtime_struct_constructor_can_be_assigned_to_map(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = dsrv_spec!(
-            r#"
+        let spec_untyped = (r#"
 in tick
 out robot
 out id
 robot = Struct("id": tick + 7, "active": true)
 id = Map.get(robot, "id")
-"#
-        );
+"#)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
         let input_stream = map::input_stream(BTreeMap::from([("tick".into(), vec![0.into()])]));
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -1482,8 +1490,7 @@ async fn test_untyped_runtime_struct_like_map_input_and_update(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = dsrv_spec!(
-            r#"
+        let spec_untyped = (r#"
 in robot
 out id
 out active
@@ -1491,8 +1498,9 @@ out renamed
 id = Map.get(robot, "id")
 active = Map.get(robot, "active")
 renamed = Map.insert(robot, "name", "bb8")
-"#
-        );
+"#)
+        .parse::<DsrvSpecification>()
+        .expect("test DSRV specification should parse");
         let input_stream = map::input_stream(BTreeMap::from([(
             "robot".into(),
             vec![
@@ -1721,7 +1729,9 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -1777,7 +1787,9 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
@@ -1833,7 +1845,9 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
@@ -1889,7 +1903,9 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
@@ -1945,9 +1961,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!(
-            "in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y"
-        );
+        let spec_untyped = ("in x: Int\nin y: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = x + y").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
 
         let x = vec![1.into(), 2.into(), 3.into(), 4.into()];
         let y = vec![10.into(), 20.into(), 30.into(), 40.into()];
@@ -2018,7 +2032,9 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = dsrv_spec!("in x\nin y\nout z\nz = update(x, y)");
+        let spec_untyped = ("in x\nin y\nout z\nz = update(x, y)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec!["x0".into(), "x1".into(), "x2".into()];
         let y = vec!["y0".into(), "y1".into(), "y2".into()];
@@ -2066,7 +2082,9 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // TODO: This test only runs on untyped configurations due to update functionality limitations
     for config in TestConfiguration::untyped_configurations() {
-        let spec_untyped = dsrv_spec!("in x\nin y\nout z\nz = update(x, y)");
+        let spec_untyped = ("in x\nin y\nout z\nz = update(x, y)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
@@ -2124,7 +2142,9 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x\nin e\nout z\nz = update(\"def\", defer(e))");
+        let spec_untyped = ("in x\nin e\nout z\nz = update(\"def\", defer(e))")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
@@ -2182,7 +2202,9 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x\nin y\nout z\nz = defer(update(x, y))");
+        let spec_untyped = ("in x\nin y\nout z\nz = defer(update(x, y))")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![Value::Deferred, "x".into(), "x_lost".into(), "x_sad".into()];
         let y = vec![
@@ -2236,7 +2258,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 // async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 //     // TODO: This test only works on the constraint-based runtime
 //     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = dsrv_spec!("in x\nout z\nz = update(x, z))");
+//         let spec_untyped = ("in x\nout z\nz = update(x, z))").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
 //
 //             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
 //             let input_stream = BTreeMap::from([("x".into(), x)]);
@@ -2287,7 +2309,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 //     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
 //     // limitations
 //     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = dsrv_spec!("in x\nout z\nz = update(defer(x), z)");
+//         let spec_untyped = ("in x\nout z\nz = update(defer(x), z)").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
 //
 //             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
 //             let input_stream = BTreeMap::from([("x".into(), x)]);
@@ -2349,7 +2371,9 @@ pub fn constraint_input_stream(vars: impl IntoIterator<Item = VarName>) -> Input
 #[apply(async_test)]
 async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("");
+        let spec_untyped = ("")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2384,7 +2408,9 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 #[apply(async_test)]
 async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = x");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = x")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2429,7 +2455,9 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 #[apply(async_test)]
 async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("out z: Int\nz = 42");
+        let spec_untyped = ("out z: Int\nz = 42")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2478,7 +2506,9 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = x + 1");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = x + 1")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2523,7 +2553,9 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 #[apply(async_test)]
 async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = x - 10");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = x - 10")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2570,7 +2602,9 @@ async fn test_index_past_mult_dependencies(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]");
+        let spec_untyped = ("in x: Int\nout z1: Int\nout z2: Int\nz2 = x[2]\nz1 = x[1]")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2627,8 +2661,9 @@ async fn test_index_past_mult_dependencies(
 #[apply(async_test)]
 async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped =
-            dsrv_spec!("in x: Bool\nin y: Bool\nout z: Bool\nz = if(x) then y else false");
+        let spec_untyped = ("in x: Bool\nin y: Bool\nout z: Bool\nz = if(x) then y else false")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = boolean_pair_input_stream();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2673,7 +2708,9 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Str\nin y: Str\nout z: Str\nz = x ++ y");
+        let spec_untyped = ("in x: Str\nin y: Str\nout z: Str\nz = x ++ y")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = string_pair_input_stream();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2717,7 +2754,9 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 #[apply(async_test)]
 async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = default(x, 42)");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = default(x, 42)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2762,7 +2801,9 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 #[apply(async_test)]
 async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = default(x, 42)");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = default(x, 42)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = map::input_stream(BTreeMap::from([(
             "x".into(),
@@ -2810,7 +2851,9 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nout z: Int\nz = default(x, 42)");
+        let spec_untyped = ("in x: Int\nout z: Int\nz = default(x, 42)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = map::input_stream(BTreeMap::from([(
             "x".into(),
@@ -2858,7 +2901,9 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("out x: Int\nx = 1 + default(x[1], 0)");
+        let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -2911,7 +2956,9 @@ async fn test_simple_add_monitor_does_not_go_away(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = (spec_simple_add_monitor_typed())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = integer_pair_input_stream();
@@ -2966,7 +3013,9 @@ async fn test_simple_add_monitor_large_input(
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Common specification for all configurations
-        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = (spec_simple_add_monitor_typed())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration (100 elements)
         let input_stream = trustworthiness_checker::dsrv_fixtures::simple_add_input_stream(100);
@@ -3036,7 +3085,9 @@ pub fn constraint_style_input_stream() -> InputStream<Value> {
 #[apply(async_test)]
 async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec_untyped = (spec_simple_add_monitor_typed())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = integer_pair_input_stream();
 
@@ -3079,7 +3130,9 @@ async fn test_simple_add_monitor_untyped_spec(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = integer_pair_input_stream();
 
@@ -3125,7 +3178,9 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         if config == TestConfiguration::SemiSyncUntimed {
             continue;
         }
-        let spec = dsrv_spec!("in x\nin e\nout z\nz = defer(e)");
+        let spec = ("in x\nin e\nout z\nz = defer(e)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
@@ -3168,15 +3223,15 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 #[apply(async_test)]
 async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::untyped_configurations() {
-        let spec = dsrv_spec!(
-            "in x
+        let spec = ("in x
              in y
              in s
              out z
              out w
              z = x + y
-             w = dynamic(s)"
-        );
+             w = dynamic(s)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = dynamic_expression_input_stream();
         let mut output_handler = Box::new(ManualOutputHandler::new(
@@ -3221,12 +3276,12 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!(
-            "in x: Int
+        let spec_untyped = ("in x: Int
              in y: Int
              out z: Int
-             z = y % x"
-        );
+             z = y % x")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = integer_pair_input_stream();
 
@@ -3274,7 +3329,9 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 #[apply(async_test)]
 async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
-        let spec_untyped = parse_str(spec_simple_add_monitor_typed_float()).unwrap();
+        let spec_untyped = (spec_simple_add_monitor_typed_float())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = float_pair_input_stream();
 
@@ -3320,7 +3377,9 @@ async fn test_count_monitor_sequential_with_drop_guard(
         // First run
         {
             let input_stream = map::input_stream(BTreeMap::new());
-            let spec_untyped = dsrv_spec!("out x: Int\nx = 1 + default(x[1], 0)");
+            let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -3357,7 +3416,9 @@ async fn test_count_monitor_sequential_with_drop_guard(
         // Second run - should work now with drop guard cancellation
         {
             let input_stream = map::input_stream(BTreeMap::new());
-            let spec_untyped = dsrv_spec!("out x: Int\nx = 1 + default(x[1], 0)");
+            let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
 
             let mut output_handler = Box::new(ManualOutputHandler::new(
                 executor.clone(),
@@ -3472,7 +3533,9 @@ async fn test_drop_guard_cancellation_behaviour(
     // Test to verify that drop guard properly stops VarManagers when output streams are dropped
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
         let input_stream = map::input_stream(BTreeMap::new());
-        let spec_untyped = dsrv_spec!("out x: Int\nx = 1 + default(x[1], 0)");
+        let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -3515,7 +3578,9 @@ async fn test_drop_guard_cancellation_behaviour(
 async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         // Use different specifications based on configuration to ensure type compatibility
-        let spec_untyped = dsrv_spec!("out x: Int\nx = 1 + default(x[1], 0)");
+        let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration (empty for count monitor)
         let input_stream = map::input_stream(BTreeMap::new());
@@ -3564,7 +3629,9 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::async_configurations() {
         let spec_untyped =
-            dsrv_spec!("in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y");
+            ("in x : Int\nin y : Int\nout r1 : Int\nout r2 : Int\nr1 =x+y\nr2 = x * y")
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
 
         let input_stream = integer_pair_input_stream();
 
@@ -3611,7 +3678,9 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
     for config in TestConfiguration::all() {
         let spec_str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int)";
         let input_stream = dynamic_expression_input_stream();
-        let spec = parse_str(spec_str).unwrap();
+        let spec = (spec_str)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -3653,12 +3722,12 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
 #[apply(async_test)]
 async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!(
-            "in x: Str
+        let spec_untyped = ("in x: Str
              in y: Str
              out z: Str
-             z = x ++ y"
-        );
+             z = x ++ y")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = string_pair_input_stream();
 
@@ -3696,7 +3765,9 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 #[apply(async_test)]
 async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!("in x: Int\nin y: Int\nout z: Int\nz = x[1]");
+        let spec_untyped = ("in x: Int\nin y: Int\nout z: Int\nz = x[1]")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = constraint_style_input_stream();
 
@@ -3738,7 +3809,9 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 #[apply(async_test)]
 async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = parse_str(spec_maple_sequence()).unwrap();
+        let spec_untyped = (spec_maple_sequence())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = maple_valid_input_stream(10);
 
@@ -3799,9 +3872,7 @@ async fn test_restricted_dynamic_monitor(
             // dynamic evaluation not yet verified on SemiSync
             continue;
         }
-        let spec_untyped = dsrv_spec!(
-            "in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int, {x,y})"
-        );
+        let spec_untyped = ("in x: Int\nin y: Int\nin s: Str\nout z: Int\nout w: Int\nz = x + y\nw = dynamic(s : Int, {x,y})").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = dynamic_expression_input_stream();
@@ -3865,7 +3936,9 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = defer_input_stream_1();
@@ -3940,7 +4013,9 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = defer_input_stream_2();
@@ -4015,7 +4090,9 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = defer_input_stream_3();
@@ -4090,7 +4167,9 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
             // Bugs in defer that this runtime does not like
             continue;
         }
-        let spec_untyped = dsrv_spec!("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)");
+        let spec_untyped = ("in x: Int\nin e: Str\nout z: Int\nz = defer(e : Int)")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = defer_input_stream_4();
@@ -4161,9 +4240,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
     which we do not have a test for..."]
 async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
-        let spec_untyped = dsrv_spec!(
-            "in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)"
-        );
+        let spec_untyped = ("in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
 
         // Create fresh input streams for each test iteration
         let input_stream = dynamic_defer_composition_input_stream();
@@ -4235,7 +4312,9 @@ async fn test_benchmark_regression_long_add_defer(
     let _guard = subscriber.set_default(); // active only in this scope
 
     for config in TestConfiguration::untyped_configurations() {
-        let spec = parse_str(spec_add_defer()).unwrap();
+        let spec = (spec_add_defer())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = add_defer_input_stream(SIZE);
 
@@ -4283,7 +4362,9 @@ async fn test_map_get_deferred_propagates(
     for config in TestConfiguration::untyped_configurations() {
         // Map.get should propagate Deferred rather than panicking when the map
         // input stream carries a Deferred tick.
-        let spec = dsrv_spec!("in m\nout z\nz = Map.get(m, \"x\")");
+        let spec = ("in m\nout z\nz = Map.get(m, \"x\")")
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let input_stream = map::input_stream(BTreeMap::from([(
             "m".into(),
@@ -4391,7 +4472,9 @@ mod reconf_tests {
     async fn test_reconf_simple_add_no_reconf(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
         // reconfiguration, to check that the basic input/output works as expected.
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let expected = vec![Value::NoVal, Value::Int(3), Value::Int(5), Value::Int(7)];
@@ -4405,7 +4488,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4446,7 +4529,9 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_typed_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
-        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec = (spec_simple_add_monitor_typed())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let expected = vec![
@@ -4548,7 +4633,9 @@ mod reconf_tests {
 
     #[apply(async_test)]
     async fn test_typed_reconf_type_error_is_reported(ex: Rc<LocalExecutor<'static>>) {
-        let spec = parse_str(spec_simple_add_monitor_typed()).unwrap();
+        let spec = (spec_simple_add_monitor_typed())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
 
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
@@ -4601,7 +4688,9 @@ mod reconf_tests {
     async fn test_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let expected = vec![
@@ -4626,7 +4715,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4731,7 +4820,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
-        let spec = parse_str(spec_simple_add_monitor()).unwrap();
+        let spec = (spec_simple_add_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -4755,7 +4846,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4848,7 +4939,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
-        let spec = parse_str(spec_acc_monitor()).unwrap();
+        let spec = (spec_acc_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -4874,7 +4967,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -4964,7 +5057,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have two output streams,
         // and reconfigure into having one
 
-        let spec = parse_str(spec_assignment2_monitor()).unwrap();
+        let spec = (spec_assignment2_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(2), Value::Int(3)];
@@ -4980,7 +5075,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5069,7 +5164,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have one output streams,
         // and reconfigure into having two
 
-        let spec = parse_str(spec_assignment_monitor()).unwrap();
+        let spec = (spec_assignment_monitor())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(4), Value::Int(5)];
@@ -5085,7 +5182,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5174,7 +5271,9 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one.
 
-        let spec = parse_str(spec_sindex()).unwrap();
+        let spec = (spec_sindex())
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let in_len = xs.len();
         let expected = vec![
@@ -5195,7 +5294,7 @@ mod reconf_tests {
             .aux_info(vec![]);
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_factory(input_factory)
@@ -5283,7 +5382,9 @@ mod reconf_tests {
             out z\n\
             y = x\n\
             z = y[1] + 1";
-            let spec = parse_str(first_spec).unwrap();
+            let spec = (first_spec)
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5314,7 +5415,7 @@ mod reconf_tests {
                 .aux_info(vec![]);
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(parse_str)
+                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_factory(input_factory)
@@ -5405,7 +5506,9 @@ mod reconf_tests {
         // Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let spec = parse_str(spec_acc_monitor()).unwrap();
+            let spec = (spec_acc_monitor())
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5436,7 +5539,7 @@ mod reconf_tests {
                 .aux_info(vec![]);
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(parse_str)
+                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_factory(input_factory)

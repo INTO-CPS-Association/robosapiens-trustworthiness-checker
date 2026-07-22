@@ -22,22 +22,34 @@ impl Variant {
         quote!(#name( #( #fields ),* ))
     }
 
-    fn view_definition(&self, cursor: &Ident, id: &Ident, key: &Type) -> proc_macro2::TokenStream {
+    fn view_definition(
+        &self,
+        runtime: &proc_macro2::TokenStream,
+        cursor: &Ident,
+        id: &Ident,
+        key: &Type,
+    ) -> proc_macro2::TokenStream {
         let name = &self.name;
         let fields = self
             .fields
             .iter()
-            .map(|field| view_type(&field.kind, cursor, id, key));
+            .map(|field| view_type(runtime, &field.kind, cursor, id, key));
         quote!(#name( #( #fields ),* ))
     }
 
-    fn resolve_arm(&self, kind: &Ident, view: &Ident, cursor: &Ident) -> proc_macro2::TokenStream {
+    fn resolve_arm(
+        &self,
+        runtime: &proc_macro2::TokenStream,
+        kind: &Ident,
+        view: &Ident,
+        cursor: &Ident,
+    ) -> proc_macro2::TokenStream {
         let name = &self.name;
         let fields = self.fields.iter().map(|field| &field.name);
         let resolved = self
             .fields
             .iter()
-            .map(|field| resolve(&field.kind, &field.name, cursor));
+            .map(|field| resolve(runtime, &field.kind, &field.name, cursor));
         quote!(#kind::#name( #( #fields ),* ) => #view::#name( #( #resolved ),* ))
     }
 
@@ -185,22 +197,6 @@ impl Variant {
             ) => true #( && #comparisons )*
         }
     }
-
-    fn duplicate_key_arm(&self, kind: &Ident) -> Option<proc_macro2::TokenStream> {
-        let keyed_index = self
-            .fields
-            .iter()
-            .position(|field| matches!(field.kind, FieldKind::KeyedChildren))?;
-        let name = &self.name;
-        let patterns = (0..self.fields.len()).map(|index| {
-            if index == keyed_index {
-                quote!(fields)
-            } else {
-                quote!(_)
-            }
-        });
-        Some(quote!(#kind::#name( #( #patterns ),* ) => fields.duplicate_key()))
-    }
 }
 
 struct GeneratedNames {
@@ -211,8 +207,9 @@ struct GeneratedNames {
     reference: Ident,
     view: Ident,
     builder: Ident,
+    forest: Ident,
+    forest_map: Ident,
     handle: Ident,
-    child_ids: Ident,
     refs: Ident,
     field_refs: Ident,
     keyed_fields: Ident,
@@ -228,8 +225,9 @@ impl GeneratedNames {
             reference: format_ident!("{root}Ref"),
             view: format_ident!("{root}View"),
             builder: format_ident!("{root}Builder"),
+            forest: format_ident!("{root}Forest"),
+            forest_map: format_ident!("{root}ForestMap"),
             handle: format_ident!("{root}Handle"),
-            child_ids: format_ident!("{root}ChildIds"),
             refs: format_ident!("{root}Refs"),
             field_refs: format_ident!("{root}FieldRefs"),
             keyed_fields: format_ident!("{root}Fields"),
@@ -237,10 +235,13 @@ impl GeneratedNames {
     }
 }
 
-pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
+pub(super) fn expand(
+    schema: TreeSchema,
+    runtime: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
     let TreeSchema {
         visibility,
-        internals,
+        schema_visibility,
         owned_constructors,
         root,
         metadata_name,
@@ -250,6 +251,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         key,
         children,
         keyed_children,
+        uses_keyed_children,
         variants,
     } = schema;
     let GeneratedNames {
@@ -260,8 +262,9 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         reference,
         view,
         builder,
+        forest,
+        forest_map,
         handle,
-        child_ids,
         refs,
         field_refs,
         keyed_fields,
@@ -277,7 +280,9 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
     let arena_doc = format!("Contiguous storage for `{root_name}` nodes.");
     let handle_doc = format!("Shared owning handle for a `{root_name}` root.");
     let root_doc = format!("Owning root of a `{root_name}` tree.");
-    let builder_doc = format!("Bottom-up builder for `{root_name}` trees.");
+    let builder_doc = format!("Bottom-up builder for `{root_name}` trees and forests.");
+    let forest_doc = format!("Ordered owning forest of `{root_name}` roots in shared storage.");
+    let forest_map_doc = format!("Sorted unique keys associated with `{root_name}` forest roots.");
 
     let stored_variants = variants
         .iter()
@@ -285,11 +290,11 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         .collect::<Vec<_>>();
     let view_variants = variants
         .iter()
-        .map(|variant| variant.view_definition(&cursor, &id, &key))
+        .map(|variant| variant.view_definition(runtime, &cursor, &id, &key))
         .collect::<Vec<_>>();
     let resolve_arms = variants
         .iter()
-        .map(|variant| variant.resolve_arm(&kind, &view, &cursor_value))
+        .map(|variant| variant.resolve_arm(runtime, &kind, &view, &cursor_value))
         .collect::<Vec<_>>();
     let child_ids_arms = variants
         .iter()
@@ -303,12 +308,22 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         .iter()
         .map(|variant| variant.payload_equality_arm(&kind))
         .collect::<Vec<_>>();
-    let duplicate_key_arms = variants
-        .iter()
-        .filter_map(|variant| variant.duplicate_key_arm(&kind))
-        .collect::<Vec<_>>();
-    let keyed_fields_definition =
-        keyed_fields::expand(&visibility, &key, &id, &keyed_fields, &keyed_children);
+    let keyed_support = uses_keyed_children.then(|| {
+        let keyed_fields_definition = keyed_fields::expand(
+            runtime,
+            &schema_visibility,
+            &key,
+            &id,
+            &keyed_fields,
+            &keyed_children,
+        );
+        quote! {
+            #schema_visibility type #field_refs<'arena> =
+                #runtime::ResolvedFields<'arena, #reference<'arena>, #key>;
+
+            #keyed_fields_definition
+        }
+    });
     let owned_constructor_impl = owned_constructors.map(|owned_constructors| {
         let constructor_attributes = owned_constructors.attributes;
         let constructor_visibility = owned_constructors.visibility;
@@ -333,12 +348,17 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 ) -> Self {
                     let children: Vec<_> = children.into_iter().collect();
                     let capacity = children.iter()
-                        .map(|child| contiguous_tree::TreeCursorExt::postorder(child.as_ref()).len())
+                        .map(|child| #runtime::TreeCursorExt::postorder(child.as_ref()).len())
                         .sum::<usize>() + 1;
-                    let mut arena = #arena::with_capacity(capacity);
-                    let ids = children.iter().map(|child| arena.clone_tree(child)).collect::<Vec<_>>();
-                    let root = arena.alloc(make(&ids), #metadata_default);
-                    Self::new(#handle::new(arena, root))
+                    let mut builder = #builder::with_capacity(capacity);
+                    let ids = children
+                        .iter()
+                        .map(|child| builder.clone_subtree(child.as_ref()))
+                        .collect::<Vec<_>>();
+                    let root = builder.alloc(make(&ids), #metadata_default);
+                    builder
+                        .finish(root)
+                        .expect("owned children form one complete tree")
                 }
 
                 #( #methods )*
@@ -352,16 +372,16 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         #visibility struct #id(#id_type);
 
         impl #id {
-            #internals fn new(index: usize) -> Self {
+            fn new(index: usize) -> Self {
                 Self(<#id_type>::try_from(index).expect("tree contains more nodes than its ID type can represent"))
             }
 
-            pub fn index(self) -> usize {
+            #visibility fn index(self) -> usize {
                 self.0 as usize
             }
         }
 
-        impl contiguous_tree::ArenaId for #id {
+        impl #runtime::ArenaId for #id {
             fn from_index(index: usize) -> Self {
                 Self::new(index)
             }
@@ -371,19 +391,16 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             }
         }
 
-        pub(crate) type #child_ids<'node> = contiguous_tree::ChildIds<'node, #id, #key>;
-        pub(crate) type #refs<'arena> = contiguous_tree::ResolvedIds<
+        #schema_visibility type #refs<'arena> = #runtime::ResolvedIds<
             #reference<'arena>,
             std::iter::Copied<std::slice::Iter<'arena, #id>>,
         >;
-        pub(crate) type #field_refs<'arena> =
-            contiguous_tree::ResolvedFields<'arena, #reference<'arena>, #key>;
 
-        #keyed_fields_definition
+        #keyed_support
 
         #[doc = #kind_doc]
         #[derive(Clone, PartialEq, Debug)]
-        #visibility enum #kind {
+        #schema_visibility enum #kind {
             #( #stored_variants, )*
         }
 
@@ -398,26 +415,26 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         #[derive(Debug)]
         #visibility enum #view<
             'arena,
-            #cursor: contiguous_tree::TreeCursor<Id = #id> + 'arena = #reference<'arena>,
+            #cursor: #runtime::TreeCursor<Id = #id> + 'arena = #reference<'arena>,
         > {
             #( #view_variants, )*
         }
 
         #[doc = #node_doc]
         #[derive(Clone, Debug, PartialEq)]
-        #internals struct #node {
-            pub(crate) node: #kind,
-            pub(crate) #metadata_name: #metadata,
+        struct #node {
+            node: #kind,
+            #metadata_name: #metadata,
         }
 
         #[doc = #arena_doc]
         #[derive(Clone, Debug, Default, PartialEq)]
-        #internals struct #arena {
-            #internals nodes: contiguous_tree::Arena<#id, #node>,
+        #schema_visibility struct #arena {
+            nodes: #runtime::Arena<#id, #node>,
         }
 
         #[doc = #handle_doc]
-        #internals type #handle = contiguous_tree::TreeHandle<#arena>;
+        type #handle = #runtime::TreeHandle<#arena>;
 
         #[doc = #root_doc]
         #[derive(Clone)]
@@ -425,7 +442,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             tree: #handle,
         }
 
-        impl contiguous_tree::TreeStorage for #arena {
+        impl #runtime::TreeStorage for #arena {
             type Id = #id;
             type Cursor<'arena> = #reference<'arena>;
 
@@ -436,153 +453,387 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
             fn owns(&self, cursor: Self::Cursor<'_>) -> bool {
                 cursor.belongs_to(self)
             }
+
+            fn validate_forest(
+                &self,
+                roots: &[Self::Id],
+            ) -> Result<(), #runtime::ForestError> {
+                self.nodes.validate_forest(roots)
+            }
+
+            fn node_count(&self) -> usize {
+                self.nodes.len()
+            }
+        }
+
+        impl #runtime::PostorderStorage<#node> for #arena {
+            fn push_node(&mut self, node: #node) -> Self::Id {
+                #runtime::__private::arena_push_node(&mut self.nodes, node)
+            }
+
+            fn reserve_nodes(&mut self, additional: usize) {
+                self.nodes.reserve(additional);
+            }
+
+            fn truncate_nodes(&mut self, len: usize) {
+                #runtime::__private::arena_truncate(&mut self.nodes, len);
+            }
         }
 
         impl #root {
-            pub(crate) fn new(tree: #handle) -> Self {
+            fn new(tree: #handle) -> Self {
                 Self { tree }
             }
 
-            pub fn id(&self) -> #id {
+            #visibility fn id(&self) -> #id {
                 self.tree.root_id()
             }
 
-            #internals fn arena(&self) -> &#arena {
-                self.tree.storage()
-            }
 
-            pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+
+            #schema_visibility fn shares_storage_with(&self, other: &Self) -> bool {
                 self.tree.shares_storage_with(&other.tree)
             }
 
-            pub(crate) fn same_root(&self, other: &Self) -> bool {
+            #schema_visibility fn same_root(&self, other: &Self) -> bool {
                 self.tree.same_root(&other.tree)
             }
 
             #[cfg(test)]
-            pub(crate) fn storage_strong_count(&self) -> usize {
+            #schema_visibility fn storage_strong_count(&self) -> usize {
                 self.tree.strong_count()
             }
 
-            pub(crate) fn child(&self, id: #id) -> Self {
-                self.subtree(self.as_ref().child(id))
-            }
 
-            pub(crate) fn subtree(&self, root: #reference<'_>) -> Self {
+
+            #schema_visibility fn subtree(&self, root: #reference<'_>) -> Self {
                 Self::new(self.tree.subtree(root))
             }
 
-            pub fn as_ref(&self) -> #reference<'_> {
+            #schema_visibility fn annotations_builder<T>(
+                &self,
+            ) -> #runtime::NodeAnnotationsBuilder<#arena, T> {
+                self.tree.annotations_builder()
+            }
+
+
+
+            #visibility fn as_ref(&self) -> #reference<'_> {
                 self.tree.cursor()
             }
 
-            #internals fn into_owned_arena(self) -> (#arena, #id) {
-                self.tree.into_storage_and_root()
+
+        }
+
+        #[doc = #forest_doc]
+        #[derive(Clone)]
+        #schema_visibility struct #forest {
+            forest: #runtime::Forest<#arena>,
+        }
+
+        impl #forest {
+            /// Validate and create a forest whose roots cover the complete arena.
+            #schema_visibility fn new(
+                arena: #arena,
+                roots: impl IntoIterator<Item = #id>,
+            ) -> Result<Self, #runtime::ForestError> {
+                #runtime::Forest::new(arena, roots).map(|forest| Self { forest })
+            }
+
+            #schema_visibility fn len(&self) -> usize {
+                self.forest.len()
+            }
+
+            #schema_visibility fn is_empty(&self) -> bool {
+                self.forest.is_empty()
+            }
+
+            #schema_visibility fn root_ids(&self) -> &[#id] {
+                self.forest.root_ids()
+            }
+
+
+
+            #schema_visibility fn root(&self, index: usize) -> #root {
+                #root::new(self.forest.handle(index))
+            }
+
+            /// Iterate over borrowed root cursors in caller-provided order.
+            #schema_visibility fn roots(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = #reference<'_>> + ExactSizeIterator + '_ {
+                self.forest.cursors()
+            }
+
+            /// Iterate over every node in contiguous allocation order.
+            #schema_visibility fn nodes(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = #reference<'_>> + ExactSizeIterator + '_ {
+                self.forest.nodes()
+            }
+
+            #schema_visibility fn annotations_builder<T>(
+                &self,
+            ) -> #runtime::NodeAnnotationsBuilder<#arena, T> {
+                self.forest.annotations_builder()
+            }
+
+
+
+            /// Consume the forest and iterate over owning roots without cloning storage.
+            #schema_visibility fn into_roots(
+                self,
+            ) -> impl DoubleEndedIterator<Item = #root> + ExactSizeIterator {
+                self.forest.into_handles().map(#root::new)
             }
         }
 
+        #[doc = #forest_map_doc]
+        #[derive(Clone)]
+        #schema_visibility struct #forest_map<Key: Ord> {
+            map: #runtime::ForestMap<Key, #arena>,
+        }
+
+        impl<Key: Ord + std::fmt::Debug> std::fmt::Debug for #forest_map<Key> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.debug_map().entries(self.iter()).finish()
+            }
+        }
+
+        impl<Key: Ord> #forest_map<Key> {
+            #schema_visibility fn new(
+                keys: impl IntoIterator<Item = Key>,
+                forest: #forest,
+            ) -> Result<Self, #runtime::ForestMapError> {
+                #runtime::ForestMap::new(keys, forest.forest).map(|map| Self { map })
+            }
+
+            #schema_visibility fn from_unsorted(
+                keys: impl IntoIterator<Item = Key>,
+                forest: #forest,
+            ) -> Result<Self, #runtime::ForestMapError> {
+                #runtime::ForestMap::from_unsorted(keys, forest.forest).map(|map| Self { map })
+            }
+
+            #schema_visibility fn len(&self) -> usize {
+                self.map.len()
+            }
+
+            #schema_visibility fn is_empty(&self) -> bool {
+                self.map.is_empty()
+            }
+
+            #schema_visibility fn keys(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = &Key> + ExactSizeIterator {
+                self.map.keys()
+            }
+
+            #schema_visibility fn values(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = #reference<'_>> + ExactSizeIterator + '_ {
+                self.map.values()
+            }
+
+            #schema_visibility fn iter(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = (&Key, #reference<'_>)> + ExactSizeIterator + '_ {
+                self.map.iter()
+            }
+
+            /// Iterate over every node in contiguous allocation order.
+            #schema_visibility fn nodes(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = #reference<'_>> + ExactSizeIterator + '_ {
+                self.map.nodes()
+            }
+
+            #schema_visibility fn contains_key(&self, key: &Key) -> bool {
+                self.map.contains_key(key)
+            }
+
+            #schema_visibility fn get(&self, key: &Key) -> Option<#reference<'_>> {
+                self.map.get(key)
+            }
+
+            #schema_visibility fn get_owned(&self, key: &Key) -> Option<#root> {
+                self.map.handle(key).map(#root::new)
+            }
+
+
+
+            #schema_visibility fn annotations_builder<T>(
+                &self,
+            ) -> #runtime::NodeAnnotationsBuilder<#arena, T> {
+                self.map.annotations_builder()
+            }
+
+
+
+            /// Retain entries whose keys satisfy `keep`.
+            ///
+            /// If every entry is retained, storage is preserved unchanged. Removing
+            /// any root rebuilds the retained trees into complete shared storage.
+            #schema_visibility fn retain(&mut self, mut keep: impl FnMut(&Key) -> bool)
+            where
+                Key: Clone,
+            {
+                let selected = self.iter().filter(|(key, _)| keep(key)).collect::<Vec<_>>();
+                if selected.len() == self.len() {
+                    return;
+                }
+
+                let capacity = selected
+                    .iter()
+                    .map(|(_, root)| #runtime::TreeCursorExt::subtree_len(*root))
+                    .sum();
+                let mut builder = #builder::with_capacity(capacity);
+                let mut keys = Vec::with_capacity(selected.len());
+                let mut roots = Vec::with_capacity(selected.len());
+                for (key, root) in selected {
+                    keys.push(key.clone());
+                    roots.push(builder.clone_subtree(root));
+                }
+                let forest = builder
+                    .finish_forest(roots)
+                    .expect("retained roots form a complete forest");
+                *self = Self::new(keys, forest)
+                    .expect("retaining entries preserves sorted unique keys");
+            }
+
+            #schema_visibility fn into_entries(
+                self,
+            ) -> impl DoubleEndedIterator<Item = (Key, #root)> + ExactSizeIterator {
+                self.map.into_entries().map(|(key, root)| (key, #root::new(root)))
+            }
+
+            #schema_visibility fn into_forest(self) -> #forest {
+                #forest {
+                    forest: self.map.into_forest(),
+                }
+            }
+        }
+
+
+
         impl #arena {
-            pub fn with_capacity(capacity: usize) -> Self {
+            #schema_visibility fn with_capacity(capacity: usize) -> Self {
                 Self {
-                    nodes: contiguous_tree::Arena::with_capacity(capacity),
+                    nodes: #runtime::Arena::with_capacity(capacity),
                 }
             }
 
-            #internals fn alloc(&mut self, node: #kind, metadata: #metadata) -> #id {
-                self.nodes.push_tree(#node {
+            #schema_visibility fn len(&self) -> usize {
+                self.nodes.len()
+            }
+
+            #schema_visibility fn is_empty(&self) -> bool {
+                self.nodes.is_empty()
+            }
+
+            #schema_visibility fn ids(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = #id> + ExactSizeIterator + '_ {
+                self.nodes.iter().map(|(id, _)| id)
+            }
+
+            #schema_visibility fn kind(&self, id: #id) -> &#kind {
+                &self.nodes.get(id).node
+            }
+
+            #schema_visibility fn metadata(&self, id: #id) -> &#metadata {
+                &self.nodes.get(id).#metadata_name
+            }
+
+            #schema_visibility fn subtree_ids(&self, root: #id) -> #runtime::IdRange<#id> {
+                self.nodes.subtree_ids(root)
+            }
+
+
+
+            fn node(&self, id: #id) -> &#node {
+                self.nodes.get(id)
+            }
+
+
+
+        }
+
+        #[doc = #builder_doc]
+        #schema_visibility struct #builder {
+            builder: #runtime::ForestBuilder<#arena, #node>,
+        }
+
+        impl #builder {
+            #schema_visibility fn with_capacity(capacity: usize) -> Self {
+                Self {
+                    builder: #runtime::ForestBuilder::new(
+                        #arena::with_capacity(capacity),
+                    ),
+                }
+            }
+
+            #schema_visibility fn try_alloc(
+                &mut self,
+                node: #kind,
+                metadata: #metadata,
+            ) -> Result<#id, #runtime::BuildError<#id>> {
+                self.builder.try_alloc(#node {
                     node,
                     #metadata_name: metadata,
                 })
             }
 
-            pub(crate) fn get_mut(&mut self, id: #id) -> &mut #node {
-                self.nodes.get_mut(id)
+            #schema_visibility fn alloc(&mut self, node: #kind, metadata: #metadata) -> #id {
+                self.try_alloc(node, metadata)
+                    .unwrap_or_else(|error| panic!("invalid postorder allocation: {error}"))
             }
 
-            /// Clone an owning tree into this arena.
-            pub fn clone_tree(&mut self, tree: &#root) -> #id {
-                self.clone_subtree(tree.as_ref())
+            /// Allocate a node using the schema's default metadata value.
+            #schema_visibility fn alloc_default(&mut self, node: #kind) -> #id {
+                self.alloc(node, #metadata_default)
             }
 
-            /// Clone one complete occurrence subtree into this arena.
-            pub(crate) fn clone_subtree(&mut self, root: #reference<'_>) -> #id {
-                self.nodes.clone_tree_from(root, |cursor| cursor.node().clone())
+            #schema_visibility fn metadata(&self, id: #id) -> &#metadata {
+                self.builder.storage().metadata(id)
+            }
+
+            /// Finish one owning root, validating if it differs from the constructed frontier.
+            #schema_visibility fn finish(self, root: #id) -> Result<#root, #runtime::ForestError> {
+                let forest = #forest {
+                    forest: self.builder.finish([root])?,
+                };
+                Ok(forest
+                    .into_roots()
+                    .next()
+                    .expect("a single-root forest contains one root"))
+            }
+
+            /// Finish ordered owning roots, validating if they differ from the constructed frontier.
+            #schema_visibility fn finish_forest(
+                self,
+                roots: impl IntoIterator<Item = #id>,
+            ) -> Result<#forest, #runtime::ForestError> {
+                self.builder.finish(roots).map(|forest| #forest { forest })
+            }
+
+            /// Clone one complete occurrence subtree into this builder.
+            #schema_visibility fn clone_subtree(&mut self, root: #reference<'_>) -> #id {
+                self.builder
+                    .clone_tree_from(root, |cursor| cursor.node().clone())
             }
 
             /// Clone a subtree while recursively replacing selected source subtrees.
-            pub(crate) fn try_clone_subtree_with<'source, Error>(
+            #schema_visibility fn try_clone_subtree_with<'source, Error>(
                 &mut self,
                 root: #reference<'source>,
                 replace: impl FnMut(#reference<'source>) -> Result<Option<#reference<'source>>, Error>,
-            ) -> Result<#id, contiguous_tree::CloneTreeError<#reference<'source>, Error>> {
-                self.nodes.try_clone_tree_with(
+            ) -> Result<#id, #runtime::CloneTreeError<#reference<'source>, Error>> {
+                self.builder.try_clone_tree_with(
                     root,
                     replace,
                     |cursor| cursor.node().clone(),
                 )
-            }
-
-            pub(crate) fn duplicate_key(&self) -> Option<&#key> {
-                self.nodes
-                    .iter()
-                    .find_map(|(_, node)| node.node.duplicate_key())
-            }
-        }
-
-        impl std::ops::Deref for #arena {
-            type Target = contiguous_tree::Arena<#id, #node>;
-
-            fn deref(&self) -> &Self::Target {
-                &self.nodes
-            }
-        }
-
-        #[doc = #builder_doc]
-        #visibility struct #builder {
-            #internals arena: #arena,
-        }
-
-        impl #builder {
-            pub fn with_capacity(capacity: usize) -> Self {
-                Self {
-                    arena: #arena::with_capacity(capacity),
-                }
-            }
-
-            pub fn alloc(&mut self, node: #kind, metadata: #metadata) -> #id {
-                self.arena.alloc(node, metadata)
-            }
-
-            /// Allocate a node using the schema's default metadata value.
-            pub fn alloc_default(&mut self, node: #kind) -> #id {
-                self.alloc(node, #metadata_default)
-            }
-
-            pub(crate) fn get(&self, id: #id) -> &#node {
-                self.arena.get(id)
-            }
-
-            pub(crate) fn finish_arena(self) -> #arena {
-                self.arena
-            }
-
-            /// Clone one complete occurrence subtree into this builder.
-            pub(crate) fn clone_subtree(&mut self, root: #reference<'_>) -> #id {
-                self.arena.clone_subtree(root)
-            }
-
-            /// Clone a subtree while recursively replacing selected source subtrees.
-            pub(crate) fn try_clone_subtree_with<'source, Error>(
-                &mut self,
-                root: #reference<'source>,
-                replace: impl FnMut(#reference<'source>) -> Result<Option<#reference<'source>>, Error>,
-            ) -> Result<#id, contiguous_tree::CloneTreeError<#reference<'source>, Error>> {
-                self.arena.try_clone_subtree_with(root, replace)
-            }
-
-            #[doc(hidden)]
-            pub fn clone_tree(&mut self, tree: &#root) -> #id {
-                self.arena.clone_tree(tree)
             }
         }
 
@@ -593,120 +844,122 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
         }
 
         impl<'arena> #reference<'arena> {
-            pub(crate) fn from_arena(arena: &'arena #arena, id: #id) -> Self {
+            #schema_visibility fn from_arena(arena: &'arena #arena, id: #id) -> Self {
                 Self { arena, id }
             }
 
-            pub(crate) fn belongs_to(self, arena: &#arena) -> bool {
+            fn belongs_to(self, arena: &#arena) -> bool {
                 std::ptr::eq(self.arena, arena)
             }
 
-            pub(crate) fn arena(self) -> &'arena #arena {
-                self.arena
+            #schema_visibility fn shares_storage_with(self, other: Self) -> bool {
+                std::ptr::eq(self.arena, other.arena)
             }
 
-            pub(crate) fn kind(self) -> &'arena #kind {
+
+
+            #schema_visibility fn kind(self) -> &'arena #kind {
                 &self.node().node
             }
 
-            pub fn id(self) -> #id {
+            #schema_visibility fn metadata(self) -> &'arena #metadata {
+                &self.node().#metadata_name
+            }
+
+            #visibility fn id(self) -> #id {
                 self.id
             }
 
-            pub(crate) fn child(self, id: #id) -> Self {
+            fn child(self, id: #id) -> Self {
                 Self {
                     arena: self.arena,
                     id,
                 }
             }
 
-            pub(crate) fn node(self) -> &'arena #node {
-                self.arena.get(self.id)
+            fn node(self) -> &'arena #node {
+                self.arena.node(self.id)
             }
 
-            pub(crate) fn view_with<#cursor>(self, cursor: #cursor) -> #view<'arena, #cursor>
+            #schema_visibility fn view_with<#cursor>(self, cursor: #cursor) -> #view<'arena, #cursor>
             where
-                #cursor: contiguous_tree::TreeCursor<Id = #id>,
+                #cursor: #runtime::TreeCursor<Id = #id>,
             {
                 match self.kind() {
                     #( #resolve_arms, )*
                 }
             }
 
-            pub fn view(self) -> #view<'arena> {
+            #visibility fn view(self) -> #view<'arena> {
                 self.view_with(self)
             }
 
-            pub(crate) fn duplicate_key(self) -> Option<&'arena #key> {
-                contiguous_tree::Postorder::new(self)
-                    .find_map(|node| node.kind().duplicate_key())
-            }
         }
 
         impl #kind {
-            pub fn child_ids(&self) -> #child_ids<'_> {
-                let mut ids = #child_ids::empty();
+            #schema_visibility fn child_ids(
+                &self,
+            ) -> #runtime::__private::ChildIds<'_, #id, #key> {
+                let mut ids = #runtime::__private::ChildIds::empty();
                 match self {
                     #( #child_ids_arms, )*
                 }
                 ids
             }
 
-            #internals fn for_each_child_id_mut(&mut self, mut visit: impl FnMut(&mut #id)) {
+            fn for_each_child_id_mut(&mut self, mut visit: impl FnMut(&mut #id)) {
                 match self {
                     #( #visit_mut_arms, )*
                 }
             }
 
-            pub(crate) fn same_payload(&self, other: &Self) -> bool {
+            #schema_visibility fn same_payload(&self, other: &Self) -> bool {
                 match (self, other) {
                     #( #payload_arms, )*
                     _ => false,
                 }
             }
 
-            pub(crate) fn duplicate_key(&self) -> Option<&#key> {
-                match self {
-                    #( #duplicate_key_arms, )*
-                    _ => None,
-                }
-            }
         }
 
-        impl contiguous_tree::TreeNode<#id> for #kind {
-            type ChildIds<'node> = #child_ids<'node>;
+        impl #runtime::TreeNode<#id> for #kind {
+            type ChildIds<'node> = #runtime::__private::ChildIds<'node, #id, #key>;
 
             fn child_ids(&self) -> Self::ChildIds<'_> {
                 self.child_ids()
             }
         }
 
-        impl contiguous_tree::TreeNodeMut<#id> for #kind {
+        impl #runtime::TreeNodeMut<#id> for #kind {
             fn for_each_child_id_mut(&mut self, visit: impl FnMut(&mut #id)) {
                 self.for_each_child_id_mut(visit)
             }
         }
 
-        impl contiguous_tree::TreeNode<#id> for #node {
-            type ChildIds<'node> = #child_ids<'node>;
+        impl #runtime::TreeNode<#id> for #node {
+            type ChildIds<'node> = #runtime::__private::ChildIds<'node, #id, #key>;
 
             fn child_ids(&self) -> Self::ChildIds<'_> {
                 self.node.child_ids()
             }
         }
 
-        impl contiguous_tree::TreeNodeMut<#id> for #node {
+        impl #runtime::TreeNodeMut<#id> for #node {
             fn for_each_child_id_mut(&mut self, visit: impl FnMut(&mut #id)) {
                 self.node.for_each_child_id_mut(visit)
             }
         }
 
-        impl<'arena> contiguous_tree::TreeCursor for #reference<'arena> {
+        impl<'arena> #runtime::TreeCursor for #reference<'arena> {
             type Id = #id;
-            type ChildIds = #child_ids<'arena>;
+            type ChildIds = #runtime::__private::ChildIds<'arena, #id, #key>;
 
             fn id(self) -> Self::Id {
                 self.id()
+            }
+
+            fn storage_identity(self) -> #runtime::StorageIdentity {
+                #runtime::StorageIdentity::for_ref(self.arena)
             }
 
             fn same_node(self, other: Self) -> bool {
@@ -721,7 +974,7 @@ pub(super) fn expand(schema: TreeSchema) -> proc_macro2::TokenStream {
                 self.child(id)
             }
 
-            fn subtree_ids(self) -> contiguous_tree::IdRange<Self::Id> {
+            fn subtree_ids(self) -> #runtime::IdRange<Self::Id> {
                 self.arena.subtree_ids(self.id())
             }
         }
@@ -747,31 +1000,42 @@ fn stored_type(
     }
 }
 
-fn view_type(kind: &FieldKind, cursor: &Ident, id: &Ident, key: &Type) -> proc_macro2::TokenStream {
+fn view_type(
+    runtime: &proc_macro2::TokenStream,
+    kind: &FieldKind,
+    cursor: &Ident,
+    id: &Ident,
+    key: &Type,
+) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(#cursor),
-        FieldKind::Children => quote!(contiguous_tree::ResolvedIds<
+        FieldKind::Children => quote!(#runtime::ResolvedIds<
             #cursor,
             std::iter::Copied<std::slice::Iter<'arena, #id>>
         >),
 
         FieldKind::KeyedChildren => {
-            quote!(contiguous_tree::ResolvedFields<'arena, #cursor, #key>)
+            quote!(#runtime::ResolvedFields<'arena, #cursor, #key>)
         }
         FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) => quote!(&'arena #typ),
         FieldKind::Copied(typ) => quote!(#typ),
     }
 }
 
-fn resolve(kind: &FieldKind, field: &Ident, cursor: &Ident) -> proc_macro2::TokenStream {
+fn resolve(
+    runtime: &proc_macro2::TokenStream,
+    kind: &FieldKind,
+    field: &Ident,
+    cursor: &Ident,
+) -> proc_macro2::TokenStream {
     match kind {
-        FieldKind::Child => quote!(contiguous_tree::TreeCursor::child(#cursor, *#field)),
+        FieldKind::Child => quote!(#runtime::TreeCursor::child(#cursor, *#field)),
         FieldKind::Children => {
-            quote!(contiguous_tree::ResolvedIds::new(#cursor, #field.iter().copied()))
+            quote!(#runtime::ResolvedIds::new(#cursor, #field.iter().copied()))
         }
 
         FieldKind::KeyedChildren => {
-            quote!(contiguous_tree::ResolvedFields::new(#cursor, #field.as_slice()))
+            quote!(#runtime::ResolvedFields::new(#cursor, #field.as_slice()))
         }
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) => quote!(#field),
         FieldKind::Copied(_) => quote!(*#field),
@@ -794,7 +1058,7 @@ fn visit(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
         FieldKind::Child => quote!(visit(#field);),
         FieldKind::Children => quote!(#field.make_mut().iter_mut().for_each(&mut visit);),
         FieldKind::KeyedChildren => quote!(
-            for (_, child) in #field.make_mut_with(|storage| storage.make_mut()) {
+            for (_, child) in #field.child_ids_mut() {
                 visit(child);
             }
         ),

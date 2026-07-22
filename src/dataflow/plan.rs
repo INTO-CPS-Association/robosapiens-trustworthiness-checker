@@ -251,7 +251,7 @@ pub(super) struct DynamicSpec<E> {
     pub(super) scope: DataflowDynamicScope,
     pub(super) mode: DataflowDynamicMode,
     /// Type information for typed plans; `None` for untyped plans.
-    pub(super) typed: Option<(Rc<TypeInfo>, TCType)>,
+    pub(super) typed: Option<(Rc<StreamTypeEnvironment>, TCType)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -388,11 +388,11 @@ pub(super) enum DataflowOp<E> {
     },
 }
 
-/// The operand-visiting match used for dependency analysis.
-macro_rules! for_each_operand_body {
-    ($op:expr, $visit:ident) => {
-        match $op {
-            DataflowOp::Unary { arg, .. } => $visit(arg),
+impl<E> DataflowOp<E> {
+    /// Visit every direct operand used by dependency analysis.
+    pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
+        match self {
+            DataflowOp::Unary { arg, .. } => visit(arg),
             DataflowOp::Binary { lhs, rhs, .. }
             | DataflowOp::Default {
                 input: lhs,
@@ -419,10 +419,10 @@ macro_rules! for_each_operand_body {
                 value: rhs,
             }
             | DataflowOp::LConcat { lhs, rhs } => {
-                $visit(lhs);
-                $visit(rhs);
+                visit(lhs);
+                visit(rhs);
             }
-            DataflowOp::If { cond, .. } => $visit(cond),
+            DataflowOp::If { cond, .. } => visit(cond),
             DataflowOp::SIndex { input, .. }
             | DataflowOp::IsDefined { input }
             | DataflowOp::When { input }
@@ -433,12 +433,12 @@ macro_rules! for_each_operand_body {
             | DataflowOp::MRemove { map: input, .. }
             | DataflowOp::MHasKey { map: input, .. }
             | DataflowOp::TGet { tuple: input, .. }
-            | DataflowOp::Fix { func: input, .. } => $visit(input),
-            DataflowOp::Dynamic(DynamicSpec { input, .. }) => $visit(input),
+            | DataflowOp::Fix { func: input, .. } => visit(input),
+            DataflowOp::Dynamic(DynamicSpec { input, .. }) => visit(input),
             DataflowOp::List(items) | DataflowOp::Tuple(items) => {
-                items.into_iter().for_each($visit)
+                items.into_iter().for_each(&mut visit)
             }
-            DataflowOp::Map(items) => items.into_iter().for_each(|(_, value)| $visit(value)),
+            DataflowOp::Map(items) => items.into_iter().for_each(|(_, value)| visit(value)),
             DataflowOp::MInsert { map, value, .. }
             | DataflowOp::ListMap {
                 func: map,
@@ -448,29 +448,23 @@ macro_rules! for_each_operand_body {
                 func: map,
                 list: value,
             } => {
-                $visit(map);
-                $visit(value);
+                visit(map);
+                visit(value);
             }
             DataflowOp::ListFold { func, init, list } => {
-                $visit(func);
-                $visit(init);
-                $visit(list);
+                visit(func);
+                visit(init);
+                visit(list);
             }
             DataflowOp::Apply { func, args } | DataflowOp::Partial { func, args, .. } => {
-                $visit(func);
-                args.into_iter().for_each($visit);
+                visit(func);
+                args.into_iter().for_each(&mut visit);
             }
             DataflowOp::DirectApply { args, .. }
             | DataflowOp::DirectFixApply { args, .. }
-            | DataflowOp::RecursiveCall { args } => args.into_iter().for_each($visit),
+            | DataflowOp::RecursiveCall { args } => args.into_iter().for_each(&mut visit),
             DataflowOp::Function { .. } | DataflowOp::RecursiveSIndex { .. } => {}
         }
-    };
-}
-
-impl<E> DataflowOp<E> {
-    pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
-        for_each_operand_body!(self, visit)
     }
 
     pub(super) fn is_recursive_sindex(&self) -> bool {

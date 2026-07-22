@@ -38,6 +38,15 @@ impl serde::Serialize for Expr {
     where
         S: serde::Serializer,
     {
+        self.as_ref().serialize(serializer)
+    }
+}
+
+impl serde::Serialize for ExprRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         serializer.serialize_str(&self.to_string())
     }
 }
@@ -223,7 +232,7 @@ impl Display for DsrvSpecification {
                 writeln!(f, "aux {v}: {typ}")?;
             }
         }
-        for (v, expression) in &self.exprs {
+        for (v, expression) in self.exprs.iter() {
             writeln!(f, "{v} = {expression}")?;
         }
         Ok(())

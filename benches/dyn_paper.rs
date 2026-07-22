@@ -11,6 +11,7 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use itertools::Itertools;
 use smol::LocalExecutor;
+use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::dsrv_fixtures::spec_deferred_and;
 use trustworthiness_checker::dsrv_fixtures::spec_direct_and;
 use trustworthiness_checker::dsrv_fixtures::{
@@ -51,9 +52,12 @@ fn from_elem(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(10));
 
-    let spec_direct =
-        trustworthiness_checker::lang::dsrv::parser::parse_str(spec_direct_and()).unwrap();
-    let spec = trustworthiness_checker::lang::dsrv::parser::parse_str(spec_deferred_and()).unwrap();
+    let spec_direct = spec_direct_and()
+        .parse::<DsrvSpecification>()
+        .expect("direct benchmark specification should parse");
+    let spec = spec_deferred_and()
+        .parse::<DsrvSpecification>()
+        .expect("deferred benchmark specification should parse");
     let percents = vec![0, 25, 50, 75, 100];
 
     for size in sizes.iter() {

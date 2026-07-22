@@ -2,7 +2,7 @@ use contiguous_tree_macros::tree_schema;
 
 tree_schema! {
     pub tree Expr {
-        internals: pub(crate),
+        schema: pub(crate),
         metadata: span: () = (),
         id: u32,
         key: String,

@@ -143,7 +143,6 @@ mod tests {
     use crate::DsrvSpecification;
     use crate::distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph};
     use crate::distributed::scheduling::communication::{MockSchedulerCommunicator, WorkTypeInfo};
-    use crate::lang::dsrv::parser::parse_str;
     use crate::semantics::distributed::localisation::Localisable;
     use macro_rules_attribute::apply;
     use std::collections::BTreeSet;
@@ -152,7 +151,9 @@ mod tests {
     #[test]
     fn monitor_work_keeps_only_localised_io_type_info() -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = parse_str(spec_src).map_err(|e| anyhow::anyhow!(e))?;
+        let spec = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
         let local_spec = spec.localise(&vec!["y".into()]);
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
@@ -183,7 +184,9 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = parse_str(spec_src).map_err(|e| anyhow::anyhow!(e))?;
+        let spec = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),
@@ -239,7 +242,9 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = parse_str(spec_src).map_err(|e| anyhow::anyhow!(e))?;
+        let spec = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),
@@ -307,7 +312,9 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nout y: Int\ny = (x + 1)";
-        let spec = parse_str(spec_src).map_err(|e| anyhow::anyhow!(e))?;
+        let spec = (spec_src)
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),

@@ -12,36 +12,46 @@ use crate::lang::dsrv::span::Span;
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
 
+/// A failure while resolving the variables assigned to a locality.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LocalitySpecError {
+    #[error("locality node `{node}` does not exist in the distribution graph")]
+    UnknownNode { node: NodeName },
+}
+
 pub trait LocalitySpec: Debug {
-    fn local_vars(&self) -> Vec<VarName>;
+    fn local_vars(&self) -> Result<Vec<VarName>, LocalitySpecError>;
 }
 
 assert_obj_safe!(LocalitySpec);
 
 impl LocalitySpec for Vec<VarName> {
-    fn local_vars(&self) -> Vec<VarName> {
-        self.clone()
+    fn local_vars(&self) -> Result<Vec<VarName>, LocalitySpecError> {
+        Ok(self.clone())
     }
 }
 impl<W: Debug> LocalitySpec for (NodeName, &GenericLabelledDistributionGraph<W>) {
-    /// Returns the local variables of the node.
-    /// Panics if the node does not exist in the graph.
-    fn local_vars(&self) -> Vec<VarName> {
-        let node_index = self.1.get_node_index_by_name(&self.0).unwrap();
-        self.1
+    fn local_vars(&self) -> Result<Vec<VarName>, LocalitySpecError> {
+        let node_index = self.1.get_node_index_by_name(&self.0).ok_or_else(|| {
+            LocalitySpecError::UnknownNode {
+                node: self.0.clone(),
+            }
+        })?;
+        Ok(self
+            .1
             .monitors_at_node(node_index)
-            .unwrap_or_else(|| panic!("Node index {:?} does not exist in the graph", node_index))
-            .clone()
+            .cloned()
+            .unwrap_or_default())
     }
 }
-impl<W: Debug + Clone> LocalitySpec for (NodeName, GenericLabelledDistributionGraph<W>) {
-    fn local_vars(&self) -> Vec<VarName> {
+impl<W: Debug> LocalitySpec for (NodeName, GenericLabelledDistributionGraph<W>) {
+    fn local_vars(&self) -> Result<Vec<VarName>, LocalitySpecError> {
         (self.0.clone(), &self.1).local_vars()
     }
 }
 
 impl LocalitySpec for Box<dyn LocalitySpec> {
-    fn local_vars(&self) -> Vec<VarName> {
+    fn local_vars(&self) -> Result<Vec<VarName>, LocalitySpecError> {
         self.as_ref().local_vars()
     }
 }
@@ -53,6 +63,7 @@ pub trait Localisable {
 /// A failure while localising a DSRV specification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DsrvLocalisationError {
+    Locality(LocalitySpecError),
     MissingAuxDefinition { variable: VarName },
     MonitoredAtAux { variable: VarName, node: NodeName },
     Dist,
@@ -62,6 +73,7 @@ pub enum DsrvLocalisationError {
 impl fmt::Display for DsrvLocalisationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Locality(error) => fmt::Display::fmt(error, formatter),
             Self::MissingAuxDefinition { variable } => {
                 write!(
                     formatter,
@@ -81,7 +93,20 @@ impl fmt::Display for DsrvLocalisationError {
     }
 }
 
-impl std::error::Error for DsrvLocalisationError {}
+impl std::error::Error for DsrvLocalisationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Locality(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<LocalitySpecError> for DsrvLocalisationError {
+    fn from(error: LocalitySpecError) -> Self {
+        Self::Locality(error)
+    }
+}
 
 fn dependency_closure(
     spec: &DsrvSpecification,
@@ -115,7 +140,7 @@ fn prune_to_dependency_closure(
     let root_set = roots.iter().cloned().collect::<BTreeSet<_>>();
     spec.output_vars.retain(|var| root_set.contains(var));
     spec.aux_vars.retain(|var| reachable.contains(var));
-    spec.exprs.retain(|var, _| reachable.contains(var));
+    spec.exprs.retain(|var| reachable.contains(var));
     spec.type_annotations
         .retain(|var, _| reachable.contains(var));
     spec
@@ -136,7 +161,7 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         .filter(|(var, _)| spec.output_vars.contains(*var) && !aux_vars.contains(*var))
         .map(|(var, root)| (var.clone(), root))
         .collect::<BTreeMap<_, _>>();
-    let compact_forest = rewrite_forest(roots, |expression| match expression.view() {
+    let exprs = rewrite_forest(roots, |expression| match expression.view() {
         ExprView::Var(var) if aux_vars.contains(var) => Ok(spec.var_expr_ref(var)),
         ExprView::MonitoredAt(var, node) if aux_vars.contains(var) => {
             Err(DsrvLocalisationError::MonitoredAtAux {
@@ -153,7 +178,6 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
             DsrvLocalisationError::CyclicReplacement { replacement_spans }
         }
     })?;
-    let (arena, exprs) = compact_forest.into_arena_and_roots();
 
     let output_vars = spec.output_vars.difference(&aux_vars).cloned().collect();
     let type_annotations = spec
@@ -162,10 +186,9 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
 
-    Ok(DsrvSpecification::from_arena(
+    Ok(DsrvSpecification::from_expression_forest(
         spec.input_vars,
         output_vars,
-        arena,
         exprs,
         type_annotations,
         std::iter::empty(),
@@ -220,7 +243,7 @@ impl DsrvSpecification {
         &self,
         locality_spec: &impl LocalitySpec,
     ) -> Result<Self, DsrvLocalisationError> {
-        let local_vars = locality_spec.local_vars();
+        let local_vars = locality_spec.local_vars()?;
         let spec = try_inline_aux(prune_to_dependency_closure(self.clone(), &local_vars))?;
         let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
         Ok(finish_localisation(spec, self, &local_set))
@@ -235,18 +258,65 @@ impl Localisable for DsrvSpecification {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::rc::Rc;
     use std::vec;
 
+    use petgraph::graph::DiGraph;
+
+    use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::{Expr, TreeCursorExt};
-    use crate::lang::dsrv::span::strip_span;
-    use crate::sexpr;
+    use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp, TreeCursorExt};
+    use crate::lang::dsrv::span::strip_span_ref;
     use proptest::prelude::*;
     use test_log::test;
 
     use super::*;
     use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
+
+    fn locality_graph() -> GenericLabelledDistributionGraph<u64> {
+        let mut graph: DiGraph<NodeName, u64> = DiGraph::new();
+        let node = graph.add_node("A".into());
+        GenericLabelledDistributionGraph {
+            dist_graph: Rc::new(GenericDistributionGraph {
+                central_monitor: node,
+                graph,
+            }),
+            var_names: Vec::new(),
+            node_labels: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn graph_locality_treats_missing_labels_as_empty_and_reports_unknown_nodes() {
+        let graph = locality_graph();
+        assert_eq!(
+            (NodeName::from("A"), &graph).local_vars().unwrap(),
+            Vec::<VarName>::new()
+        );
+
+        let unknown = NodeName::from("missing");
+        assert_eq!(
+            (unknown.clone(), &graph).local_vars(),
+            Err(LocalitySpecError::UnknownNode {
+                node: unknown.clone()
+            })
+        );
+
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+        );
+        assert_eq!(
+            spec.try_localise(&(unknown.clone(), &graph)),
+            Err(DsrvLocalisationError::Locality(
+                LocalitySpecError::UnknownNode { node: unknown }
+            ))
+        );
+    }
 
     fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
         assert_eq!(actual.input_vars, expected.input_vars);
@@ -258,12 +328,12 @@ mod tests {
         let actual_exprs = actual
             .exprs
             .iter()
-            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .map(|(name, expr)| (name.clone(), strip_span_ref(expr)))
             .collect::<BTreeMap<_, _>>();
         let expected_exprs = expected
             .exprs
             .iter()
-            .map(|(name, expr)| (name.clone(), strip_span(expr)))
+            .map(|(name, expr)| (name.clone(), strip_span_ref(expr)))
             .collect::<BTreeMap<_, _>>();
         assert_eq!(actual_exprs, expected_exprs);
     }
@@ -274,9 +344,9 @@ mod tests {
             BTreeSet::from(["a".into(), "b".into()]),
             BTreeSet::from(["c".into(), "d".into(), "e".into()]),
             vec![
-                ("c".into(), sexpr!(Var("a"))),
-                ("d".into(), sexpr!(Not(Var("a")))),
-                ("e".into(), sexpr!(Not(Var("d")))),
+                ("c".into(), Expr::Var("a".into())),
+                ("d".into(), Expr::Not(Box::new(Expr::Var("a".into())))),
+                ("e".into(), Expr::Not(Box::new(Expr::Var("d".into())))),
             ]
             .into_iter()
             .collect(),
@@ -291,8 +361,8 @@ mod tests {
                 BTreeSet::from(["a".into(), "d".into()]),
                 BTreeSet::from(["c".into(), "e".into()]),
                 vec![
-                    ("c".into(), sexpr!(Var("a"))),
-                    ("e".into(), sexpr!(Not(Var("d")))),
+                    ("c".into(), Expr::Var("a".into())),
+                    ("e".into(), Expr::Not(Box::new(Expr::Var("d".into())))),
                 ]
                 .into_iter()
                 .collect(),
@@ -327,8 +397,9 @@ mod tests {
 
     #[test]
     fn test_localise_specification_simple_add() {
-        let spec = crate::lang::dsrv::parser::parse_str(spec_simple_add_decomposable())
-            .expect("Failed to parse specification");
+        let spec = spec_simple_add_decomposable()
+            .parse::<DsrvSpecification>()
+            .unwrap();
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
@@ -338,9 +409,16 @@ mod tests {
             &DsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
-                vec![("w".into(), sexpr!(BinOp(Var("x"), Add, Var("y"))))]
-                    .into_iter()
-                    .collect(),
+                vec![(
+                    "w".into(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var("x".into())),
+                        Box::new(Expr::Var("y".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                )]
+                .into_iter()
+                .collect(),
                 BTreeMap::new(),
                 vec![],
             ),
@@ -351,9 +429,16 @@ mod tests {
             &DsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
-                vec![("v".into(), sexpr!(BinOp(Var("z"), Add, Var("w"))))]
-                    .into_iter()
-                    .collect(),
+                vec![(
+                    "v".into(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var("z".into())),
+                        Box::new(Expr::Var("w".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                )]
+                .into_iter()
+                .collect(),
                 BTreeMap::new(),
                 vec![],
             ),
@@ -364,8 +449,7 @@ mod tests {
     fn test_localise_spec_with_aux() {
         // Tests that localisation correctly handles auxiliary variables
         // Note that these must be specified similarly to output variables
-        let spec = crate::lang::dsrv::parser::parse_str(
-            "   in x
+        let spec = "   in x
                     in y
                     in z
                     out w
@@ -373,9 +457,9 @@ mod tests {
                     aux tmp
                     w = x + y
                     tmp = z + w
-                    v = tmp",
-        )
-        .expect("Failed to parse specification");
+                    v = tmp"
+            .parse::<DsrvSpecification>()
+            .unwrap();
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
@@ -385,9 +469,16 @@ mod tests {
             &DsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
-                vec![("w".into(), sexpr!(BinOp(Var("x"), Add, Var("y"))))]
-                    .into_iter()
-                    .collect(),
+                vec![(
+                    "w".into(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var("x".into())),
+                        Box::new(Expr::Var("y".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                )]
+                .into_iter()
+                .collect(),
                 BTreeMap::new(),
                 vec![],
             ),
@@ -398,9 +489,16 @@ mod tests {
             &DsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
-                vec![("v".into(), sexpr!(BinOp(Var("z"), Add, Var("w"))))]
-                    .into_iter()
-                    .collect(),
+                vec![(
+                    "v".into(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var("z".into())),
+                        Box::new(Expr::Var("w".into())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                )]
+                .into_iter()
+                .collect(),
                 BTreeMap::new(),
                 vec![],
             ),
@@ -420,11 +518,19 @@ mod tests {
             vec![
                 (
                     tmp.clone(),
-                    sexpr!(BinOp(Var(x.clone()), Add, Var(y.clone()))),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(x.clone())),
+                        Box::new(Expr::Var(y.clone())),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
                 ),
                 (
                     z.clone(),
-                    sexpr!(BinOp(Var(tmp.clone()), Mul, Var(x.clone()))),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(tmp.clone())),
+                        Box::new(Expr::Var(x.clone())),
+                        SBinOp::NOp(NumericalBinOp::Mul),
+                    ),
                 ),
             ]
             .into_iter()
@@ -437,11 +543,15 @@ mod tests {
 
         let expected_exprs = vec![(
             z.clone(),
-            sexpr!(BinOp(
-                BinOp(Var(x.clone()), Add, Var(y.clone())),
-                Mul,
-                Var(x.clone())
-            )),
+            Expr::BinOp(
+                Box::new(Expr::BinOp(
+                    Box::new(Expr::Var(x.clone())),
+                    Box::new(Expr::Var(y.clone())),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                )),
+                Box::new(Expr::Var(x.clone())),
+                SBinOp::NOp(NumericalBinOp::Mul),
+            ),
         )]
         .into_iter()
         .collect();
@@ -470,10 +580,24 @@ mod tests {
             BTreeSet::from([i.clone()]),
             BTreeSet::from([h1.clone(), h2.clone(), h3.clone(), out.clone()]),
             vec![
-                (h1.clone(), sexpr!(Var(i.clone()))),
-                (h2.clone(), sexpr!(BinOp(Var(h1.clone()), Add, Val(1)))),
-                (h3.clone(), sexpr!(BinOp(Var(h2.clone()), Add, Val(2)))),
-                (out.clone(), sexpr!(Var(h3.clone()))),
+                (h1.clone(), Expr::Var(i.clone())),
+                (
+                    h2.clone(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(h1.clone())),
+                        Box::new(Expr::Val(1)),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                ),
+                (
+                    h3.clone(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(h2.clone())),
+                        Box::new(Expr::Val(2)),
+                        SBinOp::NOp(NumericalBinOp::Add),
+                    ),
+                ),
+                (out.clone(), Expr::Var(h3.clone())),
             ]
             .into_iter()
             .collect(),
@@ -486,7 +610,15 @@ mod tests {
         // Auxiliary definitions are expanded transitively into the output expression.
         let expected_exprs = vec![(
             out.clone(),
-            sexpr!(BinOp(BinOp(Var(i.clone()), Add, Val(1)), Add, Val(2))),
+            Expr::BinOp(
+                Box::new(Expr::BinOp(
+                    Box::new(Expr::Var(i.clone())),
+                    Box::new(Expr::Val(1)),
+                    SBinOp::NOp(NumericalBinOp::Add),
+                )),
+                Box::new(Expr::Val(2)),
+                SBinOp::NOp(NumericalBinOp::Add),
+            ),
         )]
         .into_iter()
         .collect();
@@ -514,9 +646,9 @@ mod tests {
             BTreeSet::new(),
             BTreeSet::from([h1.clone(), h2.clone(), out.clone()]),
             vec![
-                (h1.clone(), sexpr!(Var(h2.clone()))),
-                (h2.clone(), sexpr!(Var(h1.clone()))),
-                (out.clone(), sexpr!(Var(h1.clone()))),
+                (h1.clone(), Expr::Var(h2.clone())),
+                (h2.clone(), Expr::Var(h1.clone())),
+                (out.clone(), Expr::Var(h1.clone())),
             ]
             .into_iter()
             .collect(),
@@ -534,7 +666,7 @@ mod tests {
         let spec = DsrvSpecification::new(
             BTreeSet::new(),
             BTreeSet::from([missing.clone(), output.clone()]),
-            BTreeMap::from([(output.clone(), sexpr!(Var(missing.clone())))]),
+            BTreeMap::from([(output.clone(), Expr::Var(missing.clone()))]),
             BTreeMap::new(),
             [missing.clone()],
         );
@@ -549,10 +681,9 @@ mod tests {
     fn try_localise_reports_monitored_at_aux() {
         let helper: VarName = "helper".into();
         let output: VarName = "output".into();
-        let spec = crate::lang::dsrv::parser::parse_str(
-            "aux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)",
-        )
-        .expect("spec should parse");
+        let spec = "aux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)"
+            .parse::<DsrvSpecification>()
+            .unwrap();
 
         assert!(matches!(
             spec.try_localise(&vec![output]),
@@ -563,8 +694,9 @@ mod tests {
     #[test]
     fn try_localise_reports_dist() {
         let output: VarName = "output".into();
-        let spec = crate::lang::dsrv::parser::parse_str("out output\noutput = dist(A, B)")
-            .expect("spec should parse");
+        let spec = "out output\noutput = dist(A, B)"
+            .parse::<DsrvSpecification>()
+            .unwrap();
 
         assert_eq!(
             spec.try_localise(&vec![output]).unwrap_err(),
@@ -581,9 +713,9 @@ mod tests {
             BTreeSet::new(),
             BTreeSet::from([first.clone(), second.clone(), output.clone()]),
             BTreeMap::from([
-                (first.clone(), sexpr!(Var(second.clone()))),
-                (second.clone(), sexpr!(Var(first.clone()))),
-                (output.clone(), sexpr!(Var(first.clone()))),
+                (first.clone(), Expr::Var(second.clone())),
+                (second.clone(), Expr::Var(first.clone())),
+                (output.clone(), Expr::Var(first.clone())),
             ]),
             BTreeMap::new(),
             [first, second],
@@ -596,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn localisation_finalisation_preserves_the_compact_rewrite_arena() {
+    fn localisation_finalisation_preserves_compact_rewrite_storage() {
         let helper: VarName = "helper".into();
         let first: VarName = "first".into();
         let second: VarName = "second".into();
@@ -604,11 +736,18 @@ mod tests {
             BTreeSet::from(["input".into()]),
             BTreeSet::from([helper.clone(), first.clone(), second.clone()]),
             BTreeMap::from([
-                (helper.clone(), sexpr!(Not(Var("input")))),
-                (first.clone(), sexpr!(Var(helper.clone()))),
+                (
+                    helper.clone(),
+                    Expr::Not(Box::new(Expr::Var("input".into()))),
+                ),
+                (first.clone(), Expr::Var(helper.clone())),
                 (
                     second.clone(),
-                    sexpr!(BinOp(Var(helper.clone()), And, Val(true))),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(helper.clone())),
+                        Box::new(Expr::Val(true)),
+                        SBinOp::BOp(BoolBinOp::And),
+                    ),
                 ),
             ]),
             BTreeMap::new(),
@@ -621,32 +760,30 @@ mod tests {
             &local_set.iter().cloned().collect::<Vec<_>>(),
         );
         let rewritten = try_inline_aux(pruned).unwrap();
-        let rewrite_arena = rewritten
-            .exprs()
-            .values()
+        let rewritten_name = rewritten
+            .expressions()
             .next()
             .expect("local roots should exist")
-            .arena() as *const _ as usize;
+            .0
+            .clone();
+        let rewritten_root = rewritten.var_expr(&rewritten_name).unwrap();
 
         let localised = finish_localisation(rewritten, &spec, &local_set);
-        let final_arena = localised
-            .exprs()
-            .values()
-            .next()
-            .expect("local roots should exist")
-            .arena() as *const _ as usize;
-        assert_eq!(
-            final_arena, rewrite_arena,
+        let final_root = localised.var_expr(&rewritten_name).unwrap();
+        assert!(
+            final_root.shares_storage_with(&rewritten_root),
             "finalisation must not rebuild syntax"
         );
 
         let reachable_nodes = localised
-            .exprs()
-            .values()
-            .map(|root| root.as_ref().postorder().len())
+            .expressions()
+            .map(|(_, root)| root.postorder().len())
             .sum::<usize>();
-        assert_eq!(localised.arena_len(), reachable_nodes);
-        let roots = localised.exprs().values().collect::<Vec<_>>();
+        assert_eq!(localised.nodes().count(), reachable_nodes);
+        let roots = localised
+            .expressions()
+            .map(|(_, root)| root)
+            .collect::<Vec<_>>();
         assert!(
             roots
                 .windows(2)

@@ -13,7 +13,7 @@ use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
-use trustworthiness_checker::{Value, VarName};
+use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -48,11 +48,12 @@ fn from_elem(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(std::time::Duration::from_secs(5));
 
-    let spec = trustworthiness_checker::lang::dsrv::parser::parse_str(spec_add_defer()).unwrap();
-    let dynamic_spec = trustworthiness_checker::lang::dsrv::parser::parse_str(
-        "in x\nin y\nin e\nout z\nz = dynamic(e)",
-    )
-    .unwrap();
+    let spec = spec_add_defer()
+        .parse::<DsrvSpecification>()
+        .expect("add/defer benchmark specification should parse");
+    let dynamic_spec = "in x\nin y\nin e\nout z\nz = dynamic(e)"
+        .parse::<DsrvSpecification>()
+        .expect("dynamic benchmark specification should parse");
 
     for size in sizes {
         let input_stream_fn = || add_defer_input_stream(size);
@@ -147,7 +148,9 @@ fn from_elem(c: &mut Criterion) {
 fn dataflow_dynamic_phases(c: &mut Criterion) {
     fn compile(operator: &str) -> DataflowMonitor {
         let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
-        let spec = trustworthiness_checker::lang::dsrv::parser::parse_str(source.as_str()).unwrap();
+        let spec = source
+            .parse::<DsrvSpecification>()
+            .expect("dynamic phase benchmark specification should parse");
         DataflowMonitor::try_compile_untyped(spec).unwrap()
     }
 

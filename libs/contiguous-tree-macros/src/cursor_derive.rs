@@ -37,14 +37,18 @@ impl CursorOptions {
     }
 }
 
-pub(crate) fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+pub(crate) fn expand(
+    input: DeriveInput,
+    runtime: &proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
     let options = CursorOptions::parse(&input)?;
-    expand_delegate(&input, options)
+    expand_delegate(&input, options, runtime)
 }
 
 fn expand_delegate(
     input: &DeriveInput,
     options: CursorOptions,
+    runtime: &proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let CursorOptions {
         delegate: Some(field),
@@ -86,22 +90,25 @@ fn expand_delegate(
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics contiguous_tree::TreeCursor for #name #type_generics #where_clause {
-            type Id = <#target as contiguous_tree::TreeCursor>::Id;
-            type ChildIds = <#target as contiguous_tree::TreeCursor>::ChildIds;
+        impl #impl_generics #runtime::TreeCursor for #name #type_generics #where_clause {
+            type Id = <#target as #runtime::TreeCursor>::Id;
+            type ChildIds = <#target as #runtime::TreeCursor>::ChildIds;
 
-            fn id(self) -> Self::Id { contiguous_tree::TreeCursor::id(self.#field) }
+            fn id(self) -> Self::Id { #runtime::TreeCursor::id(self.#field) }
+            fn storage_identity(self) -> #runtime::StorageIdentity {
+                #runtime::TreeCursor::storage_identity(self.#field)
+            }
             fn same_node(self, other: Self) -> bool {
-                contiguous_tree::TreeCursor::same_node(self.#field, other.#field)
+                #runtime::TreeCursor::same_node(self.#field, other.#field)
             }
             fn child_ids(self) -> Self::ChildIds {
-                contiguous_tree::TreeCursor::child_ids(self.#field)
+                #runtime::TreeCursor::child_ids(self.#field)
             }
             fn child(self, id: Self::Id) -> Self {
-                Self { #field: contiguous_tree::TreeCursor::child(self.#field, id) }
+                Self { #field: #runtime::TreeCursor::child(self.#field, id) }
             }
-            fn subtree_ids(self) -> contiguous_tree::IdRange<Self::Id> {
-                contiguous_tree::TreeCursor::subtree_ids(self.#field)
+            fn subtree_ids(self) -> #runtime::IdRange<Self::Id> {
+                #runtime::TreeCursor::subtree_ids(self.#field)
             }
         }
     })
@@ -109,6 +116,8 @@ fn expand_delegate(
 
 #[cfg(test)]
 mod tests {
+    use quote::quote;
+
     use super::expand;
 
     #[test]
@@ -118,7 +127,7 @@ mod tests {
             struct Cursor<'a> { arena: &'a (), id: usize }
         };
         assert!(
-            expand(input)
+            expand(input, &quote!(::renamed_contiguous_tree))
                 .unwrap_err()
                 .to_string()
                 .contains("requires a delegate field")
@@ -132,7 +141,7 @@ mod tests {
             struct Cursor<C> { cursor: C, extra: usize }
         };
         assert!(
-            expand(input)
+            expand(input, &quote!(::renamed_contiguous_tree))
                 .unwrap_err()
                 .to_string()
                 .contains("only the delegate field")

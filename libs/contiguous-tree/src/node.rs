@@ -15,14 +15,13 @@ pub trait TreeNodeMut<Id: ArenaId>: TreeNode<Id> {
     fn for_each_child_id_mut(&mut self, visit: impl FnMut(&mut Id));
 }
 
-pub fn map_child_ids<Id, Node>(node: &Node, mut map: impl FnMut(Id) -> Id) -> Node
+pub(crate) fn map_child_ids<Id, Node>(mut node: Node, mut map: impl FnMut(Id) -> Id) -> Node
 where
     Id: ArenaId,
-    Node: Clone + TreeNodeMut<Id>,
+    Node: TreeNodeMut<Id>,
 {
-    let mut mapped = node.clone();
-    mapped.for_each_child_id_mut(|child| *child = map(*child));
-    mapped
+    node.for_each_child_id_mut(|child| *child = map(*child));
+    node
 }
 
 /// Child IDs consisting of a small fixed prefix and an optional trailing collection.

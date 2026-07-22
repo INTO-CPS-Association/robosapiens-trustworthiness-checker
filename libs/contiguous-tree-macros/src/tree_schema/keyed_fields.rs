@@ -2,6 +2,7 @@ use quote::quote;
 use syn::{Ident, Type, Visibility};
 
 pub(super) fn expand(
+    runtime: &proc_macro2::TokenStream,
     visibility: &Visibility,
     key: &Type,
     id: &Ident,
@@ -13,17 +14,55 @@ pub(super) fn expand(
         #[derive(Clone, Debug, Default, PartialEq)]
         #[repr(transparent)]
         #visibility struct #fields(
-            contiguous_tree::KeyedFields<#key, #id, #storage<(#key, #id)>>,
+            #runtime::KeyedFields<#key, #id, #storage<(#key, #id)>>,
         );
 
-        impl std::ops::Deref for #fields {
-            type Target = contiguous_tree::KeyedFields<#key, #id, #storage<(#key, #id)>>;
+        impl #fields {
+            #visibility fn iter(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = (&#key, &#id)> + ExactSizeIterator {
+                self.0.iter()
+            }
 
-            fn deref(&self) -> &Self::Target { &self.0 }
-        }
+            #visibility fn keys(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = &#key> + ExactSizeIterator {
+                self.0.keys()
+            }
 
-        impl std::ops::DerefMut for #fields {
-            fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+            #visibility fn values(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = &#id> + ExactSizeIterator {
+                self.0.values()
+            }
+
+            #visibility fn get<Q>(&self, key: &Q) -> Option<#id>
+            where
+                #key: std::borrow::Borrow<Q>,
+                Q: Eq + ?Sized,
+            {
+                self.0.get(key)
+            }
+
+            #visibility fn contains_key<Q>(&self, key: &Q) -> bool
+            where
+                #key: std::borrow::Borrow<Q>,
+                Q: Eq + ?Sized,
+            {
+                self.0.contains_key(key)
+            }
+
+            #visibility fn duplicate_key(&self) -> Option<&#key> {
+                self.0.duplicate_key()
+            }
+
+            #visibility fn as_slice(&self) -> &[(#key, #id)] {
+                self.0.as_slice()
+            }
+
+            fn child_ids_mut(&mut self) -> &mut [(#key, #id)] {
+                self.0.make_mut_with(|storage| storage.make_mut())
+            }
         }
 
         impl FromIterator<(#key, #id)> for #fields {
@@ -45,7 +84,7 @@ pub(super) fn expand(
 
         impl<'fields> IntoIterator for &'fields #fields {
             type Item = (&'fields #key, &'fields #id);
-            type IntoIter = <&'fields contiguous_tree::KeyedFields<
+            type IntoIter = <&'fields #runtime::KeyedFields<
                 #key,
                 #id,
                 #storage<(#key, #id)>,

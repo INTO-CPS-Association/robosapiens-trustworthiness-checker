@@ -7,8 +7,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use trustworthiness_checker::core::StreamType;
-use trustworthiness_checker::lang::dsrv::parser::parse_str;
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
+use trustworthiness_checker::{DsrvSpecification, TypeCheckOptions};
 
 #[derive(Parser)]
 struct Args {
@@ -71,10 +70,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let spec_source = fs::read_to_string(&args.spec)
         .with_context(|| format!("failed to read {}", args.spec.display()))?;
-    let parser_input = spec_source.as_str();
-    let untyped = parse_str(parser_input)
+    let untyped = spec_source
+        .parse::<DsrvSpecification>()
         .map_err(|error| anyhow!("failed to parse {}: {error:?}", args.spec.display()))?;
-    let typed = type_check(untyped, false)
+    let typed = untyped
+        .type_check(TypeCheckOptions::STRICT)
         .map_err(|error| anyhow!("failed to type-check {}: {error:?}", args.spec.display()))?;
 
     let annotations = match args.annotations.as_deref() {

@@ -18,8 +18,6 @@ use crate::io::InputStreamFactory;
 use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
 use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
-use crate::lang::dsrv::parser::parse_str;
-use crate::lang::dsrv::type_checker::type_check;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
 use crate::runtime::builder::{CheckedValueConfig, SemiSyncValueConfig};
@@ -40,16 +38,20 @@ pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -
         .collect::<Vec<_>>()
         .join(" + ");
     let source = format!("in n: Int\nout result: Int\nresult = (\\x: Int -> {expression})(n)");
-    let parsed = parse_str(&source).expect("function binding fixture should parse");
     let runtime_expr = if checked {
-        type_check(parsed, false)
-            .expect("function binding fixture should type check")
+        source
+            .parse::<CheckedDsrvSpecification>()
+            .expect("function binding fixture should type-check")
             .var_expr(&VarName::new("result"))
             .unwrap()
             .expr()
             .clone()
     } else {
-        parsed.exprs()[&VarName::new("result")].clone()
+        source
+            .parse::<DsrvSpecification>()
+            .expect("function binding fixture should parse")
+            .var_expr(&VarName::new("result"))
+            .unwrap()
     };
     let crate::lang::dsrv::ast::ExprView::Apply(function, mut args) = runtime_expr.as_ref().view()
     else {
@@ -213,7 +215,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
 ) {
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
         ReconfSemiSyncRuntimeBuilder::new()
-            .parse_spec(parse_str)
+            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
             .executor(executor)
             .model(spec)
             .input_factory(input_factory)

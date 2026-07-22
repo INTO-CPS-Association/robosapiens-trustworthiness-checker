@@ -8,9 +8,9 @@ use petgraph::prelude::EdgeIndex;
 use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use tracing::debug;
 
+use crate::VarName;
 use crate::lang::dsrv::ast::{CheckedExpr, DsrvSpecification, Expr, ExprRef, ExprView};
 use crate::semantics::AsyncConfig;
-use crate::{Specification, VarName};
 
 pub trait DependencyGraphExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph;
@@ -114,7 +114,7 @@ impl DepGraph {
             .collect())
     }
 
-    pub fn from_sexprs<Expr>(exprs: BTreeMap<VarName, Expr>) -> Self
+    pub fn from_sexprs<Expr>(exprs: impl IntoIterator<Item = (VarName, Expr)>) -> Self
     where
         Expr: DependencyGraphExpr,
     {
@@ -401,10 +401,9 @@ mod tests {
     use crate::DsrvSpecification;
     use crate::dsrv_fixtures::*;
     use crate::lang::dsrv::ast::Expr;
-    use crate::lang::dsrv::parser::parse_str;
 
     fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
-        parse_str(input)
+        (*input).parse().map_err(anyhow::Error::from)
     }
 
     fn specs() -> BTreeMap<&'static str, &'static str> {
@@ -455,7 +454,7 @@ mod tests {
     fn test_graph_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.edge_count(), 0);
     }
@@ -464,7 +463,7 @@ mod tests {
     fn test_graph_index_past() {
         let mut spec = specs()["single_inp_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 1);
         let a = find_node(&graph, "a");
@@ -478,7 +477,7 @@ mod tests {
     fn test_graph_multi_out_past() {
         let mut spec = specs()["multi_out_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 2);
         let a = find_node(&graph, "a");
@@ -496,7 +495,7 @@ mod tests {
     fn test_graph_multi_dependent() {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 2);
         let a = find_node(&graph, "a");
@@ -514,7 +513,7 @@ mod tests {
     fn test_graph_multi_dependent_past() {
         let mut spec = specs()["multi_dependent_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 2);
         let a = find_node(&graph, "a");
@@ -532,7 +531,7 @@ mod tests {
     fn test_graph_multi_same_dependent() {
         let mut spec = specs()["multi_same_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 2);
         assert_eq!(graph.edge_count(), 2);
         let a = find_node(&graph, "a");
@@ -546,7 +545,7 @@ mod tests {
     fn test_graph_recursion() {
         let mut spec = specs()["recursion"];
         let spec = test_parser(&mut spec).unwrap();
-        let graph = DepGraph::from_sexprs(spec.exprs).graph;
+        let graph = DepGraph::from_sexprs(spec.exprs.into_entries()).graph;
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.edge_count(), 1);
         let z = find_node(&graph, "z");

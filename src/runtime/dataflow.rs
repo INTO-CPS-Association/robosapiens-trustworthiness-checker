@@ -268,8 +268,7 @@ mod tests {
     use crate::io::map;
     use crate::io::testing::LimitedNullOutputHandler;
     use crate::io::testing::ManualOutputHandler;
-    use crate::lang::dsrv::type_checker::{type_check, type_check_gradual};
-    use crate::{DsrvSpecification, Value, async_test, lang::dsrv::parser::parse_str};
+    use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, Value, async_test};
 
     use super::*;
 
@@ -279,8 +278,7 @@ mod tests {
         inputs: BTreeMap<VarName, Vec<Value>>,
         limit: usize,
     ) {
-        let spec_src = spec_src;
-        let spec = parse_str(spec_src).unwrap();
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -322,7 +320,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec = parse_str(spec_src).unwrap();
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -376,7 +374,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x: Int\nin y: Int\nout z: Int\nz = x + y";
-        let spec = type_check(parse_str(spec_src).unwrap(), false).unwrap();
+        let spec = spec_src.parse::<CheckedDsrvSpecification>().unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -405,7 +403,8 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
-        let spec = type_check_gradual(parse_str(spec_src).unwrap(), false).unwrap();
+        let spec =
+            CheckedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
         let output_handler = Box::new(LimitedNullOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -434,7 +433,8 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec = type_check_gradual(parse_str(spec_src).unwrap(), false).unwrap();
+        let spec =
+            CheckedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -475,7 +475,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 10";
-        let spec = parse_str(spec_src).unwrap();
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -515,7 +515,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec = parse_str(spec_src).unwrap();
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),
@@ -551,7 +551,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nin y\nout z\nz = 42";
-        let spec = parse_str(spec_src).unwrap();
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
             spec.output_vars().clone(),

@@ -1,6 +1,17 @@
-//! Borrowed cursors and allocation-free traversal iterators.
+//! Cursor identity and structural navigation contracts.
 
-use crate::{ArenaId, FoldNode, IdRange};
+use crate::{ArenaId, IdRange};
+
+/// Opaque identity of the storage allocation behind a tree cursor.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StorageIdentity(*const ());
+
+impl StorageIdentity {
+    /// Create an identity token for a stable storage reference.
+    pub fn for_ref<Storage>(storage: &Storage) -> Self {
+        Self(std::ptr::from_ref(storage).cast())
+    }
+}
 
 /// A copyable handle that resolves structural relationships within one tree.
 pub trait TreeCursor: Copy {
@@ -8,47 +19,13 @@ pub trait TreeCursor: Copy {
     type ChildIds: DoubleEndedIterator<Item = Self::Id> + ExactSizeIterator;
 
     fn id(self) -> Self::Id;
+    fn storage_identity(self) -> StorageIdentity;
     fn same_node(self, other: Self) -> bool;
 
     fn child_ids(self) -> Self::ChildIds;
     fn child(self, id: Self::Id) -> Self;
     fn subtree_ids(self) -> IdRange<Self::Id>;
 }
-
-/// Convenience traversal operations shared by every tree cursor.
-pub trait TreeCursorExt: TreeCursor {
-    fn children(self) -> Children<Self> {
-        Children::new(self)
-    }
-
-    fn postorder(self) -> Postorder<Self> {
-        Postorder::new(self)
-    }
-
-    fn fold<T>(self, fold: impl FnMut(FoldNode<'_, Self, T>) -> T) -> T {
-        crate::fold(self, fold)
-    }
-
-    fn try_fold<T, E>(
-        self,
-        fold: impl FnMut(FoldNode<'_, Self, T>) -> Result<T, E>,
-    ) -> Result<T, E> {
-        crate::try_fold(self, fold)
-    }
-
-    fn try_zip_with<E, Other>(
-        self,
-        other: Other,
-        zip: impl FnMut(Self, Other) -> Result<bool, E>,
-    ) -> Result<bool, E>
-    where
-        Other: TreeCursor,
-    {
-        try_zip_with(self, other, zip)
-    }
-}
-
-impl<Cursor: TreeCursor> TreeCursorExt for Cursor {}
 
 /// A cursor paired with copyable context that is retained while traversing children.
 #[derive(Clone, Copy)]
@@ -89,6 +66,10 @@ where
         self.cursor.id()
     }
 
+    fn storage_identity(self) -> StorageIdentity {
+        self.cursor.storage_identity()
+    }
+
     fn same_node(self, other: Self) -> bool {
         self.cursor.same_node(other.cursor)
     }
@@ -104,90 +85,4 @@ where
     fn subtree_ids(self) -> IdRange<Self::Id> {
         self.cursor.subtree_ids()
     }
-}
-
-pub struct Children<Cursor: TreeCursor> {
-    parent: Cursor,
-    ids: Cursor::ChildIds,
-}
-
-impl<Cursor: TreeCursor> Children<Cursor> {
-    pub fn new(parent: Cursor) -> Self {
-        Self {
-            parent,
-            ids: parent.child_ids(),
-        }
-    }
-}
-
-impl<Cursor: TreeCursor> Iterator for Children<Cursor> {
-    type Item = Cursor;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.ids.next().map(|id| self.parent.child(id))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.ids.size_hint()
-    }
-}
-
-impl<Cursor: TreeCursor> DoubleEndedIterator for Children<Cursor> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.ids.next_back().map(|id| self.parent.child(id))
-    }
-}
-
-impl<Cursor: TreeCursor> ExactSizeIterator for Children<Cursor> {}
-
-pub struct Postorder<Cursor: TreeCursor> {
-    root: Cursor,
-    ids: IdRange<Cursor::Id>,
-}
-
-impl<Cursor: TreeCursor> Postorder<Cursor> {
-    pub fn new(root: Cursor) -> Self {
-        Self {
-            root,
-            ids: root.subtree_ids(),
-        }
-    }
-}
-
-impl<Cursor: TreeCursor> Iterator for Postorder<Cursor> {
-    type Item = Cursor;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.ids.next().map(|id| self.root.child(id))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.ids.size_hint()
-    }
-}
-
-impl<Cursor: TreeCursor> ExactSizeIterator for Postorder<Cursor> {}
-
-pub fn try_zip_with<Left, Right, E>(
-    left: Left,
-    right: Right,
-    mut zip: impl FnMut(Left, Right) -> Result<bool, E>,
-) -> Result<bool, E>
-where
-    Left: TreeCursor,
-    Right: TreeCursor,
-{
-    let mut pending = vec![(left, right)];
-    while let Some((left, right)) = pending.pop() {
-        if !zip(left, right)? {
-            return Ok(false);
-        }
-        let left_children = Children::new(left);
-        let right_children = Children::new(right);
-        if left_children.len() != right_children.len() {
-            return Ok(false);
-        }
-        pending.extend(left_children.zip(right_children).rev());
-    }
-    Ok(true)
 }

@@ -241,17 +241,16 @@ pub fn extract_value_type(value: Value) -> TCType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsrv_spec;
     use crate::lang::dsrv::type_checker::{SemanticError, type_check_gradual};
     use std::collections::BTreeMap;
     use test_log::test;
 
     #[test]
     fn gradual_cycles_still_validate_runtime_scopes() {
-        let specification = dsrv_spec!(
-            "in source: Str\nout z\n\
-                          z = if true then z else dynamic(source: Int, {missing})"
-        );
+        let specification = "in source: Str\nout z\n\
+                             z = if true then z else dynamic(source: Int, {missing})"
+            .parse()
+            .unwrap();
 
         let errors = type_check_gradual(specification, false)
             .expect_err("an unresolved type cycle must not bypass AST validation");
@@ -265,7 +264,7 @@ mod tests {
 
     #[test]
     fn validation_respects_lambda_bindings() {
-        let specification = dsrv_spec!("out z: Int\nz = (\\x: Int -> x)(1)");
+        let specification = "out z: Int\nz = (\\x: Int -> x)(1)".parse().unwrap();
 
         validate_specification(&specification, false).expect("lambda parameter should be in scope");
     }
