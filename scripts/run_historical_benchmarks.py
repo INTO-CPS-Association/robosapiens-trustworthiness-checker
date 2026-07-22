@@ -76,12 +76,18 @@ def build(repo: Path, target: str) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns).resolve()
 
 
-def run(executable: Path, cpu: str, benchmark_filter: str, repo: Path) -> None:
-    subprocess.run(
-        ["taskset", "-c", cpu, str(executable), benchmark_filter, "--bench"],
-        cwd=repo,
-        check=True,
-    )
+def run(executable: Path, cpu: str, benchmark_filter: str, repo: Path) -> bool:
+    try:
+        subprocess.run(
+            ["taskset", "-c", cpu, str(executable), benchmark_filter, "--bench"],
+            cwd=repo,
+            check=True,
+            timeout=600,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        print(f"historical benchmark failed: {benchmark_filter}: {error}")
+        return False
+    return True
 
 
 def read_results(repo: Path, expected: set[str]) -> list[dict[str, Any]]:
@@ -118,29 +124,41 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     requested = set(args.benchmarks.split(","))
-    targets: dict[str, list[str]] = {}
-    expected = set()
+    targets: dict[str, list[tuple[str, set[str]]]] = {}
     for request in requested:
         if request == "pipeline":
             targets.setdefault("backfill_compilation_phases", []).append(
-                "compilation_phases/"
+                ("compilation_phases/", set(PIPELINE))
             )
-            expected.update(PIPELINE)
         else:
             target, name = EXPECTED[request]
-            targets.setdefault(target, []).append(name)
-            expected.add(name)
+            targets.setdefault(target, []).append((name, {name}))
 
     cpu = p_core()
+    expected = set()
+    failures = []
     for target, filters in targets.items():
-        executable = build(args.repo, target)
-        for benchmark_filter in filters:
-            run(executable, cpu, benchmark_filter, args.repo)
+        try:
+            executable = build(args.repo, target)
+        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            print(f"historical benchmark target failed to build: {target}: {error}")
+            failures.extend(benchmark_filter for benchmark_filter, _names in filters)
+            continue
+        for benchmark_filter, names in filters:
+            if run(executable, cpu, benchmark_filter, args.repo):
+                expected.update(names)
+            else:
+                failures.append(benchmark_filter)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(
-            {"sha": args.sha, "benches": read_results(args.repo, expected)}, indent=2
+            {
+                "sha": args.sha,
+                "benches": read_results(args.repo, expected),
+                "failures": failures,
+            },
+            indent=2,
         )
         + "\n"
     )

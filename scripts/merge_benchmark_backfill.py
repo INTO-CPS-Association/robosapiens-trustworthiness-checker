@@ -28,8 +28,12 @@ def main() -> None:
     entries = next(iter(data["entries"].values()))
     runs = {run["commit"]["id"]: run for run in entries}
     added = 0
+    failures = []
     for result_path in sorted(args.results.glob("**/*.json")):
         result = json.loads(result_path.read_text())
+        failures.extend(
+            f"{result['sha']}:{benchmark}" for benchmark in result.get("failures", [])
+        )
         run = runs.get(result["sha"])
         if run is None:
             raise ValueError(f"no historical run for {result['sha']}")
@@ -43,6 +47,9 @@ def main() -> None:
 
     args.data.write_text(PREFIX + json.dumps(data, indent=2) + "\n")
     print(f"Added {added} historical benchmark measurements")
+    if failures:
+        print(f"Skipped {len(failures)} failed historical benchmarks:")
+        print("\n".join(failures))
 
 
 if __name__ == "__main__":
