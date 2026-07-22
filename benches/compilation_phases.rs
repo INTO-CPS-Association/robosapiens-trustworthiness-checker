@@ -134,6 +134,18 @@ fn compilation_phases(c: &mut Criterion) {
                 })
             },
         );
+        group.bench_with_input(
+            BenchmarkId::new("parse_typecheck_dependency_compile_typed", assignments),
+            &source,
+            |b, source| {
+                b.iter(|| {
+                    let parsed = parse_str(black_box(source)).unwrap();
+                    let typed = type_check(parsed, false).unwrap();
+                    black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
+                    black_box(DataflowMonitor::try_compile_checked(typed).unwrap())
+                })
+            },
+        );
     }
     group.finish();
 

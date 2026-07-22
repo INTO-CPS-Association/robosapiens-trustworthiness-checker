@@ -140,6 +140,23 @@ pub async fn monitor_outputs_untyped_dataflow_limited(
     .await;
 }
 
+pub async fn monitor_outputs_untyped_semisync_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_stream: InputStream<Value>,
+    limit: usize,
+) {
+    monitor_runtime_outputs(
+        RuntimeSpec::SemiSync,
+        Semantics::Untimed,
+        executor,
+        spec,
+        input_stream,
+        Some(limit),
+    )
+    .await;
+}
+
 pub async fn monitor_outputs_untyped_dataflow(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,

@@ -10,6 +10,7 @@ use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
@@ -60,6 +61,20 @@ fn from_elem(c: &mut Criterion) {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async(
+                        benchmark_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("maple_sequence_untyped_semisync", size),
+            &(&spec),
+            |b, &spec| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_little(
                         benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

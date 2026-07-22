@@ -6,15 +6,19 @@ const IMPORTANT_SECTIONS = [
     cards: [
       {
         title: "MAPLE sequence — 25,000 inputs",
-        description: "End-to-end execution of the typed MAPLE sequence monitor.",
+        description: "End-to-end execution of the MAPLE sequence monitor.",
         series: [
           {
             label: "Dataflow",
-            name: "maple_sequence/maple_sequence_typed_dataflow/25000",
+            name: "maple_sequence/maple_sequence_untyped_dataflow/25000",
+          },
+          {
+            label: "SemiSync",
+            name: "maple_sequence/maple_sequence_untyped_semisync/25000",
           },
           {
             label: "Async stream runtime",
-            name: "maple_sequence/maple_sequence_typed_async/25000",
+            name: "maple_sequence/maple_sequence_untyped_async/25000",
           },
         ],
       },
@@ -28,8 +32,31 @@ const IMPORTANT_SECTIONS = [
             name: "dyn_paper/dyn_paper_50_dataflow/100000",
           },
           {
+            label: "SemiSync",
+            name: "dyn_paper/dyn_paper_50_semisync/100000",
+          },
+          {
             label: "Async stream runtime",
             name: "dyn_paper/dyn_paper_50/100000",
+          },
+        ],
+      },
+      {
+        title: "Deferred expression — 25,000 inputs",
+        description:
+          "End-to-end evaluation of an expression deferred until runtime, comparing all three local execution engines.",
+        series: [
+          {
+            label: "Dataflow",
+            name: "dup_defer/dup_defer_untyped_dataflow/25000",
+          },
+          {
+            label: "SemiSync",
+            name: "dup_defer/dup_defer_untyped_semisync/25000",
+          },
+          {
+            label: "Async stream runtime",
+            name: "dup_defer/dup_defer_untyped_async/25000",
           },
         ],
       },
@@ -83,7 +110,7 @@ const IMPORTANT_SECTIONS = [
         fullWidth: true,
         title: "Typed compilation pipeline — 1,024 assignments",
         description:
-          "Stacked end-to-end compilation time. Remaining dataflow compilation is derived from the complete pipeline total after subtracting the independently measured preceding phases.",
+          "Stacked staged compilation time. The total explicitly runs parsing, type checking, dependency graph construction and dataflow compilation; the remaining compilation segment is derived after subtracting the preceding phases.",
         phases: [
           {
             label: "LALR parsing",
@@ -100,7 +127,7 @@ const IMPORTANT_SECTIONS = [
         ],
         total: {
           label: "Complete typed pipeline",
-          name: "compilation_phases/parse_typecheck_compile_typed/1024",
+          name: "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
         },
       },
     ],

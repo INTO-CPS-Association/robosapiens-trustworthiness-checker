@@ -2,6 +2,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_semisync_limited;
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
@@ -98,6 +99,21 @@ fn from_elem(c: &mut Criterion) {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
                     monitor_outputs_untyped_async_limited(
+                        benchmark_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                        size,
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(format!("dyn_paper_{}_semisync", percent), size),
+            &(&spec),
+            |b, &spec| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_semisync_limited(
                         benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

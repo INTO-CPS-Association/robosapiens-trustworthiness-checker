@@ -1,0 +1,90 @@
+name: Backfill benchmark history
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-benchmarks
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v5
+        with:
+          ref: benchmark-data
+          path: benchmark-data
+      - id: matrix
+        run: echo "matrix=$(python scripts/benchmark_backfill_matrix.py benchmark-data/benchmarks/data.js)" >> "$GITHUB_OUTPUT"
+
+  benchmark:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: tools
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.sha }}
+          path: historical
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev cmake build-essential
+      - name: Backport benchmark definitions
+        run: python tools/scripts/prepare_historical_benchmarks.py historical --benchmarks '${{ matrix.benchmarks }}'
+      - name: Run pinned historical benchmarks
+        run: |
+          python tools/scripts/run_historical_benchmarks.py historical \
+            --benchmarks '${{ matrix.benchmarks }}' \
+            --sha '${{ matrix.sha }}' \
+            --output backfill-result/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-backfill-${{ matrix.sha }}
+          path: backfill-result/result.json
+          if-no-files-found: error
+
+  merge:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: tools
+      - uses: actions/checkout@v5
+        with:
+          ref: benchmark-data
+          path: benchmark-data
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-backfill-*
+          path: results
+          merge-multiple: false
+      - name: Merge and validate history
+        run: |
+          python tools/scripts/merge_benchmark_backfill.py benchmark-data/benchmarks/data.js results
+          python tools/scripts/validate_benchmark_data.py benchmark-data/benchmarks/data.js
+      - name: Push recovered measurements
+        working-directory: benchmark-data
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add benchmarks/data.js
+          git diff --cached --quiet || git commit -m 'Backfill dashboard benchmarks'
+          git push origin benchmark-data
