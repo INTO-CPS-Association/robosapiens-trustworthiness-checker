@@ -947,8 +947,9 @@ pub(super) fn expand(
         impl #builder {
             #schema_visibility fn with_capacity(capacity: usize) -> Self {
                 Self {
-                    builder: #runtime::ForestBuilder::new(
+                    builder: #runtime::ForestBuilder::with_capacity(
                         #arena::with_capacity(capacity),
+                        capacity,
                     ),
                 }
             }

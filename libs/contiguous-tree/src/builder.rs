@@ -68,6 +68,11 @@ where
     Node: TreeNode<Storage::Id>,
 {
     pub fn new(storage: Storage) -> Self {
+        Self::with_capacity(storage, 0)
+    }
+
+    /// Create a builder with space for at least `root_capacity` frontier roots.
+    pub fn with_capacity(storage: Storage, root_capacity: usize) -> Self {
         assert_eq!(
             storage.node_count(),
             0,
@@ -75,7 +80,7 @@ where
         );
         Self {
             storage,
-            roots: Vec::new(),
+            roots: Vec::with_capacity(root_capacity),
             node: PhantomData,
         }
     }
@@ -178,22 +183,30 @@ where
         roots: impl IntoIterator<Item = Storage::Id>,
     ) -> Result<Forest<Storage>, ForestError> {
         let roots = roots.into_iter().collect::<Box<[_]>>();
-        let same_roots = if roots.len() == self.roots.len() {
-            let mut requested = roots.iter().map(|root| root.index()).collect::<Vec<_>>();
-            let mut constructed = self
-                .roots
+        let same_roots_in_order = roots.len() == self.roots.len()
+            && roots
                 .iter()
-                .map(|root| root.index())
-                .collect::<Vec<_>>();
-            requested.sort_unstable();
-            constructed.sort_unstable();
-            requested == constructed
-        } else {
-            false
-        };
+                .zip(&self.roots)
+                .all(|(requested, constructed)| requested.index() == constructed.index());
 
-        if !same_roots {
-            self.storage.validate_forest(&roots)?;
+        if !same_roots_in_order {
+            let same_roots_unordered = if roots.len() == self.roots.len() {
+                let mut requested = roots.iter().map(|root| root.index()).collect::<Vec<_>>();
+                let mut constructed = self
+                    .roots
+                    .iter()
+                    .map(|root| root.index())
+                    .collect::<Vec<_>>();
+                requested.sort_unstable();
+                constructed.sort_unstable();
+                requested == constructed
+            } else {
+                false
+            };
+
+            if !same_roots_unordered {
+                self.storage.validate_forest(&roots)?;
+            }
         }
         Ok(Forest::from_validated_parts(self.storage, roots))
     }

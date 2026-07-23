@@ -18,14 +18,15 @@ MakeSpanned<T>: ExprId = {
 // Tokens
 // -----------------------------------------------------------------------------
 match {
-    r"\s*" => { }, // Ignore whitespace
+    r"[ \t\r\n\x0B\x0C]+" => { }, // Ignore ASCII whitespace
     r"//[^\n\r]*[\n\r]*" => { }, // Ignore `// comments`
     r#"\(\*[^*]*\*+(?:[^\)*][^*]*\*+)*\)"# => { },  // Ignore `(* comments *)`
 } else {
     _
 }
 
-Ident: VarName = <s:r"[A-Za-z_]\w*"> => VarName::from(s);
+RawIdent: &'input str = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => s;
+Ident: VarName = <s:RawIdent> => VarName::from(s);
 Uint: u64 = <s:r"[0-9]+"> => u64::from_str(s).unwrap();
 // Negative numbers handled in unary minus - but need a separate case to not accept
 // numbers too large for i64 here.
@@ -37,11 +38,11 @@ Bool: bool = {
 };
 String: EcoString = <s:r#""[^\\"\n\r]*(?:\\[tn'"\\][^\\"\n\r]*)*""#> => s[1..s.len()-1].into();
 VarOrNodeName: VarOrNodeName = {
-    Ident => VarOrNodeName((<>).to_string()),
+    RawIdent => VarOrNodeName((<>).to_owned()),
     String => VarOrNodeName((<>).to_string()),
 };
 PlacementNode: NodeName = {
-    Ident => NodeName::new((<>).to_string()),
+    RawIdent => NodeName::new((<>).to_owned()),
     String => NodeName::new((<>).to_string()),
 };
 
@@ -75,7 +76,7 @@ ExprKVPair: (EcoString, ExprId) = {
 };
 
 ObjectLiteralKey: EcoString = {
-    <id: Ident> => EcoString::from(id.name()),
+    <id: RawIdent> => EcoString::from(id),
     String => <>,
 };
 
@@ -260,7 +261,7 @@ AtomBase: ExprId = {
 
 
 FieldName: EcoString = {
-    <field: Ident> => field.name().into(),
+    <field: RawIdent> => field.into(),
     <idx: Uint> => idx.to_string().into(),
 }
 
@@ -402,7 +403,7 @@ LambdaExpr: ExprId = {
 // -----------------------------------------------------------------------------
 
 StructTypeField: (EcoString, StreamType) = {
-    <name: Ident> ":" <typ: StreamTyp> => (name.name().into(), typ),
+    <name: RawIdent> ":" <typ: StreamTyp> => (name.into(), typ),
 }
 
 StructPermissiveFields: EcoVec<(EcoString, StreamType)> = {
@@ -483,7 +484,7 @@ Assignment: Declaration = {
    <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => Declaration::Assignment(var, expr, Span::new(l as u32, r as u32))
 }
 
-pub Declaration: Declaration = {
+Declaration: Declaration = {
     InputDecl,
     OutputDecl,
     AuxDecl,

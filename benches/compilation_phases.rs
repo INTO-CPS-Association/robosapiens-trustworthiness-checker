@@ -56,6 +56,15 @@ fn localisation_chain_input(assignments: usize) -> String {
     source
 }
 
+fn expression_input(operators: usize) -> String {
+    let mut expression = String::from("input");
+    for index in 0..operators {
+        expression.push_str(" + ");
+        expression.push_str(&index.to_string());
+    }
+    expression
+}
+
 fn lexical_binding_input(bindings: usize) -> String {
     assert!(bindings > 0);
     let params = (0..bindings)
@@ -92,9 +101,9 @@ fn compilation_phases(c: &mut Criterion) {
         DataflowMonitor::try_compile_checked(typed.clone())
             .expect("benchmark input should compile typed");
 
-        group.throughput(Throughput::Elements(assignments as u64));
+        group.throughput(Throughput::Bytes(source.len() as u64));
         group.bench_with_input(
-            BenchmarkId::new("lalr_parse", assignments),
+            BenchmarkId::new("parse_and_validate_specification", assignments),
             &source,
             |b, source| b.iter(|| black_box(parse_str(black_box(source)).unwrap())),
         );
@@ -171,6 +180,22 @@ fn compilation_phases(c: &mut Criterion) {
                     black_box(DataflowMonitor::try_compile_checked(typed).unwrap())
                 })
             },
+        );
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("expression_parsing");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+    for operators in [1, 32, 256] {
+        let source = expression_input(operators);
+        parse_expr(&source).expect("benchmark expression should parse");
+        group.throughput(Throughput::Bytes(source.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::new("parse_and_validate_expression", operators),
+            &source,
+            |b, source| b.iter(|| black_box(parse_expr(black_box(source)).unwrap())),
         );
     }
     group.finish();

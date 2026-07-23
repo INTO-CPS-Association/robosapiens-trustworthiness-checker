@@ -74,30 +74,34 @@ impl UnvalidatedDsrvSpecification {
     }
 
     pub(crate) fn validate(self) -> Result<DsrvSpecification, DsrvAstError> {
-        let mut first_assignments = BTreeMap::new();
-        for assignment in &self.assignments {
-            if let Some(first) = first_assignments.insert(&assignment.name, assignment.span) {
+        let names = self
+            .assignments
+            .iter()
+            .map(|assignment| assignment.name.clone());
+        let exprs = match ExprForestMap::from_unsorted(names, self.expressions) {
+            Ok(exprs) => exprs,
+            Err(contiguous_tree::ForestMapError::DuplicateKey {
+                first_index,
+                duplicate_index,
+            }) => {
+                let first = &self.assignments[first_index];
+                let duplicate = &self.assignments[duplicate_index];
                 return Err(DsrvAstError::DuplicateAssignment {
-                    variable: assignment.name.clone(),
-                    first,
-                    duplicate: assignment.span,
+                    variable: duplicate.name.clone(),
+                    first: first.span,
+                    duplicate: duplicate.span,
                 });
             }
-        }
+            Err(error) => return Err(DsrvAstError::InvalidExpressionMap(error)),
+        };
 
-        if let Some(field) = self
-            .expressions
+        if let Some(field) = exprs
             .nodes()
             .find_map(|expression| expression.kind().duplicate_key().cloned())
         {
             return Err(DsrvAstError::DuplicateExpressionField { field });
         }
 
-        let names = self
-            .assignments
-            .into_iter()
-            .map(|assignment| assignment.name);
-        let exprs = ExprForestMap::from_unsorted(names, self.expressions)?;
         Ok(DsrvSpecification::from_expression_forest(
             self.input_vars,
             self.output_vars,

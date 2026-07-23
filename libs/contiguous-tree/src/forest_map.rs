@@ -98,10 +98,27 @@ impl<Key: Ord, Storage: TreeStorage> ForestMap<Key, Storage> {
             .map(|(index, (key, root))| (key, root, index))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.2.cmp(&right.2)));
-        if let Some(pair) = entries.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+        let mut earliest_duplicate = None;
+        let mut start = 0;
+        while start < entries.len() {
+            let mut end = start + 1;
+            while end < entries.len() && entries[start].0 == entries[end].0 {
+                end += 1;
+            }
+            if end - start > 1 {
+                let candidate = (entries[start].2, entries[start + 1].2);
+                if earliest_duplicate
+                    .is_none_or(|(_, duplicate_index)| candidate.1 < duplicate_index)
+                {
+                    earliest_duplicate = Some(candidate);
+                }
+            }
+            start = end;
+        }
+        if let Some((first_index, duplicate_index)) = earliest_duplicate {
             return Err(ForestMapError::DuplicateKey {
-                first_index: pair[0].2,
-                duplicate_index: pair[1].2,
+                first_index,
+                duplicate_index,
             });
         }
 

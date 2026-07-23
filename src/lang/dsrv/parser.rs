@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::LazyLock;
 
 use anyhow::{Error, anyhow};
 use ecow::EcoVec;
@@ -12,9 +13,10 @@ fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, 
     format!("{result:?}")
 }
 
-#[cfg(test)]
-use self::lalr::DeclarationParser;
 use self::lalr::{DeclarationsParser, ExprParser};
+
+static EXPR_PARSER: LazyLock<ExprParser> = LazyLock::new(ExprParser::new);
+static DECLARATIONS_PARSER: LazyLock<DeclarationsParser> = LazyLock::new(DeclarationsParser::new);
 
 use crate::{
     DsrvSpecification,
@@ -49,7 +51,7 @@ pub(crate) enum Declaration {
 
 pub fn parse_expr(input: &str) -> Result<Expr, Error> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let root = ExprParser::new()
+    let root = EXPR_PARSER
         .parse(&mut builder, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
     let expr = builder
@@ -64,9 +66,16 @@ pub fn parse_expr(input: &str) -> Result<Expr, Error> {
 #[cfg(test)]
 fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let declaration = DeclarationParser::new()
+    let declarations = DECLARATIONS_PARSER
         .parse(&mut builder, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
+    if declarations.len() != 1 {
+        return Err(anyhow!(
+            "expected exactly one declaration, got {}",
+            declarations.len()
+        ));
+    }
+    let declaration = declarations.into_iter().next().unwrap();
     let expression = match &declaration {
         Declaration::Assignment(_, root, _) => {
             let expression = builder
@@ -93,9 +102,9 @@ pub(crate) fn create_dsrv_spec(
 ) -> Result<DsrvSpecification, DsrvAstError> {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
-    let mut aux_vars = Vec::new();
-    let mut assignments = Vec::new();
-    let mut roots = Vec::new();
+    let mut aux_vars = Vec::with_capacity(stmts.len());
+    let mut assignments = Vec::with_capacity(stmts.len());
+    let mut roots = Vec::with_capacity(stmts.len());
     let mut type_annotations = BTreeMap::new();
 
     for stmt in stmts {
@@ -167,8 +176,8 @@ fn line_col(input: &str, byte: usize) -> LineCol {
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let stmts = DeclarationsParser::new()
-        .parse(&mut builder, &input)
+    let stmts = DECLARATIONS_PARSER
+        .parse(&mut builder, input)
         .map_err(|e| {
             let err_fixed = e.map_location(|byte| line_col(&input, byte));
             DsrvParseError::Syntax(
@@ -968,6 +977,33 @@ mod tests {
     }
 
     #[test]
+    fn identifiers_and_whitespace_are_ascii() {
+        assert!(parse_expr("ascii_name_1").is_ok());
+        assert!(parse_expr("xé").is_err());
+        assert!(parse_expr("x\u{a0}+ 1").is_err());
+        assert_eq!(
+            presult_strip_span(&parse_expr("x\x0b+\x0c1").unwrap()),
+            "Ok(BinOp(Var(VarName::new(\"x\")), Val(Int(1)), Add))"
+        );
+    }
+
+    #[test]
+    fn strings_and_comments_retain_unicode_support() {
+        assert_eq!(
+            presult_strip_span(&parse_expr("\"Zażółć gęślą jaźń 🤖\"").unwrap()),
+            "Ok(Val(Str(\"Zażółć gęślą jaźń 🤖\")))"
+        );
+        assert_eq!(
+            presult_strip_span(&parse_expr("1 // komentarz 日本語 🤖\n + 2").unwrap()),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Add))"
+        );
+        assert_eq!(
+            presult_strip_span(&parse_expr("1 (* комментарий 🤖 *) + 2").unwrap()),
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Add))"
+        );
+    }
+
+    #[test]
     fn duplicate_assignments_are_ast_validation_errors() {
         let source = "out x\nx = 1\nx = 2";
         let error = parse_str(source).unwrap_err();
@@ -983,6 +1019,24 @@ mod tests {
         assert_eq!(variable, VarName::new("x"));
         assert_eq!(&source[first.to_range()], "x = 1");
         assert_eq!(&source[duplicate.to_range()], "x = 2");
+    }
+
+    #[test]
+    fn duplicate_assignment_errors_follow_source_order() {
+        let source = "out z\nout a\nz = 0\na = 0\nz = 1\na = 1";
+        let error = parse_str(source).unwrap_err();
+        let DsrvParseError::Ast(DsrvAstError::DuplicateAssignment {
+            variable,
+            first,
+            duplicate,
+        }) = error
+        else {
+            panic!("expected a duplicate-assignment AST error, got {error:?}");
+        };
+
+        assert_eq!(variable, VarName::new("z"));
+        assert_eq!(&source[first.to_range()], "z = 0");
+        assert_eq!(&source[duplicate.to_range()], "z = 1");
     }
 
     #[test]

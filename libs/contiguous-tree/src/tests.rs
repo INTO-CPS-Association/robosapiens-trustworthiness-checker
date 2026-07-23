@@ -302,6 +302,16 @@ fn forest_builder_enforces_the_root_frontier() {
 }
 
 #[test]
+fn forest_builder_with_capacity_accepts_reordered_frontier_roots() {
+    let mut builder = ForestBuilder::with_capacity(TestStorage::default(), 2);
+    let first = builder.try_alloc(TestNode(vec![])).unwrap();
+    let second = builder.try_alloc(TestNode(vec![])).unwrap();
+
+    let forest = builder.finish([second, first]).unwrap();
+    assert_eq!(forest.root_ids(), &[second, first]);
+}
+
+#[test]
 fn arena_assigns_dense_ids_and_iterates_in_allocation_order() {
     let mut arena: Arena<TestId, _> = Arena::with_capacity(2);
     let first = arena.push_raw("first");
@@ -556,6 +566,21 @@ fn forest_maps_require_sorted_unique_keys_and_preserve_associations() {
         ForestMapError::DuplicateKey {
             first_index: 0,
             duplicate_index: 1,
+        }
+    );
+
+    let mut arena = Arena::default();
+    let roots = (0..4)
+        .map(|_| arena.push_tree(TestNode(vec![])))
+        .collect::<Vec<_>>();
+    let forest = Forest::new(TestStorage(arena), roots).unwrap();
+    assert_eq!(
+        ForestMap::from_unsorted(["z", "a", "z", "a"], forest)
+            .err()
+            .unwrap(),
+        ForestMapError::DuplicateKey {
+            first_index: 0,
+            duplicate_index: 2,
         }
     );
 }
