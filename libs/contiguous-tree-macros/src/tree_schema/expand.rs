@@ -461,7 +461,7 @@ pub(super) fn expand(
                     let capacity = children.iter()
                         .map(|child| #runtime::TreeCursorExt::postorder(child.as_ref()).len())
                         .sum::<usize>() + 1;
-                    let mut builder = #builder::with_capacity(capacity);
+                    let mut builder = #builder::with_capacities(capacity, children.len());
                     let ids = children
                         .iter()
                         .map(|child| builder.clone_subtree(child.as_ref()))
@@ -836,7 +836,7 @@ pub(super) fn expand(
                     .iter()
                     .map(|(_, root)| #runtime::TreeCursorExt::subtree_len(*root))
                     .sum();
-                let mut builder = #builder::with_capacity(capacity);
+                let mut builder = #builder::with_capacities(capacity, selected.len());
                 let mut keys = Vec::with_capacity(selected.len());
                 let mut roots = Vec::with_capacity(selected.len());
                 for (key, root) in selected {
@@ -867,7 +867,7 @@ pub(super) fn expand(
                     .iter()
                     .map(|(_, root)| #runtime::TreeCursorExt::subtree_len(*root))
                     .sum();
-                let mut builder = #builder::with_capacity(capacity);
+                let mut builder = #builder::with_capacities(capacity, selected.len());
                 let mut keys = Vec::with_capacity(selected.len());
                 let mut roots = Vec::with_capacity(selected.len());
                 for (key, root) in selected {
@@ -945,11 +945,18 @@ pub(super) fn expand(
         }
 
         impl #builder {
-            #schema_visibility fn with_capacity(capacity: usize) -> Self {
+            #schema_visibility fn with_capacity(node_capacity: usize) -> Self {
+                Self::with_capacities(node_capacity, 0)
+            }
+
+            #schema_visibility fn with_capacities(
+                node_capacity: usize,
+                root_capacity: usize,
+            ) -> Self {
                 Self {
                     builder: #runtime::ForestBuilder::with_capacity(
-                        #arena::with_capacity(capacity),
-                        capacity,
+                        #arena::with_capacity(node_capacity),
+                        root_capacity,
                     ),
                 }
             }

@@ -77,7 +77,7 @@ mod tests {
             result
         );
         let typed_spec = result.unwrap();
-        let te = typed_spec.var_expr(&var).unwrap();
+        let te = typed_spec.var_expr_ref(&var).unwrap();
         assert_eq!(te.typ(), &TCType::list(TCType::Int));
     }
 
@@ -138,16 +138,16 @@ mod tests {
         let checked = type_check(spec, false).expect("both contextual types are valid");
 
         assert_eq!(
-            checked.var_expr(&int_output).unwrap().typ(),
+            checked.var_expr_ref(&int_output).unwrap().typ(),
             &TCType::list(TCType::Int)
         );
         assert_eq!(
-            checked.var_expr(&bool_output).unwrap().typ(),
+            checked.var_expr_ref(&bool_output).unwrap().typ(),
             &TCType::list(TCType::Bool)
         );
         assert_ne!(
-            checked.var_expr(&int_output).unwrap().as_ref().expr().id(),
-            checked.var_expr(&bool_output).unwrap().as_ref().expr().id()
+            checked.var_expr_ref(&int_output).unwrap().expr().id(),
+            checked.var_expr_ref(&bool_output).unwrap().expr().id()
         );
     }
 
@@ -270,7 +270,10 @@ mod tests {
         let original: DsrvSpecification = "out z: Int\nz = 1".parse().unwrap();
         let checked = type_check(original.clone(), false).unwrap();
 
-        assert_eq!(checked.var_expr(&"z".into()).unwrap().typ(), &TCType::Int);
+        assert_eq!(
+            checked.var_expr_ref(&"z".into()).unwrap().typ(),
+            &TCType::Int
+        );
 
         let mut contradictory = original;
         contradictory

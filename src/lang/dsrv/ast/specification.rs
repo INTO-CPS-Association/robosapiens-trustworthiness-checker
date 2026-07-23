@@ -7,7 +7,7 @@ use std::rc::Rc;
 use contiguous_tree::TreeCursorExt;
 
 use super::checked::{CheckedTypes, ExprTypes};
-use super::{CheckedExpr, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
+use super::{CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::span::Span;
 
@@ -154,6 +154,13 @@ impl CheckedDsrvSpecification {
         &self.spec
     }
 
+    pub fn var_expr_ref(&self, var: &VarName) -> Option<CheckedExprRef<'_>> {
+        self.spec
+            .exprs
+            .get(var)
+            .map(|expr| expr.with_checked_types(&self.checked))
+    }
+
     pub fn var_expr(&self, var: &VarName) -> Option<CheckedExpr> {
         self.spec
             .exprs
@@ -249,7 +256,7 @@ impl DsrvSpecification {
         // Copy each root independently so a root cannot accidentally include unrelated nodes
         // from its original expression.
         let capacity = exprs.values().map(|expr| expr.as_ref().subtree_len()).sum();
-        let mut builder = ExprBuilder::with_capacity(capacity);
+        let mut builder = ExprBuilder::with_capacities(capacity, exprs.len());
         let mut names = Vec::with_capacity(exprs.len());
         let mut roots = Vec::with_capacity(exprs.len());
         for (name, expression) in &exprs {

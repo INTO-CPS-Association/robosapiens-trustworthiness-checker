@@ -115,7 +115,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            specification.var_expr(&VarName::new("y")).unwrap().typ(),
+            specification
+                .var_expr_ref(&VarName::new("y"))
+                .unwrap()
+                .typ(),
             &TCType::Int
         );
         assert!(
@@ -134,7 +137,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            specification.var_expr(&VarName::new("y")).unwrap().typ(),
+            specification
+                .var_expr_ref(&VarName::new("y"))
+                .unwrap()
+                .typ(),
             &TCType::Int
         );
     }

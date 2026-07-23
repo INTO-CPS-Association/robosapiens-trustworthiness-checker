@@ -110,7 +110,7 @@ impl<'arena> ExprRef<'arena> {
 
 impl Expr {
     pub(crate) fn value_with_span(value: Value, span: Span) -> Self {
-        let mut builder = ExprBuilder::with_capacity(1);
+        let mut builder = ExprBuilder::with_capacities(1, 1);
         let root = builder.alloc(ExprKind::Val(value), span);
         builder
             .finish(root)

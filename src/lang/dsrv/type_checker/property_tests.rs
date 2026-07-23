@@ -254,9 +254,9 @@ proptest! {
         let gradual = type_check_gradual(spec, false).expect("type-directed gradual program must type check");
         let output = VarName::new("result");
         let expected = TCType::from_stream_type(&case.expected);
-        let output_expr = strict.var_expr(&output).unwrap();
+        let output_expr = strict.var_expr_ref(&output).unwrap();
         prop_assert_eq!(output_expr.typ(), &expected);
-        let gradual_output = gradual.var_expr(&output).unwrap();
+        let gradual_output = gradual.var_expr_ref(&output).unwrap();
         prop_assert_eq!(gradual_output.typ(), &expected);
     }
 
@@ -264,7 +264,7 @@ proptest! {
     fn gradual_infers_unannotated_type_directed_programs(case in arb_type_directed_case()) {
         let typed = type_check_gradual(specification(&case, false), false)
             .expect("gradual checker must infer a type-directed expression");
-        let result = typed.var_expr(&VarName::new("result")).unwrap();
+        let result = typed.var_expr_ref(&VarName::new("result")).unwrap();
         let actual = result.typ().clone();
         if !case.may_widen_without_annotation {
             prop_assert_eq!(actual, TCType::from_stream_type(&case.expected));
@@ -307,8 +307,8 @@ proptest! {
         );
         let typed = type_check_gradual(spec, false)
             .expect("gradual inference must resolve a forward dependency chain");
-        let source_type = typed.var_expr(&source).unwrap().typ().clone();
-        let consumer_type = typed.var_expr(&consumer).unwrap().typ().clone();
+        let source_type = typed.var_expr_ref(&source).unwrap().typ().clone();
+        let consumer_type = typed.var_expr_ref(&consumer).unwrap().typ().clone();
         prop_assert_eq!(consumer_type, source_type.clone());
         if !case.may_widen_without_annotation {
             prop_assert_eq!(source_type, TCType::from_stream_type(&case.expected));

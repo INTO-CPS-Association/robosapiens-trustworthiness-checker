@@ -206,7 +206,7 @@ mod tests {
 
         let typed = type_check_gradual(spec, false).expect("gradual type check should infer y");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
-        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
+        assert_eq!(typed.var_expr_ref(&y).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
             type_check_gradual(spec, false).expect("gradual type check should accept untyped x");
         assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
-        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
+        assert_eq!(typed.var_expr_ref(&y).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -323,8 +323,8 @@ mod tests {
         let typed = type_check_gradual(spec, false).expect("dependency chain should be inferred");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Int));
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Int));
-        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Int);
-        assert_eq!(typed.var_expr(&z).unwrap().typ(), &TCType::Int);
+        assert_eq!(typed.var_expr_ref(&y).unwrap().typ(), &TCType::Int);
+        assert_eq!(typed.var_expr_ref(&z).unwrap().typ(), &TCType::Int);
     }
 
     #[test]
@@ -353,10 +353,13 @@ mod tests {
             Some(&StreamType::Map(Box::new(StreamType::Any)))
         );
         assert_eq!(
-            typed.var_expr(&xs).unwrap().typ(),
+            typed.var_expr_ref(&xs).unwrap().typ(),
             &TCType::list(TCType::Any)
         );
-        assert_eq!(typed.var_expr(&m).unwrap().typ(), &TCType::map(TCType::Any));
+        assert_eq!(
+            typed.var_expr_ref(&m).unwrap().typ(),
+            &TCType::map(TCType::Any)
+        );
     }
 
     #[test]
@@ -440,7 +443,7 @@ mod tests {
             type_check_gradual(spec, false).expect("Any annotation should accept any value");
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
         // The expression keeps its precise type; only the declaration is Any.
-        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Str);
+        assert_eq!(typed.var_expr_ref(&y).unwrap().typ(), &TCType::Str);
     }
 
     #[test]
@@ -520,7 +523,7 @@ mod tests {
         let typed =
             type_check_gradual(spec, false).expect("heterogeneous list should widen to Any");
         assert_eq!(typed.type_annotations().get(&xs), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr(&xs).unwrap().typ(), &TCType::Any);
+        assert_eq!(typed.var_expr_ref(&xs).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -572,7 +575,7 @@ mod tests {
 
         let typed = type_check_gradual(spec, false).expect("heterogeneous map should widen to Any");
         assert_eq!(typed.type_annotations().get(&m), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr(&m).unwrap().typ(), &TCType::Any);
+        assert_eq!(typed.var_expr_ref(&m).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -632,7 +635,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            typed.var_expr(&robot).unwrap().typ(),
+            typed.var_expr_ref(&robot).unwrap().typ(),
             &TCType::Struct(
                 EcoVec::from(vec![
                     ("id".into(), TCType::Int),
@@ -670,7 +673,7 @@ mod tests {
         let typed =
             type_check_gradual(spec, false).expect("field access should use inferred struct type");
         assert_eq!(typed.type_annotations().get(&name), Some(&StreamType::Str));
-        assert_eq!(typed.var_expr(&name).unwrap().typ(), &TCType::Str);
+        assert_eq!(typed.var_expr_ref(&name).unwrap().typ(), &TCType::Str);
     }
 
     #[test]
@@ -739,7 +742,7 @@ mod tests {
 
         let typed = type_check_gradual(spec, false).expect("heterogeneous if should widen to Any");
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr(&z).unwrap().typ(), &TCType::Any);
+        assert_eq!(typed.var_expr_ref(&z).unwrap().typ(), &TCType::Any);
     }
 
     #[test]
@@ -759,7 +762,7 @@ mod tests {
         let typed = type_check_gradual(spec, false).expect("passthrough should type check");
         assert_eq!(typed.type_annotations().get(&x), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&y), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr(&y).unwrap().typ(), &TCType::Any);
+        assert_eq!(typed.var_expr_ref(&y).unwrap().typ(), &TCType::Any);
     }
 
     #[test]

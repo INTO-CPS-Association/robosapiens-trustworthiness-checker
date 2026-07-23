@@ -33,13 +33,13 @@ pub trait DependencyGraphSpec {
 
 impl DependencyGraphExpr for Expr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
-        sexpr_dependencies(self, root)
+        sexpr_dependencies(self.as_ref(), root)
     }
 }
 
 impl DependencyGraphExpr for CheckedExpr {
     fn dependency_graph_for_root(&self, root: &VarName) -> DepGraph {
-        sexpr_dependencies(self.expr(), root)
+        sexpr_dependencies(self.expr().as_ref(), root)
     }
 }
 
@@ -276,7 +276,7 @@ impl DepGraph {
 // NOTE: The graph returned here may have multiple edges to the same node.
 // Can be combined by calling `combine_edges`. This is not done in this function for efficiency
 fn add_sexpr_dependencies(
-    expr: &Expr,
+    expr: ExprRef<'_>,
     root_name: &Node,
     graph: &mut DepGraph,
     nodes: &mut BTreeMap<VarName, NodeIndex>,
@@ -329,18 +329,14 @@ fn add_sexpr_dependencies(
         }
     }
 
-    debug!(
-        "sexpr_dependencies for {}: {:?}",
-        root_name,
-        expr.as_ref().kind()
-    );
+    debug!("sexpr_dependencies for {}: {:?}", root_name, expr.kind());
     let root_node = *nodes
         .entry(root_name.clone())
         .or_insert_with(|| graph.graph.add_node(root_name.clone()));
-    visit(expr.as_ref(), &[], graph, nodes, root_node, 0);
+    visit(expr, &[], graph, nodes, root_node, 0);
 }
 
-fn sexpr_dependencies(expr: &Expr, root_name: &Node) -> DepGraph {
+fn sexpr_dependencies(expr: ExprRef<'_>, root_name: &Node) -> DepGraph {
     let mut graph = DepGraph::empty_graph();
     add_sexpr_dependencies(expr, root_name, &mut graph, &mut BTreeMap::new());
     graph
@@ -355,8 +351,8 @@ impl DependencyGraphSpec for DsrvSpecification {
             DependencyGraphRoots::AllStreams => self.stream_vars(),
         };
         for var in roots {
-            if let Some(expr) = self.var_expr(&var) {
-                add_sexpr_dependencies(&expr, &var, &mut graph, &mut nodes);
+            if let Some(expr) = self.var_expr_ref(var) {
+                add_sexpr_dependencies(expr, var, &mut graph, &mut nodes);
             }
         }
         debug!("Constructed dependency graph: {:?}", graph.as_dot_graph());

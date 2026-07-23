@@ -354,29 +354,28 @@ fn ast_traversal(c: &mut Criterion) {
             .expect("benchmark fixture should type check");
         let output = VarName::new("z");
         let expr = spec
-            .var_expr(&output)
+            .var_expr_ref(&output)
             .expect("benchmark fixture has output z");
         let checked_expr = checked
-            .var_expr(&output)
+            .var_expr_ref(&output)
             .expect("checked benchmark fixture has output z");
 
         group.throughput(Throughput::Elements(nodes));
         group.bench_function(BenchmarkId::new("postorder", nodes), |b| {
             b.iter(|| {
-                black_box(expr.as_ref()).postorder().for_each(|node| {
+                black_box(expr).postorder().for_each(|node| {
                     black_box(node);
                 })
             })
         });
         group.bench_function(BenchmarkId::new("fold_child_results", nodes), |b| {
             b.iter(|| {
-                black_box(expr.as_ref())
-                    .fold(|node| 1_usize + node.children().copied().sum::<usize>())
+                black_box(expr).fold(|node| 1_usize + node.children().copied().sum::<usize>())
             })
         });
         group.bench_function(BenchmarkId::new("fold_typed_views", nodes), |b| {
             b.iter(|| {
-                black_box(checked_expr.as_ref()).fold(|node| {
+                black_box(checked_expr).fold(|node| {
                     let node_weight = match node.cursor().view() {
                         ExprView::Var(_) => 2,
                         _ => 1,
@@ -387,7 +386,7 @@ fn ast_traversal(c: &mut Criterion) {
         });
 
         group.bench_function(BenchmarkId::new("free_variables", nodes), |b| {
-            b.iter(|| black_box(expr.as_ref().free_variables()))
+            b.iter(|| black_box(expr.free_variables()))
         });
     }
     group.finish();
