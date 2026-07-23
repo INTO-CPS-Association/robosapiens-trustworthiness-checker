@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784796139281,
+  "lastUpdate": 1784797410966,
   "repoUrl": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker",
   "entries": {
     "RoboSAPIENS Criterion benchmarks": [
@@ -58197,6 +58197,174 @@ window.BENCHMARK_DATA = {
             "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
             "value": 3732283,
             "range": "± 12320",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "committer": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "distinct": true,
+          "id": "c394dd15296cd418abaaddcf01a915f2f325c2c2",
+          "message": "Tweak and improve expression building and dependency graph building",
+          "timestamp": "2026-07-23T10:25:50+02:00",
+          "tree_id": "6ebaebbfb0b0a0181e56804280c87780a3899ab8",
+          "url": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/commit/c394dd15296cd418abaaddcf01a915f2f325c2c2"
+        },
+        "date": 1784797410291,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "maple_sequence/maple_sequence_untyped_async/25000",
+            "value": 274390834,
+            "range": "± 1585002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_semisync/25000",
+            "value": 166383818,
+            "range": "± 528570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_dataflow/25000",
+            "value": 35791995,
+            "range": "± 292684",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50/100000",
+            "value": 445391832,
+            "range": "± 2163645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_semisync/100000",
+            "value": 417947522,
+            "range": "± 653195",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow/100000",
+            "value": 294164320,
+            "range": "± 2899517",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_async/25000",
+            "value": 107568809,
+            "range": "± 327622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_dataflow/25000",
+            "value": 40308528,
+            "range": "± 94659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_semisync/25000",
+            "value": 57151155,
+            "range": "± 321659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_on_percent_10/100",
+            "value": 2441599,
+            "range": "± 242051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_off_percent_10/100",
+            "value": 1647250,
+            "range": "± 190745",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_small_varied_inputs/parsing_lalrpop/10000",
+            "value": 15794144,
+            "range": "± 131367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_and_validate_specification/1024",
+            "value": 2910405,
+            "range": "± 14856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/strict_type_check/1024",
+            "value": 706371,
+            "range": "± 6257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/typed_dependency_graph/1024",
+            "value": 267279,
+            "range": "± 2239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 9346998,
+            "range": "± 31640",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_semisync/10000",
+            "value": 11134985,
+            "range": "± 94022",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow/10000",
+            "value": 1741104,
+            "range": "± 2760",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_runtime_qual/10000",
+            "value": 5421768,
+            "range": "± 16131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_direct_qual/10000",
+            "value": 2143439,
+            "range": "± 6824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_semisync/10000",
+            "value": 19025542,
+            "range": "± 195603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow/10000",
+            "value": 3826323,
+            "range": "± 9750",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_globally_window_qual/10000",
+            "value": 6961193,
+            "range": "± 51866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+            "value": 3695339,
+            "range": "± 5668",
             "unit": "ns/iter"
           }
         ]
