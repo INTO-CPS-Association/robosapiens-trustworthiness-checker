@@ -83,6 +83,8 @@ pub mod __private {
     use crate::{Arena, ArenaId, TreeNode};
 
     pub use crate::node::ChildIds;
+    #[cfg(feature = "serde")]
+    pub use serde;
 
     /// Append one node for generated storage implementations.
     pub fn arena_push_node<Id: ArenaId, Node: TreeNode<Id>>(

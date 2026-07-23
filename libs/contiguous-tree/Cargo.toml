@@ -8,8 +8,14 @@ license-file = "../../LICENSE.md"
 name = "contiguous_tree"
 path = "src/lib.rs"
 
+[features]
+default = []
+serde = ["dep:serde", "contiguous-tree-macros/serde"]
+
 [dependencies]
 contiguous-tree-macros = { path = "../contiguous-tree-macros" }
+serde = { version = "1.0.228", optional = true }
 
 [dev-dependencies]
 ecow = "0.3.0"
+serde_json = "1.0.150"

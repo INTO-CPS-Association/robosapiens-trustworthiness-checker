@@ -2,9 +2,9 @@ use super::*;
 use crate::dsrv_fixtures::TestConfig;
 use crate::io::map;
 use crate::io::testing::ManualOutputHandler;
-use crate::lang::dsrv::ast::generation::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
 use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
+use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 
 use crate::runtime::asynchronous::{AsyncRuntimeBuilder, Context};
 use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};

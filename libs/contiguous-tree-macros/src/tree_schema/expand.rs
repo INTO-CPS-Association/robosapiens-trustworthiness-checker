@@ -73,6 +73,29 @@ impl Variant {
         quote!(#kind::#name( #( #fields ),* ) => { #( #visited )* })
     }
 
+    fn duplicate_key_arm(&self, kind: &Ident) -> proc_macro2::TokenStream {
+        let name = &self.name;
+        let keyed_field = self
+            .fields
+            .iter()
+            .find(|field| matches!(field.kind, FieldKind::KeyedChildren));
+        let fields = self.fields.iter().map(|field| {
+            if matches!(field.kind, FieldKind::KeyedChildren) {
+                let name = &field.name;
+                quote!(#name)
+            } else {
+                quote!(_)
+            }
+        });
+        let duplicate = keyed_field
+            .map(|field| {
+                let name = &field.name;
+                quote!(#name.duplicate_key())
+            })
+            .unwrap_or_else(|| quote!(None));
+        quote!(#kind::#name( #( #fields ),* ) => #duplicate)
+    }
+
     fn owned_constructor(
         &self,
         visibility: &syn::Visibility,
@@ -243,6 +266,7 @@ pub(super) fn expand(
         visibility,
         schema_visibility,
         owned_constructors,
+        serialize_display,
         root,
         metadata_name,
         metadata,
@@ -308,6 +332,10 @@ pub(super) fn expand(
         .iter()
         .map(|variant| variant.payload_equality_arm(&kind))
         .collect::<Vec<_>>();
+    let duplicate_key_arms = variants
+        .iter()
+        .map(|variant| variant.duplicate_key_arm(&kind))
+        .collect::<Vec<_>>();
     let keyed_support = uses_keyed_children.then(|| {
         let keyed_fields_definition = keyed_fields::expand(
             runtime,
@@ -322,8 +350,91 @@ pub(super) fn expand(
                 #runtime::ResolvedFields<'arena, #reference<'arena>, #key>;
 
             #keyed_fields_definition
+
+            impl #kind {
+                #schema_visibility fn duplicate_key(&self) -> Option<&#key>
+                where
+                    #key: Eq,
+                {
+                    match self {
+                        #( #duplicate_key_arms, )*
+                    }
+                }
+            }
         }
     });
+    #[cfg(feature = "serde")]
+    let serialization = {
+        let display_serialization = serialize_display.then(|| {
+            quote! {
+                impl #runtime::__private::serde::Serialize for #reference<'_>
+                where
+                    Self: std::fmt::Display,
+                {
+                    fn serialize<Serializer>(
+                        &self,
+                        serializer: Serializer,
+                    ) -> Result<Serializer::Ok, Serializer::Error>
+                    where
+                        Serializer: #runtime::__private::serde::Serializer,
+                    {
+                        #runtime::__private::serde::Serializer::serialize_str(
+                            serializer,
+                            &std::string::ToString::to_string(self),
+                        )
+                    }
+                }
+
+                impl #runtime::__private::serde::Serialize for #root {
+                    fn serialize<Serializer>(
+                        &self,
+                        serializer: Serializer,
+                    ) -> Result<Serializer::Ok, Serializer::Error>
+                    where
+                        Serializer: #runtime::__private::serde::Serializer,
+                    {
+                        #runtime::__private::serde::Serialize::serialize(&self.as_ref(), serializer)
+                    }
+                }
+            }
+        });
+        quote! {
+            #display_serialization
+
+            impl<Key> #runtime::__private::serde::Serialize for #forest_map<Key>
+            where
+                Key: Ord + #runtime::__private::serde::Serialize,
+                for<'arena> #reference<'arena>: #runtime::__private::serde::Serialize,
+            {
+                fn serialize<Serializer>(
+                    &self,
+                    serializer: Serializer,
+                ) -> Result<Serializer::Ok, Serializer::Error>
+                where
+                    Serializer: #runtime::__private::serde::Serializer,
+                {
+                    let mut map = #runtime::__private::serde::Serializer::serialize_map(
+                        serializer,
+                        Some(self.len()),
+                    )?;
+                    for (key, expression) in self.iter() {
+                        #runtime::__private::serde::ser::SerializeMap::serialize_entry(
+                            &mut map,
+                            key,
+                            &expression,
+                        )?;
+                    }
+                    #runtime::__private::serde::ser::SerializeMap::end(map)
+                }
+            }
+        }
+    };
+    #[cfg(not(feature = "serde"))]
+    let serialization = {
+        let _ = serialize_display;
+        quote!()
+    };
+
     let owned_constructor_impl = owned_constructors.map(|owned_constructors| {
         let constructor_attributes = owned_constructors.attributes;
         let constructor_visibility = owned_constructors.visibility;
@@ -440,6 +551,12 @@ pub(super) fn expand(
         #[derive(Clone)]
         #visibility struct #root {
             tree: #handle,
+        }
+
+        impl std::fmt::Debug for #root {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Debug::fmt(&self.as_ref(), formatter)
+            }
         }
 
         impl #runtime::TreeStorage for #arena {
@@ -599,6 +716,17 @@ pub(super) fn expand(
                 formatter.debug_map().entries(self.iter()).finish()
             }
         }
+
+        impl<Key: Ord + PartialEq> PartialEq for #forest_map<Key>
+        where
+            for<'arena> #reference<'arena>: PartialEq,
+        {
+            fn eq(&self, other: &Self) -> bool {
+                self.iter().eq(other.iter())
+            }
+        }
+
+        #serialization
 
         impl<Key: Ord> #forest_map<Key> {
             #schema_visibility fn new(

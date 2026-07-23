@@ -132,8 +132,8 @@ mod tests {
             &TCType::list(TCType::Bool)
         );
         assert_ne!(
-            checked.var_expr(&int_output).unwrap().as_ref().id(),
-            checked.var_expr(&bool_output).unwrap().as_ref().id()
+            checked.var_expr(&int_output).unwrap().as_ref().expr().id(),
+            checked.var_expr(&bool_output).unwrap().as_ref().expr().id()
         );
     }
 

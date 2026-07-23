@@ -1,4 +1,4 @@
-use std::fmt::{self, Debug, Display, Error};
+use std::fmt::{Debug, Display, Error};
 
 use crate::core::{StreamTypeAscription, VarName};
 
@@ -15,39 +15,6 @@ impl Debug for CheckedExpr {
 impl Display for CheckedExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.expr, f)
-    }
-}
-
-impl serde::Serialize for CheckedExpr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.expr.serialize(serializer)
-    }
-}
-
-impl Debug for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.as_ref(), f)
-    }
-}
-
-impl serde::Serialize for Expr {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.as_ref().serialize(serializer)
-    }
-}
-
-impl serde::Serialize for ExprRef<'_> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
     }
 }
 

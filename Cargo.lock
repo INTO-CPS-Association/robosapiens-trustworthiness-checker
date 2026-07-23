@@ -730,6 +730,8 @@ version = "0.1.0"
 dependencies = [
  "contiguous-tree-macros",
  "ecow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

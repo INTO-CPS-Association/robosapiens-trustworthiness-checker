@@ -7,6 +7,10 @@ license-file = "../../LICENSE.md"
 [lib]
 proc-macro = true
 
+[features]
+default = []
+serde = []
+
 [dependencies]
 proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.106"

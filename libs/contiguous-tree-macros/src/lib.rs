@@ -14,6 +14,7 @@ mod tree_schema;
 /// ```text
 /// pub tree Expr {
 ///     schema: pub(crate),
+///     serialize: display,
 ///     owned_constructors: #[cfg(test)] pub(crate),
 ///     metadata: span: Span = Span::default(),
 ///     id: u32,
@@ -65,7 +66,15 @@ mod tree_schema;
 /// `ExprForest` provides `new`, `len`, `is_empty`, `root_ids`, `roots` (borrowed
 /// cursors), and `into_roots` (owning `Expr` values), all at schema visibility.
 /// `ExprForestMap<Key>` additionally provides keyed lookup, retention, and fallible
-/// rewriting of all or selected roots into fresh compact storage.
+/// rewriting of all or selected roots into fresh compact storage. Owning roots
+/// implement `Debug` by formatting their borrowed root cursor.
+///
+/// When `contiguous-tree` is built with its `serde` feature, generated forest maps
+/// implement `Serialize` whenever their keys and root cursors do. The optional
+/// `serialize: display` setting also generates `Serialize` for owning roots and
+/// borrowed cursors by serializing the cursor's `Display` output as a string.
+/// Without the feature, no serialization implementations are generated.
+///
 /// The optional `owned_constructors` setting generates
 /// variant-named constructors with the requested visibility. Outer attributes
 /// between `:` and the visibility are applied to the constructor `impl`, so

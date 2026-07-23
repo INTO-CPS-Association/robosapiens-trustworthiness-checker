@@ -264,17 +264,18 @@ mod tests {
     use std::rc::Rc;
     use std::vec;
 
+    use contiguous_tree::TreeCursorExt;
     use petgraph::graph::DiGraph;
 
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp, TreeCursorExt};
+    use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp};
     use crate::lang::dsrv::span::strip_span_ref;
     use proptest::prelude::*;
     use test_log::test;
 
     use super::*;
-    use crate::lang::dsrv::ast::generation::arb_boolean_dsrv_spec;
+    use crate::lang::dsrv::test_support::arb_boolean_dsrv_spec;
 
     fn locality_graph() -> GenericLabelledDistributionGraph<u64> {
         let mut graph: DiGraph<NodeName, u64> = DiGraph::new();
@@ -763,7 +764,7 @@ mod tests {
         );
         let rewritten = try_inline_aux(pruned).unwrap();
         let rewritten_name = rewritten
-            .expressions()
+            .roots()
             .next()
             .expect("local roots should exist")
             .0
@@ -778,14 +779,11 @@ mod tests {
         );
 
         let reachable_nodes = localised
-            .expressions()
+            .roots()
             .map(|(_, root)| root.postorder().len())
             .sum::<usize>();
         assert_eq!(localised.nodes().count(), reachable_nodes);
-        let roots = localised
-            .expressions()
-            .map(|(_, root)| root)
-            .collect::<Vec<_>>();
+        let roots = localised.roots().map(|(_, root)| root).collect::<Vec<_>>();
         assert!(
             roots
                 .windows(2)

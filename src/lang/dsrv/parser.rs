@@ -48,14 +48,14 @@ pub(crate) enum Declaration {
 }
 
 pub fn parse_expr(input: &str) -> Result<Expr, Error> {
-    let mut builder = ExprBuilder::for_source(input);
+    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
     let root = ExprParser::new()
         .parse(&mut builder, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
     let expr = builder
         .finish(root)
         .map_err(|error| anyhow!("Invalid expression tree: {error}"))?;
-    if let Some(key) = expr.as_ref().duplicate_key() {
+    if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(anyhow!("duplicate expression field {key:?}"));
     }
     Ok(expr)
@@ -63,7 +63,7 @@ pub fn parse_expr(input: &str) -> Result<Expr, Error> {
 
 #[cfg(test)]
 fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> {
-    let mut builder = ExprBuilder::for_source(input);
+    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
     let declaration = DeclarationParser::new()
         .parse(&mut builder, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
@@ -72,7 +72,7 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
             let expression = builder
                 .finish(*root)
                 .map_err(|error| anyhow!("Invalid expression tree: {error}"))?;
-            if let Some(key) = expression.as_ref().duplicate_key() {
+            if let Some(key) = expression.as_ref().duplicate_field() {
                 return Err(anyhow!("duplicate expression field {key:?}"));
             }
             Some(expression)
@@ -166,7 +166,7 @@ fn line_col(input: &str, byte: usize) -> LineCol {
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
-    let mut builder = ExprBuilder::for_source(input);
+    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
     let stmts = DeclarationsParser::new()
         .parse(&mut builder, &input)
         .map_err(|e| {
@@ -207,7 +207,10 @@ mod tests {
             panic!("expected Neg root, got {:?}", expression.as_ref().kind());
         };
 
-        assert_eq!(expression.span(), Span::new(0, source.len() as u32));
+        assert_eq!(
+            expression.as_ref().span(),
+            Span::new(0, source.len() as u32)
+        );
         assert_eq!(operand.span(), Span::new(1, source.len() as u32));
         assert!(matches!(
             operand.view(),
@@ -219,7 +222,7 @@ mod tests {
     fn interleaved_call_and_field_prefixes_have_exact_spans() {
         let source = "factory()(x).result(y)";
         let expression = parse_expr(source).expect("postfix chain should parse");
-        assert_eq!(expression.span(), Span::new(0, 22));
+        assert_eq!(expression.as_ref().span(), Span::new(0, 22));
 
         let ExprView::Apply(field_access, mut final_args) = expression.as_ref().view() else {
             panic!("expected final call");

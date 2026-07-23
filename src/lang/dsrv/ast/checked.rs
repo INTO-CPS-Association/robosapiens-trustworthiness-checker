@@ -4,8 +4,7 @@ use std::rc::Rc;
 
 use contiguous_tree::{ContextCursor, TreeCursorExt};
 
-use super::{Expr, ExprArena, ExprId, ExprKind, ExprRef, ExprView};
-use crate::lang::dsrv::span::Span;
+use super::{Expr, ExprArena, ExprKind, ExprRef, ExprView};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 
 pub(crate) type ExprTypes = contiguous_tree::NodeAnnotations<ExprArena, TCType>;
@@ -137,20 +136,8 @@ impl<'arena> CheckedExprRef<'arena> {
         self.expr().kind()
     }
 
-    pub fn span(self) -> Span {
-        self.expr().span()
-    }
-
-    pub fn id(self) -> ExprId {
-        self.expr().id()
-    }
-
     pub fn typ(self) -> &'arena TCType {
         self.cursor.context().type_of(self.expr())
-    }
-
-    pub fn type_environment(self) -> &'arena StreamTypeEnvironment {
-        self.shared_type_environment().as_ref()
     }
 
     pub(crate) fn shared_type_environment(self) -> &'arena Rc<StreamTypeEnvironment> {

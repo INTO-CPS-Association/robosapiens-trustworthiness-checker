@@ -17,6 +17,8 @@ mod keyword {
     syn::custom_keyword!(copy);
     syn::custom_keyword!(metadata);
     syn::custom_keyword!(schema);
+    syn::custom_keyword!(serialize);
+    syn::custom_keyword!(display);
     syn::custom_keyword!(owned_constructors);
     syn::custom_keyword!(id);
     syn::custom_keyword!(key);
@@ -167,6 +169,7 @@ pub(crate) struct TreeSchema {
     pub(super) visibility: Visibility,
     pub(super) schema_visibility: Visibility,
     pub(super) owned_constructors: Option<OwnedConstructors>,
+    pub(super) serialize_display: bool,
     pub(super) root: Ident,
     pub(super) metadata_name: Ident,
     pub(super) metadata: Type,
@@ -190,6 +193,7 @@ impl Parse for TreeSchema {
         let mut metadata = None;
         let mut schema_visibility = None;
         let mut owned_constructors = None;
+        let mut serialize_display = None;
         let mut id = None;
         let mut key = None;
         let mut children = None;
@@ -216,6 +220,11 @@ impl Parse for TreeSchema {
                     ));
                 }
                 set_once(&mut schema_visibility, visibility, &name)?;
+            } else if content.peek(keyword::serialize) {
+                let name: Ident = content.parse()?;
+                content.parse::<Token![:]>()?;
+                content.parse::<keyword::display>()?;
+                set_once(&mut serialize_display, true, &name)?;
             } else if content.peek(keyword::owned_constructors) {
                 let name: Ident = content.parse()?;
                 content.parse::<Token![:]>()?;
@@ -289,6 +298,7 @@ impl Parse for TreeSchema {
             visibility,
             schema_visibility: schema_visibility.unwrap_or_else(|| syn::parse_quote!(pub(crate))),
             owned_constructors,
+            serialize_display: serialize_display.unwrap_or(false),
             root,
             metadata_name: metadata
                 .as_ref()
@@ -386,9 +396,27 @@ mod tests {
     }
 
     #[test]
+    fn accepts_display_serialization() {
+        let schema = syn::parse_str::<TreeSchema>(
+            "pub tree Expr {
+                serialize: display,
+                metadata: m: () = (),
+                id: u32,
+            }",
+        )
+        .unwrap();
+
+        assert!(schema.serialize_display);
+    }
+
+    #[test]
     fn rejects_duplicate_settings() {
         assert!(
             error("pub tree Expr { schema: pub(crate), id: u32, id: u64, }")
+                .contains("duplicate tree setting")
+        );
+        assert!(
+            error("pub tree Expr { serialize: display, serialize: display, }")
                 .contains("duplicate tree setting")
         );
     }

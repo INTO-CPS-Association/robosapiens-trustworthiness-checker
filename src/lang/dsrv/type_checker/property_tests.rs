@@ -1,8 +1,8 @@
 use super::*;
 use crate::core::{StreamType, Value};
 use crate::dataflow::DataflowMonitor;
-use crate::lang::dsrv::ast::generation::arb_dsrv_spec;
 use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp, StrBinOp};
+use crate::lang::dsrv::test_support::arb_dsrv_spec;
 use crate::{DsrvSpecification, VarName};
 use ecow::eco_vec;
 use proptest::prelude::*;

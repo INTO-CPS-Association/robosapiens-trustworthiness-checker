@@ -5,31 +5,11 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use contiguous_tree::TreeCursorExt;
-use serde::ser::SerializeMap;
 
 use super::checked::{CheckedTypes, ExprTypes};
-use super::{CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
+use super::{CheckedExpr, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::span::Span;
-
-impl PartialEq for ExprForestMap<VarName> {
-    fn eq(&self, other: &Self) -> bool {
-        self.iter().eq(other.iter())
-    }
-}
-
-impl serde::Serialize for ExprForestMap<VarName> {
-    fn serialize<Serializer: serde::Serializer>(
-        &self,
-        serializer: Serializer,
-    ) -> Result<Serializer::Ok, Serializer::Error> {
-        let mut map = serializer.serialize_map(Some(self.len()))?;
-        for (name, expression) in self.iter() {
-            map.serialize_entry(name, &expression)?;
-        }
-        map.end()
-    }
-}
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -108,7 +88,7 @@ impl UnvalidatedDsrvSpecification {
         if let Some(field) = self
             .expressions
             .nodes()
-            .find_map(|expression| expression.duplicate_key_here().cloned())
+            .find_map(|expression| expression.kind().duplicate_key().cloned())
         {
             return Err(DsrvAstError::DuplicateExpressionField { field });
         }
@@ -170,21 +150,6 @@ impl CheckedDsrvSpecification {
         &self.spec
     }
 
-    pub fn roots(&self) -> impl DoubleEndedIterator<Item = (&VarName, CheckedExprRef<'_>)> {
-        self.spec
-            .exprs
-            .iter()
-            .map(|(name, expr)| (name, expr.with_checked_types(&self.checked)))
-    }
-
-    /// Every checked syntax node in allocation order.
-    pub fn nodes(&self) -> impl DoubleEndedIterator<Item = CheckedExprRef<'_>> {
-        self.spec
-            .exprs
-            .nodes()
-            .map(|expr| expr.with_checked_types(&self.checked))
-    }
-
     pub fn var_expr(&self, var: &VarName) -> Option<CheckedExpr> {
         self.spec
             .exprs
@@ -206,17 +171,7 @@ impl CheckedDsrvSpecification {
     pub fn type_annotations(&self) -> &BTreeMap<VarName, StreamType> {
         self.spec.type_annotations()
     }
-    pub fn expressions(&self) -> impl Iterator<Item = (&VarName, CheckedExpr)> {
-        self.spec.exprs.keys().map(|name| {
-            (
-                name,
-                CheckedExpr::from_checked_types(
-                    self.spec.exprs.get_owned(name).unwrap(),
-                    self.checked.clone(),
-                ),
-            )
-        })
-    }
+
     pub fn type_annotation(&self, var: &VarName) -> Option<&StreamType> {
         self.spec.type_annotation(var)
     }
@@ -305,11 +260,6 @@ impl DsrvSpecification {
         Self::from_expression_forest(input_vars, output_vars, exprs, type_annotations, aux_vars)
     }
 
-    pub fn expressions(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = (&VarName, ExprRef<'_>)> + ExactSizeIterator + '_ {
-        self.exprs.iter()
-    }
     pub fn var_expr_ref(&self, var: &VarName) -> Option<ExprRef<'_>> {
         self.exprs.get(var)
     }
@@ -380,15 +330,15 @@ mod tests {
         spec_simple_add_monitor_typed,
     };
     use crate::lang::dsrv::ast::NumericalBinOp;
-    use crate::lang::dsrv::ast::generation::{
-        arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
-    };
     use crate::lang::dsrv::ast::{
         CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, ExprBuilder,
-        ExprId, ExprKind, SBinOp,
+        ExprKind, SBinOp,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
+    use crate::lang::dsrv::test_support::{
+        arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
+    };
     use crate::lang::dsrv::type_checker::TCType;
 
     fn checked_expression(source: &str) -> CheckedExpr {
@@ -405,7 +355,7 @@ mod tests {
                 .parse::<DsrvSpecification>()
                 .unwrap();
         let roots = specification
-            .expressions()
+            .roots()
             .map(|(_, expression)| expression)
             .collect::<Vec<_>>();
 
@@ -452,10 +402,9 @@ mod tests {
         assert_eq!(left.typ(), &TCType::Int);
         assert_eq!(right.typ(), &TCType::Int);
         assert!(root.children().all(|child| child.typ() == &TCType::Int));
-        assert!(
-            root.postorder()
-                .all(|node| { node.type_environment() == expression.as_ref().type_environment() })
-        );
+        assert!(root.postorder().all(|node| {
+            node.shared_type_environment() == expression.as_ref().shared_type_environment()
+        }));
     }
 
     #[test]
@@ -481,7 +430,7 @@ mod tests {
 
     #[test]
     fn programmatic_keyed_expressions_reject_duplicate_fields_during_checking() {
-        let expr = Expr::MapOrdered([("x".into(), Expr::Val(1)), ("x".into(), Expr::Val(2))]);
+        let expr = Expr::Map([("x".into(), Expr::Val(1)), ("x".into(), Expr::Val(2))]);
         let mut context = BTreeMap::new();
 
         assert!(
@@ -495,81 +444,6 @@ mod tests {
     }
     use crate::lang::dsrv::span::{Span, strip_span};
     use ecow::{EcoVec, eco_vec};
-
-    #[test]
-    fn child_ids_preserve_source_order_for_each_node_shape() {
-        let ids = [0, 1, 2, 3].map(<ExprId as contiguous_tree::ArenaId>::from_index);
-        let cases = [
-            (ExprKind::Val(1.into()), vec![]),
-            (ExprKind::Not(ids[0]), vec![ids[0]]),
-            (
-                ExprKind::BinOp(ids[0], ids[1], SBinOp::NOp(NumericalBinOp::Add)),
-                vec![ids[0], ids[1]],
-            ),
-            (
-                ExprKind::If(ids[0], ids[1], ids[2]),
-                vec![ids[0], ids[1], ids[2]],
-            ),
-            (
-                ExprKind::Apply(ids[0], eco_vec![ids[1], ids[2]]),
-                vec![ids[0], ids[1], ids[2]],
-            ),
-            (
-                ExprKind::List(eco_vec![ids[2], ids[0], ids[1]]),
-                vec![ids[2], ids[0], ids[1]],
-            ),
-            (
-                ExprKind::Map(eco_vec![("a".into(), ids[1]), ("b".into(), ids[3])].into()),
-                vec![ids[1], ids[3]],
-            ),
-        ];
-
-        for (node, expected) in cases {
-            let mut visited = Vec::new();
-            visited.extend(node.child_ids());
-            assert_eq!(visited, expected, "unexpected child order for {node:?}");
-        }
-    }
-
-    #[test]
-    fn borrowed_child_iteration_does_not_clone_the_arena_handle() {
-        let expr = Expr::If(
-            Box::new(Expr::Var("condition".into())),
-            Box::new(Expr::Val(1)),
-            Box::new(Expr::Val(0)),
-        );
-        let owners = expr.storage_strong_count();
-        let mut visited = 0;
-        for child in expr.as_ref().children() {
-            visited += 1;
-            let _ = child.kind();
-        }
-
-        assert_eq!(visited, 3);
-        assert_eq!(expr.storage_strong_count(), owners);
-    }
-
-    #[test]
-    fn subtree_traversal_and_folding_use_contiguous_postorder() {
-        let expr = Expr::If(
-            Box::new(Expr::Var("condition".into())),
-            Box::new(Expr::BinOp(
-                Box::new(Expr::Val(1)),
-                Box::new(Expr::Val(2)),
-                SBinOp::NOp(NumericalBinOp::Add),
-            )),
-            Box::new(Expr::Val(0)),
-        );
-        let root = expr.as_ref();
-        let nodes = root.postorder().collect::<Vec<_>>();
-
-        assert_eq!(nodes.len(), 6);
-        assert_eq!(nodes.last().unwrap().id(), root.id());
-        assert_eq!(
-            root.fold(|node| 1 + node.children().copied().sum::<usize>()),
-            nodes.len()
-        );
-    }
 
     #[test]
     fn specification_construction_gives_each_assignment_its_own_type_context() {
@@ -683,17 +557,6 @@ mod tests {
         assert!(!encoded.contains("nodes"));
     }
 
-    #[test]
-    fn parser_builds_nested_expressions_in_one_compact_tree() {
-        let expr = parse_expr("1 + 2 + 3 + 4").unwrap();
-
-        assert_eq!(expr.as_ref().subtree_len(), 7);
-        assert_eq!(
-            strip_span(&expr),
-            "BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Add))"
-        );
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -734,7 +597,7 @@ mod tests {
         #[test]
         fn test_prop_free_variables_works(e in arb_boolean_sexpr(vec!["a".into(), "b".into()])) {
             let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
-            for input in e.free_variables() {
+            for input in e.as_ref().free_variables() {
                 assert!(valid_inputs.contains(&input));
             }
         }
@@ -749,7 +612,7 @@ mod tests {
         #[test]
         fn test_prop_free_variables_works_mixed(e in arb_mixed_sexpr(vec!["a".into(), "b".into()])) {
             let valid_inputs: Vec<VarName> = vec!["a".into(), "b".into()];
-            for input in e.free_variables() {
+            for input in e.as_ref().free_variables() {
                 assert!(valid_inputs.contains(&input));
             }
         }
@@ -814,11 +677,8 @@ mod tests {
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),
         ));
-        assert_display_roundtrips(&Expr::RestrictedDynamic(
-            Box::new(Expr::Var("x".into())),
-            StreamTypeAscription::Ascribed(StreamType::Int),
-            eco_vec!["x".into(), "y".into()],
-        ));
+        let explicit_dynamic = parse_expr("dynamic(x: Int, {x, y})").unwrap();
+        assert_display_roundtrips(&explicit_dynamic);
         assert_display_roundtrips(&Expr::Defer(
             Box::new(Expr::Var("x".into())),
             StreamTypeAscription::Ascribed(StreamType::Int),

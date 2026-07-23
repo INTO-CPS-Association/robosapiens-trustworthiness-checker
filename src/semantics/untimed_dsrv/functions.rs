@@ -323,6 +323,7 @@ where
         .collect::<std::collections::BTreeSet<_>>();
     let captures = body
         .expr
+        .as_ref()
         .free_variables()
         .into_iter()
         .filter(|name| !param_names.contains(name))

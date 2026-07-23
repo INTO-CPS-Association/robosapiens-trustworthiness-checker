@@ -23,52 +23,6 @@ impl Display for NumericalBinOp {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub enum IntBinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-}
-
-impl TryFrom<NumericalBinOp> for IntBinOp {
-    type Error = ();
-
-    fn try_from(op: NumericalBinOp) -> Result<Self, Self::Error> {
-        Ok(match op {
-            NumericalBinOp::Add => Self::Add,
-            NumericalBinOp::Sub => Self::Sub,
-            NumericalBinOp::Mul => Self::Mul,
-            NumericalBinOp::Div => Self::Div,
-            NumericalBinOp::Mod => Self::Mod,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub enum FloatBinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-}
-
-impl TryFrom<NumericalBinOp> for FloatBinOp {
-    type Error = ();
-
-    fn try_from(op: NumericalBinOp) -> Result<Self, Self::Error> {
-        Ok(match op {
-            NumericalBinOp::Add => Self::Add,
-            NumericalBinOp::Sub => Self::Sub,
-            NumericalBinOp::Mul => Self::Mul,
-            NumericalBinOp::Div => Self::Div,
-            NumericalBinOp::Mod => Self::Mod,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum BoolBinOp {
     Or,
     And,

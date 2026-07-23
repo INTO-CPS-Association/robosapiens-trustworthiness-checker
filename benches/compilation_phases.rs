@@ -360,11 +360,9 @@ fn ast_traversal(c: &mut Criterion) {
                 })
             })
         });
-        group.bench_function(BenchmarkId::new("variable_references", nodes), |b| {
-            b.iter(|| black_box(expr.variable_references().count()))
-        });
+
         group.bench_function(BenchmarkId::new("free_variables", nodes), |b| {
-            b.iter(|| black_box(expr.free_variables()))
+            b.iter(|| black_box(expr.as_ref().free_variables()))
         });
     }
     group.finish();

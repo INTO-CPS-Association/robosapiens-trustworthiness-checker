@@ -9,6 +9,7 @@ use ecow::{EcoString, EcoVec, eco_vec};
 crate::tree_schema! {
     pub tree Fixture {
         schema: pub(crate),
+        serialize: display,
         owned_constructors: #[cfg(test)] pub(crate),
         metadata: offset: u32 = 0,
         id: u32,
@@ -22,6 +23,13 @@ crate::tree_schema! {
         Sequence(values: children),
         Record(fields: keyed_children),
         Mixed(label: data(EcoString), first: child, rest: children, flag: copy(bool)),
+    }
+}
+
+#[cfg(feature = "serde")]
+impl std::fmt::Display for FixtureRef<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, formatter)
     }
 }
 
@@ -50,6 +58,29 @@ crate::tree_schema! {
         Leaf(value: data(EcoString)),
         Sequence(children: children),
     }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn generated_serialization_uses_display_and_preserves_forest_map_entries() {
+    let tree = Fixture::Leaf("leaf".into());
+    assert_eq!(
+        serde_json::to_value(&tree).unwrap(),
+        serde_json::Value::String(tree.as_ref().to_string())
+    );
+    assert_eq!(
+        serde_json::to_value(tree.as_ref()).unwrap(),
+        serde_json::Value::String(tree.as_ref().to_string())
+    );
+
+    let mut builder = FixtureBuilder::with_capacity(1);
+    let root = builder.alloc_default(FixtureKind::Leaf("leaf".into()));
+    let forest = builder.finish_forest([root]).unwrap();
+    let map = FixtureForestMap::new([String::from("root")], forest).unwrap();
+    assert_eq!(
+        serde_json::to_value(map).unwrap(),
+        serde_json::json!({"root": "Leaf(\"leaf\")"})
+    );
 }
 
 #[test]

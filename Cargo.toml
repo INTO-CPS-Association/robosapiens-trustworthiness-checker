@@ -25,7 +25,7 @@ bench = false
 lalrpop = "0.23.1"
 
 [dependencies]
-contiguous-tree = { path = "libs/contiguous-tree" }
+contiguous-tree = { path = "libs/contiguous-tree", features = ["serde"] }
 winnow = { version = "1.0.3", features = ["simd"] }
 futures = "0.3.32"
 

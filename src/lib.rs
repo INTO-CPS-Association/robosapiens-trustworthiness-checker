@@ -14,7 +14,7 @@ pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
     DsrvPipelineError, TypeCheckMode, TypeCheckOptions,
-    ast::{CheckedDsrvSpecification, DsrvSpecification, TreeCursorExt},
+    ast::{CheckedDsrvSpecification, DsrvSpecification},
 };
 pub mod distributed;
 pub mod dsrv_fixtures;

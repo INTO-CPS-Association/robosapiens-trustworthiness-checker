@@ -32,6 +32,7 @@ pub enum DynamicExprScope {
 contiguous_tree::tree_schema! {
     pub tree Expr {
         schema: pub(crate),
+        serialize: display,
         owned_constructors: pub,
         metadata: span: Span = Span::default(),
         id: u32,
@@ -100,35 +101,13 @@ contiguous_tree::tree_schema! {
     }
 }
 
-impl ExprKind {
-    fn duplicate_key(&self) -> Option<&EcoString> {
-        match self {
-            Self::Map(fields) | Self::Struct(fields) | Self::ObjectLiteral(fields) => {
-                fields.duplicate_key()
-            }
-            _ => None,
-        }
-    }
-}
-
 impl<'arena> ExprRef<'arena> {
-    pub(crate) fn duplicate_key(self) -> Option<&'arena EcoString> {
-        self.postorder().find_map(Self::duplicate_key_here)
-    }
-
-    pub(crate) fn duplicate_key_here(self) -> Option<&'arena EcoString> {
-        self.kind().duplicate_key()
+    pub(crate) fn duplicate_field(self) -> Option<&'arena EcoString> {
+        self.postorder()
+            .find_map(|expression| expression.kind().duplicate_key())
     }
 }
 
-impl ExprBuilder {
-    pub(crate) fn for_source(source: &str) -> Self {
-        Self::with_capacity(source.len() / 4)
-    }
-}
-
-// Programmatic construction helpers that are not schema variant constructors.
-#[allow(non_snake_case)]
 impl Expr {
     pub(crate) fn value_with_span(value: Value, span: Span) -> Self {
         let mut builder = ExprBuilder::with_capacity(1);
@@ -136,22 +115,6 @@ impl Expr {
         builder
             .finish(root)
             .expect("a single allocated expression is a valid tree")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn RestrictedDynamic<E: Into<Self>>(
-        source: Box<E>,
-        result_type: StreamTypeAscription,
-        vars: EcoVec<VarName>,
-    ) -> Self {
-        Self::__merge_owned_children([(*source).into()], |ids| {
-            ExprKind::Dynamic(ids[0], result_type, DynamicExprScope::Explicit(vars))
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn MapOrdered(items: impl IntoIterator<Item = (EcoString, Self)>) -> Self {
-        Self::Map(items)
     }
 }
 
@@ -182,32 +145,9 @@ impl From<VarOrNodeName> for String {
     }
 }
 
-impl DynamicExprScope {
-    pub fn explicit(vars: EcoVec<VarName>) -> Self {
-        Self::Explicit(vars)
-    }
-
-    pub fn explicit_vars(&self) -> Option<&EcoVec<VarName>> {
-        match self {
-            Self::Automatic => None,
-            Self::Explicit(vars) => Some(vars),
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &VarName> {
-        self.explicit_vars().into_iter().flatten()
-    }
-}
-
 impl From<EcoVec<VarName>> for DynamicExprScope {
     fn from(vars: EcoVec<VarName>) -> Self {
         Self::Explicit(vars)
-    }
-}
-
-impl Expr {
-    pub fn span(&self) -> Span {
-        self.as_ref().span()
     }
 }
 
@@ -241,14 +181,9 @@ impl<'left, 'right> PartialEq<ExprRef<'right>> for ExprRef<'left> {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
-    use contiguous_tree::TreeCursorExt;
     use ecow::EcoVec;
 
-    use crate::lang::dsrv::ast::{
-        DynamicExprScope, Expr, ExprBuilder, ExprKind, ExprView, NumericalBinOp, SBinOp,
-    };
+    use crate::lang::dsrv::ast::{DynamicExprScope, Expr, NumericalBinOp, SBinOp};
 
     #[test]
     fn empty_scope_conversion_remains_explicit() {
@@ -258,7 +193,7 @@ mod tests {
         );
     }
 
-    fn tree(right: i64) -> Expr {
+    fn expression(right: i64) -> Expr {
         Expr::If(
             Box::new(Expr::Var("condition".into())),
             Box::new(Expr::BinOp(
@@ -271,47 +206,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_traversal_and_zip_preserve_source_order() {
-        let left = tree(3);
-        let right = tree(4);
-        let mut visited = Vec::new();
-
-        let matched = left
-            .as_ref()
-            .try_zip_with::<Infallible, _>(right.as_ref(), |left, right| {
-                visited.push((left.id(), right.id()));
-                Ok(std::mem::discriminant(&left.view()) == std::mem::discriminant(&right.view()))
-            })
-            .unwrap_or_else(|never| match never {});
-
-        assert!(matched);
-        assert_eq!(visited.len(), left.as_ref().postorder().len());
-        assert_eq!(visited.first().unwrap(), &(left.id(), right.id()));
-    }
-
-    #[test]
-    fn generated_zip_stops_on_shape_mismatch_and_propagates_errors() {
-        let tree = tree(3);
-        let leaf = Expr::Val(3);
-        assert!(
-            !tree
-                .as_ref()
-                .try_zip_with::<Infallible, _>(leaf.as_ref(), |_, _| Ok(true))
-                .unwrap_or_else(|never| match never {})
-        );
-
-        assert_eq!(
-            tree.as_ref()
-                .try_zip_with(tree.as_ref(), |_, _| Err::<bool, _>("stopped")),
-            Err("stopped")
-        );
-    }
-
-    #[test]
     fn borrowed_expressions_support_semantic_equality_and_serialization() {
-        let left = tree(3);
-        let equal = tree(3);
-        let different = tree(4);
+        let left = expression(3);
+        let equal = expression(3);
+        let different = expression(4);
 
         assert_eq!(left.as_ref(), equal.as_ref());
         assert_ne!(left.as_ref(), different.as_ref());
@@ -319,103 +217,5 @@ mod tests {
             serde_json::to_string(&left.as_ref()).unwrap(),
             serde_json::to_string(&left).unwrap()
         );
-    }
-
-    #[test]
-    fn generated_cloning_preserves_the_selected_tree_and_spans() {
-        let source = tree(3);
-        let mut builder = ExprBuilder::with_capacity(0);
-        let root = builder.clone_subtree(source.as_ref());
-        let cloned = builder.finish(root).unwrap();
-
-        assert_eq!(cloned, source);
-    }
-
-    #[test]
-    fn generated_fold_resolves_sequence_and_field_children() {
-        let expression = Expr::ObjectLiteral(
-            [
-                ("condition".into(), Expr::Var("enabled".into())),
-                (
-                    "values".into(),
-                    Expr::List(vec![Expr::Val(1), Expr::Val(2)].into()),
-                ),
-            ]
-            .into_iter(),
-        );
-
-        let node_count = expression.as_ref().fold(|node| match node.cursor().kind() {
-            ExprKind::ObjectLiteral(fields) => {
-                1 + node
-                    .fields(fields.as_slice())
-                    .map(|(_, size)| size)
-                    .sum::<usize>()
-            }
-            _ => 1 + node.children().copied().sum::<usize>(),
-        });
-
-        assert_eq!(node_count, expression.as_ref().postorder().len());
-    }
-
-    #[test]
-    fn generated_views_resolve_collections_and_keyed_children() {
-        let object = Expr::ObjectLiteral([("answer".into(), Expr::Val(42))]);
-        let ExprView::ObjectLiteral(fields) = object.as_ref().view() else {
-            unreachable!()
-        };
-        assert!(matches!(
-            fields.get("answer").unwrap().view(),
-            ExprView::Val(crate::Value::Int(42))
-        ));
-
-        let list = Expr::List(vec![Expr::Val(1), Expr::Val(2)].into());
-        let ExprView::List(items) = list.as_ref().view() else {
-            unreachable!()
-        };
-        assert_eq!(items.len(), 2);
-        assert!(
-            items
-                .into_iter()
-                .all(|item| matches!(item.view(), ExprView::Val(_)))
-        );
-    }
-
-    #[test]
-    fn generated_debug_resolves_sequence_and_keyed_children() {
-        let list = Expr::List(vec![Expr::Val(1), Expr::Val(2)].into());
-        assert_eq!(
-            format!("{:?}", list.as_ref()),
-            "List([Val(Int(1)), Val(Int(2))])"
-        );
-
-        let object = Expr::ObjectLiteral([("answer".into(), Expr::Val(42))]);
-        assert_eq!(
-            format!("{:?}", object.as_ref()),
-            "ObjectLiteral({\"answer\": Val(Int(42))})"
-        );
-    }
-
-    #[test]
-    fn generated_views_resolve_fixed_children() {
-        let expression = tree(3);
-        let ExprView::If(condition, then_expr, else_expr) = expression.as_ref().view() else {
-            unreachable!()
-        };
-        assert!(matches!(condition.view(), ExprView::Var(_)));
-        assert!(matches!(then_expr.view(), ExprView::BinOp(..)));
-        assert!(matches!(else_expr.view(), ExprView::Val(_)));
-    }
-
-    #[test]
-    fn boxed_construction_clones_only_the_selected_subtree() {
-        let container = Expr::Tuple(vec![Expr::Val(1), Expr::Val(2)].into());
-        let ExprView::Tuple(mut items) = container.as_ref().view() else {
-            unreachable!()
-        };
-        let selected = container.subtree(items.nth(1).unwrap());
-        let wrapped = Expr::Not(Box::new(selected));
-
-        assert_eq!(wrapped.as_ref().postorder().len(), 2);
-        assert!(matches!(wrapped.as_ref().view(), ExprView::Not(_)));
     }
 }

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contiguous_tree::TreeCursorExt;
 
-use super::{Expr, ExprRef, ExprView};
+use super::{DynamicExprScope, ExprRef, ExprView};
 use crate::core::{StreamType, VarName};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,70 +18,22 @@ enum DependencyTraversalEvent<'arena> {
     LeaveBindings(&'arena [(VarName, StreamType)]),
 }
 
-impl Expr {
-    /// Syntactic variable occurrences, including lexically bound variables.
-    pub fn variable_references(&self) -> impl Iterator<Item = &VarName> {
-        self.as_ref().variable_references()
-    }
-
-    /// Variables referenced outside of any enclosing lambda binding.
-    pub fn free_variables(&self) -> BTreeSet<VarName> {
-        self.as_ref().free_variables()
-    }
-
-    pub fn visit_free_variables(&self, visit: impl FnMut(&VarName)) {
-        self.as_ref().visit_free_variables(visit);
-    }
-
-    /// Stream values required to evaluate this expression.
-    ///
-    /// Unlike [`Self::free_variables`], placement references in `monitored_at`
-    /// are not stream dependencies.
-    pub fn stream_dependencies(&self) -> BTreeSet<VarName> {
-        self.as_ref().stream_dependencies()
-    }
-
-    pub fn visit_stream_dependencies(&self, visit: impl FnMut(&VarName)) {
-        self.as_ref().visit_stream_dependencies(visit);
-    }
-}
-
 impl<'arena> ExprRef<'arena> {
-    /// Syntactic variable occurrences, including lexically bound variables.
-    pub fn variable_references(self) -> impl Iterator<Item = &'arena VarName> {
-        self.postorder().filter_map(|expr| match expr.view() {
-            ExprView::Var(var) => Some(var),
-            _ => None,
-        })
-    }
-
     /// Variables referenced outside of any enclosing lambda binding.
     pub fn free_variables(self) -> BTreeSet<VarName> {
         let mut free = BTreeSet::new();
-        self.visit_free_variables(|var| {
+        self.visit_dependencies_with::<true>(|_, var| {
             free.insert(var.clone());
         });
         free
     }
 
-    /// Visit variables referenced outside of any enclosing lambda binding.
-    ///
-    /// A variable is reported once per semantic occurrence; callers that need
-    /// uniqueness can collect into a set without first allocating a temporary set.
-    pub fn visit_free_variables(self, mut visit: impl FnMut(&VarName)) {
-        self.visit_dependencies_with::<true>(|_, var| visit(var));
-    }
-
     pub fn stream_dependencies(self) -> BTreeSet<VarName> {
         let mut dependencies = BTreeSet::new();
-        self.visit_stream_dependencies(|var| {
+        self.visit_dependencies_with::<false>(|_, var| {
             dependencies.insert(var.clone());
         });
         dependencies
-    }
-
-    pub fn visit_stream_dependencies(self, mut visit: impl FnMut(&VarName)) {
-        self.visit_dependencies_with::<false>(|_, var| visit(var));
     }
 
     pub(crate) fn visit_dependencies(self, visit: impl FnMut(DependencyKind, &VarName)) {
@@ -109,11 +61,11 @@ impl<'arena> ExprRef<'arena> {
                         visit(DependencyKind::Placement, var);
                     }
                     Dynamic(source, _, scope) | Defer(source, _, scope) => {
-                        for var in scope
-                            .iter()
-                            .filter(|var| !binding_depths.contains_key(*var))
-                        {
-                            visit(DependencyKind::Stream, var);
+                        if let DynamicExprScope::Explicit(vars) = scope {
+                            for var in vars.iter().filter(|var| !binding_depths.contains_key(*var))
+                            {
+                                visit(DependencyKind::Stream, var);
+                            }
                         }
                         pending.push(DependencyTraversalEvent::Expression(source));
                     }
@@ -175,7 +127,7 @@ mod tests {
         );
 
         assert_eq!(
-            expr.free_variables(),
+            expr.as_ref().free_variables(),
             BTreeSet::from(["also_free".into(), "free".into()])
         );
     }
@@ -188,7 +140,7 @@ mod tests {
             eco_vec![("bound".into(), StreamType::Int)],
             Box::new(Expr::Tuple(
                 vec![
-                    Expr::RestrictedDynamic(
+                    Expr::Defer(
                         Box::new(Expr::Val("source")),
                         crate::core::StreamTypeAscription::Ascribed(StreamType::Int),
                         eco_vec!["bound".into(), "runtime_input".into()],
@@ -200,25 +152,9 @@ mod tests {
         );
 
         assert_eq!(
-            expr.free_variables(),
+            expr.as_ref().free_variables(),
             BTreeSet::from(["monitored".into(), "runtime_input".into()])
         );
-    }
-
-    #[test]
-    fn free_variable_visitor_avoids_an_intermediate_collection() {
-        let expr = Expr::Tuple(
-            vec![
-                Expr::Var("x".into()),
-                Expr::Var("x".into()),
-                Expr::Var("y".into()),
-            ]
-            .into(),
-        );
-        let mut visited = Vec::new();
-        expr.visit_free_variables(|var| visited.push(var.clone()));
-
-        assert_eq!(visited, vec!["x".into(), "x".into(), "y".into()]);
     }
 
     #[test]
@@ -231,9 +167,12 @@ mod tests {
             .into(),
         );
 
-        assert_eq!(expr.stream_dependencies(), BTreeSet::from(["input".into()]));
         assert_eq!(
-            expr.free_variables(),
+            expr.as_ref().stream_dependencies(),
+            BTreeSet::from(["input".into()])
+        );
+        assert_eq!(
+            expr.as_ref().free_variables(),
             BTreeSet::from(["input".into(), "placed_stream".into()])
         );
     }
@@ -249,7 +188,7 @@ mod tests {
                 vec![
                     Expr::Var("free".into()),
                     Expr::MonitoredAt("placed".into(), "node".into()),
-                    Expr::RestrictedDynamic(
+                    Expr::Defer(
                         Box::new(Expr::Var("dynamic_source".into())),
                         StreamTypeAscription::Ascribed(StreamType::Int),
                         eco_vec!["bound".into(), "dynamic_scope".into()],
