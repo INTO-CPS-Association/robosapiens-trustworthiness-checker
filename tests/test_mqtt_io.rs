@@ -851,7 +851,7 @@ mod reconf_tests {
         ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics>;
 
     fn parse_str(input: &str) -> anyhow::Result<DsrvSpecification> {
-        input.parse()
+        Ok(input.parse()?)
     }
 
     // TODO: Thomas suggested implement a type of OutputHandler for these tests that uses mpsc channels because
