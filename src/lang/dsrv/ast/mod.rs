@@ -12,8 +12,6 @@ mod specification;
 
 // Semantic queries over expressions.
 mod analysis;
-// Structural rewriting into shared expression forests.
-pub(crate) mod rewrite;
 
 // Expression formatting.
 mod display;
@@ -29,7 +27,6 @@ pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprRefs,
 };
 pub use operators::{BoolBinOp, CompBinOp, FloatBinOp, IntBinOp, NumericalBinOp, SBinOp, StrBinOp};
-pub(crate) use rewrite::{RewriteForestError, rewrite_forest};
 
 pub use specification::{CheckedDsrvSpecification, DsrvAstError, DsrvSpecification};
 pub(crate) use specification::{UnvalidatedAssignment, UnvalidatedDsrvSpecification};

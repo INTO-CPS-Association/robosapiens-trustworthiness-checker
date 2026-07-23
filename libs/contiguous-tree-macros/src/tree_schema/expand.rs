@@ -670,6 +670,58 @@ pub(super) fn expand(
 
 
 
+            /// Clone and recursively rewrite every root into fresh compact storage.
+            #schema_visibility fn try_rewrite_with<'source, Error>(
+                &'source self,
+                replace: impl FnMut(
+                    #reference<'source>,
+                ) -> Result<Option<#reference<'source>>, Error>,
+            ) -> Result<
+                Self,
+                #runtime::CloneTreeError<#reference<'source>, Error>,
+            >
+            where
+                Key: Clone,
+            {
+                self.try_rewrite_selected_with(|_| true, replace)
+            }
+
+            /// Clone selected roots and recursively rewrite them into fresh compact storage.
+            ///
+            /// Root keys retain their existing order. Unselected roots and nodes that become
+            /// unreachable through replacement are omitted from the resulting storage.
+            #schema_visibility fn try_rewrite_selected_with<'source, Error>(
+                &'source self,
+                mut keep: impl FnMut(&Key) -> bool,
+                mut replace: impl FnMut(
+                    #reference<'source>,
+                ) -> Result<Option<#reference<'source>>, Error>,
+            ) -> Result<
+                Self,
+                #runtime::CloneTreeError<#reference<'source>, Error>,
+            >
+            where
+                Key: Clone,
+            {
+                let selected = self.iter().filter(|(key, _)| keep(key)).collect::<Vec<_>>();
+                let capacity = selected
+                    .iter()
+                    .map(|(_, root)| #runtime::TreeCursorExt::subtree_len(*root))
+                    .sum();
+                let mut builder = #builder::with_capacity(capacity);
+                let mut keys = Vec::with_capacity(selected.len());
+                let mut roots = Vec::with_capacity(selected.len());
+                for (key, root) in selected {
+                    keys.push(key.clone());
+                    roots.push(builder.try_clone_subtree_with(root, &mut replace)?);
+                }
+                let forest = builder
+                    .finish_forest(roots)
+                    .expect("rewritten roots form a complete forest");
+                Ok(Self::new(keys, forest)
+                    .expect("selecting entries preserves sorted unique keys"))
+            }
+
             /// Retain entries whose keys satisfy `keep`.
             ///
             /// If every entry is retained, storage is preserved unchanged. Removing

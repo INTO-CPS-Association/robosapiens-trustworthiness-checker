@@ -50,6 +50,7 @@ mod tree_schema;
 /// | `ExprKind` | schema-author node payload using `ExprId` for children |
 /// | `ExprBuilder` | schema-author bottom-up allocator with validated completion methods |
 /// | `ExprForest` | schema-author ordered owning forest backed by one shared arena |
+/// | `ExprForestMap<Key>` | schema-author sorted keys associated with shared forest roots |
 /// | `ExprFields` | schema-author keyed children in source order |
 /// | `ExprArena` | schema-author storage with safe ID, kind, and metadata accessors |
 ///
@@ -63,6 +64,8 @@ mod tree_schema;
 /// `ExprBuilder::finish_forest(roots)` returns `Result<ExprForest, ForestError>`.
 /// `ExprForest` provides `new`, `len`, `is_empty`, `root_ids`, `roots` (borrowed
 /// cursors), and `into_roots` (owning `Expr` values), all at schema visibility.
+/// `ExprForestMap<Key>` additionally provides keyed lookup, retention, and fallible
+/// rewriting of all or selected roots into fresh compact storage.
 /// The optional `owned_constructors` setting generates
 /// variant-named constructors with the requested visibility. Outer attributes
 /// between `:` and the visibility are applied to the constructor `impl`, so

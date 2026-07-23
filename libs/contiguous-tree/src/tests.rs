@@ -530,6 +530,105 @@ fn forest_maps_require_sorted_unique_keys_and_preserve_associations() {
 }
 
 #[test]
+fn generated_forest_map_rewrite_rebuilds_all_roots_in_compact_shared_storage() {
+    let mut builder = FixtureBuilder::with_capacity(3);
+    let child = builder.alloc_default(FixtureKind::Leaf("replace".into()));
+    let first = builder.alloc_default(FixtureKind::Unary(child));
+    let second = builder.alloc_default(FixtureKind::Leaf("replacement".into()));
+    let forest = builder.finish_forest([first, second]).unwrap();
+    let map = FixtureForestMap::new(["a", "b"], forest).unwrap();
+    let replacement = map.get(&"b").unwrap();
+    let original = map.get_owned(&"a").unwrap();
+
+    let rewritten = map
+        .try_rewrite_with(|cursor| {
+            Ok::<_, std::convert::Infallible>(match cursor.view() {
+                FixtureView::Leaf(value) if value == "replace" => Some(replacement),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+    let FixtureView::Unary(child) = rewritten.get(&"a").unwrap().view() else {
+        panic!("expected rewritten unary root");
+    };
+    assert!(matches!(
+        child.view(),
+        FixtureView::Leaf(value) if value == "replacement"
+    ));
+    assert!(matches!(
+        rewritten.get(&"b").unwrap().view(),
+        FixtureView::Leaf(value) if value == "replacement"
+    ));
+    let first = rewritten.get_owned(&"a").unwrap();
+    let second = rewritten.get_owned(&"b").unwrap();
+    assert!(first.shares_storage_with(&second));
+    assert!(!original.shares_storage_with(&first));
+    assert_eq!(rewritten.nodes().len(), 3);
+}
+
+#[test]
+fn generated_forest_map_rewrite_selected_omits_unselected_storage() {
+    let mut builder = FixtureBuilder::with_capacity(3);
+    let child = builder.alloc_default(FixtureKind::Leaf("child".into()));
+    let retained = builder.alloc_default(FixtureKind::Unary(child));
+    let removed = builder.alloc_default(FixtureKind::Leaf("removed".into()));
+    let forest = builder.finish_forest([retained, removed]).unwrap();
+    let map = FixtureForestMap::new(["a", "b"], forest).unwrap();
+
+    let rewritten = map
+        .try_rewrite_selected_with(
+            |key| *key == "a",
+            |_| Ok::<_, std::convert::Infallible>(None),
+        )
+        .unwrap();
+
+    assert_eq!(rewritten.keys().copied().collect::<Vec<_>>(), ["a"]);
+    assert_eq!(rewritten.nodes().len(), 2);
+    let FixtureView::Unary(child) = rewritten.get(&"a").unwrap().view() else {
+        panic!("expected retained unary root");
+    };
+    assert!(matches!(
+        child.view(),
+        FixtureView::Leaf(value) if value == "child"
+    ));
+
+    let empty = map
+        .try_rewrite_selected_with(|_| false, |_| Ok::<_, std::convert::Infallible>(None))
+        .unwrap();
+    assert!(empty.is_empty());
+    assert_eq!(empty.nodes().len(), 0);
+}
+
+#[test]
+fn generated_forest_map_rewrite_reports_transitive_replacement_cycles() {
+    let mut builder = FixtureBuilder::with_capacity(2);
+    let first = builder.alloc_default(FixtureKind::Leaf("first".into()));
+    let second = builder.alloc_default(FixtureKind::Leaf("second".into()));
+    let forest = builder.finish_forest([first, second]).unwrap();
+    let map = FixtureForestMap::new(["a", "b"], forest).unwrap();
+    let first = map.get(&"a").unwrap();
+    let second = map.get(&"b").unwrap();
+
+    let error = map
+        .try_rewrite_with(|cursor| {
+            Ok::<_, std::convert::Infallible>(if cursor.id() == first.id() {
+                Some(second)
+            } else if cursor.id() == second.id() {
+                Some(first)
+            } else {
+                None
+            })
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CloneTreeError::ReplacementCycle { cursors } if cursors.len() == 3
+    ));
+}
+
+#[test]
 fn generated_forest_map_retain_preserves_storage_when_every_root_is_kept() {
     let mut builder = FixtureBuilder::with_capacity(2);
     let first = builder.alloc_default(FixtureKind::Leaf("first".into()));

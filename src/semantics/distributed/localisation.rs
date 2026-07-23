@@ -1,12 +1,13 @@
 //! Localisation and auxiliary-expression expansion for distributed DSRV specifications.
 
 use static_assertions::assert_obj_safe;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Debug};
 
+use contiguous_tree::CloneTreeError;
 use tracing::debug;
 
-use crate::lang::dsrv::ast::{DsrvSpecification, ExprView, RewriteForestError, rewrite_forest};
+use crate::lang::dsrv::ast::{DsrvSpecification, ExprView};
 use crate::lang::dsrv::span::Span;
 
 use crate::VarName;
@@ -156,28 +157,30 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         }
     }
 
-    let roots = spec
-        .roots()
-        .filter(|(var, _)| spec.output_vars.contains(*var) && !aux_vars.contains(*var))
-        .map(|(var, root)| (var.clone(), root))
-        .collect::<BTreeMap<_, _>>();
-    let exprs = rewrite_forest(roots, |expression| match expression.view() {
-        ExprView::Var(var) if aux_vars.contains(var) => Ok(spec.var_expr_ref(var)),
-        ExprView::MonitoredAt(var, node) if aux_vars.contains(var) => {
-            Err(DsrvLocalisationError::MonitoredAtAux {
-                variable: var.clone(),
-                node: node.clone(),
-            })
-        }
-        ExprView::Dist(_, _) => Err(DsrvLocalisationError::Dist),
-        _ => Ok(None),
-    })
-    .map_err(|error| match error {
-        RewriteForestError::Policy(error) => error,
-        RewriteForestError::ReplacementCycle { replacement_spans } => {
-            DsrvLocalisationError::CyclicReplacement { replacement_spans }
-        }
-    })?;
+    let exprs = spec
+        .exprs
+        .try_rewrite_selected_with(
+            |var| spec.output_vars.contains(var) && !aux_vars.contains(var),
+            |expression| match expression.view() {
+                ExprView::Var(var) if aux_vars.contains(var) => Ok(spec.var_expr_ref(var)),
+                ExprView::MonitoredAt(var, node) if aux_vars.contains(var) => {
+                    Err(DsrvLocalisationError::MonitoredAtAux {
+                        variable: var.clone(),
+                        node: node.clone(),
+                    })
+                }
+                ExprView::Dist(_, _) => Err(DsrvLocalisationError::Dist),
+                _ => Ok(None),
+            },
+        )
+        .map_err(|error| match error {
+            CloneTreeError::Policy(error) => error,
+            CloneTreeError::ReplacementCycle { cursors } => {
+                DsrvLocalisationError::CyclicReplacement {
+                    replacement_spans: cursors.into_iter().map(|cursor| cursor.span()).collect(),
+                }
+            }
+        })?;
 
     let output_vars = spec.output_vars.difference(&aux_vars).cloned().collect();
     let type_annotations = spec
