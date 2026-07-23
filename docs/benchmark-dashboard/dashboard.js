@@ -113,8 +113,8 @@ const IMPORTANT_SECTIONS = [
           "Stacked area showing staged compilation time over benchmark history. The total explicitly runs parsing, type checking, dependency graph construction and dataflow compilation; the remaining compilation segment is derived after subtracting the preceding phases.",
         phases: [
           {
-            label: "LALR parsing",
-            name: "compilation_phases/lalr_parse/1024",
+            label: "LALR parsing and validation",
+            name: "compilation_phases/parse_and_validate_specification/1024",
           },
           {
             label: "Strict type checking",
@@ -183,6 +183,12 @@ const IMPORTANT_SECTIONS = [
   },
 ];
 
+const BENCHMARK_ALIASES = {
+  "compilation_phases/parse_and_validate_specification/1024": [
+    "compilation_phases/lalr_parse/1024",
+  ],
+};
+
 const COLORS = ["#0969da", "#cf222e", "#1a7f37", "#8250df"];
 const AREA_COLORS = [
   "rgba(9, 105, 218, 0.45)",
@@ -212,8 +218,13 @@ function allBenchmarkNames(runs) {
   );
 }
 
+function benchmarkNames(name) {
+  return [name, ...(BENCHMARK_ALIASES[name] || [])];
+}
+
 function benchmarkFor(run, name) {
-  return run.benches.find((benchmark) => benchmark.name === name);
+  const names = benchmarkNames(name);
+  return run.benches.find((benchmark) => names.includes(benchmark.name));
 }
 
 function valueInNanoseconds(benchmark) {
@@ -311,7 +322,9 @@ function cardSources(cardDefinition) {
 function cardHasData(cardDefinition, availableNames) {
   const sources = cardSources(cardDefinition);
   if (cardDefinition.kind === "stacked-pipeline") {
-    return sources.every(({ name }) => availableNames.has(name));
+    return sources.every(({ name }) =>
+      benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
+    );
   }
   return sources.some(({ name }) => availableNames.has(name));
 }
