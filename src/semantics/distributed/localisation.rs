@@ -267,9 +267,10 @@ mod tests {
     use contiguous_tree::TreeCursorExt;
     use petgraph::graph::DiGraph;
 
+    use crate::core::BinaryOperator;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp};
+    use crate::lang::dsrv::ast::Expr;
     use crate::lang::dsrv::span::strip_span_ref;
     use proptest::prelude::*;
     use test_log::test;
@@ -417,7 +418,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var("x".into())),
                         Box::new(Expr::Var("y".into())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 )]
                 .into_iter()
@@ -437,7 +438,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var("z".into())),
                         Box::new(Expr::Var("w".into())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 )]
                 .into_iter()
@@ -477,7 +478,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var("x".into())),
                         Box::new(Expr::Var("y".into())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 )]
                 .into_iter()
@@ -497,7 +498,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var("z".into())),
                         Box::new(Expr::Var("w".into())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 )]
                 .into_iter()
@@ -524,7 +525,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var(x.clone())),
                         Box::new(Expr::Var(y.clone())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 ),
                 (
@@ -532,7 +533,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var(tmp.clone())),
                         Box::new(Expr::Var(x.clone())),
-                        SBinOp::NOp(NumericalBinOp::Mul),
+                        BinaryOperator::Multiply,
                     ),
                 ),
             ]
@@ -550,10 +551,10 @@ mod tests {
                 Box::new(Expr::BinOp(
                     Box::new(Expr::Var(x.clone())),
                     Box::new(Expr::Var(y.clone())),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 )),
                 Box::new(Expr::Var(x.clone())),
-                SBinOp::NOp(NumericalBinOp::Mul),
+                BinaryOperator::Multiply,
             ),
         )]
         .into_iter()
@@ -589,7 +590,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var(h1.clone())),
                         Box::new(Expr::Val(1)),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 ),
                 (
@@ -597,7 +598,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var(h2.clone())),
                         Box::new(Expr::Val(2)),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 ),
                 (out.clone(), Expr::Var(h3.clone())),
@@ -617,10 +618,10 @@ mod tests {
                 Box::new(Expr::BinOp(
                     Box::new(Expr::Var(i.clone())),
                     Box::new(Expr::Val(1)),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 )),
                 Box::new(Expr::Val(2)),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         )]
         .into_iter()
@@ -749,7 +750,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var(helper.clone())),
                         Box::new(Expr::Val(true)),
-                        SBinOp::BOp(BoolBinOp::And),
+                        BinaryOperator::And,
                     ),
                 ),
             ]),

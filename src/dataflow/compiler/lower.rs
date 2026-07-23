@@ -5,7 +5,8 @@
 
 use super::super::plan::*;
 use super::super::*;
-use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView, SBinOp};
+use crate::core::UnaryOperator;
+use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 
 struct PlanBuilder {
@@ -57,18 +58,14 @@ fn lower_expr(expr: ExprCursor<'_>, builder: &mut PlanBuilder) -> UnboundRef {
         BinOp(lhs, rhs, op) => {
             let lhs = lower_expr(lhs, builder);
             let rhs = lower_expr(rhs, builder);
-            builder.push(UnboundOp::Binary {
-                op: lower_binary_op(op.clone()),
-                lhs,
-                rhs,
-            })
+            builder.push(UnboundOp::Binary { op, lhs, rhs })
         }
-        Not(arg) => lower_unary(builder, DataflowUnaryOp::Not, arg),
-        Neg(arg) => lower_unary(builder, DataflowUnaryOp::Neg, arg),
-        Sin(arg) => lower_unary(builder, DataflowUnaryOp::Sin, arg),
-        Cos(arg) => lower_unary(builder, DataflowUnaryOp::Cos, arg),
-        Tan(arg) => lower_unary(builder, DataflowUnaryOp::Tan, arg),
-        Abs(arg) => lower_unary(builder, DataflowUnaryOp::Abs, arg),
+        Not(arg) => lower_unary(builder, UnaryOperator::Not, arg),
+        Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg),
+        Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg),
+        Cos(arg) => lower_unary(builder, UnaryOperator::Cos, arg),
+        Tan(arg) => lower_unary(builder, UnaryOperator::Tan, arg),
+        Abs(arg) => lower_unary(builder, UnaryOperator::Absolute, arg),
         If(cond, then_value, else_value) => {
             let cond = lower_expr(cond, builder);
             let then_branch = lower_branch(then_value);
@@ -275,7 +272,7 @@ fn lower_expr(expr: ExprCursor<'_>, builder: &mut PlanBuilder) -> UnboundRef {
     }
 }
 
-fn lower_unary(builder: &mut PlanBuilder, op: DataflowUnaryOp, arg: ExprCursor<'_>) -> UnboundRef {
+fn lower_unary(builder: &mut PlanBuilder, op: UnaryOperator, arg: ExprCursor<'_>) -> UnboundRef {
     let arg = lower_expr(arg, builder);
     builder.push(UnboundOp::Unary { op, arg })
 }
@@ -390,25 +387,5 @@ fn specialize_recursive_self_calls_in_op(op: &mut UnboundOp, self_name: &VarName
             specialize_recursive_self_calls(else_branch, self_name);
         }
         _ => {}
-    }
-}
-
-fn lower_binary_op(op: SBinOp) -> DataflowBinaryOp {
-    use crate::lang::dsrv::ast::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
-    match op {
-        SBinOp::NOp(NumericalBinOp::Add) => DataflowBinaryOp::Add,
-        SBinOp::NOp(NumericalBinOp::Sub) => DataflowBinaryOp::Sub,
-        SBinOp::NOp(NumericalBinOp::Mul) => DataflowBinaryOp::Mul,
-        SBinOp::NOp(NumericalBinOp::Div) => DataflowBinaryOp::Div,
-        SBinOp::NOp(NumericalBinOp::Mod) => DataflowBinaryOp::Mod,
-        SBinOp::BOp(BoolBinOp::Or) => DataflowBinaryOp::Or,
-        SBinOp::BOp(BoolBinOp::And) => DataflowBinaryOp::And,
-        SBinOp::BOp(BoolBinOp::Impl) => DataflowBinaryOp::Impl,
-        SBinOp::SOp(StrBinOp::Concat) => DataflowBinaryOp::Concat,
-        SBinOp::COp(CompBinOp::Eq) => DataflowBinaryOp::Eq,
-        SBinOp::COp(CompBinOp::Le) => DataflowBinaryOp::Le,
-        SBinOp::COp(CompBinOp::Lt) => DataflowBinaryOp::Lt,
-        SBinOp::COp(CompBinOp::Ge) => DataflowBinaryOp::Ge,
-        SBinOp::COp(CompBinOp::Gt) => DataflowBinaryOp::Gt,
     }
 }

@@ -1,9 +1,9 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, SBinOp, NumericalBinOp, CompBinOp, BoolBinOp, StrBinOp, ExprId, VarOrNodeName};
+use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, ExprId, VarOrNodeName};
 use crate::lang::dsrv::parser::Declaration;
-use crate::core::{Value, VarName, StreamType, StreamTypeAscription};
+use crate::core::{BinaryOperator, Value, VarName, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
@@ -297,10 +297,10 @@ UnaryExpr<Next>: ExprId = {
 // -----------------------------------------------------------------------------
 
 // Multiplicative helpers
-MultExprHelp: SBinOp  = {
-    "*" => SBinOp::NOp(NumericalBinOp::Mul),
-    "/" => SBinOp::NOp(NumericalBinOp::Div),
-    "%" => SBinOp::NOp(NumericalBinOp::Mod),
+MultExprHelp: BinaryOperator  = {
+    "*" => BinaryOperator::Multiply,
+    "/" => BinaryOperator::Divide,
+    "%" => BinaryOperator::Modulo,
 };
 
 MultExpr<Next>: ExprId = {
@@ -311,9 +311,9 @@ MultExpr<Next>: ExprId = {
 };
 
 // Additive helpers
-AddExprHelp: SBinOp  = {
-    "+" => SBinOp::NOp(NumericalBinOp::Add),
-    "-" => SBinOp::NOp(NumericalBinOp::Sub),
+AddExprHelp: BinaryOperator  = {
+    "+" => BinaryOperator::Add,
+    "-" => BinaryOperator::Subtract,
 };
 
 AddExpr<Next>: ExprId = {
@@ -324,11 +324,11 @@ AddExpr<Next>: ExprId = {
 };
 
 // Relational operators ( < <= > >= )
-RelExprHelp: SBinOp = {
-    "<=" => SBinOp::COp(CompBinOp::Le),
-    ">=" => SBinOp::COp(CompBinOp::Ge),
-    "<" => SBinOp::COp(CompBinOp::Lt),
-    ">" => SBinOp::COp(CompBinOp::Gt),
+RelExprHelp: BinaryOperator = {
+    "<=" => BinaryOperator::LessEqual,
+    ">=" => BinaryOperator::GreaterEqual,
+    "<" => BinaryOperator::Less,
+    ">" => BinaryOperator::Greater,
 }
 
 RelExpr<Next>: ExprId ={
@@ -339,9 +339,9 @@ RelExpr<Next>: ExprId ={
 };
 
 // Comparison (==)
-CompExprHelp: SBinOp = {
-    "==" => SBinOp::COp(CompBinOp::Eq),
-    // "!=" => SBinOp::COp(CompBinOp::Ne), // Not implemented yet
+CompExprHelp: BinaryOperator = {
+    "==" => BinaryOperator::Equal,
+    // "!=" => BinaryOperator::NotEqual, // Not implemented yet
 }
 
 CompExpr<Next>: ExprId = {
@@ -354,21 +354,21 @@ CompExpr<Next>: ExprId = {
 // Boolean
 AndExpr<Next>: ExprId = {
   <l:@L>  <lhs: AndExpr<Next>> "&&" <rhs: Next> <r:@R> => {
-        builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::And)), Span::new(l as u32, r as u32))
+        builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::And), Span::new(l as u32, r as u32))
     },
     Next
 };
 
 OrExpr<Next>: ExprId = {
    <l:@L> <lhs: OrExpr<Next>> "||" <rhs: Next> <r:@R> => {
-        builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Or)), Span::new(l as u32, r as u32))
+        builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Or), Span::new(l as u32, r as u32))
     },
     Next
 };
 
 ImplExpr<Next>: ExprId = {
    <l:@L> <lhs: ImplExpr<Next>> "=>" <rhs: Next> <r:@R> => {
-        builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::BOp(BoolBinOp::Impl)), Span::new(l as u32, r as u32))
+        builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Implication), Span::new(l as u32, r as u32))
     },
     Next
 };
@@ -376,7 +376,7 @@ ImplExpr<Next>: ExprId = {
 // String concat
 ConcatExpr<Next>: ExprId = {
    <l:@L> <lhs: ConcatExpr<Next>> "++" <rhs: Next> <r:@R> => {
-                builder.alloc(ExprKind::BinOp(lhs, rhs, SBinOp::SOp(StrBinOp::Concat)), Span::new(l as u32, r as u32))
+                builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Concatenate), Span::new(l as u32, r as u32))
     },
     Next
 }

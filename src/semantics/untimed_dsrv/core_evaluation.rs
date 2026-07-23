@@ -1,10 +1,8 @@
 //! Untimed DSRV evaluation reused by distributed semantics.
 
 use super::combinators as mc;
-use crate::core::{OutputStream, Value};
-use crate::lang::dsrv::ast::{
-    BoolBinOp, CompBinOp, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp,
-};
+use crate::core::{BinaryOperator, OutputStream, Value};
+use crate::lang::dsrv::ast::{ExprRef, ExprView};
 
 pub(crate) fn evaluate<'a>(
     node: ExprRef<'a>,
@@ -18,20 +16,20 @@ pub(crate) fn evaluate<'a>(
             let left = evaluate(left);
             let right = evaluate(right);
             match operator {
-                SBinOp::NOp(NumericalBinOp::Add) => mc::plus(left, right),
-                SBinOp::NOp(NumericalBinOp::Sub) => mc::minus(left, right),
-                SBinOp::NOp(NumericalBinOp::Mul) => mc::mult(left, right),
-                SBinOp::NOp(NumericalBinOp::Div) => mc::div(left, right),
-                SBinOp::NOp(NumericalBinOp::Mod) => mc::modulo(left, right),
-                SBinOp::BOp(BoolBinOp::Or) => mc::or(left, right),
-                SBinOp::BOp(BoolBinOp::And) => mc::and(left, right),
-                SBinOp::BOp(BoolBinOp::Impl) => mc::implication(left, right),
-                SBinOp::SOp(StrBinOp::Concat) => mc::concat(left, right),
-                SBinOp::COp(CompBinOp::Eq) => mc::eq(left, right),
-                SBinOp::COp(CompBinOp::Le) => mc::le(left, right),
-                SBinOp::COp(CompBinOp::Lt) => mc::lt(left, right),
-                SBinOp::COp(CompBinOp::Ge) => mc::ge(left, right),
-                SBinOp::COp(CompBinOp::Gt) => mc::gt(left, right),
+                BinaryOperator::Add => mc::plus(left, right),
+                BinaryOperator::Subtract => mc::minus(left, right),
+                BinaryOperator::Multiply => mc::mult(left, right),
+                BinaryOperator::Divide => mc::div(left, right),
+                BinaryOperator::Modulo => mc::modulo(left, right),
+                BinaryOperator::Or => mc::or(left, right),
+                BinaryOperator::And => mc::and(left, right),
+                BinaryOperator::Implication => mc::implication(left, right),
+                BinaryOperator::Concatenate => mc::concat(left, right),
+                BinaryOperator::Equal => mc::eq(left, right),
+                BinaryOperator::LessEqual => mc::le(left, right),
+                BinaryOperator::Less => mc::lt(left, right),
+                BinaryOperator::GreaterEqual => mc::ge(left, right),
+                BinaryOperator::Greater => mc::gt(left, right),
             }
         }
         Not(value) => mc::not(evaluate(value)),

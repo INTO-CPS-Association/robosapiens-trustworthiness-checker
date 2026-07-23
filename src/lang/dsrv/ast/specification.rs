@@ -324,15 +324,15 @@ mod tests {
 
     use crate::TypeCheckOptions;
     use crate::VarName;
+    use crate::core::BinaryOperator;
     use crate::core::{StreamType, StreamTypeAscription};
     use crate::dsrv_fixtures::{
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
         spec_simple_add_monitor_typed,
     };
-    use crate::lang::dsrv::ast::NumericalBinOp;
     use crate::lang::dsrv::ast::{
         CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, ExprBuilder,
-        ExprKind, SBinOp,
+        ExprKind,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
@@ -522,7 +522,7 @@ mod tests {
         let built = Expr::BinOp(
             Box::new(Expr::Val(1)),
             Box::new(Expr::Val(2)),
-            SBinOp::NOp(NumericalBinOp::Add),
+            BinaryOperator::Add,
         );
 
         let mut builder = ExprBuilder::with_capacity(4);
@@ -530,7 +530,7 @@ mod tests {
         let left = builder.alloc(ExprKind::Val(1.into()), Span::default());
         let right = builder.alloc(ExprKind::Val(2.into()), Span::default());
         let root = builder.alloc(
-            ExprKind::BinOp(left, right, SBinOp::NOp(NumericalBinOp::Add)),
+            ExprKind::BinOp(left, right, BinaryOperator::Add),
             Span::default(),
         );
         let mut roots = builder
@@ -547,7 +547,7 @@ mod tests {
         let expr = Expr::BinOp(
             Box::new(Expr::Val(1)),
             Box::new(Expr::Val(2)),
-            SBinOp::NOp(NumericalBinOp::Add),
+            BinaryOperator::Add,
         );
         let json = serde_json::to_value(&expr).unwrap();
 

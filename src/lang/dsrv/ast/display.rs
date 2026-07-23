@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Error};
 
-use crate::core::{StreamTypeAscription, VarName};
+use crate::core::{BinaryOperator, StreamTypeAscription, VarName};
 
 use super::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr, ExprRef,
@@ -37,7 +37,9 @@ impl Display for ExprRef<'_> {
         match self.view() {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),
-            BinOp(lhs, rhs, op) => write!(f, "({} {op} {})", lhs, rhs),
+            BinOp(lhs, rhs, operator) => {
+                write!(f, "({} {} {})", lhs, binary_operator_symbol(operator), rhs)
+            }
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
             SIndex(expr, index) => write!(f, "{}[{index}]", expr),
             Not(expr) => write!(f, "!{expr}"),
@@ -168,6 +170,25 @@ impl Display for ExprRef<'_> {
             MonitoredAt(var, node) => write!(f, "monitored_at({var}, {node})"),
             Dist(a, b) => write!(f, "dist({a}, {b})"),
         }
+    }
+}
+
+fn binary_operator_symbol(operator: BinaryOperator) -> &'static str {
+    match operator {
+        BinaryOperator::Add => "+",
+        BinaryOperator::Subtract => "-",
+        BinaryOperator::Multiply => "*",
+        BinaryOperator::Divide => "/",
+        BinaryOperator::Modulo => "%",
+        BinaryOperator::Or => "||",
+        BinaryOperator::And => "&&",
+        BinaryOperator::Implication => "=>",
+        BinaryOperator::Concatenate => "++",
+        BinaryOperator::Equal => "==",
+        BinaryOperator::Less => "<",
+        BinaryOperator::LessEqual => "<=",
+        BinaryOperator::Greater => ">",
+        BinaryOperator::GreaterEqual => ">=",
     }
 }
 

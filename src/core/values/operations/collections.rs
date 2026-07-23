@@ -3,6 +3,21 @@ use ecow::EcoString;
 use super::Value;
 use super::dispatch::{ValueOpError, invalid_binary_named, invalid_unary_named};
 
+pub fn tuple_get(tuple: Value, index: usize) -> Result<Value, ValueOpError> {
+    match tuple {
+        Value::Tuple(values) | Value::List(values) => {
+            values
+                .get(index)
+                .cloned()
+                .ok_or(ValueOpError::TupleIndexOutOfBounds {
+                    index,
+                    len: values.len(),
+                })
+        }
+        operand => invalid_unary_named("tuple indexing", operand),
+    }
+}
+
 pub fn list_index(list: Value, index: Value) -> Result<Value, ValueOpError> {
     match (list, index) {
         (Value::List(_), Value::Int(index)) if index < 0 => {

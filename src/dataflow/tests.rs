@@ -1,8 +1,9 @@
 use super::*;
+use crate::core::BinaryOperator;
 use crate::dsrv_fixtures::TestConfig;
 use crate::io::map;
 use crate::io::testing::ManualOutputHandler;
-use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
+use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
 use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 
@@ -68,11 +69,7 @@ fn arb_valid_dataflow_program_and_inputs()
                 let offset = u64::from(second % 5);
                 let var = |name: VarName| Expr::Var(name);
                 let expression = match operator % 12 {
-                    0 => Expr::BinOp(
-                        Box::new(var(lhs)),
-                        Box::new(var(rhs)),
-                        SBinOp::NOp(NumericalBinOp::Add),
-                    ),
+                    0 => Expr::BinOp(Box::new(var(lhs)), Box::new(var(rhs)), BinaryOperator::Add),
                     1 => Expr::If(
                         Box::new(var(VarName::new("flag"))),
                         Box::new(var(lhs)),
@@ -94,14 +91,14 @@ fn arb_valid_dataflow_program_and_inputs()
                             Box::new(Expr::Val(Value::Int(0))),
                         )),
                         Box::new(var(VarName::new("x"))),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                     7 => Expr::Abs(Box::new(var(lhs))),
                     8 => Expr::Latch(Box::new(var(lhs)), Box::new(var(rhs))),
                     9 => Expr::BinOp(
                         Box::new(var(lhs)),
                         Box::new(var(rhs)),
-                        SBinOp::NOp(NumericalBinOp::Sub),
+                        BinaryOperator::Subtract,
                     ),
                     10 => Expr::Default(Box::new(var(lhs)), Box::new(var(rhs))),
                     _ => Expr::Val(Value::Int(i64::from(first))),

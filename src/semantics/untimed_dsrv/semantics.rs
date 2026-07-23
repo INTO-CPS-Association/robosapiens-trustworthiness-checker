@@ -12,11 +12,10 @@ use super::typed_combinators as typed;
 use crate::VarName;
 use crate::core::Value;
 use crate::core::{
-    OutputStream, PartialStreamValue, from_typed_partial_stream, to_typed_partial_stream,
+    BinaryOperator, BinaryOperatorKind, OutputStream, PartialStreamValue,
+    from_typed_partial_stream, to_typed_partial_stream,
 };
-use crate::lang::dsrv::ast::{
-    BoolBinOp, CheckedExpr, CompBinOp, Expr, ExprRef, ExprView, NumericalBinOp, SBinOp,
-};
+use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprRef, ExprView};
 use crate::lang::dsrv::type_checker::TCType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
@@ -229,15 +228,16 @@ where
                 }
             }
         }
-        BinOp(left, right, SBinOp::NOp(operator)) => {
+        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Numeric => {
             let left = evaluate_float_typed::<AC>(expression.scope(left), context);
             let right = evaluate_float_typed::<AC>(expression.scope(right), context);
             match operator {
-                NumericalBinOp::Add => typed::add(left, right),
-                NumericalBinOp::Sub => typed::sub(left, right),
-                NumericalBinOp::Mul => typed::mul(left, right),
-                NumericalBinOp::Div => typed::div(left, right),
-                NumericalBinOp::Mod => typed::rem(left, right),
+                BinaryOperator::Add => typed::add(left, right),
+                BinaryOperator::Subtract => typed::sub(left, right),
+                BinaryOperator::Multiply => typed::mul(left, right),
+                BinaryOperator::Divide => typed::div(left, right),
+                BinaryOperator::Modulo => typed::rem(left, right),
+                _ => unreachable!("numeric operator kind contains only numeric operators"),
             }
         }
         Default(input, default) => typed::default(
@@ -293,15 +293,16 @@ where
                 }
             }
         }
-        BinOp(left, right, SBinOp::NOp(operator)) => {
+        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Numeric => {
             let left = evaluate_int_typed::<AC>(expression.scope(left), context);
             let right = evaluate_int_typed::<AC>(expression.scope(right), context);
             match operator {
-                NumericalBinOp::Add => typed::add(left, right),
-                NumericalBinOp::Sub => typed::sub(left, right),
-                NumericalBinOp::Mul => typed::mul(left, right),
-                NumericalBinOp::Div => typed::div(left, right),
-                NumericalBinOp::Mod => typed::rem(left, right),
+                BinaryOperator::Add => typed::add(left, right),
+                BinaryOperator::Subtract => typed::sub(left, right),
+                BinaryOperator::Multiply => typed::mul(left, right),
+                BinaryOperator::Divide => typed::div(left, right),
+                BinaryOperator::Modulo => typed::rem(left, right),
+                _ => unreachable!("numeric operator kind contains only numeric operators"),
             }
         }
         Default(input, default) => typed::default(
@@ -354,39 +355,56 @@ where
             }
         }
         Not(input) => typed::not(evaluate_bool_typed::<AC>(expression.scope(input), context)),
-        BinOp(left, right, SBinOp::BOp(operator)) => {
+        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Boolean => {
             let left = evaluate_bool_typed::<AC>(expression.scope(left), context);
             let right = evaluate_bool_typed::<AC>(expression.scope(right), context);
             match operator {
-                BoolBinOp::And => typed::and(left, right),
-                BoolBinOp::Or => typed::or(left, right),
-                BoolBinOp::Impl => typed::implies(left, right),
+                BinaryOperator::And => typed::and(left, right),
+                BinaryOperator::Or => typed::or(left, right),
+                BinaryOperator::Implication => typed::implies(left, right),
+                _ => unreachable!("boolean operator kind contains only boolean operators"),
             }
         }
-        BinOp(left, right, SBinOp::COp(operator))
-            if matches!(expression.typ(left), Some(TCType::Int)) =>
+        BinOp(left, right, operator)
+            if matches!(
+                operator.kind(),
+                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
+            ) && matches!(expression.typ(left), Some(TCType::Int)) =>
         {
             let left = evaluate_int_typed::<AC>(expression.scope(left), context);
             let right = evaluate_int_typed::<AC>(expression.scope(right), context);
             match operator {
-                CompBinOp::Eq => typed::compare(left, right, |left, right| left == right),
-                CompBinOp::Le => typed::compare(left, right, |left, right| left <= right),
-                CompBinOp::Lt => typed::compare(left, right, |left, right| left < right),
-                CompBinOp::Ge => typed::compare(left, right, |left, right| left >= right),
-                CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
+                BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
+                BinaryOperator::LessEqual => {
+                    typed::compare(left, right, |left, right| left <= right)
+                }
+                BinaryOperator::Less => typed::compare(left, right, |left, right| left < right),
+                BinaryOperator::GreaterEqual => {
+                    typed::compare(left, right, |left, right| left >= right)
+                }
+                BinaryOperator::Greater => typed::compare(left, right, |left, right| left > right),
+                _ => unreachable!("comparison operator kind contains only comparison operators"),
             }
         }
-        BinOp(left, right, SBinOp::COp(operator))
-            if matches!(expression.typ(left), Some(TCType::Float)) =>
+        BinOp(left, right, operator)
+            if matches!(
+                operator.kind(),
+                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
+            ) && matches!(expression.typ(left), Some(TCType::Float)) =>
         {
             let left = evaluate_float_typed::<AC>(expression.scope(left), context);
             let right = evaluate_float_typed::<AC>(expression.scope(right), context);
             match operator {
-                CompBinOp::Eq => typed::compare(left, right, |left, right| left == right),
-                CompBinOp::Le => typed::compare(left, right, |left, right| left <= right),
-                CompBinOp::Lt => typed::compare(left, right, |left, right| left < right),
-                CompBinOp::Ge => typed::compare(left, right, |left, right| left >= right),
-                CompBinOp::Gt => typed::compare(left, right, |left, right| left > right),
+                BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
+                BinaryOperator::LessEqual => {
+                    typed::compare(left, right, |left, right| left <= right)
+                }
+                BinaryOperator::Less => typed::compare(left, right, |left, right| left < right),
+                BinaryOperator::GreaterEqual => {
+                    typed::compare(left, right, |left, right| left >= right)
+                }
+                BinaryOperator::Greater => typed::compare(left, right, |left, right| left > right),
+                _ => unreachable!("comparison operator kind contains only comparison operators"),
             }
         }
         Default(input, default) => typed::default(

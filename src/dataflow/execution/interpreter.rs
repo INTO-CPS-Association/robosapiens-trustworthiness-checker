@@ -2,9 +2,10 @@ use super::super::plan::*;
 use super::super::*;
 use super::dynamic::*;
 use super::functions::*;
+use super::lifting::*;
 use super::plan_executor::*;
 use super::state::*;
-use super::value_evaluation::*;
+use crate::core::values::operations as value_operations;
 
 /// Evaluates one node at one logical tick and is shared by every execution mode.
 pub(in crate::dataflow) fn eval_node_at(
@@ -167,7 +168,11 @@ pub(in crate::dataflow) fn eval_node_at(
                 context.read(state, idx, tick),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            lift_two(values.next().unwrap(), values.next().unwrap(), eval_lindex)
+            lift_two(
+                values.next().unwrap(),
+                values.next().unwrap(),
+                |list, index| expect_value(value_operations::list_index(list, index)),
+            )
         }
         BoundOp::LAppend { list, value } => {
             let values = vec![
@@ -175,7 +180,11 @@ pub(in crate::dataflow) fn eval_node_at(
                 context.read(state, value, tick),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            lift_two(values.next().unwrap(), values.next().unwrap(), eval_lappend)
+            lift_two(
+                values.next().unwrap(),
+                values.next().unwrap(),
+                |list, value| expect_value(value_operations::list_append(list, value)),
+            )
         }
         BoundOp::LConcat { lhs, rhs } => {
             let values = vec![
@@ -183,41 +192,45 @@ pub(in crate::dataflow) fn eval_node_at(
                 context.read(state, rhs, tick),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            lift_two(values.next().unwrap(), values.next().unwrap(), eval_lconcat)
+            lift_two(
+                values.next().unwrap(),
+                values.next().unwrap(),
+                |lhs, rhs| expect_value(value_operations::list_concat(lhs, rhs)),
+            )
         }
         BoundOp::LHead { list } => {
             let values = vec![context.read(state, list, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                eval_lhead,
+                |list| expect_value(value_operations::list_head(list)),
             )
         }
         BoundOp::LTail { list } => {
             let values = vec![context.read(state, list, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                eval_ltail,
+                |list| expect_value(value_operations::list_tail(list)),
             )
         }
         BoundOp::LLen { list } => {
             let values = vec![context.read(state, list, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                eval_llen,
+                |list| expect_value(value_operations::list_len(list)),
             )
         }
         BoundOp::MGet { map, key } => {
             let values = vec![context.read(state, map, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                |map| eval_mget(map, key),
+                |map| expect_value(value_operations::map_get(map, key)),
             )
         }
         BoundOp::MRemove { map, key } => {
             let values = vec![context.read(state, map, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                |map| eval_mremove(map, key),
+                |map| expect_value(value_operations::map_remove(map, key)),
             )
         }
         BoundOp::MInsert { map, key, value } => {
@@ -229,21 +242,21 @@ pub(in crate::dataflow) fn eval_node_at(
             lift_two(
                 values.next().unwrap(),
                 values.next().unwrap(),
-                |map, value| eval_minsert(map, key, value),
+                |map, value| expect_value(value_operations::map_insert(map, key, value)),
             )
         }
         BoundOp::MHasKey { map, key } => {
             let values = vec![context.read(state, map, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                |map| eval_mhas_key(map, key),
+                |map| expect_value(value_operations::map_has_key(map, key)),
             )
         }
         BoundOp::TGet { tuple, index: idx } => {
             let values = vec![context.read(state, tuple, tick)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                |tuple| eval_tget(tuple, *idx),
+                |tuple| expect_value(value_operations::tuple_get(tuple, *idx)),
             )
         }
 

@@ -2,10 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
-use crate::{
-    DsrvSpecification, Value, VarName,
-    lang::dsrv::ast::{BoolBinOp, CompBinOp, Expr, NumericalBinOp, SBinOp, StrBinOp},
-};
+use crate::{DsrvSpecification, Value, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
 // Mixed type expressions. Note that these are not fully recursively mixed-type as we switch to
 // single type expressions within the individual branches of the mixed type expression
 pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
@@ -15,39 +12,33 @@ pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
     ];
 
     let int_cmp = prop_oneof![
+        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Equal) }),
         (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
+            Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::LessEqual)
         }),
+        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Less) }),
         (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Le))
+            Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::GreaterEqual)
         }),
-        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Lt))
-        }),
-        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Ge))
-        }),
-        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Gt))
-        }),
+        (arb_int_sexpr(vars.clone()), arb_int_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Greater) }),
     ];
 
     let float_cmp = prop_oneof![
+        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Equal) }),
         (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
+            Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::LessEqual)
         }),
+        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Less) }),
         (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Le))
+            Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::GreaterEqual)
         }),
-        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Lt))
-        }),
-        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Ge))
-        }),
-        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone())).prop_map(|(a, b)| {
-            Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Gt))
-        }),
+        (arb_float_sexpr(vars.clone()), arb_float_sexpr(vars.clone()))
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Greater) }),
     ];
 
     let string_cmp = prop_oneof![
@@ -55,9 +46,7 @@ pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             arb_string_sexpr(vars.clone()),
             arb_string_sexpr(vars.clone())
         )
-            .prop_map(|(a, b)| {
-                Expr::BinOp(Box::new(a), Box::new(b), SBinOp::COp(CompBinOp::Eq))
-            }),
+            .prop_map(|(a, b)| { Expr::BinOp(Box::new(a), Box::new(b), BinaryOperator::Equal) }),
     ];
 
     let comparison_leaf = prop_oneof![int_cmp, float_cmp, string_cmp];
@@ -67,17 +56,17 @@ pub fn arb_mixed_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::Or)
+                BinaryOperator::Or
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::And)
+                BinaryOperator::And
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::Impl)
+                BinaryOperator::Implication
             )),
             (inner.clone(), inner.clone(), inner.clone()).prop_map(|(c, t, e)| Expr::If(
                 Box::new(c),
@@ -99,17 +88,17 @@ pub fn arb_boolean_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::Or)
+                BinaryOperator::Or
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::And)
+                BinaryOperator::And
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::BOp(BoolBinOp::And)
+                BinaryOperator::And
             )),
         ]
     })
@@ -125,27 +114,27 @@ pub fn arb_int_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Add)
+                BinaryOperator::Add
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Sub)
+                BinaryOperator::Subtract
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Mul)
+                BinaryOperator::Multiply
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Div)
+                BinaryOperator::Divide
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Mod)
+                BinaryOperator::Modulo
             )),
             (
                 arb_boolean_sexpr(vars.clone()),
@@ -172,27 +161,27 @@ pub fn arb_float_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Add)
+                BinaryOperator::Add
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Sub)
+                BinaryOperator::Subtract
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Mul)
+                BinaryOperator::Multiply
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Div)
+                BinaryOperator::Divide
             )),
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::NOp(NumericalBinOp::Mod)
+                BinaryOperator::Modulo
             )),
             (
                 arb_boolean_sexpr(vars.clone()),
@@ -220,7 +209,7 @@ pub fn arb_string_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
             (inner.clone(), inner.clone()).prop_map(|(a, b)| Expr::BinOp(
                 Box::new(a),
                 Box::new(b),
-                SBinOp::SOp(StrBinOp::Concat)
+                BinaryOperator::Concatenate
             )),
             (
                 arb_boolean_sexpr(vars.clone()),

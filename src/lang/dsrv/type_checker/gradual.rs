@@ -165,7 +165,8 @@ pub fn type_check_gradual(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::ast::{Expr, NumericalBinOp, SBinOp};
+    use crate::core::BinaryOperator;
+    use crate::lang::dsrv::ast::Expr;
     use crate::{Value, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
@@ -190,7 +191,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
                 Box::new(Expr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let mut type_annotations = BTreeMap::new();
@@ -218,7 +219,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
                 Box::new(Expr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let spec = DsrvSpecification::new(
@@ -298,7 +299,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Var(y.clone())),
                 Box::new(Expr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         exprs.insert(
@@ -306,7 +307,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
                 Box::new(Expr::Val(Value::Int(1))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let mut type_annotations = BTreeMap::new();
@@ -452,7 +453,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Val(Value::Int(1))),
                 Box::new(Expr::Val(Value::Str("a".into()))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let mut type_annotations = BTreeMap::new();
@@ -480,7 +481,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Val(Value::Int(1))),
                 Box::new(Expr::Val(Value::Str("a".into()))),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let spec = DsrvSpecification::new(
@@ -772,7 +773,7 @@ mod tests {
             Expr::BinOp(
                 Box::new(Expr::Var(a.clone())),
                 Box::new(Expr::Var(b.clone())),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             ),
         );
         let spec = DsrvSpecification::new(

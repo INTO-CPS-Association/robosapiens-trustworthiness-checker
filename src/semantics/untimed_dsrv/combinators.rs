@@ -1,6 +1,7 @@
 use crate::core::StreamData;
 use crate::core::Value;
-use crate::core::values::operations::{self as value_operations, BinaryValueOp, UnaryValueOp};
+use crate::core::values::operations as value_operations;
+use crate::core::{BinaryOperator, UnaryOperator};
 use crate::semantics::AsyncConfig;
 use crate::semantics::StreamContext;
 use crate::{OutputStream, VarName};
@@ -27,11 +28,11 @@ fn unwrap_value(result: Result<Value, value_operations::ValueOpError>) -> Value 
     result.unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn eval_binary(operation: BinaryValueOp, left: Value, right: Value) -> Value {
+fn eval_binary(operation: BinaryOperator, left: Value, right: Value) -> Value {
     unwrap_value(value_operations::binary(operation, left, right))
 }
 
-fn eval_unary(operation: UnaryValueOp, operand: Value) -> Value {
+fn eval_unary(operation: UnaryOperator, operand: Value) -> Value {
     unwrap_value(value_operations::unary(operation, operand))
 }
 
@@ -107,19 +108,19 @@ pub fn stream_lift2(
 }
 
 pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::And, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::And, x, y), x, y)
 }
 
 pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Or, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Or, x, y), x, y)
 }
 
 pub fn implication(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Implication, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Implication, x, y), x, y)
 }
 
 pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|x| eval_unary(UnaryValueOp::Not, x), x)
+    stream_lift1(|x| eval_unary(UnaryOperator::Not, x), x)
 }
 
 // Semantic detail: deferred == deferred === deferred
@@ -127,23 +128,23 @@ pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
 // For the old, value equality, you can use:
 // default(x == y, is_defined(x) == is_defined(y))
 pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Equal, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Equal, x, y), x, y)
 }
 
 pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::LessEqual, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::LessEqual, x, y), x, y)
 }
 
 pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Less, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Less, x, y), x, y)
 }
 
 pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::GreaterEqual, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::GreaterEqual, x, y), x, y)
 }
 
 pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Greater, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Greater, x, y), x, y)
 }
 
 pub fn val(x: Value) -> OutputStream<Value> {
@@ -246,7 +247,7 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     stream_lift2(
         |x, y| {
             debug!("Executing plus operation");
-            eval_binary(BinaryValueOp::Add, x, y)
+            eval_binary(BinaryOperator::Add, x, y)
         },
         x,
         y,
@@ -254,23 +255,23 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
 }
 
 pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Mod, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Modulo, x, y), x, y)
 }
 
 pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Sub, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Subtract, x, y), x, y)
 }
 
 pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Mul, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Multiply, x, y), x, y)
 }
 
 pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Div, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Divide, x, y), x, y)
 }
 
 pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift2(|x, y| eval_binary(BinaryValueOp::Concat, x, y), x, y)
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Concatenate, x, y), x, y)
 }
 pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> OutputStream<Value>
 where
@@ -562,23 +563,23 @@ pub fn mhas_key(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
 }
 
 pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|v| eval_unary(UnaryValueOp::Sin, v), v)
+    stream_lift1(|v| eval_unary(UnaryOperator::Sin, v), v)
 }
 
 pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|v| eval_unary(UnaryValueOp::Cos, v), v)
+    stream_lift1(|v| eval_unary(UnaryOperator::Cos, v), v)
 }
 
 pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|v| eval_unary(UnaryValueOp::Tan, v), v)
+    stream_lift1(|v| eval_unary(UnaryOperator::Tan, v), v)
 }
 
 pub fn neg(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|v| eval_unary(UnaryValueOp::Neg, v), v)
+    stream_lift1(|v| eval_unary(UnaryOperator::Negate, v), v)
 }
 
 pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
-    stream_lift1(|v| eval_unary(UnaryValueOp::Abs, v), v)
+    stream_lift1(|v| eval_unary(UnaryOperator::Absolute, v), v)
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::DynamicExprScope;
 use std::num::NonZeroU64;
 
@@ -26,34 +27,6 @@ impl EnvironmentId {
     pub(super) fn index(self) -> usize {
         self.0
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DataflowUnaryOp {
-    Not,
-    Neg,
-    Sin,
-    Cos,
-    Tan,
-    Abs,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DataflowBinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Or,
-    And,
-    Impl,
-    Concat,
-    Eq,
-    Le,
-    Lt,
-    Ge,
-    Gt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,11 +230,11 @@ pub(super) struct DynamicSpec<E> {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum DataflowOp<E> {
     Unary {
-        op: DataflowUnaryOp,
+        op: UnaryOperator,
         arg: DataRef<E>,
     },
     Binary {
-        op: DataflowBinaryOp,
+        op: BinaryOperator,
         lhs: DataRef<E>,
         rhs: DataRef<E>,
     },

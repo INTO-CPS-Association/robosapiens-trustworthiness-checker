@@ -1,7 +1,8 @@
 use super::*;
+use crate::core::BinaryOperator;
 use crate::core::{StreamType, Value};
 use crate::dataflow::DataflowMonitor;
-use crate::lang::dsrv::ast::{BoolBinOp, Expr, NumericalBinOp, SBinOp, StrBinOp};
+use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::test_support::arb_dsrv_spec;
 use crate::{DsrvSpecification, VarName};
 use ecow::eco_vec;
@@ -39,7 +40,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                 1 => Expr::BinOp(
                     Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
                     Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 )
                 .into(),
                 2 => Expr::If(
@@ -67,7 +68,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                 1 => Expr::BinOp(
                     Box::new(Expr::Val(Value::Float(lhs))),
                     Box::new(Expr::Val(Value::Float(rhs))),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 )
                 .into(),
                 _ => Expr::Abs(Box::new(Expr::Var(VarName::new("f")))).into(),
@@ -82,7 +83,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             1 => Expr::BinOp(
                 Box::new(Expr::Val(Value::Bool(lhs))),
                 Box::new(Expr::Val(Value::Bool(rhs))),
-                SBinOp::BOp(BoolBinOp::And),
+                BinaryOperator::And,
             )
             .into(),
             _ => Expr::Not(Box::new(Expr::Var(VarName::new("b")))).into(),
@@ -97,7 +98,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                 1 => Expr::BinOp(
                     Box::new(Expr::Val(Value::Str(lhs.into()))),
                     Box::new(Expr::Val(Value::Str(rhs.into()))),
-                    SBinOp::SOp(StrBinOp::Concat),
+                    BinaryOperator::Concatenate,
                 )
                 .into(),
                 _ => Expr::If(

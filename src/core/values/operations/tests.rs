@@ -3,19 +3,20 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, eco_vec};
 
 use super::*;
+use crate::core::BinaryOperator;
 
 #[test]
 fn numeric_operations_promote_mixed_operands_and_check_integer_failures() {
     assert_eq!(
-        binary(BinaryValueOp::Add, Value::Int(2), Value::Float(0.5)),
+        binary(BinaryOperator::Add, Value::Int(2), Value::Float(0.5)),
         Ok(Value::Float(2.5))
     );
     assert!(matches!(
-        binary(BinaryValueOp::Add, Value::Int(i64::MAX), Value::Int(1)),
+        binary(BinaryOperator::Add, Value::Int(i64::MAX), Value::Int(1)),
         Err(ValueOpError::IntegerOverflow { .. })
     ));
     assert!(matches!(
-        binary(BinaryValueOp::Div, Value::Int(1), Value::Int(0)),
+        binary(BinaryOperator::Divide, Value::Int(1), Value::Int(0)),
         Err(ValueOpError::IntegerDivisionByZero { .. })
     ));
 }
@@ -23,19 +24,19 @@ fn numeric_operations_promote_mixed_operands_and_check_integer_failures() {
 #[test]
 fn comparison_supports_numbers_booleans_and_strings() {
     assert_eq!(
-        binary(BinaryValueOp::Less, Value::Int(1), Value::Float(1.5)),
+        binary(BinaryOperator::Less, Value::Int(1), Value::Float(1.5)),
         Ok(Value::Bool(true))
     );
     assert_eq!(
         binary(
-            BinaryValueOp::Greater,
+            BinaryOperator::Greater,
             Value::Bool(true),
             Value::Bool(false)
         ),
         Ok(Value::Bool(true))
     );
     assert_eq!(
-        binary(BinaryValueOp::LessEqual, "a".into(), "b".into()),
+        binary(BinaryOperator::LessEqual, "a".into(), "b".into()),
         Ok(Value::Bool(true))
     );
 }
@@ -43,10 +44,10 @@ fn comparison_supports_numbers_booleans_and_strings() {
 #[test]
 fn unordered_float_comparisons_are_false() {
     let operations = [
-        BinaryValueOp::Less,
-        BinaryValueOp::LessEqual,
-        BinaryValueOp::Greater,
-        BinaryValueOp::GreaterEqual,
+        BinaryOperator::Less,
+        BinaryOperator::LessEqual,
+        BinaryOperator::Greater,
+        BinaryOperator::GreaterEqual,
     ];
     let operands = [
         (Value::Float(f64::NAN), Value::Float(1.0)),
@@ -64,6 +65,33 @@ fn unordered_float_comparisons_are_false() {
             );
         }
     }
+}
+
+#[test]
+fn tuple_access_supports_tuples_and_lists() {
+    assert_eq!(
+        tuple_get(Value::Tuple(eco_vec![Value::Int(1)]), 0),
+        Ok(Value::Int(1))
+    );
+    assert_eq!(
+        tuple_get(Value::List(eco_vec![Value::Int(2)]), 0),
+        Ok(Value::Int(2))
+    );
+}
+
+#[test]
+fn tuple_access_failures_are_structured() {
+    assert_eq!(
+        tuple_get(Value::Tuple(eco_vec![Value::Int(1)]), 1),
+        Err(ValueOpError::TupleIndexOutOfBounds { index: 1, len: 1 })
+    );
+    assert_eq!(
+        tuple_get(Value::Int(1), 0),
+        Err(ValueOpError::InvalidUnaryOperand {
+            operation: "tuple indexing",
+            operand: Value::Int(1),
+        })
+    );
 }
 
 #[test]

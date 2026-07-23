@@ -1,7 +1,5 @@
 //! DSRV syntax, specifications, and expression APIs.
 
-// Operators used by expression nodes.
-mod operators;
 // Core nodes and expression handles.
 mod expression;
 // Type-checking decorates the shared expression representation.
@@ -24,7 +22,6 @@ pub use expression::{DynamicExprScope, Expr, ExprId, ExprRef, ExprView, VarOrNod
 pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprRefs,
 };
-pub use operators::{BoolBinOp, CompBinOp, NumericalBinOp, SBinOp, StrBinOp};
 
 pub use specification::{CheckedDsrvSpecification, DsrvAstError, DsrvSpecification};
 pub(crate) use specification::{UnvalidatedAssignment, UnvalidatedDsrvSpecification};

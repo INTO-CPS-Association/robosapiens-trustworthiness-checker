@@ -14,9 +14,9 @@ use std::fmt::{Debug, Display};
 use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
+use super::CheckedExprRef;
 use super::checked::CheckedTypes;
-use super::{CheckedExprRef, SBinOp};
-use crate::core::{StreamType, Value};
+use crate::core::{BinaryOperator, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::span::Span;
@@ -43,7 +43,7 @@ contiguous_tree::tree_schema! {
         If(condition: child, then_expr: child, else_expr: child),
         SIndex(input: child, offset: copy(u64)),
         Val(value: into_data(Value)),
-        BinOp(left: child, right: child, operator: data(SBinOp)),
+        BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Var(variable: data(VarName)),
 
         Dynamic(
@@ -183,7 +183,8 @@ impl<'left, 'right> PartialEq<ExprRef<'right>> for ExprRef<'left> {
 mod tests {
     use ecow::EcoVec;
 
-    use crate::lang::dsrv::ast::{DynamicExprScope, Expr, NumericalBinOp, SBinOp};
+    use crate::core::BinaryOperator;
+    use crate::lang::dsrv::ast::{DynamicExprScope, Expr};
 
     #[test]
     fn empty_scope_conversion_remains_explicit() {
@@ -199,7 +200,7 @@ mod tests {
             Box::new(Expr::BinOp(
                 Box::new(Expr::Val(1)),
                 Box::new(Expr::Val(2)),
-                SBinOp::NOp(NumericalBinOp::Add),
+                BinaryOperator::Add,
             )),
             Box::new(Expr::Val(right)),
         )

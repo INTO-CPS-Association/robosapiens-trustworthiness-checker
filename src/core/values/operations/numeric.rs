@@ -1,22 +1,23 @@
 use std::cmp::Ordering;
 
 use super::Value;
-use super::dispatch::{BinaryValueOp, ValueOpError, invalid_binary};
+use super::dispatch::{ValueOpError, invalid_binary};
+use crate::core::BinaryOperator;
 
 pub(super) fn numeric_binary(
-    operation: BinaryValueOp,
+    operation: BinaryOperator,
     left: Value,
     right: Value,
 ) -> Result<Value, ValueOpError> {
-    use BinaryValueOp as Op;
+    use BinaryOperator as Op;
 
     match (left, right) {
         (Value::Int(left), Value::Int(right)) => {
             let result = match operation {
                 Op::Add => left.checked_add(right),
-                Op::Sub => left.checked_sub(right),
-                Op::Mul => left.checked_mul(right),
-                Op::Div => {
+                Op::Subtract => left.checked_sub(right),
+                Op::Multiply => left.checked_mul(right),
+                Op::Divide => {
                     if right == 0 {
                         return Err(ValueOpError::IntegerDivisionByZero {
                             operation: operation.name(),
@@ -24,7 +25,7 @@ pub(super) fn numeric_binary(
                     }
                     left.checked_div(right)
                 }
-                Op::Mod => {
+                Op::Modulo => {
                     if right == 0 {
                         return Err(ValueOpError::IntegerDivisionByZero {
                             operation: operation.name(),
@@ -51,19 +52,19 @@ pub(super) fn numeric_binary(
     }
 }
 
-fn float_binary(operation: BinaryValueOp, left: f64, right: f64) -> f64 {
+fn float_binary(operation: BinaryOperator, left: f64, right: f64) -> f64 {
     match operation {
-        BinaryValueOp::Add => left + right,
-        BinaryValueOp::Sub => left - right,
-        BinaryValueOp::Mul => left * right,
-        BinaryValueOp::Div => left / right,
-        BinaryValueOp::Mod => left % right,
+        BinaryOperator::Add => left + right,
+        BinaryOperator::Subtract => left - right,
+        BinaryOperator::Multiply => left * right,
+        BinaryOperator::Divide => left / right,
+        BinaryOperator::Modulo => left % right,
         _ => unreachable!(),
     }
 }
 
 pub(super) fn compare_ordering(
-    operation: BinaryValueOp,
+    operation: BinaryOperator,
     left: Value,
     right: Value,
 ) -> Result<Option<Ordering>, ValueOpError> {

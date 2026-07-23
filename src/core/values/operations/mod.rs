@@ -10,9 +10,9 @@ use super::Value;
 
 pub use collections::{
     list_append, list_concat, list_head, list_index, list_len, list_tail, map_get, map_has_key,
-    map_insert, map_remove,
+    map_insert, map_remove, tuple_get,
 };
-pub use dispatch::{BinaryValueOp, UnaryValueOp, ValueOpError, binary, unary};
+pub use dispatch::{ValueOpError, binary, unary};
 
 #[cfg(test)]
 mod tests;

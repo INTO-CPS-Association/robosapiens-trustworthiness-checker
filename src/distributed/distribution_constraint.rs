@@ -3,11 +3,10 @@ use std::fmt;
 
 use ecow::{EcoString, EcoVec};
 
-use crate::core::values::operations::{self as value_operations, BinaryValueOp, UnaryValueOp};
+use crate::core::values::operations as value_operations;
+use crate::core::{BinaryOperator, UnaryOperator};
 use crate::distributed::distribution_graphs::NodeName;
-use crate::lang::dsrv::ast::{
-    BoolBinOp, CompBinOp, ExprRef, ExprView, NumericalBinOp, SBinOp, StrBinOp,
-};
+use crate::lang::dsrv::ast::{ExprRef, ExprView};
 use crate::lang::dsrv::span::Span;
 use crate::{DsrvSpecification, Value, VarName};
 
@@ -34,7 +33,7 @@ pub enum ConstraintExprKind {
         Box<ConstraintExpr>,
         Box<ConstraintExpr>,
     ),
-    Binary(Box<ConstraintExpr>, Box<ConstraintExpr>, SBinOp),
+    Binary(Box<ConstraintExpr>, Box<ConstraintExpr>, BinaryOperator),
     Not(Box<ConstraintExpr>),
     Neg(Box<ConstraintExpr>),
     Abs(Box<ConstraintExpr>),
@@ -234,17 +233,17 @@ impl DistributionConstraintPlan {
                 eval_binary(left, right, op)
             }
             E::Not(value) => value_operations::unary(
-                UnaryValueOp::Not,
+                UnaryOperator::Not,
                 self.evaluate(value, bindings, monitored_at, stack)?,
             )
             .ok(),
             E::Neg(value) => value_operations::unary(
-                UnaryValueOp::Neg,
+                UnaryOperator::Negate,
                 self.evaluate(value, bindings, monitored_at, stack)?,
             )
             .ok(),
             E::Abs(value) => value_operations::unary(
-                UnaryValueOp::Abs,
+                UnaryOperator::Absolute,
                 self.evaluate(value, bindings, monitored_at, stack)?,
             )
             .ok(),
@@ -375,7 +374,7 @@ impl Lowerer<'_> {
             BinOp(left, right, operator) => ConstraintExprKind::Binary(
                 Box::new(self.lower_expr(left)?),
                 Box::new(self.lower_expr(right)?),
-                operator.clone(),
+                operator,
             ),
             Not(value) => ConstraintExprKind::Not(Box::new(self.lower_expr(value)?)),
             Neg(value) => ConstraintExprKind::Neg(Box::new(self.lower_expr(value)?)),
@@ -483,24 +482,8 @@ impl Lowerer<'_> {
     }
 }
 
-fn eval_binary(left: Value, right: Value, operator: &SBinOp) -> Option<Value> {
-    let operation = match operator {
-        SBinOp::BOp(BoolBinOp::And) => BinaryValueOp::And,
-        SBinOp::BOp(BoolBinOp::Or) => BinaryValueOp::Or,
-        SBinOp::BOp(BoolBinOp::Impl) => BinaryValueOp::Implication,
-        SBinOp::COp(CompBinOp::Eq) => BinaryValueOp::Equal,
-        SBinOp::COp(CompBinOp::Le) => BinaryValueOp::LessEqual,
-        SBinOp::COp(CompBinOp::Lt) => BinaryValueOp::Less,
-        SBinOp::COp(CompBinOp::Ge) => BinaryValueOp::GreaterEqual,
-        SBinOp::COp(CompBinOp::Gt) => BinaryValueOp::Greater,
-        SBinOp::NOp(NumericalBinOp::Add) => BinaryValueOp::Add,
-        SBinOp::NOp(NumericalBinOp::Sub) => BinaryValueOp::Sub,
-        SBinOp::NOp(NumericalBinOp::Mul) => BinaryValueOp::Mul,
-        SBinOp::NOp(NumericalBinOp::Div) => BinaryValueOp::Div,
-        SBinOp::NOp(NumericalBinOp::Mod) => BinaryValueOp::Mod,
-        SBinOp::SOp(StrBinOp::Concat) => BinaryValueOp::Concat,
-    };
-    value_operations::binary(operation, left, right).ok()
+fn eval_binary(left: Value, right: Value, operator: &BinaryOperator) -> Option<Value> {
+    value_operations::binary(*operator, left, right).ok()
 }
 
 #[cfg(test)]

@@ -189,8 +189,8 @@ mod tests {
     use crate::core::StreamType;
 
     use crate::VarName;
-    use crate::lang::dsrv::ast::NumericalBinOp;
-    use crate::lang::dsrv::ast::{Expr, ExprView, SBinOp};
+    use crate::core::BinaryOperator;
+    use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
@@ -336,15 +336,15 @@ mod tests {
     #[test]
     fn test_sexpr() {
         let parsed = parse_expr("1 + 2");
-        let exp = "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))";
+        let exp = "Ok(BinOp(Val(Int(1)), Val(Int(2)), Add))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("1 + 2 * 3");
-        let exp = "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))";
+        let exp = "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), Multiply), Add))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("x + (y + 2)");
-        let exp = "Ok(BinOp(Var(VarName::new(\"x\")), BinOp(Var(VarName::new(\"y\")), Val(Int(2)), NOp(Add)), NOp(Add)))";
+        let exp = "Ok(BinOp(Var(VarName::new(\"x\")), BinOp(Var(VarName::new(\"y\")), Val(Int(2)), Add), Add))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("if true then 1 else 2");
@@ -356,12 +356,11 @@ mod tests {
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("(x + y)[3]");
-        let exp =
-            "Ok(SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add)), 3))";
+        let exp = "Ok(SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add), 3))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("1 + (x)[1]");
-        let exp = "Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new(\"x\")), 1), NOp(Add)))";
+        let exp = "Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new(\"x\")), 1), Add))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("\"test\"");
@@ -369,7 +368,7 @@ mod tests {
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("(stage == \"m\")");
-        let exp = "Ok(BinOp(Var(VarName::new(\"stage\")), Val(Str(\"m\")), COp(Eq)))";
+        let exp = "Ok(BinOp(Var(VarName::new(\"stage\")), Val(Str(\"m\")), Equal))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
     }
 
@@ -468,7 +467,7 @@ mod tests {
                 Expr::BinOp(
                     Box::new(Expr::Var("x".into())),
                     Box::new(Expr::Var("y".into())),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 ),
             )]),
             BTreeMap::new(),
@@ -491,7 +490,7 @@ mod tests {
                 Expr::BinOp(
                     Box::new(Expr::Var("x".into())),
                     Box::new(Expr::Var("y".into())),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 ),
             )]),
             BTreeMap::from([
@@ -518,7 +517,7 @@ mod tests {
                 Expr::BinOp(
                     Box::new(Expr::Var("x".into())),
                     Box::new(Expr::Var("y".into())),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 ),
             )]),
             BTreeMap::from([
@@ -547,7 +546,7 @@ mod tests {
                 Expr::BinOp(
                     Box::new(Expr::Val(1)),
                     Box::new(Expr::SIndex(Box::new(Expr::Var("x".into())), 1)),
-                    SBinOp::NOp(NumericalBinOp::Add),
+                    BinaryOperator::Add,
                 ),
             )]),
             BTreeMap::new(),
@@ -578,7 +577,7 @@ mod tests {
                     Expr::BinOp(
                         Box::new(Expr::Var("x".into())),
                         Box::new(Expr::Var("y".into())),
-                        SBinOp::NOp(NumericalBinOp::Add),
+                        BinaryOperator::Add,
                     ),
                 ),
                 (
@@ -614,7 +613,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr("-(1+2)").unwrap()),
-            "Ok(Neg(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add))))"
+            "Ok(Neg(BinOp(Val(Int(1)), Val(Int(2)), Add)))"
         );
     }
 
@@ -631,34 +630,34 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr("  1.0 +2.0  ").unwrap()),
-            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)))"
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1.0  + 2.0 +3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), Add), Val(Float(3.0)), Add))"
         );
         // Sub
         assert_eq!(
             presult_strip_span(&parse_expr("  1.0 -2.0  ").unwrap()),
-            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)))"
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), Subtract))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1.0  - 2.0 -3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), Subtract), Val(Float(3.0)), Subtract))"
         );
         // Mul
         assert_eq!(
             presult_strip_span(&parse_expr("  1.0 *2.0  ").unwrap()),
-            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)))"
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), Multiply))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1.0  * 2.0 *3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Float(2.0)), Multiply), Val(Float(3.0)), Multiply))"
         );
         // Div
         assert_eq!(
             presult_strip_span(&parse_expr("  1.0 /2.0  ").unwrap()),
-            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), NOp(Div)))"
+            "Ok(BinOp(Val(Float(1.0)), Val(Float(2.0)), Divide))"
         );
     }
 
@@ -667,38 +666,38 @@ mod tests {
         // Add
         assert_eq!(
             presult_strip_span(&parse_expr("0.0 + 2").unwrap()),
-            "Ok(BinOp(Val(Float(0.0)), Val(Int(2)), NOp(Add)))"
+            "Ok(BinOp(Val(Float(0.0)), Val(Int(2)), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2.0").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1.0 + 2 + 3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Add)), Val(Float(3.0)), NOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), Add), Val(Float(3.0)), Add))"
         );
         // Sub
         assert_eq!(
             presult_strip_span(&parse_expr("1 - 2.0").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Sub)))"
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), Subtract))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1.0 - 2 - 3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Sub)), Val(Float(3.0)), NOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), Subtract), Val(Float(3.0)), Subtract))"
         );
         // Mul
         assert_eq!(
             presult_strip_span(&parse_expr("1 * 2.0").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Mul)))"
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), Multiply))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1.0 * 2 * 3.0").unwrap()),
-            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), NOp(Mul)), Val(Float(3.0)), NOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Float(1.0)), Val(Int(2)), Multiply), Val(Float(3.0)), Multiply))"
         );
         // Div
         assert_eq!(
             presult_strip_span(&parse_expr("1 / 2.0").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), NOp(Div)))"
+            "Ok(BinOp(Val(Int(1)), Val(Float(2.0)), Divide))"
         );
     }
 
@@ -711,47 +710,47 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr("  1 +2  ").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1  + 2 +3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), Val(Int(3)), Add))"
         );
         // Sub
         assert_eq!(
             presult_strip_span(&parse_expr("  1 -2  ").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Subtract))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1  - 2 -3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Sub)), Val(Int(3)), NOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Subtract), Val(Int(3)), Subtract))"
         );
         // Mul
         assert_eq!(
             presult_strip_span(&parse_expr("  1 *2  ").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Multiply))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1  * 2 *3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Multiply), Val(Int(3)), Multiply))"
         );
         // Div
         assert_eq!(
             presult_strip_span(&parse_expr("  1 /2  ").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Divide))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1  / 2 /3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Div)), Val(Int(3)), NOp(Div)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Divide), Val(Int(3)), Divide))"
         );
         // Mod
         assert_eq!(
             presult_strip_span(&parse_expr("  1 %2  ").unwrap()),
-            "Ok(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mod)))"
+            "Ok(BinOp(Val(Int(1)), Val(Int(2)), Modulo))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr(" 1  % 2 %3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mod)), Val(Int(3)), NOp(Mod)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Modulo), Val(Int(3)), Modulo))"
         );
         // Var
         assert_eq!(
@@ -779,7 +778,7 @@ mod tests {
         // Don't care about order of eval; care about what the AST looks like
         assert_eq!(
             presult_strip_span(&parse_expr(" 2 + (2 + 3)").unwrap()),
-            "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Add)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(2)), BinOp(Val(Int(2)), Val(Int(3)), Add), Add))"
         );
         // If then else
         assert_eq!(
@@ -788,105 +787,105 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr("if true then x+x else y+y").unwrap()),
-            r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), NOp(Add)), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), NOp(Add))))"#
+            r#"Ok(If(Val(Bool(true)), BinOp(Var(VarName::new("x")), Var(VarName::new("x")), Add), BinOp(Var(VarName::new("y")), Var(VarName::new("y")), Add)))"#
         );
 
         // ChatGPT generated tests with mixed arithmetic and parentheses iexprs. It only had knowledge of the tests above.
         // Basic mixed addition and multiplication
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2 * 3").unwrap()),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), Multiply), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 * 2 + 3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Multiply), Val(Int(3)), Add))"
         );
         // Mixed addition, subtraction, and multiplication
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2 * 3 - 4").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), NOp(Mul)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), BinOp(Val(Int(2)), Val(Int(3)), Multiply), Add), Val(Int(4)), Subtract))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 * 2 + 3 - 4").unwrap()),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), Val(Int(3)), NOp(Add)), Val(Int(4)), NOp(Sub)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Multiply), Val(Int(3)), Add), Val(Int(4)), Subtract))"
         );
         // Mixed addition and division
         assert_eq!(
             presult_strip_span(&parse_expr("10 + 20 / 5").unwrap()),
-            "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), NOp(Div)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(10)), BinOp(Val(Int(20)), Val(Int(5)), Divide), Add))"
         );
         // Nested parentheses with mixed operations
         assert_eq!(
             presult_strip_span(&parse_expr("(1 + 2) * (3 - 4)").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Sub)), NOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), BinOp(Val(Int(3)), Val(Int(4)), Subtract), Multiply))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 + (2 * (3 + 4))").unwrap()),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(4)), Add), Multiply), Add))"
         );
         // Complex nested expressions
         assert_eq!(
             presult_strip_span(&parse_expr("((1 + 2) * 3) + (4 / (5 - 6))").unwrap()),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), NOp(Mul)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), Val(Int(3)), Multiply), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), Subtract), Divide), Add))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("(1 + (2 * (3 - (4 / 5))))").unwrap()),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), NOp(Div)), NOp(Sub)), NOp(Mul)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), Val(Int(5)), Divide), Subtract), Multiply), Add))"
         );
         // More complex expressions with deep nesting
         assert_eq!(
             presult_strip_span(&parse_expr("((1 + 2) * (3 + 4))").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Add)), NOp(Mul)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), BinOp(Val(Int(3)), Val(Int(4)), Add), Multiply))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("((1 * 2) + (3 * 4)) / 5").unwrap()),
-            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), NOp(Add)), Val(Int(5)), NOp(Div)))"
+            "Ok(BinOp(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Multiply), BinOp(Val(Int(3)), Val(Int(4)), Multiply), Add), Val(Int(5)), Divide))"
         );
         // Multiple levels of nested expressions
         assert_eq!(
             presult_strip_span(&parse_expr("1 + (2 * (3 + (4 / (5 - 6))))").unwrap()),
-            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), NOp(Sub)), NOp(Div)), NOp(Add)), NOp(Mul)), NOp(Add)))"
+            "Ok(BinOp(Val(Int(1)), BinOp(Val(Int(2)), BinOp(Val(Int(3)), BinOp(Val(Int(4)), BinOp(Val(Int(5)), Val(Int(6)), Subtract), Divide), Add), Multiply), Add))"
         );
 
         // ChatGPT generated tests with mixed iexprs. It only had knowledge of the tests above.
         // Mixing addition, subtraction, and variables
         assert_eq!(
             presult_strip_span(&parse_expr("x + 2 - y").unwrap()),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), NOp(Add)), Var(VarName::new("y")), NOp(Sub)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Val(Int(2)), Add), Var(VarName::new("y")), Subtract))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("(x + y) * 3").unwrap()),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), NOp(Add)), Val(Int(3)), NOp(Mul)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), Add), Val(Int(3)), Multiply))"#
         );
         // Nested arithmetic with variables and parentheses
         assert_eq!(
             presult_strip_span(&parse_expr("(a + b) / (c - d)").unwrap()),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), NOp(Add)), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Sub)), NOp(Div)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("a")), Var(VarName::new("b")), Add), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), Subtract), Divide))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("x * (y + 3) - z / 2").unwrap()),
-            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)), BinOp(Var(VarName::new("z")), Val(Int(2)), NOp(Div)), NOp(Sub)))"#
+            r#"Ok(BinOp(BinOp(Var(VarName::new("x")), BinOp(Var(VarName::new("y")), Val(Int(3)), Add), Multiply), BinOp(Var(VarName::new("z")), Val(Int(2)), Divide), Subtract))"#
         );
         // If-then-else with mixed arithmetic
         assert_eq!(
             presult_strip_span(&parse_expr("if true then 1 + 2 else 3 * 4").unwrap()),
-            "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul))))"
+            "Ok(If(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), Add), BinOp(Val(Int(3)), Val(Int(4)), Multiply)))"
         );
         // Time index in arithmetic expression
         assert_eq!(
             presult_strip_span(&parse_expr("x[0] + y[1]").unwrap()),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), NOp(Add)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), Add))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("x[1] * (y + 3)").unwrap()),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), NOp(Add)), NOp(Mul)))"#
+            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), Add), Multiply))"#
         );
         // Case to test precedence of if-then-else with arithmetic
         // Most languages implement this as "if a then b else (c + d)" and so should we.
         // Programmers can write "(if a then b else c) + d" if they want the other behavior.
         assert_eq!(
             presult_strip_span(&parse_expr("if a then b else c + d").unwrap()),
-            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), Add)))"#
         );
     }
 
@@ -990,11 +989,11 @@ mod tests {
     fn test_parse_boolean_expressions() {
         assert_eq!(
             presult_strip_span(&parse_expr("true && false").unwrap()),
-            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And)))"
+            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), And))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("true || false").unwrap()),
-            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)))"
+            "Ok(BinOp(Val(Bool(true)), Val(Bool(false)), Or))"
         );
     }
 
@@ -1003,11 +1002,11 @@ mod tests {
         // Expressions do not make sense but parser should allow it
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2 && 3").unwrap()),
-            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), BOp(And)))"
+            "Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), Val(Int(3)), And))"
         );
         assert_eq!(
             presult_strip_span(&parse_expr("true || 1 * 2").unwrap()),
-            "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), NOp(Mul)), BOp(Or)))"
+            "Ok(BinOp(Val(Bool(true)), BinOp(Val(Int(1)), Val(Int(2)), Multiply), Or))"
         );
     }
 
@@ -1015,15 +1014,15 @@ mod tests {
     fn test_parse_string_concatenation() {
         assert_eq!(
             presult_strip_span(&parse_expr(r#""foo" ++ "bar""#).unwrap()),
-            r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), SOp(Concat)))"#
+            r#"Ok(BinOp(Val(Str("foo")), Val(Str("bar")), Concatenate))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#""hello" ++ " " ++ "world""#).unwrap()),
-            r#"Ok(BinOp(BinOp(Val(Str("hello")), Val(Str(" ")), SOp(Concat)), Val(Str("world")), SOp(Concat)))"#
+            r#"Ok(BinOp(BinOp(Val(Str("hello")), Val(Str(" ")), Concatenate), Val(Str("world")), Concatenate))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#""a" ++ "b" ++ "c""#).unwrap()),
-            r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), SOp(Concat)), Val(Str("c")), SOp(Concat)))"#
+            r#"Ok(BinOp(BinOp(Val(Str("a")), Val(Str("b")), Concatenate), Val(Str("c")), Concatenate))"#
         );
     }
 
@@ -1099,7 +1098,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"List(1+2,2*5)"#).unwrap()),
-            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))]))"#
+            r#"Ok(List([BinOp(Val(Int(1)), Val(Int(2)), Add), BinOp(Val(Int(2)), Val(Int(5)), Multiply)]))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"List("hello","world")"#).unwrap()),
@@ -1107,7 +1106,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"List(true || false, true && false)"#).unwrap()),
-            r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))]))"#
+            r#"Ok(List([BinOp(Val(Bool(true)), Val(Bool(false)), Or), BinOp(Val(Bool(true)), Val(Bool(false)), And)]))"#
         );
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
@@ -1132,7 +1131,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"List.get(x, 1+2)"#).unwrap()),
-            r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), NOp(Add))))"#
+            r#"Ok(LIndex(Var(VarName::new("x")), BinOp(Val(Int(1)), Val(Int(2)), Add)))"#
         );
         assert_eq!(
             presult_strip_span(
@@ -1245,7 +1244,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"Map("x": 1+2,"y": 2*5)"#).unwrap()),
-            r#"Ok(Map({"x": BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), "y": BinOp(Val(Int(2)), Val(Int(5)), NOp(Mul))}))"#
+            r#"Ok(Map({"x": BinOp(Val(Int(1)), Val(Int(2)), Add), "y": BinOp(Val(Int(2)), Val(Int(5)), Multiply)}))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"Map("x": "hello", "y": "world")"#).unwrap()),
@@ -1255,7 +1254,7 @@ mod tests {
             presult_strip_span(
                 &parse_expr(r#"Map("xxxx": true || false, "yyyy": true && false)"#).unwrap()
             ),
-            r#"Ok(Map({"xxxx": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(Or)), "yyyy": BinOp(Val(Bool(true)), Val(Bool(false)), BOp(And))}))"#
+            r#"Ok(Map({"xxxx": BinOp(Val(Bool(true)), Val(Bool(false)), Or), "yyyy": BinOp(Val(Bool(true)), Val(Bool(false)), And)}))"#
         );
         // Can mix expressions - not that it is necessarily a good idea
         assert_eq!(
@@ -1316,7 +1315,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"robot.pose.x + 1"#).unwrap()),
-            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot")), "pose"), "x"), Val(Int(1)), Add))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"Struct("id": 1).id"#).unwrap()),
@@ -1328,7 +1327,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr(r#"robot_A.pose.x + 1"#).unwrap()),
-            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot_A")), "pose"), "x"), Val(Int(1)), NOp(Add)))"#
+            r#"Ok(BinOp(SGet(SGet(Var(VarName::new("robot_A")), "pose"), "x"), Val(Int(1)), Add))"#
         );
     }
 
@@ -1398,7 +1397,7 @@ mod tests {
     fn test_dangling_else() {
         assert_eq!(
             presult_strip_span(&parse_expr("if a then b else c + d").unwrap()),
-            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), NOp(Add))))"#
+            r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), Add)))"#
         )
     }
 
@@ -1434,37 +1433,37 @@ mod tests {
     fn test_comparison() {
         assert_eq!(
             presult_strip_span(&parse_expr("1 < 2").unwrap()),
-            r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), COp(Lt)))"#
+            r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), Less))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 > 2").unwrap()),
-            r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), COp(Gt)))"#
+            r#"Ok(BinOp(Val(Int(1)), Val(Int(2)), Greater))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("3.14 >= 2.71").unwrap()),
-            r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), COp(Ge)))"#
+            r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), GreaterEqual))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("3.14 <= 2.71").unwrap()),
-            r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), COp(Le)))"#
+            r#"Ok(BinOp(Val(Float(3.14)), Val(Float(2.71)), LessEqual))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("x == y").unwrap()),
-            r#"Ok(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), COp(Eq)))"#
+            r#"Ok(BinOp(Var(VarName::new("x")), Var(VarName::new("y")), Equal))"#
         );
         // Test precedence:
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2 > 3").unwrap()),
-            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), COp(Gt)))"#
+            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), Val(Int(3)), Greater))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("1 + 2 == 3 * 4").unwrap()),
-            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), BinOp(Val(Int(3)), Val(Int(4)), NOp(Mul)), COp(Eq)))"#
+            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), BinOp(Val(Int(3)), Val(Int(4)), Multiply), Equal))"#
         );
         // Equality has lower precedence than other comparisons
         assert_eq!(
             presult_strip_span(&parse_expr("1 < 2 == 3 < 4").unwrap()),
-            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), COp(Lt)), BinOp(Val(Int(3)), Val(Int(4)), COp(Lt)), COp(Eq)))"#
+            r#"Ok(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Less), BinOp(Val(Int(3)), Val(Int(4)), Less), Equal))"#
         );
     }
 
@@ -1480,7 +1479,7 @@ mod tests {
         );
         assert_eq!(
             presult_strip_span(&parse_expr("! (1 + 2 > 3)").unwrap()),
-            r#"Ok(Not(BinOp(BinOp(Val(Int(1)), Val(Int(2)), NOp(Add)), Val(Int(3)), COp(Gt))))"#
+            r#"Ok(Not(BinOp(BinOp(Val(Int(1)), Val(Int(2)), Add), Val(Int(3)), Greater)))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("!!false").unwrap()),
@@ -1493,7 +1492,7 @@ mod tests {
         // Another edge case:
         assert_eq!(
             presult_strip_span(&parse_expr("!1 + 2").unwrap()),
-            r#"Ok(BinOp(Not(Val(Int(1))), Val(Int(2)), NOp(Add)))"#
+            r#"Ok(BinOp(Not(Val(Int(1))), Val(Int(2)), Add))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("if !true then 1 else 2").unwrap()),
@@ -1542,14 +1541,14 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), Add)}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), NOp(Add))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), Add)}, type_annotations: {} })",
         )
     }
 
@@ -1563,48 +1562,48 @@ mod spec_tests {
     fn list() -> (&'static str, &'static str) {
         (
             "in iList\nout oList\nout nestedList\nout listIndex\nout listAppend\nout listConcat\nout listHead\nout listTail\noList = iList\nnestedList = List(iList, iList)\nlistIndex = List.get(iList, 0)\nlistAppend = List.append(iList, (1+1)/2)\nlistConcat = List.concat(iList, iList)\nlistHead = List.head(iList)\nlistTail = List.tail(iList)",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), NOp(Add)), Val(Int(2)), NOp(Div))), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"iList\")}, output_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, aux_vars: {}, stream_vars: {VarName::new(\"oList\"), VarName::new(\"nestedList\"), VarName::new(\"listIndex\"), VarName::new(\"listAppend\"), VarName::new(\"listConcat\"), VarName::new(\"listHead\"), VarName::new(\"listTail\")}, exprs: {VarName::new(\"oList\"): Var(VarName::new(\"iList\")), VarName::new(\"nestedList\"): List([Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))]), VarName::new(\"listIndex\"): LIndex(Var(VarName::new(\"iList\")), Val(Int(0))), VarName::new(\"listAppend\"): LAppend(Var(VarName::new(\"iList\")), BinOp(BinOp(Val(Int(1)), Val(Int(1)), Add), Val(Int(2)), Divide)), VarName::new(\"listConcat\"): LConcat(Var(VarName::new(\"iList\")), Var(VarName::new(\"iList\"))), VarName::new(\"listHead\"): LHead(Var(VarName::new(\"iList\"))), VarName::new(\"listTail\"): LTail(Var(VarName::new(\"iList\")))}, type_annotations: {} })",
         )
     }
 
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), NOp(Add)), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), NOp(Add))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
         )
     }
 
     fn if_statement() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if x == 0 then y else 42",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), Equal), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 
     fn if_statement_newlines() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nz = if\nx == 0\nthen\ny\n else\n42",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), COp(Eq)), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): If(BinOp(Var(VarName::new(\"x\")), Val(Int(0)), Equal), Var(VarName::new(\"y\")), Val(Int(42)))}, type_annotations: {} })",
         )
     }
 

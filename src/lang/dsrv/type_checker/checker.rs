@@ -14,10 +14,10 @@ use ecow::EcoVec;
 use super::{SemanticError, SemanticResult, TypeErrorKind};
 use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
-use crate::core::{StreamType, StreamTypeAscription, Value};
+use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription, Value};
 use crate::lang::dsrv::ast::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr,
-    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, SBinOp,
+    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView,
 };
 
 struct TypeContext<'types> {
@@ -871,7 +871,7 @@ fn value_type(value: &Value, expected: Option<&TCType>) -> Result<TCType, Semant
 
 fn resolve_binary(
     expr: ExprRef<'_>,
-    op: &SBinOp,
+    operator: BinaryOperator,
     lhs: &TCType,
     rhs: &TCType,
 ) -> Result<(TCType, Option<()>), SemanticError> {
@@ -882,32 +882,47 @@ fn resolve_binary(
             format!("operator cannot combine {lhs} and {rhs}"),
         )
     };
-    Ok(match op {
-        SBinOp::NOp(_) => match (lhs, rhs) {
-            (TCType::Int, TCType::Int) => (TCType::Int, Some(())),
-            (TCType::Float, TCType::Float)
-            | (TCType::Int, TCType::Float)
-            | (TCType::Float, TCType::Int) => (TCType::Float, Some(())),
-            (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => (TCType::Int, Some(())),
-            (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => {
-                (TCType::Float, Some(()))
-            }
-            (TCType::Any, TCType::Any) => (TCType::Any, None),
-            _ => return Err(invalid()),
-        },
-        SBinOp::BOp(_)
+    let numeric_result = || match (lhs, rhs) {
+        (TCType::Int, TCType::Int) => Some((TCType::Int, Some(()))),
+        (TCType::Float, TCType::Float)
+        | (TCType::Int, TCType::Float)
+        | (TCType::Float, TCType::Int) => Some((TCType::Float, Some(()))),
+        (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => Some((TCType::Int, Some(()))),
+        (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => {
+            Some((TCType::Float, Some(())))
+        }
+        (TCType::Any, TCType::Any) => Some((TCType::Any, None)),
+        _ => None,
+    };
+
+    Ok(match operator.kind() {
+        BinaryOperatorKind::Numeric => numeric_result().ok_or_else(invalid)?,
+        BinaryOperatorKind::Boolean
             if matches!(lhs, TCType::Bool | TCType::Any)
                 && matches!(rhs, TCType::Bool | TCType::Any) =>
         {
             (TCType::Bool, Some(()))
         }
-        SBinOp::SOp(_)
+        BinaryOperatorKind::String
             if matches!(lhs, TCType::Str | TCType::Any)
                 && matches!(rhs, TCType::Str | TCType::Any) =>
         {
             (TCType::Str, Some(()))
         }
-        SBinOp::COp(_) if unify(lhs, rhs).is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Equality if unify(lhs, rhs).is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Ordering if numeric_result().is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Ordering
+            if matches!(lhs, TCType::Bool | TCType::Any)
+                && matches!(rhs, TCType::Bool | TCType::Any) =>
+        {
+            (TCType::Bool, Some(()))
+        }
+        BinaryOperatorKind::Ordering
+            if matches!(lhs, TCType::Str | TCType::Any)
+                && matches!(rhs, TCType::Str | TCType::Any) =>
+        {
+            (TCType::Bool, Some(()))
+        }
         _ => return Err(invalid()),
     })
 }

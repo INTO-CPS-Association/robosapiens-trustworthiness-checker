@@ -101,6 +101,7 @@ impl<'arena> ExprRef<'arena> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::BinaryOperator;
     use crate::lang::dsrv::ast::Expr;
 
     #[test]
@@ -116,9 +117,7 @@ mod tests {
                         Box::new(Expr::BinOp(
                             Box::new(Expr::Var("x".into())),
                             Box::new(Expr::Var("also_free".into())),
-                            crate::lang::dsrv::ast::SBinOp::NOp(
-                                crate::lang::dsrv::ast::NumericalBinOp::Add,
-                            ),
+                            BinaryOperator::Add,
                         )),
                     ),
                 ]

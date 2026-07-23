@@ -41,6 +41,20 @@ mod tests {
     }
 
     #[test]
+    fn equality_and_ordering_have_distinct_operand_rules() {
+        type_check("out z: Bool\nz = [1] == [1]".parse().unwrap(), false)
+            .expect("equal lists should be comparable for equality");
+
+        let errors = type_check("out z: Bool\nz = [1] < [1]".parse().unwrap(), false)
+            .expect_err("lists should not support ordering");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::TypeError(type_error)
+                if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+        )));
+    }
+
+    #[test]
     fn test_top_level_type_check_empty_list_output() {
         // Simulates a full spec where an output variable is assigned []
         // and its declared type is List<Int>.

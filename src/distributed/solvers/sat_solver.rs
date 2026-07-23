@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::{
     DsrvSpecification, Value, VarName,
+    core::{BinaryOperator, BinaryOperatorKind},
     distributed::{
         distribution_constraint::{
             ConstraintExpr, ConstraintExprKind, ConstraintProfile, DistributionConstraintPlan,
@@ -20,7 +21,6 @@ use crate::{
         },
         scheduling::planning_context::PlanningContextSnapshot,
     },
-    lang::dsrv::ast::{BoolBinOp, SBinOp},
     semantics::{
         AsyncConfig, MonitoringSemantics,
         distributed::localisation::{DsrvLocalisationError, Localisable},
@@ -446,7 +446,7 @@ fn collect_required_concrete_inputs(
 
     match &expression.kind {
         E::Not(value) => collect_required_concrete_inputs(value, plan, required),
-        E::Binary(left, right, SBinOp::BOp(_)) => {
+        E::Binary(left, right, operator) if operator.kind() == BinaryOperatorKind::Boolean => {
             collect_required_concrete_inputs(left, plan, required);
             collect_required_concrete_inputs(right, plan, required);
         }
@@ -487,8 +487,10 @@ fn is_symbolically_compilable(
             compilable
         }
         E::Not(value) => is_symbolically_compilable(value, plan, visiting),
-        E::Binary(left, right, SBinOp::BOp(_))
-        | E::Binary(left, right, SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq)) => {
+        E::Binary(left, right, operator)
+            if operator.kind() == BinaryOperatorKind::Boolean
+                || *operator == BinaryOperator::Equal =>
+        {
             is_symbolically_compilable(left, plan, visiting)
                 && is_symbolically_compilable(right, plan, visiting)
         }
@@ -658,12 +660,12 @@ fn guarded_monitored_choices(
                 _ => Err(()),
             }
         }
-        ConstraintExprKind::Binary(left, right, SBinOp::BOp(BoolBinOp::And)) => {
+        ConstraintExprKind::Binary(left, right, BinaryOperator::And) => {
             let left = guarded_monitored_choices(left, plan, st)?;
             let right = guarded_monitored_choices(right, plan, st)?;
             guarded_choice_and(left, right)
         }
-        ConstraintExprKind::Binary(left, right, SBinOp::BOp(BoolBinOp::Or)) => {
+        ConstraintExprKind::Binary(left, right, BinaryOperator::Or) => {
             let left = guarded_monitored_choices(left, plan, st)?;
             let right = guarded_monitored_choices(right, plan, st)?;
             Ok(guarded_choice_or(left, right))
@@ -932,22 +934,22 @@ fn compile_expr_to_lit(
         }
         E::Value(value) => constant_to_lit(value.clone(), st),
         E::Not(value) => Ok(-compile_expr_to_lit(value, plan, st)?),
-        E::Binary(left, right, SBinOp::BOp(BoolBinOp::And)) => {
+        E::Binary(left, right, BinaryOperator::And) => {
             let left = compile_expr_to_lit(left, plan, st)?;
             let right = compile_expr_to_lit(right, plan, st)?;
             Ok(st.tseitin_and(left, right))
         }
-        E::Binary(left, right, SBinOp::BOp(BoolBinOp::Or)) => {
+        E::Binary(left, right, BinaryOperator::Or) => {
             let left = compile_expr_to_lit(left, plan, st)?;
             let right = compile_expr_to_lit(right, plan, st)?;
             Ok(st.tseitin_or(left, right))
         }
-        E::Binary(left, right, SBinOp::BOp(BoolBinOp::Impl)) => {
+        E::Binary(left, right, BinaryOperator::Implication) => {
             let left = compile_expr_to_lit(left, plan, st)?;
             let right = compile_expr_to_lit(right, plan, st)?;
             Ok(st.tseitin_impl(left, right))
         }
-        E::Binary(left, right, SBinOp::COp(crate::lang::dsrv::ast::CompBinOp::Eq)) => {
+        E::Binary(left, right, BinaryOperator::Equal) => {
             if let (Some(left_value), Some(right_value)) = (
                 plan.evaluate_expr(left, &st.value_bindings, None),
                 plan.evaluate_expr(right, &st.value_bindings, None),

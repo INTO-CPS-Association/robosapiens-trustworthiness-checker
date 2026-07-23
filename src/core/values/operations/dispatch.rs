@@ -3,68 +3,7 @@ use std::fmt;
 use ecow::EcoString;
 
 use super::{Value, numeric};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryValueOp {
-    Not,
-    Neg,
-    Sin,
-    Cos,
-    Tan,
-    Abs,
-}
-
-impl UnaryValueOp {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Not => "not",
-            Self::Neg => "negation",
-            Self::Sin => "sin",
-            Self::Cos => "cos",
-            Self::Tan => "tan",
-            Self::Abs => "absolute value",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryValueOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Or,
-    And,
-    Implication,
-    Concat,
-    Equal,
-    LessEqual,
-    Less,
-    GreaterEqual,
-    Greater,
-}
-
-impl BinaryValueOp {
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::Add => "addition",
-            Self::Sub => "subtraction",
-            Self::Mul => "multiplication",
-            Self::Div => "division",
-            Self::Mod => "modulo",
-            Self::Or => "boolean or",
-            Self::And => "boolean and",
-            Self::Implication => "boolean implication",
-            Self::Concat => "string concatenation",
-            Self::Equal => "equality",
-            Self::LessEqual => "less-than-or-equal comparison",
-            Self::Less => "less-than comparison",
-            Self::GreaterEqual => "greater-than-or-equal comparison",
-            Self::Greater => "greater-than comparison",
-        }
-    }
-}
+use crate::core::{BinaryOperator, UnaryOperator};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValueOpError {
@@ -85,6 +24,10 @@ pub enum ValueOpError {
     },
     NegativeListIndex(i64),
     ListIndexOutOfBounds {
+        index: usize,
+        len: usize,
+    },
+    TupleIndexOutOfBounds {
         index: usize,
         len: usize,
     },
@@ -116,6 +59,9 @@ impl fmt::Display for ValueOpError {
             Self::ListIndexOutOfBounds { index, len } => {
                 write!(f, "List index out of bounds: index {index}, length {len}")
             }
+            Self::TupleIndexOutOfBounds { index, len } => {
+                write!(f, "tuple index out of bounds: index {index}, length {len}")
+            }
             Self::EmptyList => write!(f, "List is empty"),
             Self::ListLengthOverflow(len) => {
                 write!(f, "list length {len} does not fit in an integer Value")
@@ -127,10 +73,10 @@ impl fmt::Display for ValueOpError {
 
 impl std::error::Error for ValueOpError {}
 
-pub fn unary(operation: UnaryValueOp, operand: Value) -> Result<Value, ValueOpError> {
+pub fn unary(operation: UnaryOperator, operand: Value) -> Result<Value, ValueOpError> {
     match (operation, operand) {
-        (UnaryValueOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
-        (UnaryValueOp::Neg, Value::Int(value)) => {
+        (UnaryOperator::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
+        (UnaryOperator::Negate, Value::Int(value)) => {
             value
                 .checked_neg()
                 .map(Value::Int)
@@ -138,11 +84,11 @@ pub fn unary(operation: UnaryValueOp, operand: Value) -> Result<Value, ValueOpEr
                     operation: operation.name(),
                 })
         }
-        (UnaryValueOp::Neg, Value::Float(value)) => Ok(Value::Float(-value)),
-        (UnaryValueOp::Sin, Value::Float(value)) => Ok(Value::Float(value.sin())),
-        (UnaryValueOp::Cos, Value::Float(value)) => Ok(Value::Float(value.cos())),
-        (UnaryValueOp::Tan, Value::Float(value)) => Ok(Value::Float(value.tan())),
-        (UnaryValueOp::Abs, Value::Int(value)) => {
+        (UnaryOperator::Negate, Value::Float(value)) => Ok(Value::Float(-value)),
+        (UnaryOperator::Sin, Value::Float(value)) => Ok(Value::Float(value.sin())),
+        (UnaryOperator::Cos, Value::Float(value)) => Ok(Value::Float(value.cos())),
+        (UnaryOperator::Tan, Value::Float(value)) => Ok(Value::Float(value.tan())),
+        (UnaryOperator::Absolute, Value::Int(value)) => {
             value
                 .checked_abs()
                 .map(Value::Int)
@@ -150,7 +96,7 @@ pub fn unary(operation: UnaryValueOp, operand: Value) -> Result<Value, ValueOpEr
                     operation: operation.name(),
                 })
         }
-        (UnaryValueOp::Abs, Value::Float(value)) => Ok(Value::Float(value.abs())),
+        (UnaryOperator::Absolute, Value::Float(value)) => Ok(Value::Float(value.abs())),
         (_, operand) => Err(ValueOpError::InvalidUnaryOperand {
             operation: operation.name(),
             operand,
@@ -158,11 +104,11 @@ pub fn unary(operation: UnaryValueOp, operand: Value) -> Result<Value, ValueOpEr
     }
 }
 
-pub fn binary(operation: BinaryValueOp, left: Value, right: Value) -> Result<Value, ValueOpError> {
-    use BinaryValueOp as Op;
+pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Value, ValueOpError> {
+    use BinaryOperator as Op;
 
     match operation {
-        Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod => {
+        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo => {
             numeric::numeric_binary(operation, left, right)
         }
         Op::Or | Op::And | Op::Implication => match (left, right) {
@@ -174,7 +120,7 @@ pub fn binary(operation: BinaryValueOp, left: Value, right: Value) -> Result<Val
             })),
             (left, right) => invalid_binary(operation, left, right),
         },
-        Op::Concat => match (left, right) {
+        Op::Concatenate => match (left, right) {
             (Value::Str(mut left), Value::Str(right)) => {
                 left.push_str(right.as_str());
                 Ok(Value::Str(left))
@@ -198,7 +144,7 @@ pub fn binary(operation: BinaryValueOp, left: Value, right: Value) -> Result<Val
 }
 
 pub(super) fn invalid_binary<T>(
-    operation: BinaryValueOp,
+    operation: BinaryOperator,
     left: Value,
     right: Value,
 ) -> Result<T, ValueOpError> {
