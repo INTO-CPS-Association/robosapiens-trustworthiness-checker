@@ -57,13 +57,26 @@ impl UnboundPlanBody {
         });
     }
 
+    fn inherit_environment_scope(&mut self, environment: &EnvironmentLayout) {
+        self.for_each_dynamic_spec(&mut |spec| {
+            let vars = match &spec.scope {
+                DataflowDynamicScope::Automatic => environment.keys().cloned().collect(),
+                DataflowDynamicScope::Restricted(vars) => vars
+                    .iter()
+                    .filter(|var| environment.get(var).is_some())
+                    .cloned()
+                    .collect(),
+            };
+            spec.scope = DataflowDynamicScope::Restricted(vars);
+        });
+    }
+
     pub(in crate::dataflow) fn bind(
         mut self,
         recursive_output: Option<VarName>,
         environment: Rc<EnvironmentLayout>,
     ) -> Result<Rc<ExecutablePlan>, PlanValidationError> {
-        let environment_vars = environment.keys().cloned().collect::<Vec<_>>();
-        self.inherit_dynamic_scope(&environment_vars);
+        self.inherit_environment_scope(&environment);
         self.validate(false)?;
         let body = bind_body(self, &environment, recursive_output.as_ref())?;
         body.debug_assert_valid(environment.len());
