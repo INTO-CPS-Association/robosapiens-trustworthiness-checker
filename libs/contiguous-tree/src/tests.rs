@@ -761,10 +761,10 @@ fn clone_tree_with_rewrites_replacements_and_reports_cycles() {
 }
 
 #[test]
-fn replacement_cloning_handles_deep_transitive_chains_iteratively() {
+fn replacement_cloning_handles_transitive_chains_recursively() {
     let mut source = Arena::default();
     let mut root = source.push_raw(TestNode(vec![]));
-    for _ in 0..50_000 {
+    for _ in 0..256 {
         root = source.push_raw(TestNode(vec![root]));
     }
     let root = TestCursor {

@@ -7,7 +7,13 @@ use contiguous_tree::TreeCursorExt;
 use super::{Expr, ExprRef, ExprView};
 use crate::core::{StreamType, VarName};
 
-enum FreeVariableEvent<'arena> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DependencyKind {
+    Stream,
+    Placement,
+}
+
+enum DependencyTraversalEvent<'arena> {
     Expression(ExprRef<'arena>),
     LeaveBindings(&'arena [(VarName, StreamType)]),
 }
@@ -63,7 +69,7 @@ impl<'arena> ExprRef<'arena> {
     /// A variable is reported once per semantic occurrence; callers that need
     /// uniqueness can collect into a set without first allocating a temporary set.
     pub fn visit_free_variables(self, mut visit: impl FnMut(&VarName)) {
-        self.visit_semantic_variables(true, &mut visit);
+        self.visit_dependencies_with::<true>(|_, var| visit(var));
     }
 
     pub fn stream_dependencies(self) -> BTreeSet<VarName> {
@@ -75,45 +81,56 @@ impl<'arena> ExprRef<'arena> {
     }
 
     pub fn visit_stream_dependencies(self, mut visit: impl FnMut(&VarName)) {
-        self.visit_semantic_variables(false, &mut visit);
+        self.visit_dependencies_with::<false>(|_, var| visit(var));
     }
 
-    fn visit_semantic_variables(self, include_monitored: bool, visit: &mut impl FnMut(&VarName)) {
+    pub(crate) fn visit_dependencies(self, visit: impl FnMut(DependencyKind, &VarName)) {
+        self.visit_dependencies_with::<true>(visit);
+    }
+
+    fn visit_dependencies_with<const INCLUDE_PLACEMENT: bool>(
+        self,
+        mut visit: impl FnMut(DependencyKind, &VarName),
+    ) {
         use ExprView::*;
 
         let mut binding_depths = BTreeMap::<&VarName, usize>::new();
-        let mut pending = vec![FreeVariableEvent::Expression(self)];
+        let mut pending = vec![DependencyTraversalEvent::Expression(self)];
 
         while let Some(event) = pending.pop() {
             match event {
-                FreeVariableEvent::Expression(expr) => match expr.view() {
+                DependencyTraversalEvent::Expression(expr) => match expr.view() {
                     Var(var) if !binding_depths.contains_key(var) => {
-                        visit(var);
+                        visit(DependencyKind::Stream, var);
                     }
                     MonitoredAt(var, _)
-                        if include_monitored && !binding_depths.contains_key(var) =>
+                        if INCLUDE_PLACEMENT && !binding_depths.contains_key(var) =>
                     {
-                        visit(var);
+                        visit(DependencyKind::Placement, var);
                     }
                     Dynamic(source, _, scope) | Defer(source, _, scope) => {
                         for var in scope
                             .iter()
                             .filter(|var| !binding_depths.contains_key(*var))
                         {
-                            visit(var);
+                            visit(DependencyKind::Stream, var);
                         }
-                        pending.push(FreeVariableEvent::Expression(source));
+                        pending.push(DependencyTraversalEvent::Expression(source));
                     }
                     Lambda(params, body) => {
                         for (name, _) in params {
                             *binding_depths.entry(name).or_default() += 1;
                         }
-                        pending.push(FreeVariableEvent::LeaveBindings(params));
-                        pending.push(FreeVariableEvent::Expression(body));
+                        pending.push(DependencyTraversalEvent::LeaveBindings(params));
+                        pending.push(DependencyTraversalEvent::Expression(body));
                     }
-                    _ => pending.extend(expr.children().rev().map(FreeVariableEvent::Expression)),
+                    _ => pending.extend(
+                        expr.children()
+                            .rev()
+                            .map(DependencyTraversalEvent::Expression),
+                    ),
                 },
-                FreeVariableEvent::LeaveBindings(params) => {
+                DependencyTraversalEvent::LeaveBindings(params) => {
                     for (name, _) in params {
                         let depth = binding_depths
                             .get_mut(name)
@@ -218,6 +235,49 @@ mod tests {
         assert_eq!(
             expr.free_variables(),
             BTreeSet::from(["input".into(), "placed_stream".into()])
+        );
+    }
+
+    #[test]
+    fn classified_dependencies_preserve_scopes_bindings_and_placement() {
+        use crate::core::StreamTypeAscription;
+        use ecow::eco_vec;
+
+        let expr = Expr::Lambda(
+            eco_vec![("bound".into(), StreamType::Int)],
+            Box::new(Expr::Tuple(
+                vec![
+                    Expr::Var("free".into()),
+                    Expr::MonitoredAt("placed".into(), "node".into()),
+                    Expr::RestrictedDynamic(
+                        Box::new(Expr::Var("dynamic_source".into())),
+                        StreamTypeAscription::Ascribed(StreamType::Int),
+                        eco_vec!["bound".into(), "dynamic_scope".into()],
+                    ),
+                    Expr::Defer(
+                        Box::new(Expr::Var("defer_source".into())),
+                        StreamTypeAscription::Ascribed(StreamType::Int),
+                        eco_vec!["defer_scope".into(), "bound".into()],
+                    ),
+                ]
+                .into(),
+            )),
+        );
+        let mut dependencies = Vec::new();
+
+        expr.as_ref()
+            .visit_dependencies(|kind, var| dependencies.push((kind, var.clone())));
+
+        assert_eq!(
+            dependencies,
+            vec![
+                (DependencyKind::Stream, "free".into()),
+                (DependencyKind::Placement, "placed".into()),
+                (DependencyKind::Stream, "dynamic_scope".into()),
+                (DependencyKind::Stream, "dynamic_source".into()),
+                (DependencyKind::Stream, "defer_scope".into()),
+                (DependencyKind::Stream, "defer_source".into()),
+            ]
         );
     }
 }

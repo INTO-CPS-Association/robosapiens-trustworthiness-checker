@@ -12,6 +12,7 @@ use trustworthiness_checker::lang::core::dependency_graph::{
     DependencyGraphRoots, DependencyGraphSpec,
 };
 
+use trustworthiness_checker::lang::dsrv::ast::ExprView;
 use trustworthiness_checker::lang::dsrv::parser::{parse_expr, parse_str};
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, VarName};
@@ -35,6 +36,23 @@ fn compilation_input(assignments: usize) -> String {
     }
     source.push_str("out result: Int\n");
     source.push_str(&format!("result = value{} + 1\n", assignments - 1));
+    source
+}
+
+fn localisation_chain_input(assignments: usize) -> String {
+    assert!(assignments > 0);
+    let mut source = String::from("in input: Int\n");
+    for index in 0..assignments {
+        let previous = if index == 0 {
+            "input".to_owned()
+        } else {
+            format!("value{}", index - 1)
+        };
+        source.push_str(&format!("aux value{index}: Int\n"));
+        source.push_str(&format!("value{index} = {previous} + 1\n"));
+    }
+    source.push_str("out result: Int\n");
+    source.push_str(&format!("result = value{}\n", assignments - 1));
     source
 }
 
@@ -306,9 +324,16 @@ fn ast_traversal(c: &mut Criterion) {
         let spec = source
             .parse::<DsrvSpecification>()
             .expect("benchmark fixture should parse");
+        let checked = source
+            .parse::<CheckedDsrvSpecification>()
+            .expect("benchmark fixture should type check");
+        let output = VarName::new("z");
         let expr = spec
-            .var_expr(&VarName::new("z"))
+            .var_expr(&output)
             .expect("benchmark fixture has output z");
+        let checked_expr = checked
+            .var_expr(&output)
+            .expect("checked benchmark fixture has output z");
 
         group.throughput(Throughput::Elements(nodes));
         group.bench_function(BenchmarkId::new("postorder", nodes), |b| {
@@ -318,10 +343,21 @@ fn ast_traversal(c: &mut Criterion) {
                 })
             })
         });
-        group.bench_function(BenchmarkId::new("fold_node_count", nodes), |b| {
+        group.bench_function(BenchmarkId::new("fold_child_results", nodes), |b| {
             b.iter(|| {
                 black_box(expr.as_ref())
                     .fold(|node| 1_usize + node.children().copied().sum::<usize>())
+            })
+        });
+        group.bench_function(BenchmarkId::new("fold_typed_views", nodes), |b| {
+            b.iter(|| {
+                black_box(checked_expr.as_ref()).fold(|node| {
+                    let node_weight = match node.cursor().view() {
+                        ExprView::Var(_) => 2,
+                        _ => 1,
+                    };
+                    node_weight + node.children().copied().sum::<usize>()
+                })
             })
         });
         group.bench_function(BenchmarkId::new("variable_references", nodes), |b| {
@@ -334,11 +370,41 @@ fn ast_traversal(c: &mut Criterion) {
     group.finish();
 }
 
+fn localisation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("localisation_linear_aux_chain");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(3));
+
+    for assignments in [32_usize, 256, 1024] {
+        let source = localisation_chain_input(assignments);
+        let spec = source
+            .parse::<DsrvSpecification>()
+            .expect("localisation benchmark fixture should parse");
+        let local_outputs = vec![VarName::new("result")];
+        spec.try_localise(&local_outputs)
+            .expect("localisation benchmark fixture should localise");
+
+        group.throughput(Throughput::Elements(assignments as u64));
+        group.bench_function(BenchmarkId::from_parameter(assignments), |b| {
+            b.iter(|| {
+                black_box(
+                    black_box(&spec)
+                        .try_localise(black_box(&local_outputs))
+                        .unwrap(),
+                )
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     compilation_phases,
     indexed_arena_comparison,
     specification_import,
-    ast_traversal
+    ast_traversal,
+    localisation
 );
 criterion_main!(benches);

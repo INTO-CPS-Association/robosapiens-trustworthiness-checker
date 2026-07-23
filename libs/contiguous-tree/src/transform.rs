@@ -28,16 +28,12 @@ impl NodeIdentity {
     }
 }
 
-enum CloneWork<Cursor> {
-    Enter(Cursor),
-    Emit(Cursor),
-    LeaveReplacement(NodeIdentity),
-}
-
 struct TreeCloner<Id, Node, Cursor, Replace, CloneNode, Push> {
     replace: Replace,
     clone_node: CloneNode,
     push: Push,
+    replacement_stack: Vec<Cursor>,
+    active_replacements: HashMap<NodeIdentity, usize>,
     id: std::marker::PhantomData<fn(Cursor, Node) -> Id>,
 }
 
@@ -57,70 +53,47 @@ where
     where
         Replace: FnMut(Cursor) -> Result<Option<Cursor>, PolicyError>,
     {
-        let mut work = vec![CloneWork::Enter(source)];
-        let mut results = Vec::new();
-        let mut replacement_stack = Vec::new();
-        let mut active_replacements = HashMap::new();
-
-        while let Some(next) = work.pop() {
-            match next {
-                CloneWork::Enter(source) => {
-                    if let Some(replacement) =
-                        (self.replace)(source).map_err(CloneTreeError::Policy)?
-                    {
-                        let identity = NodeIdentity::of(replacement);
-                        if let Some(&cycle_start) = active_replacements.get(&identity) {
-                            let cursors = replacement_stack[cycle_start..]
-                                .iter()
-                                .copied()
-                                .chain(std::iter::once(replacement))
-                                .collect();
-                            return Err(CloneTreeError::ReplacementCycle { cursors });
-                        }
-
-                        active_replacements.insert(identity, replacement_stack.len());
-                        replacement_stack.push(replacement);
-                        work.push(CloneWork::LeaveReplacement(identity));
-                        work.push(CloneWork::Enter(replacement));
-                        continue;
-                    }
-
-                    work.push(CloneWork::Emit(source));
-                    work.extend(
-                        source
-                            .child_ids()
-                            .rev()
-                            .map(|child| CloneWork::Enter(source.child(child))),
-                    );
-                }
-                CloneWork::Emit(source) => {
-                    let child_count = source.child_ids().len();
-                    let first_child = results
-                        .len()
-                        .checked_sub(child_count)
-                        .expect("each cloned child produces one result");
-                    let mut children = results[first_child..].iter().copied();
-                    let node = map_child_ids((self.clone_node)(source), |_| {
-                        children.next().expect("missing cloned child")
-                    });
-                    debug_assert!(children.next().is_none());
-                    results.truncate(first_child);
-                    results.push((self.push)(node));
-                }
-                CloneWork::LeaveReplacement(identity) => {
-                    let replacement = replacement_stack
-                        .pop()
-                        .expect("replacement leave has a matching enter");
-                    debug_assert!(NodeIdentity::of(replacement) == identity);
-                    active_replacements.remove(&identity);
-                }
+        if let Some(replacement) = (self.replace)(source).map_err(CloneTreeError::Policy)? {
+            let identity = NodeIdentity::of(replacement);
+            if let Some(&cycle_start) = self.active_replacements.get(&identity) {
+                let cursors = self.replacement_stack[cycle_start..]
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(replacement))
+                    .collect();
+                return Err(CloneTreeError::ReplacementCycle { cursors });
             }
+
+            self.active_replacements
+                .insert(identity, self.replacement_stack.len());
+            self.replacement_stack.push(replacement);
+            let cloned = self.clone_with(replacement);
+            let active = self
+                .replacement_stack
+                .pop()
+                .expect("replacement recursion has a matching stack entry");
+            debug_assert!(NodeIdentity::of(active) == identity);
+            self.active_replacements.remove(&identity);
+            return cloned;
         }
 
-        let [root] = results.as_slice() else {
-            panic!("cloning one tree must produce exactly one root")
-        };
-        Ok(*root)
+        let mut error = None;
+        let node = map_child_ids((self.clone_node)(source), |child| {
+            if error.is_some() {
+                return child;
+            }
+            match self.clone_with(source.child(child)) {
+                Ok(cloned) => cloned,
+                Err(clone_error) => {
+                    error = Some(clone_error);
+                    child
+                }
+            }
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok((self.push)(node))
     }
 }
 
@@ -183,6 +156,8 @@ where
         replace,
         clone_node,
         push,
+        replacement_stack: Vec::new(),
+        active_replacements: HashMap::new(),
         id: std::marker::PhantomData,
     }
     .clone_with(root)

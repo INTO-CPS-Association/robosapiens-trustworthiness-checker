@@ -19,6 +19,7 @@ mod display;
 #[cfg(test)]
 pub(crate) mod generation;
 
+pub(crate) use analysis::DependencyKind;
 pub use checked::{CheckedExpr, CheckedExprRef};
 pub(crate) use checked::{ExprCursor, ExprTypes, ExprTypesBuilder};
 pub use contiguous_tree::TreeCursorExt;

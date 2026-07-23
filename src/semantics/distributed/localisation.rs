@@ -7,7 +7,7 @@ use std::fmt::{self, Debug};
 use contiguous_tree::CloneTreeError;
 use tracing::debug;
 
-use crate::lang::dsrv::ast::{DsrvSpecification, ExprView};
+use crate::lang::dsrv::ast::{DependencyKind, DsrvSpecification, ExprView};
 use crate::lang::dsrv::span::Span;
 
 use crate::VarName;
@@ -120,11 +120,10 @@ fn dependency_closure(
             continue;
         }
         if let Some(root) = spec.exprs.get(&var) {
-            root.visit_stream_dependencies(|dependency| pending.push(dependency.clone()));
-            // Placement references are not runtime stream dependencies, but aux variables used in
-            // monitored_at must remain visible so localisation can reject them structurally.
-            root.visit_free_variables(|dependency| {
-                if spec.aux_vars.contains(dependency) {
+            root.visit_dependencies(|kind, dependency| {
+                // Placement references are not runtime stream dependencies, but aux variables used
+                // in monitored_at must remain visible so localisation can reject them structurally.
+                if matches!(kind, DependencyKind::Stream) || spec.aux_vars.contains(dependency) {
                     pending.push(dependency.clone());
                 }
             });
