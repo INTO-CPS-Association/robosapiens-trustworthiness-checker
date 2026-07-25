@@ -11,7 +11,6 @@ import argparse
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs/src/assets/dataflow"
 
@@ -32,16 +31,18 @@ COLORS = {
 }
 
 
-def esc(text: str) -> str:
+def esc(value: str) -> str:
     return (
-        text.replace("&", "&amp;")
+        value.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
 
 
-def text(x: int, y: int, value: str, *, anchor: str = "middle", cls: str = "label") -> str:
+def text(
+    x: int, y: int, value: str, *, anchor: str = "middle", cls: str = "label"
+) -> str:
     styles = {
         "label": ("system-ui, sans-serif", 14, 600, COLORS["ink"]),
         "code": ("ui-monospace, monospace", 13, 600, COLORS["ink"]),
@@ -78,7 +79,9 @@ def box(
     return "\n".join(parts)
 
 
-def arrow(x1: int, y1: int, x2: int, y2: int, marker: str, *, dashed: bool = False) -> str:
+def arrow(
+    x1: int, y1: int, x2: int, y2: int, marker: str, *, dashed: bool = False
+) -> str:
     dash = ' stroke-dasharray="5 4"' if dashed else ""
     return (
         f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
@@ -86,13 +89,19 @@ def arrow(x1: int, y1: int, x2: int, y2: int, marker: str, *, dashed: bool = Fal
     )
 
 
-def svg(title: str, description: str, width: int, height: int, body: str, marker: str) -> str:
+def divider(y: int, width: int) -> str:
+    return f'<line x1="25" y1="{y}" x2="{width - 25}" y2="{y}" stroke="{COLORS["border"]}" stroke-width="1"/>'
+
+
+def svg(
+    title: str, description: str, width: int, height: int, body: str, marker: str
+) -> str:
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="{marker}-title {marker}-desc" style="width:100%;max-width:{width}px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
 <title id="{marker}-title">{esc(title)}</title>
 <desc id="{marker}-desc">{esc(description)}</desc>
 <defs>
   <marker id="{marker}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="{COLORS['line']}"/>
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="{COLORS["line"]}"/>
   </marker>
 </defs>
 {body}
@@ -101,379 +110,1061 @@ def svg(title: str, description: str, width: int, height: int, body: str, marker
 
 def example_streams() -> tuple[str, str]:
     marker = "example-arrow"
-    parts = [text(24, 27, "Running example: stream dependencies", anchor="start", cls="section")]
-    nodes = [(55, "x", "blue"), (245, "scaled", "green"), (435, "total", "orange"), (625, "alert", "purple")]
+    parts = [
+        text(
+            24,
+            27,
+            "Running example: stream dependencies",
+            anchor="start",
+            cls="section",
+        )
+    ]
+    nodes = [
+        (55, "x", "blue"),
+        (245, "scaled", "green"),
+        (435, "total", "orange"),
+        (625, "alert", "purple"),
+    ]
     for x, label, color in nodes:
-        parts.append(box(x, 48, 120, 44, label, fill=f"{color}_fill", stroke=color))
+        parts.append(box(x, 62, 120, 44, label, fill=f"{color}_fill", stroke=color))
     for x1, x2 in [(175, 245), (365, 435), (555, 625)]:
-        parts.append(arrow(x1, 70, x2, 70, marker))
+        parts.append(arrow(x1, 84, x2, 84, marker))
     parts.extend(
         [
-            '<path d="M 495 48 C 495 10, 555 10, 555 48" fill="none" '
-            f'stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-            text(525, 14, "previous tick", cls="small"),
+            f'<path d="M 495 106 C 495 165, 555 165, 555 106" fill="none" stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
+            text(525, 151, "previous tick: total[1]", cls="small"),
         ]
     )
-    title = "Stream dependencies in the running example"
-    desc = "Input x flows through scaled, total, and alert on one tick. Total also reads its own previous-tick output."
-    return svg(title, desc, 800, 115, "\n".join(parts), marker), "Solid arrows are same-tick dependencies; the dashed loop is retained previous-tick state."
+    return (
+        svg(
+            "Stream dependencies in the running example",
+            "Input x flows through scaled, total, and alert during one tick. Total also reads retained previous-tick state through its delayed self-reference.",
+            800,
+            180,
+            "\n".join(parts),
+            marker,
+        ),
+        "Solid arrows are same-tick dependencies; the dashed loop is retained previous-tick state.",
+    )
 
 
 def pipeline() -> tuple[str, str]:
     marker = "pipeline-arrow"
     parts = [text(24, 27, "Compile once", anchor="start", cls="section")]
     compile_nodes = [
-        (25, 48, 135, "DSRV spec", "blue", "typed or untyped"),
-        (205, 48, 145, "LoweredProgram", "green", "plans + free vars"),
-        (395, 48, 165, "DepGraph order", "orange", "dependencies first"),
-        (605, 48, 145, "into_monitor", "purple", "layout + bind"),
-        (780, 48, 130, "DataflowMonitor", "blue", "executors"),
+        (35, 52, 190, "DSRV specification", "blue", "typed or untyped"),
+        (280, 52, 190, "LoweredDataflow", "green", "EvaluationGraph + dependencies"),
+        (525, 52, 190, "StreamProgram", "orange", "bind EnvironmentSlot refs"),
+        (770, 52, 190, "DataflowMonitor", "purple", "ExecutionPlan + Scheduler"),
     ]
-    for x, y, w, label, color, sublabel in compile_nodes:
-        parts.append(box(x, y, w, 62, label, fill=f"{color}_fill", stroke=color, sublabel=sublabel))
-    for x1, x2 in [(160, 205), (350, 395), (560, 605), (750, 780)]:
-        parts.append(arrow(x1, 79, x2, 79, marker))
+    for x, y, w, label, color, note in compile_nodes:
+        parts.append(
+            box(x, y, w, 64, label, fill=f"{color}_fill", stroke=color, sublabel=note)
+        )
+    for x1, x2 in [(225, 280), (470, 525), (715, 770)]:
+        parts.append(arrow(x1, 84, x2, 84, marker))
     parts.extend(
         [
-            f'<line x1="25" y1="137" x2="895" y2="137" stroke="{COLORS["border"]}" stroke-width="1"/>',
-            text(24, 165, "Evaluate every tick", anchor="start", cls="section"),
+            divider(145, 1000),
+            text(24, 176, "Every logical tick", anchor="start", cls="section"),
         ]
     )
-    tick_nodes = [
-        (55, 185, 135, "input row", "blue", "one logical tick"),
-        (250, 185, 170, "environment row", "green", "inputs, then results"),
-        (480, 185, 180, "PlanExecutor x N", "orange", "dependency order"),
-        (720, 185, 150, "output row", "purple", "project slots"),
+    phases = [
+        (35, "1  load inputs", "environment row"),
+        (275, "2  evaluate sources", "ExecutionPlan pre-order"),
+        (515, "3  resolve programs", "exact active dependencies"),
+        (755, "4  validate schedule", "Scheduler repairs if needed"),
+        (155, "5  evaluate once", "scheduled StreamEvaluators"),
+        (395, "6  commit temporal", "post-row staged writes"),
+        (635, "7  project outputs", "saved EnvironmentSlots"),
     ]
-    for x, y, w, label, color, sublabel in tick_nodes:
-        parts.append(box(x, y, w, 62, label, fill=f"{color}_fill", stroke=color, sublabel=sublabel))
-    for x1, x2 in [(190, 250), (420, 480), (660, 720)]:
-        parts.append(arrow(x1, 216, x2, 216, marker))
-    parts.append(arrow(845, 110, 570, 185, marker, dashed=True))
-    parts.append(text(725, 151, "owns and reuses", cls="small"))
-    title = "Dataflow monitor compilation and evaluation pipeline"
-    desc = "A specification becomes a LoweredProgram whose dependency graph orders plans before into_monitor lays out slots, binds references, and creates a DataflowMonitor. Every tick loads an input row, extends an environment through ordered executors, and projects an output row."
-    return svg(title, desc, 920, 270, "\n".join(parts), marker), "Compilation creates the ordered monitor; evaluation reuses it for each logical input row."
+    for index, (x, label, note) in enumerate(phases):
+        y = 202 if index < 4 else 308
+        parts.append(
+            box(
+                x,
+                y,
+                205,
+                64,
+                label,
+                fill="blue_fill" if index < 4 else "green_fill",
+                stroke="blue" if index < 4 else "green",
+                sublabel=note,
+            )
+        )
+    for x1, x2 in [(240, 275), (480, 515), (720, 755)]:
+        parts.append(arrow(x1, 234, x2, 234, marker))
+    parts.extend(
+        [
+            f'<path d="M 857 266 C 857 290, 257 290, 257 308" fill="none" stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+            arrow(360, 340, 395, 340, marker),
+            arrow(600, 340, 635, 340, marker),
+        ]
+    )
+    return (
+        svg(
+            "Current dataflow compilation and tick pipeline",
+            "Compilation lowers EvaluationGraphs, binds EnvironmentSlots into StreamPrograms, and creates a DataflowMonitor with an ExecutionPlan and Scheduler. Each tick loads inputs, pre-evaluates expression sources, resolves active programs, validates the schedule, evaluates remaining StreamEvaluators once, commits temporal state, and projects outputs.",
+            1000,
+            400,
+            "\n".join(parts),
+            marker,
+        ),
+        "Compilation creates the ordered monitor; evaluation reuses it for each logical input row.",
+    )
 
 
 def environment_layout() -> tuple[str, str]:
     marker = "environment-arrow"
-    parts = [text(24, 27, "Inputs, environment slots, and output projection (tick 2)", anchor="start", cls="section")]
+    parts = [
+        text(
+            24,
+            27,
+            "Stable EnvironmentSlot layout (tick 2)",
+            anchor="start",
+            cls="section",
+        )
+    ]
     parts.extend(
         [
-            text(35, 58, "Value source", anchor="start", cls="label"),
-            text(350, 58, "shared environment row", anchor="start", cls="label"),
-            text(720, 58, "illustrative output row", anchor="start", cls="label"),
-            box(35, 75, 225, 42, "input[0]: x = 8", fill="blue_fill", stroke="blue"),
-            box(35, 130, 225, 42, "1. scaled -> 16", fill="green_fill", stroke="green"),
-            box(35, 185, 225, 42, "2. total -> 24", fill="orange_fill", stroke="orange"),
-            box(35, 240, 225, 42, "3. alert -> true", fill="purple_fill", stroke="purple"),
-            box(350, 75, 230, 42, "slot 0: x = 8", fill="blue_fill", stroke="blue"),
-            box(350, 130, 230, 42, "slot 1: scaled = 16", fill="green_fill", stroke="green"),
-            box(350, 185, 230, 42, "slot 2: total = 24", fill="orange_fill", stroke="orange"),
-            box(350, 240, 230, 42, "slot 3: alert = true", fill="purple_fill", stroke="purple"),
-            box(720, 75, 175, 42, "output[0]: alert", fill="purple_fill", stroke="purple"),
-            box(720, 157, 175, 42, "output[1]: total", fill="orange_fill", stroke="orange"),
-            box(720, 240, 175, 42, "output[2]: scaled", fill="green_fill", stroke="green"),
-            arrow(260, 96, 350, 96, marker),
-            arrow(260, 151, 350, 151, marker),
-            arrow(260, 206, 350, 206, marker),
-            arrow(260, 261, 350, 261, marker),
-            '<path d="M 580 261 C 640 261, 655 96, 720 96" fill="none" '
-            f'stroke="{COLORS["purple"]}" stroke-width="2" marker-end="url(#{marker})"/>',
-            '<path d="M 580 206 C 640 206, 655 178, 720 178" fill="none" '
-            f'stroke="{COLORS["orange"]}" stroke-width="2" marker-end="url(#{marker})"/>',
-            '<path d="M 580 151 C 640 151, 655 261, 720 261" fill="none" '
-            f'stroke="{COLORS["green"]}" stroke-width="2" marker-end="url(#{marker})"/>',
-            text(720, 310, "output EnvironmentIds = [3, 2, 1]", anchor="start", cls="code"),
-            text(35, 310, "stable slots; executor order may change independently", anchor="start", cls="small"),
+            text(35, 62, "producers", anchor="start", cls="label"),
+            text(360, 62, "environment_values", anchor="start", cls="label"),
+            text(735, 62, "output projection", anchor="start", cls="label"),
         ]
     )
-    title = "Mapping inputs and computed streams through environment slots to outputs"
-    desc = "At tick two, input x occupies environment slot zero. Scaled, total, and alert write values to stable slots one through three. For the illustrated monitor output order, alert, total, and scaled project slots three, two, and one. Runtime scheduling may change executor order without changing these slots."
-    return svg(title, desc, 940, 335, "\n".join(parts), marker), "Environment slots remain stable even if runtime dependencies reorder executors; outputs project their own API order through saved IDs."
+    rows = [
+        (82, "input[0]: x = 8", "EnvironmentSlot(0): x = 8", "blue"),
+        (142, "scaled -> 16", "EnvironmentSlot(1): scaled = 16", "green"),
+        (202, "total -> 24", "EnvironmentSlot(2): total = 24", "orange"),
+        (262, "alert -> true", "EnvironmentSlot(3): alert = true", "purple"),
+    ]
+    for y, source, slot, color in rows:
+        parts.extend(
+            [
+                box(35, y, 235, 44, source, fill=f"{color}_fill", stroke=color),
+                box(360, y, 275, 44, slot, fill=f"{color}_fill", stroke=color),
+                arrow(270, y + 22, 360, y + 22, marker),
+            ]
+        )
+    outputs = [
+        (82, "output[0]: alert", "purple", 284),
+        (172, "output[1]: total", "orange", 224),
+        (262, "output[2]: scaled", "green", 164),
+    ]
+    for y, label, color, source_y in outputs:
+        parts.append(box(735, y, 190, 44, label, fill=f"{color}_fill", stroke=color))
+        parts.append(
+            f'<path d="M 635 {source_y} C 685 {source_y}, 685 {y + 22}, 735 {y + 22}" fill="none" stroke="{COLORS[color]}" stroke-width="1.8" marker-end="url(#{marker})"/>'
+        )
+    parts.extend(
+        [
+            text(
+                35,
+                346,
+                "Scheduler may reorder StreamEvaluators; slots do not move",
+                anchor="start",
+                cls="small",
+            ),
+            text(735, 346, "output slots = [3, 2, 1]", anchor="start", cls="code"),
+        ]
+    )
+    return (
+        svg(
+            "Stable environment slots and output projection",
+            "Input and computed values occupy stable EnvironmentSlot indices. The Scheduler may reorder StreamEvaluator execution, while output slots continue to project alert, total, and scaled from slots three, two, and one.",
+            960,
+            375,
+            "\n".join(parts),
+            marker,
+        ),
+        "Environment slots remain stable even if runtime dependencies reorder evaluators; outputs project their own API order through saved EnvironmentSlots.",
+    )
 
 
 def history_retention() -> tuple[str, str]:
     marker = "history-arrow"
-    parts = [text(24, 27, "Bounded history ownership", anchor="start", cls="section")]
-    parts.extend(
-        [
-            text(35, 58, "x[3] before tick 4 push", anchor="start", cls="label"),
-            box(35, 78, 82, 54, "10", fill="orange_fill", stroke="orange", sublabel="oldest"),
-            box(127, 78, 82, 54, "20", fill="green_fill", stroke="green"),
-            box(219, 78, 82, 54, "30", fill="green_fill", stroke="green"),
-            box(35, 168, 110, 54, "x = 40", fill="blue_fill", stroke="blue", sublabel="push here"),
-            box(191, 168, 110, 54, "result = 10", fill="purple_fill", stroke="purple", sublabel="read oldest"),
-            arrow(90, 168, 76, 132, marker),
-            arrow(76, 132, 246, 168, marker),
-            f'<line x1="340" y1="48" x2="340" y2="232" stroke="{COLORS["border"]}" stroke-width="1"/>',
-            text(375, 58, "Plan state", anchor="start", cls="label"),
-            box(375, 78, 175, 54, "PlanExecutor", fill="blue_fill", stroke="blue", sublabel="owns DataflowState"),
-            box(600, 60, 250, 48, "Delay x[3]", fill="orange_fill", stroke="orange", sublabel="ring capacity 3"),
-            box(600, 118, 250, 48, "Recursive z[2]", fill="orange_fill", stroke="orange", sublabel="commit after output"),
-            box(375, 178, 175, 54, "DynamicState", fill="purple_fill", stroke="purple", sublabel="active executor"),
-            box(600, 180, 250, 48, "Delay x[2]", fill="green_fill", stroke="green", sublabel="installation lifetime"),
-            arrow(550, 105, 600, 84, marker),
-            arrow(550, 105, 600, 142, marker),
-            arrow(550, 205, 600, 204, marker),
-        ]
-    )
-    title = "Bounded dataflow history and ownership"
-    desc = "A three-entry ring for x indexed by three reads the oldest value before replacing it. Static and recursive delays belong to a PlanExecutor, while a dynamic delay belongs to the currently installed executor."
-    return svg(title, desc, 885, 255, "\n".join(parts), marker), "Each index owns a fixed-size ring; recursive history commits after output, and dynamic history belongs to the installed executor."
-
-
-def plan_body() -> tuple[str, str]:
-    marker = "plan-arrow"
-    parts = [text(24, 27, "Bound PlanBody for total", anchor="start", cls="section")]
-    plan_nodes = [
-        (40, 60, 145, "RecursiveSIndex", "orange"),
-        (230, 60, 125, "Default", "orange"),
-        (230, 120, 125, "env: scaled", "green"),
-        (410, 90, 105, "Add", "blue"),
-        (570, 90, 115, "output", "purple"),
+    parts = [
+        text(
+            24,
+            27,
+            "History has a read/stage phase and a post-row commit",
+            anchor="start",
+            cls="section",
+        )
     ]
-    for x, y, w, label, color in plan_nodes:
-        parts.append(box(x, y, w, 38, label, fill=f"{color}_fill", stroke=color))
     parts.extend(
         [
-            arrow(185, 79, 230, 79, marker),
-            arrow(355, 79, 410, 102, marker),
-            arrow(355, 139, 410, 116, marker),
-            arrow(515, 109, 570, 109, marker),
-            '<path d="M 627 128 C 627 198, 112 198, 112 98" fill="none" '
-            f'stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-            text(365, 205, "commit completed output to recursive delay", cls="small"),
+            text(35, 62, "Evaluate / read-stage", anchor="start", cls="label"),
+            box(
+                35,
+                82,
+                250,
+                64,
+                "Delay x[3]",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="read oldest 10; stage operand x=40",
+            ),
+            box(
+                355,
+                82,
+                250,
+                64,
+                "RecursiveDelay total[1]",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="read prior output; stage new output",
+            ),
+            box(
+                675,
+                82,
+                250,
+                64,
+                "StreamEvaluator result",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="write completed environment row",
+            ),
+            arrow(285, 114, 355, 114, marker),
+            arrow(605, 114, 675, 114, marker),
+            divider(178, 960),
+            text(35, 210, "Post-row temporal commit", anchor="start", cls="label"),
+            box(
+                35,
+                230,
+                250,
+                64,
+                "DelayState",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="push staged x=40; capacity stays 3",
+            ),
+            box(
+                355,
+                230,
+                250,
+                64,
+                "RecursiveDelay history",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="commit staged stream output",
+            ),
+            box(
+                675,
+                230,
+                250,
+                64,
+                "Dynamic evaluator state",
+                fill="green_fill",
+                stroke="green",
+                sublabel="committed only while installed",
+            ),
+            text(
+                480,
+                330,
+                "If evaluation fails, commit is skipped; retained history is unchanged",
+                cls="small",
+            ),
         ]
     )
-    title = "Operation order in the total plan body"
-    desc = "RecursiveSIndex and the scaled environment operand feed Default and Add. The completed output is committed back to the recursive delay after the forward pass."
-    return svg(title, desc, 760, 220, "\n".join(parts), marker), "Solid arrows are forward-pass reads; the dashed path is the post-output recursive-delay commit."
+    return (
+        svg(
+            "Two-phase bounded history retention",
+            "During evaluation, ordinary Delay nodes read their rings and stage current operands, while RecursiveDelay nodes read retained outputs and stage completed stream outputs. Only after the row succeeds does the monitor commit staged writes. Dynamic history belongs to the installed StreamEvaluator.",
+            960,
+            355,
+            "\n".join(parts),
+            marker,
+        ),
+        "Each index owns a fixed-size ring; recursive history is staged after output and committed after the row, and dynamic history belongs to the installed evaluator.",
+    )
+
+
+def evaluation_graph() -> tuple[str, str]:
+    marker = "graph-arrow"
+    parts = [
+        text(24, 27, "Bound EvaluationGraph for total", anchor="start", cls="section")
+    ]
+    nodes = [
+        (45, 65, 210, "RecursiveDelay { 1 }", "orange", "retained previous total"),
+        (45, 145, 210, "Const(0)", "green", "fallback before history exists"),
+        (325, 105, 170, "Default", "orange", "node 0 or Const(0)"),
+        (325, 205, 170, "External(slot 1)", "green", "scaled from EnvironmentSlot"),
+        (565, 155, 135, "Add", "blue", "node 2"),
+        (770, 155, 135, "output", "purple", "DataRef::Node"),
+    ]
+    for x, y, w, label, color, note in nodes:
+        parts.append(
+            box(x, y, w, 62, label, fill=f"{color}_fill", stroke=color, sublabel=note)
+        )
+    parts.extend(
+        [
+            arrow(255, 96, 325, 126, marker),
+            arrow(255, 176, 325, 146, marker),
+            arrow(495, 136, 565, 176, marker),
+            arrow(495, 236, 565, 196, marker),
+            arrow(700, 186, 770, 186, marker),
+            f'<path d="M 837 155 L 837 48 L 150 48 L 150 65" fill="none" stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
+            text(
+                500,
+                322,
+                "post-output: stage RecursiveDelay, then commit after the completed row",
+                cls="small",
+            ),
+        ]
+    )
+    return (
+        svg(
+            "Bound evaluation graph with recursive fallback",
+            "The total EvaluationGraph reads a RecursiveDelay and uses Const zero as Default's fallback, adds scaled from an EnvironmentSlot, and returns the Add node. The completed output is staged for the recursive delay and committed after the row.",
+            960,
+            345,
+            "\n".join(parts),
+            marker,
+        ),
+        "Solid arrows are forward-pass reads; the dashed path is the post-output recursive-delay commit.",
+    )
 
 
 def lazy_if() -> tuple[str, str]:
     marker = "if-arrow"
-    parts = [text(24, 27, "Lazy branch selection and state ownership", anchor="start", cls="section")]
+    parts = [
+        text(
+            24,
+            27,
+            "Lazy if: ordinary timelines and recursive base cases",
+            anchor="start",
+            cls="section",
+        )
+    ]
     parts.extend(
         [
-            box(35, 112, 140, 48, "condition", fill="blue_fill", stroke="blue", sublabel="outer plan operand"),
-            box(245, 105, 145, 62, "evaluate branches", fill="panel", stroke="border", sublabel="advance both states"),
-            arrow(175, 136, 245, 136, marker),
-            box(480, 48, 180, 70, "then PlanBody", fill="green_fill", stroke="green", sublabel="then DataflowState"),
-            box(480, 190, 180, 70, "else PlanBody", fill="orange_fill", stroke="orange", sublabel="else DataflowState"),
-            arrow(390, 125, 480, 83, marker),
-            arrow(390, 147, 480, 225, marker),
-            text(420, 92, "advance", cls="small"),
-            text(420, 205, "advance", cls="small"),
-            box(735, 105, 140, 62, "select result", fill="purple_fill", stroke="purple", sublabel="suppress other error"),
-            arrow(660, 83, 735, 125, marker),
-            arrow(660, 225, 735, 147, marker),
-            '<path d="M 317 167 L 317 287 L 805 287 L 805 167" fill="none" '
-            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-            text(545, 305, "NoVal / Deferred: advance both states, return condition value", cls="small"),
+            box(
+                35,
+                78,
+                190,
+                64,
+                "condition",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="retained stream-lifted value",
+            ),
+            box(
+                310,
+                52,
+                235,
+                64,
+                "then EvaluationGraph",
+                fill="green_fill",
+                stroke="green",
+                sublabel="own persistent StreamState",
+            ),
+            box(
+                310,
+                142,
+                235,
+                64,
+                "else EvaluationGraph",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="own persistent StreamState",
+            ),
+            arrow(225, 100, 310, 84, marker),
+            arrow(225, 120, 310, 174, marker),
+            box(
+                630,
+                92,
+                260,
+                74,
+                "ordinary if",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="advance both; select one result",
+            ),
+            arrow(545, 84, 630, 116, marker),
+            arrow(545, 174, 630, 142, marker),
+            divider(235, 930),
+            box(
+                35,
+                265,
+                240,
+                68,
+                "recursive call context",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="genuinely lazy selection",
+            ),
+            box(
+                345,
+                265,
+                240,
+                68,
+                "Bool condition",
+                fill="green_fill",
+                stroke="green",
+                sublabel="evaluate selected branch only",
+            ),
+            box(
+                655,
+                265,
+                240,
+                68,
+                "Deferred or NoVal",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="evaluate neither branch",
+            ),
+            arrow(275, 299, 345, 299, marker),
+            f'<path d="M 275 315 C 430 390, 560 390, 655 315" fill="none" stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+            text(
+                465,
+                386,
+                "Reconfiguration points inside either lazy branch are rejected during compilation",
+                cls="small",
+            ),
         ]
     )
-    title = "Lazy if branch execution"
-    desc = "Both nested PlanBody states and lifted outputs advance on every tick. Selection remains lazy with respect to errors."
-    return svg(title, desc, 920, 325, "\n".join(parts), marker), "Each branch owns independent persistent state; selection suppresses errors from the unselected branch."
+    return (
+        svg(
+            "Conditional evaluation in ordinary and recursive contexts",
+            "Ordinary conditionals evaluate both branch EvaluationGraphs so both persistent StreamStates advance before one result is selected. In recursive call context a Boolean evaluates only its selected branch, while Deferred or NoVal evaluates neither branch. Reconfiguration points inside lazy branches are rejected during compilation.",
+            930,
+            400,
+            "\n".join(parts),
+            marker,
+        ),
+        "Each branch owns independent persistent state and ordinarily advances every tick; recursive evaluation follows only a Boolean-selected branch and evaluates neither branch for Deferred or NoVal.",
+    )
 
 
 def function_binding() -> tuple[str, str]:
     marker = "function-binding-arrow"
-    parts = [text(24, 27, "Function definition after binding", anchor="start", cls="section")]
+    parts = [
+        text(
+            24,
+            27,
+            "Bind UnboundFunction into StreamFunction",
+            anchor="start",
+            cls="section",
+        )
+    ]
     parts.extend(
         [
-            box(35, 62, 170, 62, "outer environment", fill="blue_fill", stroke="blue", sublabel="bias, n, streams"),
-            box(275, 55, 205, 76, "capture_sources", fill="green_fill", stroke="green", sublabel="resolved EnvironmentIds"),
-            arrow(205, 93, 275, 93, marker),
-            box(550, 48, 300, 90, "DataflowFunctionDef", fill="purple_fill", stroke="purple", sublabel="params + capture slots + body plan"),
-            arrow(480, 93, 550, 93, marker),
-            text(445, 78, "store", cls="small"),
-            box(550, 158, 300, 62, "shared ExecutablePlan", fill="panel", stroke="border", sublabel="body layout: [captures | params]"),
-            arrow(700, 138, 700, 158, marker),
+            box(
+                35,
+                58,
+                230,
+                70,
+                "UnboundFunction",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="parameters + EvaluationGraph",
+            ),
+            box(
+                335,
+                58,
+                250,
+                70,
+                "free vars - parameters",
+                fill="green_fill",
+                stroke="green",
+                sublabel="resolve capture_slots",
+            ),
+            box(
+                655,
+                58,
+                250,
+                70,
+                "StreamFunction",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="parameters + display + program",
+            ),
+            arrow(265, 93, 335, 93, marker),
+            arrow(585, 93, 655, 93, marker),
+            box(
+                175,
+                190,
+                250,
+                70,
+                "capture_slots",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="Vec<EnvironmentSlot> in outer row",
+            ),
+            box(
+                535,
+                190,
+                250,
+                70,
+                "Rc<StreamProgram>",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="bound EvaluationGraph",
+            ),
+            arrow(460, 128, 300, 190, marker),
+            arrow(780, 128, 660, 190, marker),
+            box(
+                355,
+                310,
+                250,
+                64,
+                "local EnvironmentLayout",
+                fill="panel",
+                stroke="border",
+                sublabel="[captures | parameters]",
+            ),
+            arrow(300, 260, 430, 310, marker),
+            arrow(660, 260, 530, 310, marker),
         ]
     )
-    title = "Function capture binding"
-    desc = "Free variables are resolved to outer EnvironmentIds and stored with parameters and a shared executable body plan in DataflowFunctionDef."
-    return svg(title, desc, 900, 245, "\n".join(parts), marker), "Binding stores capture source EnvironmentIds and gives the shared body plan a captures-first local layout."
+    return (
+        svg(
+            "Current StreamFunction binding structures",
+            "Binding removes parameters from an UnboundFunction's free variables, resolves captures to outer EnvironmentSlots, binds the EvaluationGraph against a captures-first local EnvironmentLayout, and stores the resulting StreamProgram in StreamFunction.",
+            940,
+            405,
+            "\n".join(parts),
+            marker,
+        ),
+        "Binding stores capture source environment slots and gives the shared body program a captures-first local layout.",
+    )
 
 
 def function_call() -> tuple[str, str]:
     marker = "function-call-arrow"
-    parts = [text(24, 27, "Function evaluation and calls", anchor="start", cls="section")]
-    parts.extend(
-        [
-            box(35, 62, 160, 62, "Function node", fill="blue_fill", stroke="blue", sublabel="current tick"),
-            box(260, 55, 205, 76, "call template", fill="green_fill", stroke="green", sublabel="[capture values | params]"),
-            arrow(195, 93, 260, 93, marker),
-            text(228, 80, "snapshot", cls="small"),
-            box(535, 48, 220, 90, "pooled call frame", fill="orange_fill", stroke="orange", sublabel="fill args; reset executor"),
-            arrow(465, 93, 535, 93, marker),
-            box(535, 170, 220, 62, "shared body plan", fill="panel", stroke="border", sublabel="evaluate one value"),
-            arrow(645, 138, 645, 170, marker),
-            text(790, 91, "return frame to pool", anchor="start", cls="small"),
-            '<path d="M 755 201 C 850 201, 850 93, 755 93" fill="none" '
-            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-            text(300, 214, "Apply / map / filter / fold create isolated invocations", cls="small"),
-        ]
+    parts = [
+        text(
+            24,
+            27,
+            "Normal and recursive function evaluation",
+            anchor="start",
+            cls="section",
+        ),
+        # Normal Apply: function identity selects one callable instance whose
+        # evaluator state advances across logical ticks.
+        f'<rect x="25" y="48" width="910" height="190" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(
+            45,
+            77,
+            "Normal Apply: call-site state continues",
+            anchor="start",
+            cls="label",
+        ),
+        text(205, 105, "logical tick n", cls="small"),
+        text(700, 105, "logical tick n + 1", cls="small"),
+        box(45, 125, 150, 52, "F1(args)", fill="blue_fill", stroke="blue"),
+        box(
+            235,
+            112,
+            210,
+            78,
+            "callable F1",
+            fill="blue_fill",
+            stroke="blue",
+            sublabel="state S(n)",
+        ),
+        arrow(195, 151, 235, 151, marker),
+        box(555, 125, 150, 52, "F1(args')", fill="blue_fill", stroke="blue"),
+        box(
+            745,
+            112,
+            165,
+            78,
+            "same callable F1",
+            fill="green_fill",
+            stroke="green",
+            sublabel="state S(n + 1)",
+        ),
+        arrow(705, 151, 745, 151, marker),
+        f'<path d="M 445 175 C 520 220, 670 220, 745 175" fill="none" '
+        f'stroke="{COLORS["green"]}" stroke-width="2" marker-end="url(#{marker})"/>',
+        text(595, 218, "callable state", cls="small"),
+        # RecursiveApply: every active depth gets a distinct reset evaluator
+        # frame. Frames return to the per-call pool during unwind.
+        f'<rect x="25" y="258" width="910" height="300" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(
+            45,
+            287,
+            "RecursiveApply: reset frame at each call depth",
+            anchor="start",
+            cls="label",
+        ),
+        box(
+            45,
+            330,
+            205,
+            76,
+            "RecursiveCall",
+            fill="orange_fill",
+            stroke="orange",
+            sublabel="captures + shared program",
+        ),
+        arrow(250, 368, 365, 374, marker),
+        f'<rect x="325" y="310" width="300" height="225" rx="7" fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="1.5"/>',
+        text(345, 335, "active call stack", anchor="start", cls="small"),
+        box(
+            365,
+            350,
+            220,
+            48,
+            "frame 0",
+            fill="panel",
+            stroke="border",
+            sublabel="args: n",
+        ),
+        box(
+            365,
+            415,
+            220,
+            48,
+            "frame 1",
+            fill="panel",
+            stroke="border",
+            sublabel="args: n - 1",
+        ),
+        box(
+            365,
+            480,
+            220,
+            42,
+            "frame 2",
+            fill="panel",
+            stroke="border",
+            sublabel="base case",
+        ),
+        arrow(475, 398, 475, 415, marker),
+        arrow(475, 463, 475, 480, marker),
+        box(
+            700,
+            365,
+            190,
+            76,
+            "available frame pool",
+            fill="green_fill",
+            stroke="green",
+            sublabel="after unwind",
+        ),
+        f'<path d="M 625 500 C 680 500, 680 420, 700 403" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+        f'marker-end="url(#{marker})"/>',
+    ]
+    return (
+        svg(
+            "Normal Apply state continuation and recursive frame evaluation",
+            "Normal Apply retains one callable instance while function identity F1 remains active. Its evaluator state advances from S n on one logical tick to S n plus one on the next; a different function identity creates fresh callable state. RecursiveApply creates a RecursiveCall with current captures and a shared program. Each active recursion depth acquires a separate frame, fills different arguments, resets its evaluator, and evaluates. Frames return to the available pool as recursion unwinds.",
+            960,
+            580,
+            "\n".join(parts),
+            marker,
+        ),
+        "Normal Apply carries one callable's state across ticks; RecursiveApply isolates active recursion depths in reset frames returned to a per-call pool.",
     )
-    title = "Function call frame lifecycle"
-    desc = "Evaluating a function node snapshots captures. Each invocation fills a pooled resettable frame, evaluates the shared body plan, and returns the frame to the pool."
-    return svg(title, desc, 900, 255, "\n".join(parts), marker), "Capture values belong to the current tick; argument and node state belongs to one resettable invocation frame."
+
+
+def reconfiguration_points() -> tuple[str, str]:
+    marker = "reconfiguration-points-arrow"
+
+    def point_box(
+        x: int,
+        y: int,
+        width: int,
+        title: str,
+        current: str,
+        scope: str,
+    ) -> str:
+        center = x + width // 2
+        return "\n".join(
+            [
+                f'<rect x="{x}" y="{y}" width="{width}" height="96" rx="7" '
+                f'fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="2"/>',
+                text(center, y + 25, title, cls="code"),
+                text(center, y + 51, f'current: "{current}"', cls="code"),
+                text(center, y + 75, f"scope: {scope}", cls="small"),
+            ]
+        )
+
+    parts = [
+        text(
+            24,
+            27,
+            "Current value flow for the example model",
+            anchor="start",
+            cls="section",
+        ),
+        # Legend: the graph intentionally shows only one inactive potential
+        # edge, avoiding the dense all-potential graph used by the scheduler view.
+        f'<rect x="35" y="48" width="22" height="18" rx="3" fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="2"/>',
+        text(67, 62, "reconfiguration point", anchor="start", cls="small"),
+        arrow(255, 57, 315, 57, marker),
+        text(327, 62, "active value flow", anchor="start", cls="small"),
+        arrow(495, 57, 555, 57, marker, dashed=True),
+        text(
+            567, 62, "allowed value source, inactive now", anchor="start", cls="small"
+        ),
+        # Inputs and the fixed score calculation.
+        box(55, 95, 120, 42, "sensor", fill="blue_fill", stroke="blue"),
+        box(245, 95, 120, 42, "baseline", fill="blue_fill", stroke="blue"),
+        box(735, 95, 120, 42, "enabled", fill="blue_fill", stroke="blue"),
+        box(
+            215,
+            180,
+            180,
+            56,
+            "score",
+            fill="green_fill",
+            stroke="green",
+            sublabel="sensor - baseline",
+        ),
+        arrow(115, 137, 240, 180, marker),
+        arrow(305, 137, 305, 180, marker),
+        # Point 1 is also the complete right-hand side of stream limit.
+        point_box(
+            215,
+            285,
+            290,
+            "Point 1: limit = defer(limit_source)",
+            "score + 10",
+            "score, baseline",
+        ),
+        arrow(305, 236, 305, 285, marker),
+        f'<path d="M 365 116 C 565 145, 585 320, 505 330" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+        f'marker-end="url(#{marker})"/>',
+        text(575, 235, "baseline is allowed but unused", cls="small"),
+        # Point 2 and point 3 are subexpressions of one fixed decision equation.
+        f'<rect x="85" y="415" width="770" height="185" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}" stroke-width="1.5"/>',
+        text(105, 441, "decision = point 2 && point 3", anchor="start", cls="label"),
+        point_box(
+            115,
+            465,
+            285,
+            "Point 2: dynamic(rule_source)",
+            "score > limit",
+            "score, limit",
+        ),
+        point_box(
+            555,
+            465,
+            270,
+            "Point 3: dynamic(gate_source)",
+            "enabled",
+            "enabled",
+        ),
+        # Active dependencies into point 2 are routed around point 1 so they do
+        # not cross a node. Point 3 receives the preloaded enabled input.
+        f'<path d="M 235 236 C 75 285, 65 430, 115 500" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        arrow(330, 381, 300, 465, marker),
+        f'<path d="M 795 137 C 895 245, 895 430, 825 500" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        box(
+            420,
+            535,
+            95,
+            48,
+            "decision",
+            fill="green_fill",
+            stroke="green",
+        ),
+        arrow(400, 535, 420, 553, marker),
+        arrow(555, 535, 515, 553, marker),
+    ]
+    return (
+        svg(
+            "Current value flow through three reconfiguration points",
+            "Sensor and baseline feed static stream score. Point one is the defer expression for limit; its current formula score plus ten activates score to limit, while baseline is permitted by the scope but is shown as one dashed inactive edge. The fixed decision equation contains point two and point three. Point two currently reads score and limit, so both feed it. Point three reads enabled. Their Boolean values are combined into the final decision output. Each orange point also names its source input and current formula.",
+            920,
+            620,
+            "\n".join(parts),
+            marker,
+        ),
+        "Orange boxes are the three reconfiguration points; solid arrows show current producer-to-consumer value flow, while the one dashed arrow is an allowed value source that the current formula does not use.",
+    )
 
 
 def dynamic_dependencies() -> tuple[str, str]:
     marker = "dynamic-dependencies-arrow"
 
-    def panel(x: int, y: int, width: int, height: int, fill: str, stroke: str) -> str:
-        return (
-            f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="5" '
-            f'fill="{COLORS[fill]}" stroke="{COLORS[stroke]}" stroke-width="1.5"/>'
+    def permission_cell(x: int, y: int) -> str:
+        return "\n".join(
+            [
+                f'<rect x="{x}" y="{y}" width="130" height="38" rx="5" '
+                f'fill="{COLORS["blue_fill"]}" stroke="{COLORS["blue"]}" stroke-width="1.5"/>',
+                text(x + 65, y + 27, "✓", cls="section"),
+            ]
         )
 
-    def dependency_row(
-        y: int,
-        tick: str,
-        definitions: str,
-        edge: str,
-        sort_note: str,
-        order: str,
-        order_note: str,
-        order_fill: str,
-        order_stroke: str,
-    ) -> list[str]:
-        label_y = y + 24
-        note_y = y + 43
-        return [
-            (
-                f'<text x="35" y="{label_y}" font-family="system-ui, sans-serif" '
-                f'font-size="13" font-weight="700" fill="{COLORS["ink"]}">{esc(tick)}</text>'
-            ),
-            panel(105, y, 250, 58, "blue_fill", "blue"),
-            text(230, label_y, definitions, cls="code"),
-            text(230, note_y, edge, cls="small"),
-            panel(425, y, 190, 58, "orange_fill", "orange"),
-            text(520, label_y, "topological sort", cls="code"),
-            text(520, note_y, sort_note, cls="small"),
-            panel(685, y, 190, 58, order_fill, order_stroke),
-            text(780, label_y, order, cls="code"),
-            text(780, note_y, order_note, cls="small"),
-            arrow(355, y + 29, 425, y + 29, marker),
-            arrow(615, y + 29, 685, y + 29, marker),
-        ]
-
-    parts = [text(24, 28, "Active definitions determine the order", anchor="start", cls="section")]
-    parts.extend(
-        dependency_row(
-            44,
-            "tick n",
-            'a = "b + 1"; b = "x"',
-            "actual computed edge: b → a",
-            "static + active edges",
-            "order [b, a]",
-            "write fixed slots",
-            "green_fill",
-            "green",
-        )
+    parts = [
+        text(
+            24,
+            27,
+            "Scope permissions, active dependencies, and schedule repair",
+            anchor="start",
+            cls="section",
+        ),
+        text(
+            960,
+            27,
+            "dependency arrow: A -> B means A reads B",
+            anchor="end",
+            cls="small",
+        ),
+        # Compile-time permissions shown both as the full potential graph and
+        # as a compact matrix.
+        f'<rect x="25" y="48" width="950" height="180" rx="7" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(45, 76, "Compile-time scope permissions", anchor="start", cls="label"),
+        box(130, 94, 100, 38, "x", fill="blue_fill", stroke="blue"),
+        box(60, 170, 100, 38, "a", fill="green_fill", stroke="green"),
+        box(200, 170, 100, 38, "b", fill="purple_fill", stroke="purple"),
+        arrow(110, 170, 155, 132, marker, dashed=True),
+        arrow(250, 170, 205, 132, marker, dashed=True),
+        f'<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+        f'marker-end="url(#{marker})"/>',
+        f'<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" '
+        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+        f'marker-end="url(#{marker})"/>',
+        box(390, 94, 130, 38, "stream", fill="panel", stroke="border"),
+        box(520, 94, 130, 38, "x", fill="panel", stroke="border"),
+        box(650, 94, 130, 38, "a", fill="panel", stroke="border"),
+        box(780, 94, 130, 38, "b", fill="panel", stroke="border"),
+        box(390, 132, 130, 38, "a", fill="green_fill", stroke="green"),
+        permission_cell(520, 132),
+        box(650, 132, 130, 38, "—", fill="panel", stroke="border"),
+        permission_cell(780, 132),
+        box(390, 170, 130, 38, "b", fill="purple_fill", stroke="purple"),
+        permission_cell(520, 170),
+        permission_cell(650, 170),
+        box(780, 170, 130, 38, "—", fill="panel", stroke="border"),
+        # Consecutive runtime ticks use stable columns and minimal annotation.
+        f'<rect x="25" y="248" width="950" height="155" rx="7" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(45, 276, "Runtime tick n", anchor="start", cls="label"),
+        text(165, 300, "source values", cls="small"),
+        text(535, 300, "active dependencies", cls="small"),
+        text(857, 300, "schedule", cls="small"),
+        box(45, 314, 245, 36, 'a_source = "b + 1"', fill="green_fill", stroke="green"),
+        box(45, 357, 245, 36, 'b_source = "x"', fill="purple_fill", stroke="purple"),
+        box(350, 330, 90, 44, "a", fill="green_fill", stroke="green"),
+        box(490, 330, 90, 44, "b", fill="purple_fill", stroke="purple"),
+        box(630, 330, 90, 44, "x", fill="blue_fill", stroke="blue"),
+        arrow(440, 352, 490, 352, marker),
+        arrow(580, 352, 630, 352, marker),
+        box(775, 310, 165, 38, "cached [a, b]", fill="orange_fill", stroke="orange"),
+        box(775, 360, 165, 38, "repaired [b, a]", fill="green_fill", stroke="green"),
+        arrow(857, 348, 857, 360, marker),
+        f'<rect x="25" y="423" width="950" height="155" rx="7" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(45, 451, "Runtime tick n + 1", anchor="start", cls="label"),
+        text(165, 475, "source values", cls="small"),
+        text(535, 475, "active dependencies", cls="small"),
+        text(857, 475, "schedule", cls="small"),
+        box(45, 489, 245, 36, 'a_source = "x"', fill="green_fill", stroke="green"),
+        box(
+            45, 532, 245, 36, 'b_source = "a + 1"', fill="purple_fill", stroke="purple"
+        ),
+        box(350, 505, 90, 44, "b", fill="purple_fill", stroke="purple"),
+        box(490, 505, 90, 44, "a", fill="green_fill", stroke="green"),
+        box(630, 505, 90, 44, "x", fill="blue_fill", stroke="blue"),
+        arrow(440, 527, 490, 527, marker),
+        arrow(580, 527, 630, 527, marker),
+        box(775, 485, 165, 38, "cached [b, a]", fill="orange_fill", stroke="orange"),
+        box(775, 535, 165, 38, "repaired [a, b]", fill="green_fill", stroke="green"),
+        arrow(857, 523, 857, 535, marker),
+    ]
+    return (
+        svg(
+            "Potential dependency graph, scope matrix, and runtime schedule repair",
+            "The full dashed potential graph and compile-time matrix both show that dynamic stream a may read x or b and dynamic stream b may read x or a; self reads are excluded. Dependency arrows point from a stream to what it reads. At runtime tick n, source values activate a to b to x and repair cached order a then b to b then a. At the next runtime tick, new source values activate b to a to x and repair the cached order back to a then b. The ticks are consecutive logical input rows, not stages of one evaluation.",
+            1000,
+            600,
+            "\n".join(parts),
+            marker,
+        ),
+        "The full graph and matrix show the same compile-time permissions; each runtime tick activates a subset and repairs the cached dependency-first schedule when necessary.",
     )
-    parts.extend(
-        dependency_row(
-            122,
-            "tick n+1",
-            'a = "x"; b = "a + 1"',
-            "replace together: a → b",
-            "reject cycle if present",
-            "order [a, b]",
-            "same EnvironmentIds",
-            "purple_fill",
-            "purple",
-        )
-    )
-    parts.extend(
-        [
-            f'<line x1="25" y1="207" x2="895" y2="207" stroke="{COLORS["border"]}" stroke-width="1"/>',
-            text(24, 237, "One reordering tick is a transaction", anchor="start", cls="section"),
-            panel(25, 258, 150, 62, "panel", "border"),
-            text(100, 285, "snapshot state", cls="code"),
-            text(100, 304, "before the tick", cls="small"),
-            panel(220, 258, 180, 62, "blue_fill", "blue"),
-            text(310, 285, "evaluate + collect", cls="code"),
-            text(310, 304, "all active free variables", cls="small"),
-            panel(445, 258, 185, 62, "orange_fill", "orange"),
-            text(537, 285, "replace edges + sort", cls="code"),
-            text(537, 304, "changes are atomic", cls="small"),
-            panel(675, 258, 220, 62, "green_fill", "green"),
-            text(785, 285, "restore + retry if changed", cls="code"),
-            text(785, 304, "commit one state advance", cls="small"),
-            arrow(175, 289, 220, 289, marker),
-            arrow(400, 289, 445, 289, marker),
-            arrow(630, 289, 675, 289, marker),
-            (
-                '<path d="M 785 320 C 785 365, 310 365, 310 320" fill="none" '
-                f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
-                f'marker-end="url(#{marker})"/>'
-            ),
-            text(
-                548,
-                388,
-                "repeat until observed dependencies match the evaluation order",
-                cls="small",
-            ),
-        ]
-    )
-    title = "Transactional reordering for changing dynamic dependencies"
-    desc = "On one tick, definitions b plus one and x create edge b to a and order b then a. On a later tick, definitions x and a plus one atomically replace the active edges and produce order a then b. The monitor snapshots state, evaluates and collects edges, checks for cycles, sorts, and retries if the order changed while environment slots remain fixed."
-    caption = "Changing both definitions replaces their active edges as one transaction and reverses the executor order without changing environment IDs."
-    return svg(title, desc, 920, 405, "\n".join(parts), marker), caption
 
 
-def runtime_compile_prefix(marker: str) -> list[str]:
+def lifecycle_prefix(marker: str) -> list[str]:
     return [
-        box(35, 45, 140, 50, "source string", fill="blue_fill", stroke="blue"),
-        box(235, 39, 320, 62, "parse -> type/scope check -> bind", fill="panel", stroke="border", sublabel="reuse outer EnvironmentLayout"),
-        box(625, 39, 210, 62, "PlanExecutor", fill="purple_fill", stroke="purple", sublabel="fresh persistent state"),
-        arrow(175, 70, 235, 70, marker),
-        arrow(555, 70, 625, 70, marker),
+        box(
+            35,
+            48,
+            210,
+            64,
+            "accepted source string",
+            fill="blue_fill",
+            stroke="blue",
+            sublabel="parse + type/scope check",
+        ),
+        box(
+            330,
+            48,
+            260,
+            64,
+            "bind StreamProgram",
+            fill="panel",
+            stroke="border",
+            sublabel="existing EnvironmentLayout",
+        ),
+        box(
+            675,
+            48,
+            250,
+            64,
+            "install StreamEvaluator",
+            fill="purple_fill",
+            stroke="purple",
+            sublabel="fresh StreamState + dependencies",
+        ),
+        arrow(245, 80, 330, 80, marker),
+        arrow(590, 80, 675, 80, marker),
     ]
 
 
 def dynamic_lifecycle() -> tuple[str, str]:
     marker = "dynamic-arrow"
-    parts = [text(24, 27, "dynamic: replace when source changes", anchor="start", cls="section")]
-    parts.extend(runtime_compile_prefix(marker))
-    dynamic_cells = [
-        (90, '"x + 1"', "compile; install executor", "green"),
-        (285, '"x + 1"', "reuse executor + state", "green"),
-        (480, '"x * 2"', "compile; reset + replace", "orange"),
-        (675, "NoVal", "reuse x * 2; lift result", "purple"),
+    parts = [
+        text(
+            24,
+            27,
+            "dynamic: source and result special values",
+            anchor="start",
+            cls="section",
+        ),
+        *lifecycle_prefix(marker),
+        divider(145, 960),
     ]
-    for x, source, action, color in dynamic_cells:
-        parts.append(box(x, 145, 165, 62, source, fill=f"{color}_fill", stroke=color, sublabel=action))
-    for x1, x2 in [(255, 285), (450, 480), (645, 675)]:
-        parts.append(arrow(x1, 176, x2, 176, marker))
-    title = "Dynamic plan replacement lifecycle"
-    desc = "Dynamic compiles the first source, reuses its executor for an equal string, resets executor and retained output for a changed string, and stream-lifts NoVal to reuse the active definition."
-    return svg(title, desc, 900, 230, "\n".join(parts), marker), "Equal source strings preserve executor state; a changed string installs a fresh executor."
+    cells = [
+        (35, 175, '"x + 1"', "install fresh evaluator", "green"),
+        (275, 175, "same string / NoVal", "reuse; evaluate active", "green"),
+        (515, 175, "Deferred source", "active advances; emit Deferred", "purple"),
+        (755, 175, '"x * 2"', "replace state + last result", "orange"),
+        (
+            155,
+            285,
+            "active result NoVal",
+            "repeat this definition's last result",
+            "blue",
+        ),
+        (
+            555,
+            285,
+            "active result Deferred",
+            "retain Deferred as last result",
+            "purple",
+        ),
+    ]
+    for x, y, label, note, color in cells:
+        parts.append(
+            box(
+                x,
+                y,
+                180 if y == 175 else 250,
+                68,
+                label,
+                fill=f"{color}_fill",
+                stroke=color,
+                sublabel=note,
+            )
+        )
+    for x1, x2 in [(215, 275), (455, 515), (695, 755)]:
+        parts.append(arrow(x1, 209, x2, 209, marker))
+    parts.append(
+        text(
+            480,
+            390,
+            "Before activation: NoVal -> NoVal, Deferred -> Deferred; other non-strings fail",
+            cls="small",
+        )
+    )
+    return (
+        svg(
+            "Dynamic expression lifecycle and special values",
+            "Before activation, NoVal and Deferred each propagate. Dynamic installs the first accepted string, reuses the evaluator for an equal or NoVal source, advances the active evaluator but emits Deferred for a Deferred source, and replaces evaluator state, dependencies, and retained result for a changed string. Active NoVal results repeat the current definition's last result; Deferred is retained.",
+            960,
+            420,
+            "\n".join(parts),
+            marker,
+        ),
+        "Equal source strings preserve evaluator state; a changed string installs a fresh evaluator and resets retained output.",
+    )
 
 
 def defer_lifecycle() -> tuple[str, str]:
     marker = "defer-arrow"
-    parts = [text(24, 27, "defer: pin the first accepted definition", anchor="start", cls="section")]
-    parts.extend(runtime_compile_prefix(marker))
-    defer_cells = [
-        (90, "Deferred", "no active plan", "purple"),
-        (285, '"x + 1"', "compile; install executor", "green"),
-        (480, '"x * 2"', "ignore; tick x + 1", "green"),
-        (675, "NoVal", "tick x + 1; emit result", "green"),
+    parts = [
+        text(
+            24,
+            27,
+            "defer: first accepted string fixes the program",
+            anchor="start",
+            cls="section",
+        ),
+        *lifecycle_prefix(marker),
+        divider(145, 960),
     ]
-    for x, source, action, color in defer_cells:
-        parts.append(box(x, 145, 165, 62, source, fill=f"{color}_fill", stroke=color, sublabel=action))
-    for x1, x2 in [(255, 285), (450, 480), (645, 675)]:
-        parts.append(arrow(x1, 176, x2, 176, marker))
-    title = "Deferred definition lifecycle"
-    desc = "Defer propagates Deferred before activation, installs the first source string, ignores later strings, and ticks the installed executor even when the source is NoVal."
-    return svg(title, desc, 900, 230, "\n".join(parts), marker), "The first accepted string fixes the plan; every later tick advances that same executor."
+    cells = [
+        (35, "NoVal / Deferred", "before activation: propagate", "purple"),
+        (275, '"x + 1"', "install once; evaluate", "green"),
+        (515, 'later "x * 2"', "ignore source; evaluate x + 1", "green"),
+        (755, "NoVal / Deferred", "evaluate installed program", "blue"),
+    ]
+    for x, label, note, color in cells:
+        parts.append(
+            box(
+                x,
+                175,
+                180,
+                68,
+                label,
+                fill=f"{color}_fill",
+                stroke=color,
+                sublabel=note,
+            )
+        )
+    for x1, x2 in [(215, 275), (455, 515), (695, 755)]:
+        parts.append(arrow(x1, 209, x2, 209, marker))
+    parts.extend(
+        [
+            box(
+                155,
+                285,
+                250,
+                68,
+                "installed result NoVal",
+                fill="blue_fill",
+                stroke="blue",
+                sublabel="repeat installed last result",
+            ),
+            box(
+                555,
+                285,
+                250,
+                68,
+                "installed result Deferred",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="replace retained result",
+            ),
+            text(
+                480,
+                390,
+                "After activation every tick advances exactly the same StreamEvaluator",
+                cls="small",
+            ),
+        ]
+    )
+    return (
+        svg(
+            "Deferred expression lifecycle and special values",
+            "Before activation, NoVal and Deferred each propagate. Defer then installs the first accepted string in one StreamEvaluator permanently. Later strings, NoVal, and Deferred sources all tick the installed program. An installed NoVal result repeats its last result, while Deferred becomes the retained result.",
+            960,
+            420,
+            "\n".join(parts),
+            marker,
+        ),
+        "The first accepted string fixes the program; every later tick advances that same evaluator.",
+    )
 
 
 DIAGRAMS = {
@@ -481,10 +1172,11 @@ DIAGRAMS = {
     "pipeline": pipeline,
     "environment-layout": environment_layout,
     "history-retention": history_retention,
-    "plan-body": plan_body,
+    "evaluation-graph": evaluation_graph,
     "lazy-if": lazy_if,
     "function-binding": function_binding,
     "function-call": function_call,
+    "reconfiguration-points": reconfiguration_points,
     "dynamic-dependencies": dynamic_dependencies,
     "dynamic-lifecycle": dynamic_lifecycle,
     "defer-lifecycle": defer_lifecycle,
@@ -493,23 +1185,23 @@ DIAGRAMS = {
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="fail if generated files differ")
+    parser.add_argument(
+        "--check", action="store_true", help="fail if generated files differ"
+    )
     args = parser.parse_args()
-
-    expected_assets: dict[Path, str] = {}
-    for name, render in DIAGRAMS.items():
-        svg_text, _caption = render()
-        expected_assets[ASSET_DIR / f"{name}.svg"] = svg_text + "\n"
-
-    stale: list[str] = []
-    for path, expected in expected_assets.items():
-        if not path.exists() or path.read_text(encoding="utf-8") != expected:
-            stale.append(str(path.relative_to(ROOT)))
+    expected_assets = {
+        ASSET_DIR / f"{name}.svg": render()[0] + "\n"
+        for name, render in DIAGRAMS.items()
+    }
+    stale = [
+        str(path.relative_to(ROOT))
+        for path, expected in expected_assets.items()
+        if not path.exists() or path.read_text(encoding="utf-8") != expected
+    ]
     obsolete_assets = sorted(
         path for path in ASSET_DIR.glob("*.svg") if path not in expected_assets
     )
     stale.extend(str(path.relative_to(ROOT)) for path in obsolete_assets)
-
     if args.check:
         if stale:
             print("stale generated dataflow diagrams:", file=sys.stderr)
@@ -517,7 +1209,6 @@ def main() -> int:
                 print(f"  {path}", file=sys.stderr)
             return 1
         return 0
-
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     for path in obsolete_assets:
         path.unlink()

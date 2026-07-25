@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 345" role="img" aria-labelledby="graph-arrow-title graph-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="graph-arrow-title">Bound evaluation graph with recursive fallback</title>
+<desc id="graph-arrow-desc">The total EvaluationGraph reads a RecursiveDelay and uses Const zero as Default's fallback, adds scaled from an EnvironmentSlot, and returns the Add node. The completed output is staged for the recursive delay and committed after the row.</desc>
+<defs>
+  <marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Bound EvaluationGraph for total</text>
+<rect x="45" y="65" width="210" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="150" y="94" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">RecursiveDelay { 1 }</text>
+<text x="150" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">retained previous total</text>
+<rect x="45" y="145" width="210" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="150" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Const(0)</text>
+<text x="150" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fallback before history exists</text>
+<rect x="325" y="105" width="170" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="410" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Default</text>
+<text x="410" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">node 0 or Const(0)</text>
+<rect x="325" y="205" width="170" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="410" y="234" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">External(slot 1)</text>
+<text x="410" y="252" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">scaled from EnvironmentSlot</text>
+<rect x="565" y="155" width="135" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="632" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Add</text>
+<text x="632" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">node 2</text>
+<rect x="770" y="155" width="135" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="837" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output</text>
+<text x="837" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">DataRef::Node</text>
+<line x1="255" y1="96" x2="325" y2="126" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="255" y1="176" x2="325" y2="146" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="495" y1="136" x2="565" y2="176" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="495" y1="236" x2="565" y2="196" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="700" y1="186" x2="770" y2="186" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<path d="M 837 155 L 837 48 L 150 48 L 150 65" fill="none" stroke="#b54708" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#graph-arrow)"/>
+<text x="500" y="322" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">post-output: stage RecursiveDelay, then commit after the completed row</text>
+</svg>

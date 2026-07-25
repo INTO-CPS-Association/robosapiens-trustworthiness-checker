@@ -174,9 +174,9 @@ fn evaluate_runtime_compiled_property(spec: DsrvSpecification, rows: &[DynamicIn
         .type_check(TypeCheckOptions::STRICT)
         .expect("generated specification must type check");
     let mut monitors = [
-        DataflowMonitor::try_compile_untyped(spec)
+        DataflowMonitor::compile_untyped(spec)
             .expect("generated untyped specification must compile"),
-        DataflowMonitor::try_compile_checked(typed_spec)
+        DataflowMonitor::compile_checked(typed_spec)
             .expect("generated typed specification must compile"),
     ];
 
@@ -228,15 +228,15 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(DATAFLOW_PROPTEST_CASES))]
 
     /// Compilation must terminate without panicking for every generated DSRV AST. Generated
-    /// specifications may be invalid; a structured `DataflowCompileError` is a valid result.
+    /// specifications may be invalid; a structured `DataflowCompilationError` is a valid result.
     #[test]
-    fn dataflow_plan_compilation_is_total(spec in arb_boolean_dsrv_spec()) {
-        let _ = DataflowMonitor::try_compile_untyped(spec);
+    fn dataflow_compilation_is_total(spec in arb_boolean_dsrv_spec()) {
+        let _ = DataflowMonitor::compile_untyped(spec);
     }
 
     #[test]
-    fn untyped_dataflow_plan_compilation_is_total(spec in arb_dsrv_spec()) {
-        let _ = DataflowMonitor::try_compile_untyped(spec);
+    fn untyped_dataflow_compilation_is_total(spec in arb_dsrv_spec()) {
+        let _ = DataflowMonitor::compile_untyped(spec);
     }
 
     #[test]
@@ -263,13 +263,13 @@ proptest! {
             augmented_spec.aux_vars,
         );
         let mut monitors = [
-            DataflowMonitor::try_compile_untyped(spec.clone())
+            DataflowMonitor::compile_untyped(spec.clone())
                 .expect("generator must produce an untyped dataflow plan"),
-            DataflowMonitor::try_compile_checked(typed_spec)
+            DataflowMonitor::compile_checked(typed_spec)
                 .expect("generator must produce a typed dataflow plan"),
-            DataflowMonitor::try_compile_untyped(spec)
+            DataflowMonitor::compile_untyped(spec)
                 .expect("recompilation must produce an equivalent dataflow plan"),
-            DataflowMonitor::try_compile_untyped(augmented_spec)
+            DataflowMonitor::compile_untyped(augmented_spec)
                 .expect("adding an unused stream must preserve a valid dataflow plan"),
         ];
 
@@ -279,14 +279,14 @@ proptest! {
             let input_count_result =
                 monitor.evaluate(&[Value::NoVal], &mut correctly_sized_output);
             prop_assert!(
-                matches!(input_count_result, Err(DataflowEvalError::InputCount { .. })),
+                matches!(input_count_result, Err(DataflowEvaluationError::InputCountMismatch { .. })),
                 "undersized input did not return InputCount"
             );
             let mut undersized_output = vec![Value::NoVal; monitor.output_vars().len() - 1];
             let output_count_result =
                 monitor.evaluate(&[Value::NoVal, Value::NoVal], &mut undersized_output);
             prop_assert!(
-                matches!(output_count_result, Err(DataflowEvalError::OutputCount { .. })),
+                matches!(output_count_result, Err(DataflowEvaluationError::OutputCountMismatch { .. })),
                 "undersized output did not return OutputCount"
             );
 
@@ -406,7 +406,7 @@ fn eval_dataflow_spec(
     spec: DsrvSpecification,
     inputs: BTreeMap<VarName, Vec<Value>>,
 ) -> Vec<BTreeMap<VarName, Value>> {
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let input_len = inputs.values().next().map_or(0, Vec::len);
     assert!(inputs.values().all(|values| values.len() == input_len));
     let input_columns = monitor
@@ -696,8 +696,8 @@ fn dataflow_delayed_cycles_compile_typed_and_untyped() {
     let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
 
     for mut monitor in [
-        DataflowMonitor::try_compile_untyped(spec).unwrap(),
-        DataflowMonitor::try_compile_checked(typed).unwrap(),
+        DataflowMonitor::compile_untyped(spec).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
     ] {
         assert_eq!(
             evaluate(
@@ -724,8 +724,8 @@ fn dataflow_runtime_compiled_mutual_delays_commit_once_per_tick() {
     let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
 
     for mut monitor in [
-        DataflowMonitor::try_compile_untyped(spec).unwrap(),
-        DataflowMonitor::try_compile_checked(typed).unwrap(),
+        DataflowMonitor::compile_untyped(spec).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
     ] {
         let mut output = vec![Value::NoVal; monitor.output_vars().len()];
         for (x, y, expected_a, expected_b) in [(1, 10, 1, 10), (2, 20, 12, 21), (3, 30, 24, 42)] {
@@ -750,7 +750,7 @@ fn dataflow_delay_state_persists_across_evaluations() {
     let spec = "in x\nout z\nz = default(z[3], 0) + x"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     assert_eq!(
         evaluate(&mut monitor, &[vec![1.into(), 2.into()]]),
@@ -767,7 +767,7 @@ fn dataflow_state_is_shared_between_event_and_row_evaluation() {
     let spec = "in x\nout z\nz = default(z[1], 0) + x"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     assert_eq!(
         evaluate_events(
@@ -787,19 +787,19 @@ fn dataflow_input_and_output_counts_are_validated() {
     let spec = "in x\nin y\nout z\nz = y"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     let missing = [Value::Int(1)];
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
     assert!(matches!(
         monitor.evaluate(&missing, &mut output),
-        Err(DataflowEvalError::InputCount { .. })
+        Err(DataflowEvaluationError::InputCountMismatch { .. })
     ));
 
     let valid = [Value::Int(1), Value::Int(10)];
     assert!(matches!(
         monitor.evaluate(&valid, &mut []),
-        Err(DataflowEvalError::OutputCount { .. })
+        Err(DataflowEvaluationError::OutputCountMismatch { .. })
     ));
 }
 
@@ -809,12 +809,12 @@ fn dataflow_compilers_accept_zero_stream_indices() {
         .parse::<DsrvSpecification>()
         .unwrap();
 
-    DataflowMonitor::try_compile_untyped(spec.clone())
+    DataflowMonitor::compile_untyped(spec.clone())
         .expect("untyped compilation should accept a zero stream index");
     let typed = spec
         .type_check(TypeCheckOptions::STRICT)
         .expect("zero stream index should type check");
-    DataflowMonitor::try_compile_checked(typed)
+    DataflowMonitor::compile_checked(typed)
         .expect("typed compilation should accept a zero stream index");
 }
 
@@ -824,36 +824,34 @@ fn dataflow_compilation_reports_computed_dependency_cycles() {
         .parse::<DsrvSpecification>()
         .unwrap();
 
-    let error = match DataflowMonitor::try_compile_untyped(spec) {
+    let error = match DataflowMonitor::compile_untyped(spec) {
         Ok(_) => panic!("computed dependency cycle should be rejected"),
         Err(error) => error,
     };
 
     assert!(
-        matches!(error, DataflowCompileError::DependencyCycle(_)),
+        matches!(error, DataflowCompilationError::DependencyCycle(_)),
         "unexpected compile error: {error:?}"
     );
 }
 
 #[test]
-fn dataflow_compilation_reports_unavailable_inputs() {
+fn dataflow_compilation_reports_unavailable_variables() {
     let spec = "out z\nz = missing + 1"
         .parse::<DsrvSpecification>()
         .unwrap();
 
-    let error = match DataflowMonitor::try_compile_untyped(spec) {
+    let error = match DataflowMonitor::compile_untyped(spec) {
         Ok(_) => panic!("unavailable input should be rejected"),
         Err(error) => error,
     };
 
-    assert!(
-        matches!(
-            error,
-            DataflowCompileError::UnavailableInputs { ref inputs, .. }
-                if inputs == &[VarName::new("missing")]
-        ),
-        "unexpected compile error: {error:?}"
-    );
+    match error {
+        DataflowCompilationError::UnavailableVariables { variables, .. } => {
+            assert_eq!(variables, [VarName::new("missing")]);
+        }
+        error => panic!("unexpected compile error: {error:?}"),
+    }
 }
 
 #[test]
@@ -861,7 +859,7 @@ fn dataflow_rejects_unguarded_recursive_output() {
     let spec = "in x\nout z\nz = z + x"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let error = DataflowMonitor::try_compile_untyped(spec)
+    let error = DataflowMonitor::compile_untyped(spec)
         .err()
         .expect("unguarded recursion should be rejected");
 
@@ -874,7 +872,7 @@ fn dataflow_rejects_unguarded_recursive_output() {
 #[test]
 fn dataflow_rejects_direct_recursive_output() {
     let spec = "out z\nz = z".parse::<DsrvSpecification>().unwrap();
-    let error = DataflowMonitor::try_compile_untyped(spec)
+    let error = DataflowMonitor::compile_untyped(spec)
         .err()
         .expect("direct recursion should be rejected");
 
@@ -889,7 +887,7 @@ fn dataflow_rejects_recursive_branch_output() {
     let spec = "in choose\nout z\nz = if choose then z else 0"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let error = DataflowMonitor::try_compile_untyped(spec)
+    let error = DataflowMonitor::compile_untyped(spec)
         .err()
         .expect("recursive branch output should be rejected");
 
@@ -904,7 +902,7 @@ fn dataflow_rejects_recursive_function_capture() {
     let spec = "out z\nz = (\\v: Int -> z)(1)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let error = DataflowMonitor::try_compile_untyped(spec)
+    let error = DataflowMonitor::compile_untyped(spec)
         .err()
         .expect("recursive function capture should be rejected");
 
@@ -1094,7 +1092,7 @@ fn dataflow_rejects_temporal_collection_functions() {
     let spec = "in xs: List<Int>\nout z: List<Int>\nz = List.map(\\v: Int -> v[1], xs)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let error = DataflowMonitor::try_compile_untyped(spec)
+    let error = DataflowMonitor::compile_untyped(spec)
         .err()
         .expect("temporal collection callback should be rejected");
 
@@ -1104,7 +1102,7 @@ fn dataflow_rejects_temporal_collection_functions() {
 #[test]
 fn dataflow_evaluates_ticks_without_inputs() {
     let spec = "out z\nz = 42".parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
     for _ in 0..3 {
@@ -1116,7 +1114,7 @@ fn dataflow_evaluates_ticks_without_inputs() {
 #[test]
 fn dataflow_dynamic_waits_for_computed_context_streams() {
     let spec = "in x: Int\nin source: Str\nout before: Int\naux z: Int\nbefore = dynamic(source: Int, {z})\nz = x + 1".parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (VarName::new("x"), vec![1.into(), 2.into()]),
         (
@@ -1139,7 +1137,7 @@ fn dataflow_dynamic_waits_for_computed_context_streams() {
 #[test]
 fn dataflow_explicit_full_dynamic_scope_keeps_computed_dependencies() {
     let spec = "in x: Int\nin source: Str\nout before: Int\naux z: Int\nbefore = dynamic(source: Int, {x, source, z})\nz = x + 1".parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (VarName::new("x"), vec![1.into(), 2.into()]),
         (
@@ -1189,8 +1187,8 @@ fn dataflow_automatic_dynamic_scope_can_introduce_a_computed_dependency() {
         .unwrap();
     let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
     for mut monitor in [
-        DataflowMonitor::try_compile_untyped(spec).unwrap(),
-        DataflowMonitor::try_compile_checked(typed).unwrap(),
+        DataflowMonitor::compile_untyped(spec).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
     ] {
         let mut output = vec![Value::NoVal; monitor.output_vars().len()];
         let input = runtime_input_row(
@@ -1215,8 +1213,8 @@ fn dataflow_multiple_dynamics_reorder_atomically_when_dependencies_reverse() {
         .unwrap();
     let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
     for mut monitor in [
-        DataflowMonitor::try_compile_untyped(spec).unwrap(),
-        DataflowMonitor::try_compile_checked(typed).unwrap(),
+        DataflowMonitor::compile_untyped(spec).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
     ] {
         let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
@@ -1247,12 +1245,12 @@ fn dataflow_multiple_dynamics_reorder_atomically_when_dependencies_reverse() {
 }
 
 #[test]
-fn dataflow_runtime_reordering_rolls_back_speculative_temporal_state() {
+fn dataflow_dependency_reordering_advances_temporal_state_once() {
     let spec = "in x: Int\nin a_source: Str\nin b_source: Str\nout a: Int\nout b: Int\n\
                         a = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
     for (x, expected) in [(10, 0), (20, 10)] {
@@ -1275,7 +1273,7 @@ fn dataflow_runtime_dependency_cycles_are_terminal_errors() {
                         a = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
     let valid = runtime_input_row(
         &monitor,
@@ -1297,11 +1295,11 @@ fn dataflow_runtime_dependency_cycles_are_terminal_errors() {
     );
     assert!(matches!(
         monitor.evaluate(&cycle, &mut output),
-        Err(DataflowEvalError::DynamicDependencyCycle(_))
+        Err(DataflowEvaluationError::DynamicDependencyCycle(_))
     ));
     assert!(matches!(
         monitor.evaluate(&cycle, &mut output),
-        Err(DataflowEvalError::MonitorFailed)
+        Err(DataflowEvaluationError::MonitorFailed)
     ));
 }
 
@@ -1311,7 +1309,7 @@ fn dataflow_defer_reorders_once_and_ignores_later_definitions() {
                         a = defer(a_source: Int)\nb = defer(b_source: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
     for (x, a_source, b_source, expected_a, expected_b) in
@@ -1338,10 +1336,10 @@ fn dataflow_defer_reorders_once_and_ignores_later_definitions() {
 }
 
 #[test]
-fn dataflow_nested_dynamic_cannot_escape_parent_scope() {
+fn dataflow_rejects_nested_reconfiguration_before_installation() {
     let spec_src = "in source: Str\nin secret: Int\nout z: Int\nz = dynamic(source: Int, {source})";
     let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (
             VarName::new("source"),
@@ -1362,15 +1360,14 @@ fn dataflow_nested_dynamic_cannot_escape_parent_scope() {
 
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvalError::DynamicRestrictedContext(ref vars))
-            if vars == &[VarName::new("secret")]
+        Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
     ));
 }
 
 #[test]
 fn dataflow_automatic_scope_does_not_add_unused_computed_dependencies() {
     let spec = "in x: Int\nin source: Str\nout dynamic_out: Int\naux downstream: Int\ndynamic_out = dynamic(source: Int)\ndownstream = dynamic_out + 1".parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (VarName::new("x"), vec![1.into(), 2.into()]),
         (
@@ -1395,17 +1392,17 @@ fn dataflow_evaluation_failures_are_returned() {
     let spec = "in source: Str\nout z: Int\nz = dynamic(source: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let input = [Value::Str("not valid dsrv syntax (".into())];
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvalError::DynamicParse { .. })
+        Err(DataflowEvaluationError::DynamicExpressionParse { .. })
     ));
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvalError::MonitorFailed)
+        Err(DataflowEvaluationError::MonitorFailed)
     ));
 }
 
@@ -1414,22 +1411,22 @@ fn checked_dataflow_rejects_dynamic_expressions_with_the_wrong_type() {
     let spec = "in source: Str\nout z: Int\nz = dynamic(source: Int)"
         .parse::<CheckedDsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_checked(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
     let input = [Value::Str("true".into())];
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvalError::DynamicType { .. })
+        Err(DataflowEvaluationError::DynamicExpressionType { .. })
     ));
 }
 
 #[test]
-fn checked_dataflow_preserves_types_for_nested_dynamic_expressions() {
+fn checked_dataflow_rejects_nested_dynamic_expressions() {
     let spec = "in inner: Str\nin outer: Str\nout z: Int\nz = dynamic(outer: Int)"
         .parse::<CheckedDsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_checked(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (VarName::new("inner"), Value::Str("true".into())),
         (
@@ -1446,7 +1443,7 @@ fn checked_dataflow_preserves_types_for_nested_dynamic_expressions() {
 
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvalError::DynamicType { .. })
+        Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
     ));
 }
 
@@ -1487,8 +1484,8 @@ fn dataflow_event_batch_matches_sparse_rows_for_recursive_sum() {
     let spec_src =
         "in x: Int\nin y: Int\nout z: Int\nz = default(z[1], 0) + default(x, 0) + default(y, 0)";
     let spec = spec_src.parse::<CheckedDsrvSpecification>().unwrap();
-    let mut row_monitor = DataflowMonitor::try_compile_checked(spec.clone()).unwrap();
-    let mut event_monitor = DataflowMonitor::try_compile_checked(spec).unwrap();
+    let mut row_monitor = DataflowMonitor::compile_checked(spec.clone()).unwrap();
+    let mut event_monitor = DataflowMonitor::compile_checked(spec).unwrap();
 
     let rows = vec![
         vec![Value::Int(1), Value::NoVal],
@@ -1521,7 +1518,7 @@ fn dataflow_lazy_if_propagates_initial_no_val_from_either_branch() {
     let spec = "in flag\nin good\nin bad\nout z\nz = if flag then good else bad"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (
             VarName::new("flag"),
@@ -1546,7 +1543,7 @@ fn dataflow_lazy_if_reads_inputs_at_the_outer_tick() {
     let spec = "in flag\nin x\nout z\nz = if flag then x else 0"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     assert_eq!(
         evaluate(
@@ -1561,7 +1558,7 @@ fn dataflow_lazy_if_reads_inputs_at_the_outer_tick() {
 }
 
 #[test]
-fn dataflow_nested_dynamic_reads_the_shared_input_row() {
+fn dataflow_rejects_reconfiguration_points_in_fallible_lazy_branches() {
     let spec = "in flag: Bool\n\
                         in x: Int\n\
                         in s: Str\n\
@@ -1569,28 +1566,11 @@ fn dataflow_nested_dynamic_reads_the_shared_input_row() {
                         z = if flag then dynamic(s: Int) else x"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
-    let inputs_by_var = BTreeMap::from([
-        (
-            VarName::new("flag"),
-            vec![Value::Bool(false), Value::Bool(true)],
-        ),
-        (VarName::new("x"), vec![Value::Int(1), Value::Int(2)]),
-        (
-            VarName::new("s"),
-            vec![Value::Str("x + 10".into()), Value::Str("x + 10".into())],
-        ),
-    ]);
-    let input_columns = monitor
-        .input_vars()
-        .iter()
-        .map(|var| inputs_by_var.get(var).cloned().unwrap())
-        .collect::<Vec<_>>();
 
-    assert_eq!(
-        evaluate(&mut monitor, &input_columns),
-        vec![vec![Value::Int(1), Value::Int(12)]]
-    );
+    assert!(matches!(
+        DataflowMonitor::compile_untyped(spec),
+        Err(DataflowCompilationError::UnsupportedReconfiguration { .. })
+    ));
 }
 
 #[test]
@@ -1599,7 +1579,7 @@ fn dataflow_lazy_if_allows_recursive_function_base_case() {
                         in bias\n\
                         out z\n\
                         z = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)".parse::<DsrvSpecification>().unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let inputs_by_var = BTreeMap::from([
         (
             VarName::new("n"),
@@ -1721,7 +1701,7 @@ async fn dataflow_matches_dynamic(executor: Rc<LocalExecutor<'static>>) {
     let spec = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nz = dynamic(s: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let outputs = evaluate(
         &mut monitor,
         &[
@@ -1747,7 +1727,7 @@ async fn dataflow_matches_defer(executor: Rc<LocalExecutor<'static>>) {
     let spec = "in x: Int\nin s: Str\nout z: Int\nz = defer(s: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let outputs = evaluate(
         &mut monitor,
         &[
@@ -1767,9 +1747,9 @@ fn typed_and_untyped_dataflow_preserve_explicit_defer_scopes() {
     let spec = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nz = defer(s: Int, {x})"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let untyped = DataflowMonitor::try_compile_untyped(spec.clone())
+    let untyped = DataflowMonitor::compile_untyped(spec.clone())
         .expect("untyped explicit defer should compile");
-    let typed = DataflowMonitor::try_compile_checked(
+    let typed = DataflowMonitor::compile_checked(
         spec.type_check(TypeCheckOptions::STRICT)
             .expect("typed explicit defer should type check"),
     )
@@ -1802,7 +1782,7 @@ async fn dataflow_dynamic_temporal_dependency_starts_at_introduction(
     let spec = "in x: Int\nin s: Str\nout z: Int\nz = dynamic(s: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
     let outputs = evaluate(
         &mut monitor,
         &[
@@ -2528,51 +2508,28 @@ async fn dataflow_semisync_dynamic_switch_away_and_back_parity(
     }
 }
 
-#[apply(async_test)]
-async fn dataflow_semisync_nested_runtime_compilation_parity(executor: Rc<LocalExecutor<'static>>) {
+#[test]
+fn dataflow_rejects_nested_runtime_reconfiguration() {
     for outer in ["dynamic", "defer"] {
         let spec =
-            format!("in x: Int\nin inner: Str\nin outer: Str\nout z: Int\nz = {outer}(outer: Int)");
-        assert_dataflow_semisync_runtime_parity(
-            executor.clone(),
-            &spec,
-            BTreeMap::from([
-                (
-                    VarName::new("x"),
-                    vec![
-                        1.into(),
-                        2.into(),
-                        Value::NoVal,
-                        4.into(),
-                        5.into(),
-                        6.into(),
-                    ],
-                ),
-                (
-                    VarName::new("inner"),
-                    vec![
-                        Value::Str("x".into()),
-                        Value::NoVal,
-                        Value::Str("x[1]".into()),
-                        Value::NoVal,
-                        Value::Deferred,
-                        Value::Str("x + 1".into()),
-                    ],
-                ),
-                (
-                    VarName::new("outer"),
-                    vec![
-                        Value::Str("dynamic(inner: Int)".into()),
-                        Value::NoVal,
-                        Value::NoVal,
-                        Value::NoVal,
-                        Value::NoVal,
-                        Value::NoVal,
-                    ],
-                ),
-            ]),
-        )
-        .await;
+            format!("in x: Int\nin inner: Str\nin outer: Str\nout z: Int\nz = {outer}(outer: Int)")
+                .parse::<DsrvSpecification>()
+                .unwrap();
+        let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+        let input = runtime_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(1)),
+                ("inner", Value::Str("x".into())),
+                ("outer", Value::Str("dynamic(inner: Int)".into())),
+            ],
+        );
+        let mut output = vec![Value::NoVal; 1];
+
+        assert!(matches!(
+            monitor.evaluate(&input, &mut output),
+            Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
+        ));
     }
 }
 
@@ -3271,7 +3228,7 @@ fn dataflow_lifting_does_not_depend_on_recursive_plan_shape() {
     let spec = "in x\nout z\nz = if false then z[1] else default(x, 42)"
         .parse::<DsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::try_compile_untyped(spec).unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
 
     let output = evaluate(
         &mut monitor,

@@ -1,97 +1,105 @@
-use super::super::plan::*;
+use super::super::ir::*;
 use super::super::*;
-use super::dynamic::*;
+use super::dynamic_expressions::*;
 use super::functions::*;
 use super::lifting::*;
-use super::plan_executor::*;
-use super::state::*;
+use super::stream_evaluator::*;
+use super::stream_state::*;
 use crate::core::values::operations as value_operations;
 
-/// Evaluates one node at one logical tick and is shared by every execution mode.
-pub(in crate::dataflow) fn eval_node_at(
+/// Evaluates one node and is shared by every execution mode.
+pub(in crate::dataflow) fn evaluate_node(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
 ) -> Value {
     match op {
-        BoundOp::Unary { op, arg } => {
-            let arg = context.read(state, arg, tick);
-            let NodeState::UnaryLift { last } = &mut state.states[node_id.index()] else {
+        StreamOp::Unary { op, arg } => {
+            let arg = context.read_value(state, arg);
+            let NodeState::UnaryLift { last_input } = &mut state.node_states[node_id.index()]
+            else {
                 unreachable!("unary node has incompatible runtime state")
             };
-            lift_unary_with_state(*op, arg, last)
+            lift_unary_with_state(*op, arg, last_input)
         }
-        BoundOp::Binary { op, lhs, rhs } => {
-            let lhs = context.read(state, lhs, tick);
-            let rhs = context.read(state, rhs, tick);
-            let NodeState::BinaryLift { lhs_last, rhs_last } = &mut state.states[node_id.index()]
+        StreamOp::Binary { op, lhs, rhs } => {
+            let lhs = context.read_value(state, lhs);
+            let rhs = context.read_value(state, rhs);
+            let NodeState::BinaryLift {
+                last_left,
+                last_right,
+            } = &mut state.node_states[node_id.index()]
             else {
                 unreachable!("binary node has incompatible runtime state")
             };
-            lift_binary_with_state(*op, lhs, rhs, lhs_last, rhs_last)
+            lift_binary_with_state(*op, lhs, rhs, last_left, last_right)
         }
-        BoundOp::If { .. } => eval_lazy_if(node_id, op, state, tick, context),
-        BoundOp::SIndex { input, offset } => {
+        StreamOp::If { .. } => evaluate_lazy_if(node_id, op, state, context),
+        StreamOp::Delay { input, offset } => {
             if *offset == 0 {
-                let current = context.read(state, input, tick);
-                let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
+                let current = context.read_value(state, input);
+                let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
                     unreachable!("delay node has incompatible runtime state")
                 };
-                history.lift_current(current)
+                history.retain_current_value(current)
             } else {
-                let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
+                let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
                     unreachable!("delay node has incompatible runtime state")
                 };
-                history.read_and_stage()
+                history.read_and_stage_write()
             }
         }
-        BoundOp::RecursiveSIndex { .. } => {
-            let NodeState::Delay(history) = &mut state.states[node_id.index()] else {
+        StreamOp::RecursiveDelay { .. } => {
+            let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
                 unreachable!("recursive delay node has incompatible runtime state")
             };
-            history.read()
+            history.read_delayed_value()
         }
-        BoundOp::Default { input, fallback } => {
-            let input = context.read(state, input, tick);
-            let NodeState::Default { last } = &mut state.states[node_id.index()] else {
+        StreamOp::Default { input, fallback } => {
+            let input = context.read_value(state, input);
+            let NodeState::Default { last_input } = &mut state.node_states[node_id.index()] else {
                 unreachable!("default node has incompatible runtime state")
             };
-            let input = stream_lift_value(input, last);
+            let input = retain_last_value(input, last_input);
             if input == Value::Deferred {
-                context.read(state, fallback, tick)
+                context.read_value(state, fallback)
             } else {
                 input
             }
         }
-        BoundOp::Init { input, initial } => {
-            let input = context.read(state, input, tick);
-            let NodeState::Init { started } = &mut state.states[node_id.index()] else {
+        StreamOp::Init { input, initial } => {
+            let input = context.read_value(state, input);
+            let NodeState::Init { started } = &mut state.node_states[node_id.index()] else {
                 unreachable!("init node has incompatible runtime state")
             };
             if *started {
                 input
             } else if input == Value::NoVal {
-                context.read(state, initial, tick)
+                context.read_value(state, initial)
             } else {
                 *started = true;
                 input
             }
         }
-        BoundOp::IsDefined { input } => {
-            let input = context.read(state, input, tick);
-            let NodeState::IsDefined { last } = &mut state.states[node_id.index()] else {
+        StreamOp::IsDefined { input } => {
+            let input = context.read_value(state, input);
+            let NodeState::IsDefined { last_input } = &mut state.node_states[node_id.index()]
+            else {
                 unreachable!("is_defined node has incompatible runtime state")
             };
-            Value::Bool(stream_lift_value(input, last) != Value::Deferred)
+            Value::Bool(retain_last_value(input, last_input) != Value::Deferred)
         }
-        BoundOp::When { input } => {
-            let input = context.read(state, input, tick);
-            let NodeState::When { last, started } = &mut state.states[node_id.index()] else {
+        StreamOp::When { input } => {
+            let input = context.read_value(state, input);
+            let NodeState::When {
+                last_input,
+                started,
+            } = &mut state.node_states[node_id.index()]
+            else {
                 unreachable!("when node has incompatible runtime state")
             };
-            let input = stream_lift_value(input, last);
+            let input = retain_last_value(input, last_input);
             if *started {
                 Value::Bool(true)
             } else if input == Value::Deferred || input == Value::NoVal {
@@ -101,19 +109,19 @@ pub(in crate::dataflow) fn eval_node_at(
                 Value::Bool(true)
             }
         }
-        BoundOp::Update { base, update } => {
-            let base = context.read(state, base, tick);
-            let update = context.read(state, update, tick);
+        StreamOp::Update { base, update } => {
+            let base = context.read_value(state, base);
+            let update = context.read_value(state, update);
             let NodeState::Update {
                 switched,
-                base_last,
-                update_last,
-            } = &mut state.states[node_id.index()]
+                last_base,
+                last_update,
+            } = &mut state.node_states[node_id.index()]
             else {
                 unreachable!("update node has incompatible runtime state")
             };
-            let base = stream_lift_value(base, base_last);
-            let update = stream_lift_value(update, update_last);
+            let base = retain_last_value(base, last_base);
+            let update = retain_last_value(update, last_update);
             if *switched {
                 update
             } else if update == Value::Deferred || update == Value::NoVal {
@@ -123,13 +131,13 @@ pub(in crate::dataflow) fn eval_node_at(
                 update
             }
         }
-        BoundOp::Latch { value, trigger } => {
-            let value = context.read(state, value, tick);
-            let trigger = context.read(state, trigger, tick);
-            let NodeState::Latch { value_last } = &mut state.states[node_id.index()] else {
+        StreamOp::Latch { value, trigger } => {
+            let value = context.read_value(state, value);
+            let trigger = context.read_value(state, trigger);
+            let NodeState::Latch { last_value } = &mut state.node_states[node_id.index()] else {
                 unreachable!("latch node has incompatible runtime state")
             };
-            let value = stream_lift_value(value, value_last);
+            let value = retain_last_value(value, last_value);
             if trigger == Value::NoVal {
                 Value::NoVal
             } else {
@@ -137,35 +145,35 @@ pub(in crate::dataflow) fn eval_node_at(
             }
         }
         // Collection and aggregate values.
-        BoundOp::List(items) => {
+        StreamOp::List(items) => {
             let values = items
                 .iter()
-                .map(|item| context.read(state, item, tick))
+                .map(|item| context.read_value(state, item))
                 .collect::<Vec<_>>();
             let values = lift_value_operands(node_id, state, values);
             lift_many(values, |values| Value::List(EcoVec::from(values)))
         }
-        BoundOp::Tuple(items) => {
+        StreamOp::Tuple(items) => {
             let values = items
                 .iter()
-                .map(|item| context.read(state, item, tick))
+                .map(|item| context.read_value(state, item))
                 .collect::<Vec<_>>();
             let values = lift_value_operands(node_id, state, values);
             lift_many(values, |values| Value::Tuple(EcoVec::from(values)))
         }
-        BoundOp::Map(items) => {
+        StreamOp::Map(items) => {
             let keys = items.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
             let values = items
                 .iter()
-                .map(|(_, value)| context.read(state, value, tick))
+                .map(|(_, value)| context.read_value(state, value))
                 .collect::<Vec<_>>();
             let values = lift_value_operands(node_id, state, values);
             lift_map_values(keys.into_iter().zip(values).collect(), Value::Map)
         }
-        BoundOp::LIndex { list, index: idx } => {
+        StreamOp::LIndex { list, index: idx } => {
             let values = vec![
-                context.read(state, list, tick),
-                context.read(state, idx, tick),
+                context.read_value(state, list),
+                context.read_value(state, idx),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
             lift_two(
@@ -174,10 +182,10 @@ pub(in crate::dataflow) fn eval_node_at(
                 |list, index| expect_value(value_operations::list_index(list, index)),
             )
         }
-        BoundOp::LAppend { list, value } => {
+        StreamOp::LAppend { list, value } => {
             let values = vec![
-                context.read(state, list, tick),
-                context.read(state, value, tick),
+                context.read_value(state, list),
+                context.read_value(state, value),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
             lift_two(
@@ -186,10 +194,10 @@ pub(in crate::dataflow) fn eval_node_at(
                 |list, value| expect_value(value_operations::list_append(list, value)),
             )
         }
-        BoundOp::LConcat { lhs, rhs } => {
+        StreamOp::LConcat { lhs, rhs } => {
             let values = vec![
-                context.read(state, lhs, tick),
-                context.read(state, rhs, tick),
+                context.read_value(state, lhs),
+                context.read_value(state, rhs),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
             lift_two(
@@ -198,45 +206,45 @@ pub(in crate::dataflow) fn eval_node_at(
                 |lhs, rhs| expect_value(value_operations::list_concat(lhs, rhs)),
             )
         }
-        BoundOp::LHead { list } => {
-            let values = vec![context.read(state, list, tick)];
+        StreamOp::LHead { list } => {
+            let values = vec![context.read_value(state, list)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |list| expect_value(value_operations::list_head(list)),
             )
         }
-        BoundOp::LTail { list } => {
-            let values = vec![context.read(state, list, tick)];
+        StreamOp::LTail { list } => {
+            let values = vec![context.read_value(state, list)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |list| expect_value(value_operations::list_tail(list)),
             )
         }
-        BoundOp::LLen { list } => {
-            let values = vec![context.read(state, list, tick)];
+        StreamOp::LLen { list } => {
+            let values = vec![context.read_value(state, list)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |list| expect_value(value_operations::list_len(list)),
             )
         }
-        BoundOp::MGet { map, key } => {
-            let values = vec![context.read(state, map, tick)];
+        StreamOp::MGet { map, key } => {
+            let values = vec![context.read_value(state, map)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |map| expect_value(value_operations::map_get(map, key)),
             )
         }
-        BoundOp::MRemove { map, key } => {
-            let values = vec![context.read(state, map, tick)];
+        StreamOp::MRemove { map, key } => {
+            let values = vec![context.read_value(state, map)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |map| expect_value(value_operations::map_remove(map, key)),
             )
         }
-        BoundOp::MInsert { map, key, value } => {
+        StreamOp::MInsert { map, key, value } => {
             let values = vec![
-                context.read(state, map, tick),
-                context.read(state, value, tick),
+                context.read_value(state, map),
+                context.read_value(state, value),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
             lift_two(
@@ -245,15 +253,15 @@ pub(in crate::dataflow) fn eval_node_at(
                 |map, value| expect_value(value_operations::map_insert(map, key, value)),
             )
         }
-        BoundOp::MHasKey { map, key } => {
-            let values = vec![context.read(state, map, tick)];
+        StreamOp::MHasKey { map, key } => {
+            let values = vec![context.read_value(state, map)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |map| expect_value(value_operations::map_has_key(map, key)),
             )
         }
-        BoundOp::TGet { tuple, index: idx } => {
-            let values = vec![context.read(state, tuple, tick)];
+        StreamOp::TGet { tuple, index: idx } => {
+            let values = vec![context.read_value(state, tuple)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
                 |tuple| expect_value(value_operations::tuple_get(tuple, *idx)),
@@ -261,123 +269,128 @@ pub(in crate::dataflow) fn eval_node_at(
         }
 
         // Function construction and application.
-        BoundOp::Function { func } => {
-            let NodeState::Function { function, captures } = &mut state.states[node_id.index()]
+        StreamOp::Function { func } => {
+            let NodeState::Function { function, captures } =
+                &mut state.node_states[node_id.index()]
             else {
                 unreachable!("function node has incompatible runtime state")
             };
-            eval_function_op(func, context, function, captures)
+            evaluate_function(func, context, function, captures)
         }
-        BoundOp::Apply { func, args } => {
-            let func = context.read(state, func, tick);
+        StreamOp::Apply { func, args } => {
+            let func = context.read_value(state, func);
             let args = args
                 .iter()
-                .map(|arg| context.read(state, arg, tick))
+                .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
             let NodeState::CallLift {
-                func_last,
-                arg_last,
+                last_function,
+                last_arguments,
                 active_function,
                 callable,
-            } = &mut state.states[node_id.index()]
+            } = &mut state.node_states[node_id.index()]
             else {
                 unreachable!("apply node has incompatible runtime state")
             };
-            let func = stream_lift_value(func, func_last);
-            let args = lift_call_args(args, arg_last);
-            eval_apply_op(func, args, active_function, callable)
+            let func = retain_last_value(func, last_function);
+            let args = lift_call_args(args, last_arguments);
+            evaluate_apply(func, args, active_function, callable)
         }
-        BoundOp::DirectApply { func, args } => {
+        StreamOp::DirectApply { func, args } => {
             let args = args
                 .iter()
-                .map(|arg| context.read(state, arg, tick))
+                .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
             let NodeState::PersistentCall {
-                executor,
-                values,
-                arg_last,
-            } = &mut state.states[node_id.index()]
+                evaluator,
+                environment_values,
+                last_arguments,
+            } = &mut state.node_states[node_id.index()]
             else {
                 unreachable!("direct apply node has incompatible runtime state")
             };
-            let args = lift_call_args(args, arg_last);
-            eval_direct_apply_op(func, args, context, executor, values)
+            let args = lift_call_args(args, last_arguments);
+            evaluate_direct_apply(func, args, context, evaluator, environment_values)
         }
-        BoundOp::DirectFixApply { func, args } => {
+        StreamOp::RecursiveApply { func, args } => {
             let args = args
                 .iter()
-                .map(|arg| context.read(state, arg, tick))
+                .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
-            let NodeState::CallLift { arg_last, .. } = &mut state.states[node_id.index()] else {
+            let NodeState::CallLift { last_arguments, .. } =
+                &mut state.node_states[node_id.index()]
+            else {
                 unreachable!("direct fix application node has incompatible runtime state")
             };
-            let args = lift_call_args(args, arg_last);
-            eval_direct_fix_apply_op(func, args, tick, context)
+            let args = lift_call_args(args, last_arguments);
+            evaluate_recursive_apply(func, args, context)
         }
-        BoundOp::RecursiveCall { args } => {
+        StreamOp::RecursiveCall { args } => {
             let args = args
                 .iter()
-                .map(|arg| context.read(state, arg, tick))
+                .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
-            let NodeState::CallLift { arg_last, .. } = &mut state.states[node_id.index()] else {
+            let NodeState::CallLift { last_arguments, .. } =
+                &mut state.node_states[node_id.index()]
+            else {
                 unreachable!("recursive call node has incompatible runtime state")
             };
-            let args = lift_call_args(args, arg_last);
-            eval_recursive_call_op(args, context)
+            let args = lift_call_args(args, last_arguments);
+            evaluate_recursive_call(args, context)
         }
-        BoundOp::Partial {
+        StreamOp::Partial {
             func,
             args,
             display,
         } => {
-            let func = context.read(state, func, tick);
+            let func = context.read_value(state, func);
             let args = args
                 .iter()
-                .map(|arg| context.read(state, arg, tick))
+                .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
             let NodeState::CallLift {
-                func_last,
-                arg_last,
+                last_function,
+                last_arguments,
                 ..
-            } = &mut state.states[node_id.index()]
+            } = &mut state.node_states[node_id.index()]
             else {
                 unreachable!("partial application node has incompatible runtime state")
             };
-            let func = stream_lift_value(func, func_last);
-            let args = lift_call_args(args, arg_last);
-            eval_partial_op(func, args, display.clone())
+            let func = retain_last_value(func, last_function);
+            let args = lift_call_args(args, last_arguments);
+            evaluate_partial(func, args, display.clone())
         }
-        BoundOp::Fix { func, display } => {
-            let values = vec![context.read(state, func, tick)];
-            eval_fix_op(
+        StreamOp::Fix { func, display } => {
+            let values = vec![context.read_value(state, func)];
+            evaluate_fix(
                 lift_value_operands(node_id, state, values).remove(0),
                 display.clone(),
             )
         }
-        BoundOp::ListMap { func, list } => {
+        StreamOp::ListMap { func, list } => {
             let values = vec![
-                context.read(state, func, tick),
-                context.read(state, list, tick),
+                context.read_value(state, func),
+                context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            eval_list_map_op(values.next().unwrap(), values.next().unwrap())
+            evaluate_list_map(values.next().unwrap(), values.next().unwrap())
         }
-        BoundOp::ListFilter { func, list } => {
+        StreamOp::ListFilter { func, list } => {
             let values = vec![
-                context.read(state, func, tick),
-                context.read(state, list, tick),
+                context.read_value(state, func),
+                context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            eval_list_filter_op(values.next().unwrap(), values.next().unwrap())
+            evaluate_list_filter(values.next().unwrap(), values.next().unwrap())
         }
-        BoundOp::ListFold { func, init, list } => {
+        StreamOp::ListFold { func, init, list } => {
             let values = vec![
-                context.read(state, func, tick),
-                context.read(state, init, tick),
-                context.read(state, list, tick),
+                context.read_value(state, func),
+                context.read_value(state, init),
+                context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            eval_list_fold_op(
+            evaluate_list_fold(
                 values.next().unwrap(),
                 values.next().unwrap(),
                 values.next().unwrap(),
@@ -385,31 +398,29 @@ pub(in crate::dataflow) fn eval_node_at(
         }
 
         // Runtime-compiled expressions use the fallible traversal.
-        BoundOp::Dynamic(_) => unreachable!("dynamic node reached infallible evaluator"),
+        StreamOp::Dynamic(_) => unreachable!("dynamic node reached infallible evaluator"),
     }
 }
 
-pub(in crate::dataflow) fn eval_nodes_at(
+pub(in crate::dataflow) fn evaluate_nodes(
     nodes: &[BoundOp],
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
 ) {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
-        let value = eval_node_at(node_id, op, state, tick, context);
-        state.nodes[index] = value;
+        let value = evaluate_node(node_id, op, state, context);
+        state.node_values[index] = value;
     }
 }
 
-fn eval_lazy_if(
+fn evaluate_lazy_if(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
 ) -> Value {
-    let BoundOp::If {
+    let StreamOp::If {
         cond,
         then_branch,
         else_branch,
@@ -417,24 +428,24 @@ fn eval_lazy_if(
     else {
         unreachable!("non-if node evaluated as lazy branch")
     };
-    let condition = context.read(state, cond, tick);
-    let NodeState::LazyIf(lazy_if) = &mut state.states[node_id.index()] else {
+    let condition = context.read_value(state, cond);
+    let NodeState::LazyIf(lazy_if) = &mut state.node_states[node_id.index()] else {
         unreachable!("if node has incompatible runtime state")
     };
-    let condition = stream_lift_value(condition, &mut lazy_if.condition_last);
+    let condition = retain_last_value(condition, &mut lazy_if.last_condition);
     if context.recursive_call.is_some() {
         return match condition {
-            Value::Bool(true) => eval_branch(then_branch, &mut lazy_if.then_state, tick, context),
-            Value::Bool(false) => eval_branch(else_branch, &mut lazy_if.else_state, tick, context),
+            Value::Bool(true) => evaluate_branch(then_branch, &mut lazy_if.then_state, context),
+            Value::Bool(false) => evaluate_branch(else_branch, &mut lazy_if.else_state, context),
             Value::Deferred => Value::Deferred,
             Value::NoVal => Value::NoVal,
             other => panic!("if condition must be bool, got {:?}", other),
         };
     }
-    let then_value = eval_branch(then_branch, &mut lazy_if.then_state, tick, context);
-    let then_value = stream_lift_value(then_value, &mut lazy_if.then_last);
-    let else_value = eval_branch(else_branch, &mut lazy_if.else_state, tick, context);
-    let else_value = stream_lift_value(else_value, &mut lazy_if.else_last);
+    let then_value = evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+    let then_value = retain_last_value(then_value, &mut lazy_if.last_then_value);
+    let else_value = evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+    let else_value = retain_last_value(else_value, &mut lazy_if.last_else_value);
 
     if then_value == Value::NoVal || else_value == Value::NoVal {
         return Value::NoVal;
@@ -449,62 +460,50 @@ fn eval_lazy_if(
     }
 }
 
-fn eval_branch(
-    branch: &BoundPlanBody,
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
+fn evaluate_branch(
+    branch: &BoundEvaluationGraph,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
 ) -> Value {
-    eval_nodes_at(&branch.nodes, state, tick, context);
-    let output = context.read(state, &branch.output, tick);
-    commit_recursive_delays(&branch.recursive_delays, state, &output);
+    evaluate_nodes(&branch.nodes, state, context);
+    let output = context.read_value(state, &branch.output);
+    stage_recursive_delays(&branch.recursive_delays, state, &output);
     output
 }
 
-pub(in crate::dataflow) fn try_eval_nodes_at(
+pub(in crate::dataflow) fn try_evaluate_nodes(
     nodes: &[BoundOp],
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
-) -> Result<(), DataflowEvalError> {
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
+) -> Result<(), DataflowEvaluationError> {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
         let value = match op {
-            BoundOp::Dynamic(spec) => {
-                let current = context.read(state, &spec.input, tick);
-                let NodeState::Dynamic(dynamic) = &mut state.states[index] else {
+            StreamOp::Dynamic(spec) => {
+                let current = context.read_value(state, &spec.input);
+                let NodeState::Dynamic(dynamic) = &mut state.node_states[index] else {
                     unreachable!("dynamic node has incompatible runtime state")
                 };
-                if dynamic.environment_last.len() != context.inputs.len() {
-                    dynamic.environment_last = vec![None; context.inputs.len()];
-                }
-                dynamic.environment_values = context
-                    .inputs
-                    .iter()
-                    .cloned()
-                    .zip(&mut dynamic.environment_last)
-                    .map(|(value, last)| stream_lift_value(value, last))
-                    .collect();
-                let current = stream_lift_value(current, &mut dynamic.source_last);
-                let result = eval_dynamic_value(current, spec, dynamic, tick, context)?;
-                stream_lift_value(result, &mut dynamic.result_last)
+                dynamic.update_environment(context.environment_values);
+                let current = retain_last_value(current, &mut dynamic.last_source_value);
+                let result = evaluate_dynamic_expression(current, spec, dynamic, context)?;
+                retain_last_value(result, &mut dynamic.last_result)
             }
-            BoundOp::If { .. } => try_eval_lazy_if(node_id, op, state, tick, context)?,
-            _ => eval_node_at(node_id, op, state, tick, context),
+            StreamOp::If { .. } => try_evaluate_lazy_if(node_id, op, state, context)?,
+            _ => evaluate_node(node_id, op, state, context),
         };
-        state.nodes[index] = value;
+        state.node_values[index] = value;
     }
     Ok(())
 }
 
-fn try_eval_lazy_if(
+fn try_evaluate_lazy_if(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
-) -> Result<Value, DataflowEvalError> {
-    let BoundOp::If {
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
+) -> Result<Value, DataflowEvaluationError> {
+    let StreamOp::If {
         cond,
         then_branch,
         else_branch,
@@ -512,19 +511,20 @@ fn try_eval_lazy_if(
     else {
         unreachable!("non-if node evaluated as lazy branch")
     };
-    let condition = context.read(state, cond, tick);
-    let NodeState::LazyIf(lazy_if) = &mut state.states[node_id.index()] else {
+    let condition = context.read_value(state, cond);
+    let NodeState::LazyIf(lazy_if) = &mut state.node_states[node_id.index()] else {
         unreachable!("if node has incompatible runtime state")
     };
-    let condition = stream_lift_value(condition, &mut lazy_if.condition_last);
+    let condition = retain_last_value(condition, &mut lazy_if.last_condition);
 
     match condition {
         Value::Bool(true) => {
-            let selected = try_eval_branch(then_branch, &mut lazy_if.then_state, tick, context);
-            let unselected = try_eval_branch(else_branch, &mut lazy_if.else_state, tick, context);
-            let selected = selected.map(|value| stream_lift_value(value, &mut lazy_if.then_last));
+            let selected = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+            let unselected = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+            let selected =
+                selected.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let unselected =
-                unselected.map(|value| stream_lift_value(value, &mut lazy_if.else_last));
+                unselected.map(|value| retain_last_value(value, &mut lazy_if.last_else_value));
             let selected = selected?;
             if selected == Value::NoVal || matches!(unselected, Ok(Value::NoVal)) {
                 Ok(Value::NoVal)
@@ -533,12 +533,12 @@ fn try_eval_lazy_if(
             }
         }
         Value::Bool(false) => {
-            let unselected = try_eval_branch(then_branch, &mut lazy_if.then_state, tick, context);
-            let selected = try_eval_branch(else_branch, &mut lazy_if.else_state, tick, context);
+            let unselected = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+            let selected = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
             let unselected =
-                unselected.map(|value| stream_lift_value(value, &mut lazy_if.then_last));
+                unselected.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let selected =
-                selected.map(|value| stream_lift_value(value, &mut lazy_if.else_last))?;
+                selected.map(|value| retain_last_value(value, &mut lazy_if.last_else_value))?;
             if selected == Value::NoVal || matches!(unselected, Ok(Value::NoVal)) {
                 Ok(Value::NoVal)
             } else {
@@ -546,12 +546,12 @@ fn try_eval_lazy_if(
             }
         }
         Value::Deferred => {
-            let then_value = try_eval_branch(then_branch, &mut lazy_if.then_state, tick, context);
-            let else_value = try_eval_branch(else_branch, &mut lazy_if.else_state, tick, context);
+            let then_value = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+            let else_value = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
             let then_value =
-                then_value.map(|value| stream_lift_value(value, &mut lazy_if.then_last));
+                then_value.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let else_value =
-                else_value.map(|value| stream_lift_value(value, &mut lazy_if.else_last));
+                else_value.map(|value| retain_last_value(value, &mut lazy_if.last_else_value));
             if matches!(then_value, Ok(Value::NoVal)) || matches!(else_value, Ok(Value::NoVal)) {
                 Ok(Value::NoVal)
             } else {
@@ -559,13 +559,13 @@ fn try_eval_lazy_if(
             }
         }
         Value::NoVal => {
-            let then_value = try_eval_branch(then_branch, &mut lazy_if.then_state, tick, context);
-            let else_value = try_eval_branch(else_branch, &mut lazy_if.else_state, tick, context);
+            let then_value = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+            let else_value = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
             if let Ok(value) = then_value {
-                stream_lift_value(value, &mut lazy_if.then_last);
+                retain_last_value(value, &mut lazy_if.last_then_value);
             }
             if let Ok(value) = else_value {
-                stream_lift_value(value, &mut lazy_if.else_last);
+                retain_last_value(value, &mut lazy_if.last_else_value);
             }
             Ok(Value::NoVal)
         }
@@ -573,89 +573,100 @@ fn try_eval_lazy_if(
     }
 }
 
-fn try_eval_branch(
-    branch: &BoundPlanBody,
-    state: &mut DataflowState,
-    tick: usize,
-    context: PlanEvalContext<'_>,
-) -> Result<Value, DataflowEvalError> {
+fn try_evaluate_branch(
+    branch: &BoundEvaluationGraph,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
+) -> Result<Value, DataflowEvaluationError> {
     let snapshot = state.clone();
-    if let Err(error) = try_eval_nodes_at(&branch.nodes, state, tick, context) {
+    if let Err(error) = try_evaluate_nodes(&branch.nodes, state, context) {
         *state = snapshot;
         return Err(error);
     }
-    let output = context.read(state, &branch.output, tick);
-    commit_recursive_delays(&branch.recursive_delays, state, &output);
+    let output = context.read_value(state, &branch.output);
+    stage_recursive_delays(&branch.recursive_delays, state, &output);
     Ok(output)
 }
 
-pub(in crate::dataflow) fn commit_recursive_delays(
+pub(in crate::dataflow) fn stage_recursive_delays(
     delays: &[NodeId],
-    state: &mut DataflowState,
+    state: &mut StreamState,
     output: &Value,
 ) {
     for delay in delays {
-        let NodeState::Delay(history) = &mut state.states[delay.index()] else {
+        let NodeState::Delay(history) = &mut state.node_states[delay.index()] else {
             unreachable!("recursive delay node has incompatible runtime state")
         };
-        history.push(output.clone());
+        history.stage_recursive_value(output.clone());
     }
 }
 
-pub(in crate::dataflow) fn commit_staged_delays(
-    body: &BoundPlanBody,
-    state: &mut DataflowState,
-    context: PlanEvalContext<'_>,
+pub(in crate::dataflow) fn commit_staged_temporal_state(
+    body: &BoundEvaluationGraph,
+    state: &mut StreamState,
+    context: EvaluationContext<'_>,
 ) {
     for (index, op) in body.nodes.iter().enumerate() {
         match op {
-            BoundOp::SIndex { input, offset } if *offset > 0 => {
-                let current = context.read(state, input, 0);
-                let NodeState::Delay(history) = &mut state.states[index] else {
+            StreamOp::Delay { input, offset } if *offset > 0 => {
+                let current = context.read_value(state, input);
+                let NodeState::Delay(history) = &mut state.node_states[index] else {
                     unreachable!("delay node has incompatible runtime state")
                 };
-                history.commit_pending(current);
+                history.commit_staged_write(current);
             }
-            BoundOp::If {
+            StreamOp::RecursiveDelay { .. } => {
+                let NodeState::Delay(history) = &mut state.node_states[index] else {
+                    unreachable!("recursive delay node has incompatible runtime state")
+                };
+                history.commit_recursive_value();
+            }
+            StreamOp::If {
                 then_branch,
                 else_branch,
                 ..
             } => {
-                let NodeState::LazyIf(lazy_if) = &mut state.states[index] else {
+                let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
                     unreachable!("if node has incompatible runtime state")
                 };
-                commit_staged_delays(then_branch, &mut lazy_if.then_state, context);
-                commit_staged_delays(else_branch, &mut lazy_if.else_state, context);
+                commit_staged_temporal_state(then_branch, &mut lazy_if.then_state, context);
+                commit_staged_temporal_state(else_branch, &mut lazy_if.else_state, context);
             }
-            BoundOp::DirectApply { func, .. } => {
+            StreamOp::DirectApply { func, .. } => {
                 let NodeState::PersistentCall {
-                    executor, values, ..
-                } = &mut state.states[index]
+                    evaluator,
+                    environment_values,
+                    ..
+                } = &mut state.node_states[index]
                 else {
                     unreachable!("direct application node has incompatible runtime state")
                 };
-                let capture_count = func.capture_sources.len();
-                for (slot, source) in values[..capture_count]
+                let capture_count = func.capture_slots.len();
+                for (slot, source) in environment_values[..capture_count]
                     .iter_mut()
-                    .zip(&func.capture_sources)
+                    .zip(&func.capture_slots)
                 {
-                    *slot = context.inputs[source.index()].clone();
+                    *slot = context.environment_values[source.index()].clone();
                 }
-                executor.commit_delays(values);
+                evaluator.commit_temporal_state(environment_values);
             }
-            BoundOp::Dynamic(_) => {
-                let NodeState::Dynamic(dynamic) = &mut state.states[index] else {
+            StreamOp::Dynamic(_) => {
+                let NodeState::Dynamic(dynamic) = &mut state.node_states[index] else {
                     unreachable!("dynamic node has incompatible runtime state")
                 };
-                dynamic.environment_values = context
-                    .inputs
-                    .iter()
-                    .cloned()
-                    .zip(&mut dynamic.environment_last)
-                    .map(|(value, last)| stream_lift_value(value, last))
-                    .collect();
-                if let Some(active) = &mut dynamic.active {
-                    active.executor.commit_delays(&dynamic.environment_values);
+                if dynamic
+                    .active_expression
+                    .as_ref()
+                    .is_some_and(|active| active.evaluator.program.requires_temporal_commit())
+                {
+                    dynamic.update_environment(context.environment_values);
+                    let active = dynamic
+                        .active_expression
+                        .as_mut()
+                        .expect("active dynamic expression disappeared before commit");
+                    active
+                        .evaluator
+                        .commit_temporal_state(&dynamic.environment_values);
                 }
             }
             _ => {}
@@ -666,22 +677,22 @@ pub(in crate::dataflow) fn commit_staged_delays(
 fn lift_call_args(mut args: Vec<Value>, last: &mut [Option<Value>]) -> EcoVec<Value> {
     debug_assert_eq!(args.len(), last.len());
     for (arg, last) in args.iter_mut().zip(last) {
-        *arg = stream_lift_value(arg.clone(), last);
+        *arg = retain_last_value(arg.clone(), last);
     }
     args.into()
 }
 
 fn lift_value_operands(
     node_id: NodeId,
-    state: &mut DataflowState,
+    state: &mut StreamState,
     mut values: Vec<Value>,
 ) -> Vec<Value> {
-    let NodeState::OperandLift { last } = &mut state.states[node_id.index()] else {
+    let NodeState::OperandLift { last_operands } = &mut state.node_states[node_id.index()] else {
         unreachable!("lifted value node has incompatible runtime state")
     };
-    debug_assert_eq!(values.len(), last.len());
-    for (value, last) in values.iter_mut().zip(last) {
-        *value = stream_lift_value(value.clone(), last);
+    debug_assert_eq!(values.len(), last_operands.len());
+    for (value, last) in values.iter_mut().zip(last_operands) {
+        *value = retain_last_value(value.clone(), last);
     }
     values
 }

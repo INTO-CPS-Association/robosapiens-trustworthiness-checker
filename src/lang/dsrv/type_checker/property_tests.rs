@@ -321,7 +321,7 @@ proptest! {
     ) {
         let typed = type_check(specification(&case, true), false)
             .expect("type-directed program must pass strict checking");
-        let mut monitor = DataflowMonitor::try_compile_checked(typed)
+        let mut monitor = DataflowMonitor::compile_checked(typed)
             .expect("type-directed program must compile to dataflow");
         let input = monitor
             .input_vars()

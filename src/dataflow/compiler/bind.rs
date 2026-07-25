@@ -1,11 +1,14 @@
-use super::super::plan::*;
+use super::super::ir::*;
 use super::super::*;
 use std::num::NonZeroU64;
 
-pub(in crate::dataflow) use super::super::error::PlanValidationError;
+pub(in crate::dataflow) use super::super::error::StreamProgramError;
 
-impl UnboundPlanBody {
-    fn for_each_dynamic_spec(&mut self, visit: &mut impl FnMut(&mut UnboundDynamicSpec)) {
+impl UnboundEvaluationGraph {
+    fn for_each_dynamic_expression(
+        &mut self,
+        visit: &mut impl FnMut(&mut UnboundDynamicExpressionSpec),
+    ) {
         for op in &mut self.nodes {
             match op {
                 UnboundOp::Dynamic(spec) => visit(spec),
@@ -14,76 +17,76 @@ impl UnboundPlanBody {
                     else_branch,
                     ..
                 } => {
-                    then_branch.for_each_dynamic_spec(visit);
-                    else_branch.for_each_dynamic_spec(visit);
+                    then_branch.for_each_dynamic_expression(visit);
+                    else_branch.for_each_dynamic_expression(visit);
                 }
                 _ => {}
             }
         }
     }
 
-    pub(in crate::dataflow) fn configure_dynamic_scope(
+    pub(in crate::dataflow) fn resolve_automatic_dynamic_scopes(
         &mut self,
         current_stream: &VarName,
         input_vars: &[VarName],
         stream_vars: &BTreeSet<VarName>,
     ) {
-        self.for_each_dynamic_spec(&mut |spec| match &mut spec.scope {
-            DataflowDynamicScope::Automatic => {
-                spec.scope = DataflowDynamicScope::Restricted(
-                    input_vars
+        self.for_each_dynamic_expression(&mut |spec| match &mut spec.scope {
+            DynamicExpressionScope::Automatic => {
+                spec.scope = DynamicExpressionScope::Restricted {
+                    allowed_variables: input_vars
                         .iter()
                         .chain(stream_vars)
                         .filter(|var| *var != current_stream)
                         .cloned()
                         .collect(),
-                );
+                };
             }
-            DataflowDynamicScope::Restricted(_) => {}
+            DynamicExpressionScope::Restricted { .. } => {}
         });
     }
 
-    pub(in crate::dataflow) fn inherit_dynamic_scope(&mut self, allowed_vars: &[VarName]) {
-        self.for_each_dynamic_spec(&mut |spec| {
-            let vars = match &spec.scope {
-                DataflowDynamicScope::Automatic => allowed_vars.iter().cloned().collect(),
-                DataflowDynamicScope::Restricted(vars) => vars
+    pub(in crate::dataflow) fn restrict_dynamic_scopes(&mut self, allowed_vars: &[VarName]) {
+        self.for_each_dynamic_expression(&mut |spec| {
+            let allowed_variables = match &spec.scope {
+                DynamicExpressionScope::Automatic => allowed_vars.iter().cloned().collect(),
+                DynamicExpressionScope::Restricted { allowed_variables } => allowed_variables
                     .iter()
                     .filter(|var| allowed_vars.contains(var))
                     .cloned()
                     .collect(),
             };
-            spec.scope = DataflowDynamicScope::Restricted(vars);
+            spec.scope = DynamicExpressionScope::Restricted { allowed_variables };
         });
     }
 
-    fn inherit_environment_scope(&mut self, environment: &EnvironmentLayout) {
-        self.for_each_dynamic_spec(&mut |spec| {
-            let vars = match &spec.scope {
-                DataflowDynamicScope::Automatic => environment.keys().cloned().collect(),
-                DataflowDynamicScope::Restricted(vars) => vars
+    fn restrict_dynamic_scopes_to_environment(&mut self, environment: &EnvironmentLayout) {
+        self.for_each_dynamic_expression(&mut |spec| {
+            let allowed_variables = match &spec.scope {
+                DynamicExpressionScope::Automatic => environment.variables().cloned().collect(),
+                DynamicExpressionScope::Restricted { allowed_variables } => allowed_variables
                     .iter()
-                    .filter(|var| environment.get(var).is_some())
+                    .filter(|var| environment.slot(var).is_some())
                     .cloned()
                     .collect(),
             };
-            spec.scope = DataflowDynamicScope::Restricted(vars);
+            spec.scope = DynamicExpressionScope::Restricted { allowed_variables };
         });
     }
 
-    pub(in crate::dataflow) fn bind(
+    pub(in crate::dataflow) fn bind_graph(
         mut self,
         recursive_output: Option<VarName>,
         environment: Rc<EnvironmentLayout>,
-    ) -> Result<Rc<ExecutablePlan>, PlanValidationError> {
-        self.inherit_environment_scope(&environment);
+    ) -> Result<Rc<StreamProgram>, StreamProgramError> {
+        self.restrict_dynamic_scopes_to_environment(&environment);
         self.validate(false)?;
-        let body = bind_body(self, &environment, recursive_output.as_ref())?;
+        let body = bind_graph(self, &environment, recursive_output.as_ref())?;
         body.debug_assert_valid(environment.len());
-        Ok(Rc::new(Plan::new(body, environment)))
+        Ok(Rc::new(StreamProgram::new(body, environment)))
     }
 
-    fn validate(&self, in_function: bool) -> Result<(), PlanValidationError> {
+    fn validate(&self, in_function: bool) -> Result<(), StreamProgramError> {
         for op in &self.nodes {
             let restricted_function = match op {
                 UnboundOp::ListMap { func, .. }
@@ -94,9 +97,9 @@ impl UnboundPlanBody {
             };
             if let Some(UnboundRef::Node(id)) = restricted_function
                 && let Some(UnboundOp::Function { func }) = self.nodes.get(id.index())
-                && func.plan.body.has_temporal_state()
+                && func.graph.has_temporal_state()
             {
-                return Err(PlanValidationError::TemporalFunctionBody {
+                return Err(StreamProgramError::TemporalFunctionBody {
                     operator: match op {
                         UnboundOp::Partial { .. } => "partial application",
                         _ => "collection callback",
@@ -104,7 +107,7 @@ impl UnboundPlanBody {
                 });
             }
             if in_function && let Some(operator) = op.temporal_operator_name() {
-                return Err(PlanValidationError::TemporalFunctionBody { operator });
+                return Err(StreamProgramError::TemporalFunctionBody { operator });
             }
             match op {
                 UnboundOp::If {
@@ -115,26 +118,24 @@ impl UnboundPlanBody {
                     then_branch.validate(in_function)?;
                     else_branch.validate(in_function)?;
                 }
-                UnboundOp::Function { func } => func.plan.body.validate_persistent_function()?,
-                // A direct application owns a persistent nested executor, so temporal
+                UnboundOp::Function { func } => func.graph.validate_persistent_function()?,
+                // A direct application owns a persistent nested evaluator, so temporal
                 // operators retain their state across outer ticks.
-                UnboundOp::DirectApply { func, .. } => {
-                    func.plan.body.validate_persistent_function()?
-                }
-                UnboundOp::DirectFixApply { func, .. } => func.plan.body.validate(true)?,
+                UnboundOp::DirectApply { func, .. } => func.graph.validate_persistent_function()?,
+                UnboundOp::RecursiveApply { func, .. } => func.graph.validate(true)?,
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn validate_persistent_function(&self) -> Result<(), PlanValidationError> {
+    fn validate_persistent_function(&self) -> Result<(), StreamProgramError> {
         for op in &self.nodes {
             match op {
                 // Runtime compilation has a fallible evaluation path which is not
                 // yet exposed through nested function execution.
                 UnboundOp::Dynamic(_) => {
-                    return Err(PlanValidationError::TemporalFunctionBody {
+                    return Err(StreamProgramError::TemporalFunctionBody {
                         operator: "dynamic/defer",
                     });
                 }
@@ -146,11 +147,11 @@ impl UnboundPlanBody {
                     then_branch.validate_persistent_function()?;
                     else_branch.validate_persistent_function()?;
                 }
-                UnboundOp::Function { func } | UnboundOp::DirectFixApply { func, .. } => {
-                    func.plan.body.validate(true)?;
+                UnboundOp::Function { func } | UnboundOp::RecursiveApply { func, .. } => {
+                    func.graph.validate(true)?;
                 }
                 UnboundOp::DirectApply { func, .. } => {
-                    func.plan.body.validate_persistent_function()?;
+                    func.graph.validate_persistent_function()?;
                 }
                 _ => {}
             }
@@ -167,12 +168,12 @@ impl UnboundPlanBody {
         inputs
     }
 
-    pub(in crate::dataflow) fn immediate_free_vars(
+    pub(in crate::dataflow) fn same_tick_free_vars(
         &self,
         recursive_output: Option<&VarName>,
     ) -> BTreeSet<VarName> {
         let mut inputs = BTreeSet::new();
-        self.collect_immediate_free_vars(&mut inputs, recursive_output);
+        self.collect_same_tick_free_vars(&mut inputs, recursive_output);
         inputs
     }
 
@@ -195,9 +196,9 @@ impl UnboundPlanBody {
                 }
                 UnboundOp::Function { func }
                 | UnboundOp::DirectApply { func, .. }
-                | UnboundOp::DirectFixApply { func, .. } => {
-                    let mut captures = func.plan.body.free_vars(recursive_output);
-                    for param in &func.params {
+                | UnboundOp::RecursiveApply { func, .. } => {
+                    let mut captures = func.graph.free_vars(recursive_output);
+                    for param in &func.parameters {
                         captures.remove(param);
                     }
                     inputs.extend(captures);
@@ -207,7 +208,7 @@ impl UnboundPlanBody {
         }
     }
 
-    fn collect_immediate_free_vars(
+    fn collect_same_tick_free_vars(
         &self,
         inputs: &mut BTreeSet<VarName>,
         recursive_output: Option<&VarName>,
@@ -215,7 +216,7 @@ impl UnboundPlanBody {
         collect_ref_input(&self.output, inputs, recursive_output);
         for op in &self.nodes {
             match op {
-                UnboundOp::SIndex { offset, .. } if *offset > 0 => {}
+                UnboundOp::Delay { offset, .. } if *offset > 0 => {}
                 _ => op.for_each_operand(|operand| {
                     collect_ref_input(operand, inputs, recursive_output)
                 }),
@@ -226,19 +227,19 @@ impl UnboundPlanBody {
                     else_branch,
                     ..
                 } => {
-                    then_branch.collect_immediate_free_vars(inputs, recursive_output);
-                    else_branch.collect_immediate_free_vars(inputs, recursive_output);
+                    then_branch.collect_same_tick_free_vars(inputs, recursive_output);
+                    else_branch.collect_same_tick_free_vars(inputs, recursive_output);
                 }
                 UnboundOp::DirectApply { func, .. } => {
-                    let mut captures = func.plan.body.immediate_free_vars(recursive_output);
-                    for param in &func.params {
+                    let mut captures = func.graph.same_tick_free_vars(recursive_output);
+                    for param in &func.parameters {
                         captures.remove(param);
                     }
                     inputs.extend(captures);
                 }
-                UnboundOp::Function { func } | UnboundOp::DirectFixApply { func, .. } => {
-                    let mut captures = func.plan.body.free_vars(recursive_output);
-                    for param in &func.params {
+                UnboundOp::Function { func } | UnboundOp::RecursiveApply { func, .. } => {
+                    let mut captures = func.graph.free_vars(recursive_output);
+                    for param in &func.parameters {
                         captures.remove(param);
                     }
                     inputs.extend(captures);
@@ -249,11 +250,11 @@ impl UnboundPlanBody {
     }
 }
 
-fn bind_body(
-    body: UnboundPlanBody,
+fn bind_graph(
+    body: UnboundEvaluationGraph,
     environment: &EnvironmentLayout,
     recursive_output: Option<&VarName>,
-) -> Result<BoundPlanBody, PlanValidationError> {
+) -> Result<BoundEvaluationGraph, StreamProgramError> {
     let output = bind_ref(body.output, environment, recursive_output)?;
     let nodes = body
         .nodes
@@ -263,10 +264,10 @@ fn bind_body(
     let recursive_delays = nodes
         .iter()
         .enumerate()
-        .filter(|(_, op)| op.is_recursive_sindex())
+        .filter(|(_, op)| op.is_recursive_delay())
         .map(|(index, _)| NodeId::new(index))
         .collect();
-    Ok(BoundPlanBody {
+    Ok(BoundEvaluationGraph {
         nodes,
         output,
         recursive_delays,
@@ -277,7 +278,7 @@ fn bind_op(
     op: UnboundOp,
     environment: &EnvironmentLayout,
     recursive_output: Option<&VarName>,
-) -> Result<BoundOp, PlanValidationError> {
+) -> Result<BoundOp, StreamProgramError> {
     macro_rules! r {
         ($value:expr) => {
             bind_ref($value, environment, recursive_output)?
@@ -293,7 +294,7 @@ fn bind_op(
     }
     macro_rules! body {
         ($value:expr) => {
-            bind_body($value, environment, recursive_output)?
+            bind_graph($value, environment, recursive_output)?
         };
     }
     macro_rules! function {
@@ -318,17 +319,17 @@ fn bind_op(
             then_branch: body!(then_branch),
             else_branch: body!(else_branch),
         },
-        UnboundOp::SIndex { input, offset } if matches!(&input, UnboundRef::External(var) if Some(var) == recursive_output) =>
+        UnboundOp::Delay { input, offset } if matches!(&input, UnboundRef::External(var) if Some(var) == recursive_output) =>
         {
             let offset =
-                NonZeroU64::new(offset).ok_or(PlanValidationError::UnguardedRecursiveOutput)?;
-            BoundOp::RecursiveSIndex { offset }
+                NonZeroU64::new(offset).ok_or(StreamProgramError::UnguardedRecursiveOutput)?;
+            BoundOp::RecursiveDelay { offset }
         }
-        UnboundOp::SIndex { input, offset } => BoundOp::SIndex {
+        UnboundOp::Delay { input, offset } => BoundOp::Delay {
             input: r!(input),
             offset,
         },
-        UnboundOp::RecursiveSIndex { offset } => BoundOp::RecursiveSIndex { offset },
+        UnboundOp::RecursiveDelay { offset } => BoundOp::RecursiveDelay { offset },
         UnboundOp::Default { input, fallback } => BoundOp::Default {
             input: r!(input),
             fallback: r!(fallback),
@@ -353,7 +354,7 @@ fn bind_op(
             items
                 .into_iter()
                 .map(|(key, value)| Ok((key, bind_ref(value, environment, recursive_output)?)))
-                .collect::<Result<_, PlanValidationError>>()?,
+                .collect::<Result<_, StreamProgramError>>()?,
         ),
         UnboundOp::LIndex { list, index } => BoundOp::LIndex {
             list: r!(list),
@@ -382,11 +383,11 @@ fn bind_op(
             tuple: r!(tuple),
             index,
         },
-        UnboundOp::Dynamic(spec) => BoundOp::Dynamic(BoundDynamicSpec {
+        UnboundOp::Dynamic(spec) => BoundOp::Dynamic(BoundDynamicExpressionSpec {
             input: r!(spec.input),
             scope: spec.scope,
             mode: spec.mode,
-            typed: spec.typed,
+            typing: spec.typing,
         }),
         UnboundOp::Function { func } => BoundOp::Function {
             func: function!(func),
@@ -399,7 +400,7 @@ fn bind_op(
             func: function!(func),
             args: rs!(args),
         },
-        UnboundOp::DirectFixApply { func, args } => BoundOp::DirectFixApply {
+        UnboundOp::RecursiveApply { func, args } => BoundOp::RecursiveApply {
             func: function!(func),
             args: rs!(args),
         },
@@ -434,36 +435,36 @@ fn bind_op(
 }
 
 fn bind_function(
-    function: UnboundFunctionDef,
+    function: UnboundFunction,
     environment: &EnvironmentLayout,
     recursive_output: Option<&VarName>,
-) -> Result<BoundFunctionDef, PlanValidationError> {
-    let mut captures = function.plan.body.free_vars(None);
-    for param in &function.params {
+) -> Result<StreamFunction, StreamProgramError> {
+    let mut captures = function.graph.free_vars(None);
+    for param in &function.parameters {
         captures.remove(param);
     }
 
     let capture_names = captures.into_iter().collect::<Vec<_>>();
-    let capture_sources = capture_names
+    let capture_slots = capture_names
         .iter()
         .map(|name| {
             environment
-                .get(name)
-                .ok_or_else(|| PlanValidationError::UnknownVariable(name.clone()))
+                .slot(name)
+                .ok_or_else(|| StreamProgramError::UnknownVariable(name.clone()))
         })
         .collect::<Result<_, _>>()?;
 
-    let local_ids = EnvironmentLayout::from_vars(
+    let local_ids = EnvironmentLayout::from_variables(
         capture_names
             .into_iter()
-            .chain(function.params.iter().cloned()),
+            .chain(function.parameters.iter().cloned()),
     );
-    let body = bind_body(function.plan.body.clone(), &local_ids, recursive_output)?;
-    Ok(BoundFunctionDef {
-        params: function.params,
-        plan: Rc::new(Plan::new(body, Rc::new(local_ids))),
+    let body = bind_graph(function.graph.clone(), &local_ids, recursive_output)?;
+    Ok(StreamFunction {
+        parameters: function.parameters,
+        program: Rc::new(StreamProgram::new(body, Rc::new(local_ids))),
         display: function.display,
-        capture_sources,
+        capture_slots,
     })
 }
 
@@ -471,17 +472,17 @@ fn bind_ref(
     operand: UnboundRef,
     environment: &EnvironmentLayout,
     recursive_output: Option<&VarName>,
-) -> Result<BoundRef, PlanValidationError> {
+) -> Result<BoundRef, StreamProgramError> {
     Ok(match operand {
         UnboundRef::Const(value) => BoundRef::Const(value),
         UnboundRef::Node(id) => BoundRef::Node(id),
         UnboundRef::External(var) => {
             if Some(&var) == recursive_output {
-                return Err(PlanValidationError::UnguardedRecursiveOutput);
+                return Err(StreamProgramError::UnguardedRecursiveOutput);
             }
             let id = environment
-                .get(&var)
-                .ok_or_else(|| PlanValidationError::UnknownVariable(var.clone()))?;
+                .slot(&var)
+                .ok_or_else(|| StreamProgramError::UnknownVariable(var.clone()))?;
             BoundRef::External(id)
         }
     })

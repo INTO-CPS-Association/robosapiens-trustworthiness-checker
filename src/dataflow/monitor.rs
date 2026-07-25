@@ -1,73 +1,61 @@
-use super::execution::plan_executor::PlanExecutor;
-use super::plan::EnvironmentId;
+use super::environment::EnvironmentSlot;
+use super::error::DataflowEvaluationError;
+use super::execution::stream_evaluator::StreamEvaluator;
+use super::execution_plan::ExecutionPlan;
+use super::scheduler::Scheduler;
 use super::*;
-use crate::lang::core::DepGraph;
-use std::cell::RefCell;
 
+/// A compiled, stateful synchronous dataflow monitor.
+///
+/// Each tick evaluates expression sources, resolves reconfiguration points, updates the dependency
+/// schedule, evaluates every remaining stream once, and commits staged temporal state. Static
+/// monitors are the empty-reconfiguration specialization of the same flow.
 pub struct DataflowMonitor {
     input_vars: Vec<VarName>,
     output_vars: Vec<VarName>,
-    output_ids: Vec<EnvironmentId>,
-    // These vectors share stable indices. `evaluation_order` contains indices into them and may
-    // change without invalidating environment IDs or moving persistent executor state.
+    output_slots: Vec<EnvironmentSlot>,
     stream_vars: Vec<VarName>,
-    static_dependencies: BTreeMap<VarName, BTreeSet<VarName>>,
-    dynamic_dependencies: Vec<Vec<EnvironmentId>>,
-    environment_vars: Vec<VarName>,
-    stream_ids: Vec<EnvironmentId>,
-    stream_executors: Vec<PlanExecutor>,
-    evaluation_order: Vec<usize>,
+    stream_evaluators: Vec<StreamEvaluator>,
+    execution_plan: ExecutionPlan,
+    scheduler: Scheduler,
     environment_values: Vec<Value>,
-    has_dynamic_dependencies: bool,
     failed: bool,
 }
 
 impl DataflowMonitor {
-    pub(in crate::dataflow) fn from_compiled_parts(
+    pub(in crate::dataflow) fn new(
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
-        output_ids: Vec<EnvironmentId>,
+        output_slots: Vec<EnvironmentSlot>,
         stream_vars: Vec<VarName>,
-        static_dependencies: BTreeMap<VarName, BTreeSet<VarName>>,
-        stream_executors: Vec<PlanExecutor>,
+        stream_evaluators: Vec<StreamEvaluator>,
+        execution_plan: ExecutionPlan,
         environment_size: usize,
     ) -> Self {
-        debug_assert_eq!(output_vars.len(), output_ids.len());
-        debug_assert_eq!(stream_vars.len(), stream_executors.len());
-        debug_assert_eq!(environment_size, input_vars.len() + stream_executors.len());
-        debug_assert!(output_ids.iter().all(|id| id.index() < environment_size));
-        let stream_ids = (input_vars.len()..environment_size)
-            .map(EnvironmentId::new)
-            .collect::<Vec<_>>();
-        let evaluation_order = (0..stream_executors.len()).collect();
-        let dynamic_dependencies = vec![Vec::new(); stream_executors.len()];
-        let mut environment_vars = vec![None; environment_size];
-        for (index, var) in input_vars.iter().enumerate() {
-            environment_vars[index] = Some(var.clone());
-        }
-        for (index, &id) in stream_ids.iter().enumerate() {
-            environment_vars[id.index()] = Some(stream_vars[index].clone());
-        }
-        let environment_vars = environment_vars
-            .into_iter()
-            .map(|var| var.expect("every dataflow environment slot must have a variable"))
-            .collect();
-        let has_dynamic_dependencies = stream_executors
-            .iter()
-            .any(PlanExecutor::may_reconfigure_dependencies);
+        debug_assert_eq!(output_vars.len(), output_slots.len());
+        debug_assert_eq!(stream_vars.len(), stream_evaluators.len());
+        debug_assert_eq!(environment_size, input_vars.len() + stream_evaluators.len());
+        debug_assert!(
+            output_slots
+                .iter()
+                .all(|slot| slot.index() < environment_size)
+        );
+
+        let scheduler = Scheduler::new(
+            execution_plan.stream_slots,
+            &execution_plan.dependencies,
+            &execution_plan.reconfiguration,
+        );
+
         Self {
             input_vars,
             output_vars,
-            output_ids,
+            output_slots,
             stream_vars,
-            static_dependencies,
-            dynamic_dependencies,
-            environment_vars,
-            stream_ids,
-            stream_executors,
-            evaluation_order,
+            stream_evaluators,
+            execution_plan,
+            scheduler,
             environment_values: vec![Value::NoVal; environment_size],
-            has_dynamic_dependencies,
             failed: false,
         }
     }
@@ -84,151 +72,134 @@ impl DataflowMonitor {
         &mut self,
         input: &[Value],
         output: &mut [Value],
-    ) -> Result<(), DataflowEvalError> {
+    ) -> Result<(), DataflowEvaluationError> {
         if self.failed {
-            return Err(DataflowEvalError::MonitorFailed);
+            return Err(DataflowEvaluationError::MonitorFailed);
         }
         if input.len() != self.input_vars.len() {
-            return Err(DataflowEvalError::InputCount {
+            return Err(DataflowEvaluationError::InputCountMismatch {
                 expected: self.input_vars.len(),
                 actual: input.len(),
             });
         }
         if output.len() != self.output_vars.len() {
-            return Err(DataflowEvalError::OutputCount {
+            return Err(DataflowEvaluationError::OutputCountMismatch {
                 expected: self.output_vars.len(),
                 actual: output.len(),
             });
         }
-        let result = if self.has_dynamic_dependencies {
-            self.evaluate_transactionally(input)
-        } else {
-            // Every computed slot is overwritten exactly once in the known static order, so the
-            // static path only needs to replace the input prefix.
-            self.environment_values[..input.len()].clone_from_slice(input);
-            self.evaluate_static_streams()
-        };
-        if let Err(error) = result {
+
+        if let Err(error) = self.execute_tick(input) {
             self.failed = true;
             return Err(error);
         }
-        self.commit_delays();
-
-        for (value, &stream_id) in output.iter_mut().zip(&self.output_ids) {
-            *value = self.environment_values[stream_id.index()].clone();
-        }
+        self.write_outputs(output);
         Ok(())
     }
 
-    fn reset_environment(&mut self, input: &[Value]) {
-        self.environment_values.fill(Value::NoVal);
+    fn execute_tick(&mut self, input: &[Value]) -> Result<(), DataflowEvaluationError> {
+        self.load_inputs(input);
+        self.evaluate_expression_sources();
+        self.resolve_reconfiguration_points()?;
+        self.scheduler.update_schedule(
+            &self.execution_plan.dependencies,
+            &self.execution_plan.reconfiguration,
+            &self.stream_vars,
+        )?;
+        self.evaluate_scheduled_streams()?;
+        self.commit_temporal_state();
+        Ok(())
+    }
+
+    fn load_inputs(&mut self, input: &[Value]) {
+        if !self.execution_plan.reconfiguration.is_empty() {
+            self.environment_values.fill(Value::NoVal);
+        }
         self.environment_values[..input.len()].clone_from_slice(input);
     }
 
-    fn commit_delays(&mut self) {
-        for executor in &mut self.stream_executors {
-            executor.commit_delays(&self.environment_values);
+    fn evaluate_expression_sources(&mut self) {
+        let first_stream_slot = self.execution_plan.stream_slots.start().index();
+        for &stream in self.execution_plan.reconfiguration.evaluation_order() {
+            let value = self.stream_evaluators[stream.index()]
+                .evaluate_infallible_and_stage(&self.environment_values);
+            self.environment_values[first_stream_slot + stream.index()] = value;
         }
     }
 
-    fn evaluate_transactionally(&mut self, input: &[Value]) -> Result<(), DataflowEvalError> {
-        // A speculative pass may discover dependencies which invalidate the order used for that
-        // pass. Every retry therefore starts from the same pre-tick executor state.
-        let snapshot = self.stream_executors.clone();
-        let previous_order = self.evaluation_order.clone();
-        let mut order = previous_order.clone();
-        let max_attempts = self
-            .stream_executors
-            .len()
-            .saturating_mul(self.stream_executors.len())
-            .saturating_add(2);
+    fn resolve_reconfiguration_points(&mut self) -> Result<(), DataflowEvaluationError> {
+        let reconfiguration = &self.execution_plan.reconfiguration;
+        let environment_values = &self.environment_values;
+        let stream_evaluators = &mut self.stream_evaluators;
+        let scheduler = &mut self.scheduler;
 
-        for _ in 0..max_attempts {
-            self.stream_executors.clone_from(&snapshot);
-            self.reset_environment(input);
-            self.evaluation_order.clone_from(&order);
-            let observed = match self.evaluate_streams_observing_dependencies() {
-                Ok(observed) => observed,
-                Err(error) => {
-                    self.stream_executors = snapshot;
-                    self.evaluation_order = previous_order;
-                    self.reset_environment(input);
-                    return Err(error);
-                }
-            };
-            let next_order = match self.order_for(&observed) {
-                Ok(next_order) => next_order,
-                Err(error) => {
-                    self.stream_executors = snapshot;
-                    self.evaluation_order = previous_order;
-                    self.reset_environment(input);
-                    return Err(error);
-                }
-            };
-            // The pass is valid precisely when its order is also the order induced by every
-            // dependency it observed. The observed edges can change without requiring a retry
-            // when the existing order already satisfies them.
-            if next_order == order {
-                self.dynamic_dependencies = observed;
-                return Ok(());
+        for stream in self
+            .execution_plan
+            .dependencies
+            .reconfigurable_streams()
+            .iter()
+        {
+            let dependencies = scheduler.begin_dynamic_dependency_update(stream);
+            for point in reconfiguration.points_for(stream) {
+                debug_assert_eq!(point.stream, stream);
+                let source_value = point.source.read_value(environment_values);
+                let dependency_slots = stream_evaluators[stream.index()]
+                    .resolve_reconfiguration_point(point.node, source_value)?;
+                dependencies.extend(dependency_slots);
             }
-            order = next_order;
-        }
-
-        self.stream_executors = snapshot;
-        self.evaluation_order = previous_order;
-        self.reset_environment(input);
-        Err(DataflowEvalError::DynamicSchedulingDidNotConverge)
-    }
-
-    fn evaluate_static_streams(&mut self) -> Result<(), DataflowEvalError> {
-        for &executor_index in &self.evaluation_order {
-            let value = self.stream_executors[executor_index]
-                .evaluate_observing_deferred(&self.environment_values, None)?;
-            self.environment_values[self.stream_ids[executor_index].index()] = value;
+            dependencies.finish();
         }
         Ok(())
     }
 
-    fn evaluate_streams_observing_dependencies(
-        &mut self,
-    ) -> Result<Vec<Vec<EnvironmentId>>, DataflowEvalError> {
-        let mut observed = vec![Vec::new(); self.stream_executors.len()];
-        for &executor_index in &self.evaluation_order {
-            let dependencies = RefCell::new(Vec::new());
-            let value = self.stream_executors[executor_index]
-                .evaluate_observing_deferred(&self.environment_values, Some(&dependencies))?;
-            self.environment_values[self.stream_ids[executor_index].index()] = value;
-            observed[executor_index] = dependencies.into_inner();
+    fn evaluate_scheduled_streams(&mut self) -> Result<(), DataflowEvaluationError> {
+        let schedule = self.scheduler.execution_schedule();
+        if schedule.uses_static_order() && self.execution_plan.all_streams_infallible {
+            self.evaluate_infallible_static_order();
+        } else if schedule.uses_static_order() {
+            self.try_evaluate_static_order()?;
+        } else {
+            self.try_evaluate_scheduled_order()?;
         }
-        Ok(observed)
+        Ok(())
     }
 
-    fn order_for(
-        &self,
-        dynamic_dependencies: &[Vec<EnvironmentId>],
-    ) -> Result<Vec<usize>, DataflowEvalError> {
-        let mut dependencies = self.static_dependencies.clone();
-        for (stream, dynamic) in self.stream_vars.iter().zip(dynamic_dependencies) {
-            dependencies
-                .get_mut(stream)
-                .expect("compiled stream must have a dependency entry")
-                .extend(
-                    dynamic
-                        .iter()
-                        .map(|id| self.environment_vars[id.index()].clone()),
-                );
+    fn evaluate_infallible_static_order(&mut self) {
+        let first_stream_slot = self.execution_plan.stream_slots.start().index();
+        for (index, evaluator) in self.stream_evaluators.iter_mut().enumerate() {
+            let value = evaluator.evaluate_infallible_and_stage(&self.environment_values);
+            self.environment_values[first_stream_slot + index] = value;
         }
-        let stream_set = self.stream_vars.iter().cloned().collect::<BTreeSet<_>>();
-        let ordered = DepGraph::from_dependencies(dependencies)
-            .topological_streams(&stream_set)
-            .map_err(DataflowEvalError::DynamicDependencyCycle)?;
-        let indices = self
-            .stream_vars
-            .iter()
-            .enumerate()
-            .map(|(index, var)| (var, index))
-            .collect::<BTreeMap<_, _>>();
-        Ok(ordered.into_iter().map(|var| indices[&var]).collect())
+    }
+
+    fn try_evaluate_static_order(&mut self) -> Result<(), DataflowEvaluationError> {
+        let first_stream_slot = self.execution_plan.stream_slots.start().index();
+        for (index, evaluator) in self.stream_evaluators.iter_mut().enumerate() {
+            let value = evaluator.evaluate_and_stage(&self.environment_values)?;
+            self.environment_values[first_stream_slot + index] = value;
+        }
+        Ok(())
+    }
+
+    fn try_evaluate_scheduled_order(&mut self) -> Result<(), DataflowEvaluationError> {
+        for &stream in self.scheduler.execution_schedule().evaluation_order() {
+            let value = self.stream_evaluators[stream.index()]
+                .evaluate_and_stage(&self.environment_values)?;
+            let slot = self.execution_plan.stream_slots.slot(stream);
+            self.environment_values[slot.index()] = value;
+        }
+        Ok(())
+    }
+
+    fn commit_temporal_state(&mut self) {
+        for stream in self.execution_plan.temporal_streams.iter() {
+            self.stream_evaluators[stream.index()].commit_temporal_state(&self.environment_values);
+        }
+    }
+
+    fn write_outputs(&self, output: &mut [Value]) {
+        for (value, &slot) in output.iter_mut().zip(&self.output_slots) {
+            *value = self.environment_values[slot.index()].clone();
+        }
     }
 }

@@ -96,9 +96,9 @@ fn compilation_phases(c: &mut Criterion) {
         let typed = source
             .parse::<CheckedDsrvSpecification>()
             .expect("benchmark input should type check");
-        DataflowMonitor::try_compile_untyped(parsed.clone())
+        DataflowMonitor::compile_untyped(parsed.clone())
             .expect("benchmark input should compile untyped");
-        DataflowMonitor::try_compile_checked(typed.clone())
+        DataflowMonitor::compile_checked(typed.clone())
             .expect("benchmark input should compile typed");
 
         group.throughput(Throughput::Bytes(source.len() as u64));
@@ -143,7 +143,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b| {
                 b.iter_batched(
                     || parsed.clone(),
-                    |spec| black_box(DataflowMonitor::try_compile_untyped(spec).unwrap()),
+                    |spec| black_box(DataflowMonitor::compile_untyped(spec).unwrap()),
                     BatchSize::SmallInput,
                 )
             },
@@ -153,7 +153,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b| {
                 b.iter_batched(
                     || typed.clone(),
-                    |spec| black_box(DataflowMonitor::try_compile_checked(spec).unwrap()),
+                    |spec| black_box(DataflowMonitor::compile_checked(spec).unwrap()),
                     BatchSize::SmallInput,
                 )
             },
@@ -165,7 +165,7 @@ fn compilation_phases(c: &mut Criterion) {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
                     let typed = type_check(parsed, false).unwrap();
-                    black_box(DataflowMonitor::try_compile_checked(typed).unwrap())
+                    black_box(DataflowMonitor::compile_checked(typed).unwrap())
                 })
             },
         );
@@ -177,7 +177,7 @@ fn compilation_phases(c: &mut Criterion) {
                     let parsed = parse_str(black_box(source)).unwrap();
                     let typed = type_check(parsed, false).unwrap();
                     black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
-                    black_box(DataflowMonitor::try_compile_checked(typed).unwrap())
+                    black_box(DataflowMonitor::compile_checked(typed).unwrap())
                 })
             },
         );
@@ -249,7 +249,7 @@ fn indexed_arena_comparison(c: &mut Criterion) {
         let typed = source
             .parse::<CheckedDsrvSpecification>()
             .expect("balanced scalar source should type check");
-        let mut monitor = DataflowMonitor::try_compile_checked(typed.clone())
+        let mut monitor = DataflowMonitor::compile_checked(typed.clone())
             .expect("balanced scalar source should compile");
 
         group.throughput(Throughput::Elements(nodes));
@@ -272,7 +272,7 @@ fn indexed_arena_comparison(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("compile_production_arena", nodes), |b| {
             b.iter_batched(
                 || typed.clone(),
-                |spec| black_box(DataflowMonitor::try_compile_checked(spec).unwrap()),
+                |spec| black_box(DataflowMonitor::compile_checked(spec).unwrap()),
                 BatchSize::SmallInput,
             )
         });

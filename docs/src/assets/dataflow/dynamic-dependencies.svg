@@ -1,53 +1,91 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 405" role="img" aria-labelledby="dynamic-dependencies-arrow-title dynamic-dependencies-arrow-desc" style="width:100%;max-width:920px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="dynamic-dependencies-arrow-title">Transactional reordering for changing dynamic dependencies</title>
-<desc id="dynamic-dependencies-arrow-desc">On one tick, definitions b plus one and x create edge b to a and order b then a. On a later tick, definitions x and a plus one atomically replace the active edges and produce order a then b. The monitor snapshots state, evaluates and collects edges, checks for cycles, sorts, and retries if the order changed while environment slots remain fixed.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" role="img" aria-labelledby="dynamic-dependencies-arrow-title dynamic-dependencies-arrow-desc" style="width:100%;max-width:1000px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="dynamic-dependencies-arrow-title">Potential dependency graph, scope matrix, and runtime schedule repair</title>
+<desc id="dynamic-dependencies-arrow-desc">The full dashed potential graph and compile-time matrix both show that dynamic stream a may read x or b and dynamic stream b may read x or a; self reads are excluded. Dependency arrows point from a stream to what it reads. At runtime tick n, source values activate a to b to x and repair cached order a then b to b then a. At the next runtime tick, new source values activate b to a to x and repair the cached order back to a then b. The ticks are consecutive logical input rows, not stages of one evaluation.</desc>
 <defs>
   <marker id="dynamic-dependencies-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
   </marker>
 </defs>
-<text x="24" y="28" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Active definitions determine the order</text>
-<text x="35" y="68" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#17212b">tick n</text>
-<rect x="105" y="44" width="250" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="230" y="68" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a = &quot;b + 1&quot;; b = &quot;x&quot;</text>
-<text x="230" y="87" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">actual computed edge: b → a</text>
-<rect x="425" y="44" width="190" height="58" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="520" y="68" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">topological sort</text>
-<text x="520" y="87" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">static + active edges</text>
-<rect x="685" y="44" width="190" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="780" y="68" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">order [b, a]</text>
-<text x="780" y="87" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">write fixed slots</text>
-<line x1="355" y1="73" x2="425" y2="73" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="615" y1="73" x2="685" y2="73" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<text x="35" y="146" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#17212b">tick n+1</text>
-<rect x="105" y="122" width="250" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="230" y="146" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a = &quot;x&quot;; b = &quot;a + 1&quot;</text>
-<text x="230" y="165" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">replace together: a → b</text>
-<rect x="425" y="122" width="190" height="58" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="520" y="146" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">topological sort</text>
-<text x="520" y="165" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">reject cycle if present</text>
-<rect x="685" y="122" width="190" height="58" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="780" y="146" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">order [a, b]</text>
-<text x="780" y="165" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">same EnvironmentIds</text>
-<line x1="355" y1="151" x2="425" y2="151" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="615" y1="151" x2="685" y2="151" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="25" y1="207" x2="895" y2="207" stroke="#a8b3bf" stroke-width="1"/>
-<text x="24" y="237" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">One reordering tick is a transaction</text>
-<rect x="25" y="258" width="150" height="62" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="100" y="285" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">snapshot state</text>
-<text x="100" y="304" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">before the tick</text>
-<rect x="220" y="258" width="180" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="310" y="285" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluate + collect</text>
-<text x="310" y="304" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">all active free variables</text>
-<rect x="445" y="258" width="185" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="537" y="285" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">replace edges + sort</text>
-<text x="537" y="304" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">changes are atomic</text>
-<rect x="675" y="258" width="220" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="785" y="285" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">restore + retry if changed</text>
-<text x="785" y="304" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">commit one state advance</text>
-<line x1="175" y1="289" x2="220" y2="289" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="400" y1="289" x2="445" y2="289" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="630" y1="289" x2="675" y2="289" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<path d="M 785 320 C 785 365, 310 365, 310 320" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
-<text x="548" y="388" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">repeat until observed dependencies match the evaluation order</text>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Scope permissions, active dependencies, and schedule repair</text>
+<text x="960" y="27" text-anchor="end" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">dependency arrow: A -&gt; B means A reads B</text>
+<rect x="25" y="48" width="950" height="180" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="45" y="76" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Compile-time scope permissions</text>
+<rect x="130" y="94" width="100" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="180" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
+<rect x="60" y="170" width="100" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="110" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
+<rect x="200" y="170" width="100" height="38" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="250" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
+<line x1="110" y1="170" x2="155" y2="132" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
+<line x1="250" y1="170" x2="205" y2="132" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
+<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
+<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="390" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="455" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">stream</text>
+<rect x="520" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="585" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
+<rect x="650" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="715" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
+<rect x="780" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="845" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
+<rect x="390" y="132" width="130" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="455" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
+<rect x="520" y="132" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="585" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
+<rect x="650" y="132" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="715" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">—</text>
+<rect x="780" y="132" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="845" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
+<rect x="390" y="170" width="130" height="38" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="455" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
+<rect x="520" y="170" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="585" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
+<rect x="650" y="170" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="715" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
+<rect x="780" y="170" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="845" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">—</text>
+<rect x="25" y="248" width="950" height="155" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="45" y="276" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Runtime tick n</text>
+<text x="165" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">source values</text>
+<text x="535" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active dependencies</text>
+<text x="857" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">schedule</text>
+<rect x="45" y="314" width="245" height="36" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="167" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a_source = &quot;b + 1&quot;</text>
+<rect x="45" y="357" width="245" height="36" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="167" y="380" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b_source = &quot;x&quot;</text>
+<rect x="350" y="330" width="90" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="395" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
+<rect x="490" y="330" width="90" height="44" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="535" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
+<rect x="630" y="330" width="90" height="44" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="675" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
+<line x1="440" y1="352" x2="490" y2="352" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<line x1="580" y1="352" x2="630" y2="352" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="775" y="310" width="165" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="857" y="334" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">cached [a, b]</text>
+<rect x="775" y="360" width="165" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="857" y="384" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">repaired [b, a]</text>
+<line x1="857" y1="348" x2="857" y2="360" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="25" y="423" width="950" height="155" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="45" y="451" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Runtime tick n + 1</text>
+<text x="165" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">source values</text>
+<text x="535" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active dependencies</text>
+<text x="857" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">schedule</text>
+<rect x="45" y="489" width="245" height="36" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="167" y="512" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a_source = &quot;x&quot;</text>
+<rect x="45" y="532" width="245" height="36" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="167" y="555" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b_source = &quot;a + 1&quot;</text>
+<rect x="350" y="505" width="90" height="44" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="395" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
+<rect x="490" y="505" width="90" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="535" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
+<rect x="630" y="505" width="90" height="44" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="675" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
+<line x1="440" y1="527" x2="490" y2="527" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<line x1="580" y1="527" x2="630" y2="527" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="775" y="485" width="165" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="857" y="509" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">cached [b, a]</text>
+<rect x="775" y="535" width="165" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="857" y="559" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">repaired [a, b]</text>
+<line x1="857" y1="523" x2="857" y2="535" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
 </svg>

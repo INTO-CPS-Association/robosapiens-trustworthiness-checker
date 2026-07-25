@@ -1,41 +1,41 @@
-use super::super::plan::*;
+use super::super::ir::*;
 use super::super::*;
 use super::lifting::propagated_special;
-use super::plan_executor::{PlanEvalContext, PlanExecutor};
+use super::stream_evaluator::{EvaluationContext, StreamEvaluator};
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
-pub(in crate::dataflow) fn eval_function_op(
-    func: &BoundFunctionDef,
-    context: PlanEvalContext<'_>,
+pub(in crate::dataflow) fn evaluate_function(
+    func: &StreamFunction,
+    context: EvaluationContext<'_>,
     function: &mut Option<RuntimeFunction>,
     captures: &Rc<RefCell<Vec<Value>>>,
 ) -> Value {
-    for (value, source) in captures.borrow_mut().iter_mut().zip(&func.capture_sources) {
-        *value = context.inputs[source.index()].clone();
+    for (value, source) in captures.borrow_mut().iter_mut().zip(&func.capture_slots) {
+        *value = context.environment_values[source.index()].clone();
     }
     let function = function.get_or_insert_with(|| {
         let display = func.display.clone();
-        let plan = Rc::clone(&func.plan);
+        let program = Rc::clone(&func.program);
         let captures = Rc::clone(captures);
-        let param_count = func.params.len();
-        let temporal = func.plan.body.has_temporal_state();
+        let parameter_count = func.parameters.len();
+        let temporal = func.program.requires_temporal_commit();
         RuntimeFunction::value_factory(display, temporal, move || {
-            let executor = Rc::new(RefCell::new(PlanExecutor::new(Rc::clone(&plan))));
+            let evaluator = Rc::new(RefCell::new(StreamEvaluator::new(Rc::clone(&program))));
             let captures = Rc::clone(&captures);
             Rc::new(move |args| {
-                if args.len() != param_count {
+                if args.len() != parameter_count {
                     return Err(anyhow::anyhow!(
                         "Function expected {} arguments, got {}",
-                        param_count,
+                        parameter_count,
                         args.len()
                     ));
                 }
                 let mut values = captures.borrow().clone();
                 values.extend(args);
-                executor
+                evaluator
                     .borrow_mut()
-                    .evaluate(&values, None)
+                    .evaluate_and_commit(&values, None)
                     .map_err(anyhow::Error::from)
             })
         })
@@ -43,40 +43,41 @@ pub(in crate::dataflow) fn eval_function_op(
     Value::Function(function.clone())
 }
 
-struct DataflowFunctionCall {
-    plan: Rc<ExecutablePlan>,
-    values_template: Vec<Value>,
-    capture_count: usize,
-    param_count: usize,
-    frames: RefCell<Vec<DataflowFunctionFrame>>,
+struct RecursiveCall {
+    program: Rc<StreamProgram>,
+    environment_template: Vec<Value>,
+    parameter_count: usize,
+    available_frames: RefCell<Vec<CallFrame>>,
 }
 
-struct DataflowFunctionFrame {
-    executor: PlanExecutor,
-    values: Vec<Value>,
+struct CallFrame {
+    evaluator: StreamEvaluator,
+    environment_values: Vec<Value>,
 }
 
-impl DataflowFunctionCall {
-    fn new(func: &BoundFunctionDef, _tick: usize, context: PlanEvalContext<'_>) -> Self {
+impl RecursiveCall {
+    fn new(func: &StreamFunction, context: EvaluationContext<'_>) -> Self {
         let mut values = func
-            .capture_sources
+            .capture_slots
             .iter()
-            .map(|source| context.inputs[source.index()].clone())
+            .map(|source| context.environment_values[source.index()].clone())
             .collect::<Vec<_>>();
-        values.resize(func.capture_sources.len() + func.params.len(), Value::NoVal);
+        values.resize(
+            func.capture_slots.len() + func.parameters.len(),
+            Value::NoVal,
+        );
         Self {
-            plan: Rc::clone(&func.plan),
-            values_template: values,
-            capture_count: func.capture_sources.len(),
-            param_count: func.params.len(),
-            frames: RefCell::new(Vec::new()),
+            program: Rc::clone(&func.program),
+            environment_template: values,
+            parameter_count: func.parameters.len(),
+            available_frames: RefCell::new(Vec::new()),
         }
     }
 
-    fn new_frame(&self) -> DataflowFunctionFrame {
-        DataflowFunctionFrame {
-            executor: PlanExecutor::new(Rc::clone(&self.plan)),
-            values: self.values_template.clone(),
+    fn new_frame(&self) -> CallFrame {
+        CallFrame {
+            evaluator: StreamEvaluator::new(Rc::clone(&self.program)),
+            environment_values: self.environment_template.clone(),
         }
     }
     fn call_recursive(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
@@ -92,35 +93,39 @@ impl DataflowFunctionCall {
         args: EcoVec<Value>,
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
     ) -> anyhow::Result<Value> {
-        if self.param_count != args.len() {
+        if self.parameter_count != args.len() {
             return Err(anyhow::anyhow!(
                 "Function expected {} arguments, got {}",
-                self.param_count,
+                self.parameter_count,
                 args.len()
             ));
         }
 
         let mut frame = self
-            .frames
+            .available_frames
             .borrow_mut()
             .pop()
             .unwrap_or_else(|| self.new_frame());
 
-        for (slot, value) in frame.values[self.capture_count..].iter_mut().zip(args) {
+        let parameter_start = frame.environment_values.len() - self.parameter_count;
+        for (slot, value) in frame.environment_values[parameter_start..]
+            .iter_mut()
+            .zip(args)
+        {
             *slot = value;
         }
 
-        frame.executor.reset_state();
+        frame.evaluator.reset();
         let value = frame
-            .executor
-            .evaluate(&frame.values, recursive_call)
-            .expect("function plans cannot contain fallible dynamic operators");
-        self.frames.borrow_mut().push(frame);
+            .evaluator
+            .evaluate_and_commit(&frame.environment_values, recursive_call)
+            .expect("function programs cannot contain fallible dynamic operators");
+        self.available_frames.borrow_mut().push(frame);
         Ok(value)
     }
 }
 
-pub(in crate::dataflow) fn eval_apply_op(
+pub(in crate::dataflow) fn evaluate_apply(
     func: Value,
     args: EcoVec<Value>,
     active_function: &mut Option<RuntimeFunction>,
@@ -145,50 +150,52 @@ pub(in crate::dataflow) fn eval_apply_op(
     call_runtime_function_once(function, args)
 }
 
-pub(in crate::dataflow) fn eval_direct_apply_op(
-    func: &BoundFunctionDef,
+pub(in crate::dataflow) fn evaluate_direct_apply(
+    func: &StreamFunction,
     args: EcoVec<Value>,
-    context: PlanEvalContext<'_>,
-    executor: &mut PlanExecutor,
-    values: &mut [Value],
+    context: EvaluationContext<'_>,
+    evaluator: &mut StreamEvaluator,
+    environment_values: &mut [Value],
 ) -> Value {
-    let capture_count = func.capture_sources.len();
-    debug_assert_eq!(values.len(), capture_count + func.params.len());
-    debug_assert_eq!(args.len(), func.params.len());
+    let capture_count = func.capture_slots.len();
+    debug_assert_eq!(
+        environment_values.len(),
+        capture_count + func.parameters.len()
+    );
+    debug_assert_eq!(args.len(), func.parameters.len());
 
-    for (slot, source) in values[..capture_count]
+    for (slot, source) in environment_values[..capture_count]
         .iter_mut()
-        .zip(&func.capture_sources)
+        .zip(&func.capture_slots)
     {
-        *slot = context.inputs[source.index()].clone();
+        *slot = context.environment_values[source.index()].clone();
     }
-    for (slot, value) in values[capture_count..].iter_mut().zip(args) {
+    for (slot, value) in environment_values[capture_count..].iter_mut().zip(args) {
         *slot = value;
     }
 
-    executor
-        .evaluate_observing_deferred(values, None)
-        .expect("direct function plans cannot contain fallible dynamic operators")
+    evaluator
+        .evaluate_and_stage(environment_values)
+        .expect("direct function programs cannot contain fallible dynamic operators")
 }
 
-pub(in crate::dataflow) fn eval_direct_fix_apply_op(
-    func: &BoundFunctionDef,
+pub(in crate::dataflow) fn evaluate_recursive_apply(
+    func: &StreamFunction,
     args: EcoVec<Value>,
-    tick: usize,
-    context: PlanEvalContext<'_>,
+    context: EvaluationContext<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;
     }
 
-    let call = DataflowFunctionCall::new(func, tick, context);
+    let call = RecursiveCall::new(func, context);
     call.call_recursive(args)
         .expect("direct recursive function application failed")
 }
 
-pub(in crate::dataflow) fn eval_recursive_call_op(
+pub(in crate::dataflow) fn evaluate_recursive_call(
     args: EcoVec<Value>,
-    context: PlanEvalContext<'_>,
+    context: EvaluationContext<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;
@@ -199,7 +206,7 @@ pub(in crate::dataflow) fn eval_recursive_call_op(
     recursive_call(args)
 }
 
-pub(in crate::dataflow) fn eval_partial_op(
+pub(in crate::dataflow) fn evaluate_partial(
     func: Value,
     applied: EcoVec<Value>,
     display: EcoString,
@@ -216,7 +223,7 @@ pub(in crate::dataflow) fn eval_partial_op(
     partial_function(function, applied, display)
 }
 
-pub(in crate::dataflow) fn eval_fix_op(func: Value, display: EcoString) -> Value {
+pub(in crate::dataflow) fn evaluate_fix(func: Value, display: EcoString) -> Value {
     match func {
         Value::NoVal => Value::NoVal,
         Value::Deferred => Value::Deferred,
@@ -225,7 +232,7 @@ pub(in crate::dataflow) fn eval_fix_op(func: Value, display: EcoString) -> Value
     }
 }
 
-pub(in crate::dataflow) fn eval_list_map_op(func: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_map(func: Value, list: Value) -> Value {
     if let Some(value) = propagated_special([&func, &list]) {
         return value;
     }
@@ -248,7 +255,7 @@ pub(in crate::dataflow) fn eval_list_map_op(func: Value, list: Value) -> Value {
     }
 }
 
-pub(in crate::dataflow) fn eval_list_filter_op(func: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_filter(func: Value, list: Value) -> Value {
     if let Some(value) = propagated_special([&func, &list]) {
         return value;
     }
@@ -277,7 +284,7 @@ pub(in crate::dataflow) fn eval_list_filter_op(func: Value, list: Value) -> Valu
     }
 }
 
-pub(in crate::dataflow) fn eval_list_fold_op(func: Value, init: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_fold(func: Value, init: Value, list: Value) -> Value {
     if let Some(value) = propagated_special([&func, &init, &list]) {
         return value;
     }

@@ -607,7 +607,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_untyped(arithmetic_spec.clone()).unwrap();
+                        DataflowMonitor::compile_untyped(arithmetic_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -618,7 +618,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_untyped(function_spec.clone()).unwrap();
+                        DataflowMonitor::compile_untyped(function_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &function_input_columns(size))
                 })
             },
@@ -629,8 +629,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_checked(typed_arithmetic_spec.clone())
-                            .unwrap();
+                        DataflowMonitor::compile_checked(typed_arithmetic_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -641,7 +640,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_untyped(if_arithmetic_spec.clone()).unwrap();
+                        DataflowMonitor::compile_untyped(if_arithmetic_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -652,8 +651,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_checked(typed_if_arithmetic_spec.clone())
-                            .unwrap();
+                        DataflowMonitor::compile_checked(typed_if_arithmetic_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -664,7 +662,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_checked(typed_function_spec.clone()).unwrap();
+                        DataflowMonitor::compile_checked(typed_function_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &function_input_columns(size))
                 })
             },
@@ -675,8 +673,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_untyped(direct_function_if_spec.clone())
-                            .unwrap();
+                        DataflowMonitor::compile_untyped(direct_function_if_spec.clone()).unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
             },
@@ -687,7 +684,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_checked(typed_direct_function_if_spec.clone())
+                        DataflowMonitor::compile_checked(typed_direct_function_if_spec.clone())
                             .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
@@ -699,7 +696,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             |b, &size| {
                 b.iter(|| {
                     let mut monitor =
-                        DataflowMonitor::try_compile_untyped(recursive_function_if_spec.clone())
+                        DataflowMonitor::compile_untyped(recursive_function_if_spec.clone())
                             .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
@@ -710,10 +707,9 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor = DataflowMonitor::try_compile_checked(
-                        typed_recursive_function_if_spec.clone(),
-                    )
-                    .unwrap();
+                    let mut monitor =
+                        DataflowMonitor::compile_checked(typed_recursive_function_if_spec.clone())
+                            .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
             },

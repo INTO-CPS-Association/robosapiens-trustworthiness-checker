@@ -160,6 +160,14 @@ name = "time_dependent_property"
 harness = false
 
 [[bench]]
+name = "dataflow_runtime"
+harness = false
+
+[[bench]]
+name = "dataflow_allocations"
+harness = false
+
+[[bench]]
 name = "threshold_property"
 harness = false
 

@@ -8,7 +8,7 @@ pub(in crate::dataflow) fn expect_value(
     result.unwrap_or_else(|error| panic!("{error}"))
 }
 
-pub(in crate::dataflow) fn stream_lift_value(value: Value, last: &mut Option<Value>) -> Value {
+pub(in crate::dataflow) fn retain_last_value(value: Value, last: &mut Option<Value>) -> Value {
     match value {
         Value::NoVal => last.clone().unwrap_or(Value::NoVal),
         value => {
@@ -79,7 +79,7 @@ pub(in crate::dataflow) fn lift_unary_with_state(
     value: Value,
     last: &mut Option<Value>,
 ) -> Value {
-    let value = stream_lift_value(value, last);
+    let value = retain_last_value(value, last);
     if value == Value::NoVal || value == Value::Deferred {
         return value;
     }
@@ -90,11 +90,11 @@ pub(in crate::dataflow) fn lift_binary_with_state(
     op: BinaryOperator,
     lhs: Value,
     rhs: Value,
-    lhs_last: &mut Option<Value>,
-    rhs_last: &mut Option<Value>,
+    last_left: &mut Option<Value>,
+    last_right: &mut Option<Value>,
 ) -> Value {
-    let lhs = stream_lift_value(lhs, lhs_last);
-    let rhs = stream_lift_value(rhs, rhs_last);
+    let lhs = retain_last_value(lhs, last_left);
+    let rhs = retain_last_value(rhs, last_right);
     if lhs == Value::NoVal || rhs == Value::NoVal {
         return Value::NoVal;
     }

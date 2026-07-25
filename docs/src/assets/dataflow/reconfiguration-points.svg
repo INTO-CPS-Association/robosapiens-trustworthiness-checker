@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 620" role="img" aria-labelledby="reconfiguration-points-arrow-title reconfiguration-points-arrow-desc" style="width:100%;max-width:920px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="reconfiguration-points-arrow-title">Current value flow through three reconfiguration points</title>
+<desc id="reconfiguration-points-arrow-desc">Sensor and baseline feed static stream score. Point one is the defer expression for limit; its current formula score plus ten activates score to limit, while baseline is permitted by the scope but is shown as one dashed inactive edge. The fixed decision equation contains point two and point three. Point two currently reads score and limit, so both feed it. Point three reads enabled. Their Boolean values are combined into the final decision output. Each orange point also names its source input and current formula.</desc>
+<defs>
+  <marker id="reconfiguration-points-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Current value flow for the example model</text>
+<rect x="35" y="48" width="22" height="18" rx="3" fill="#fff1e6" stroke="#b54708" stroke-width="2"/>
+<text x="67" y="62" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">reconfiguration point</text>
+<line x1="255" y1="57" x2="315" y2="57" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<text x="327" y="62" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active value flow</text>
+<line x1="495" y1="57" x2="555" y2="57" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)" stroke-dasharray="5 4"/>
+<text x="567" y="62" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">allowed value source, inactive now</text>
+<rect x="55" y="95" width="120" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="115" y="121" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">sensor</text>
+<rect x="245" y="95" width="120" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="305" y="121" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">baseline</text>
+<rect x="735" y="95" width="120" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="795" y="121" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">enabled</text>
+<rect x="215" y="180" width="180" height="56" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="305" y="206" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">score</text>
+<text x="305" y="224" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">sensor - baseline</text>
+<line x1="115" y1="137" x2="240" y2="180" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<line x1="305" y1="137" x2="305" y2="180" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<rect x="215" y="285" width="290" height="96" rx="7" fill="#fff1e6" stroke="#b54708" stroke-width="2"/>
+<text x="360" y="310" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Point 1: limit = defer(limit_source)</text>
+<text x="360" y="336" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current: &quot;score + 10&quot;</text>
+<text x="360" y="360" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">scope: score, baseline</text>
+<line x1="305" y1="236" x2="305" y2="285" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<path d="M 365 116 C 565 145, 585 320, 505 330" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#reconfiguration-points-arrow)"/>
+<text x="575" y="235" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">baseline is allowed but unused</text>
+<rect x="85" y="415" width="770" height="185" rx="8" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="105" y="441" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">decision = point 2 &amp;&amp; point 3</text>
+<rect x="115" y="465" width="285" height="96" rx="7" fill="#fff1e6" stroke="#b54708" stroke-width="2"/>
+<text x="257" y="490" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Point 2: dynamic(rule_source)</text>
+<text x="257" y="516" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current: &quot;score &gt; limit&quot;</text>
+<text x="257" y="540" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">scope: score, limit</text>
+<rect x="555" y="465" width="270" height="96" rx="7" fill="#fff1e6" stroke="#b54708" stroke-width="2"/>
+<text x="690" y="490" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Point 3: dynamic(gate_source)</text>
+<text x="690" y="516" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current: &quot;enabled&quot;</text>
+<text x="690" y="540" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">scope: enabled</text>
+<path d="M 235 236 C 75 285, 65 430, 115 500" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<line x1="330" y1="381" x2="300" y2="465" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<path d="M 795 137 C 895 245, 895 430, 825 500" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<rect x="420" y="535" width="95" height="48" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="467" y="564" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">decision</text>
+<line x1="400" y1="535" x2="420" y2="553" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+<line x1="555" y1="535" x2="515" y2="553" stroke="#65758b" stroke-width="1.8" marker-end="url(#reconfiguration-points-arrow)"/>
+</svg>

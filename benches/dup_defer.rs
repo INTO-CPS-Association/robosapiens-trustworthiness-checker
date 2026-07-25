@@ -151,7 +151,7 @@ fn dataflow_dynamic_phases(c: &mut Criterion) {
         let spec = source
             .parse::<DsrvSpecification>()
             .expect("dynamic phase benchmark specification should parse");
-        DataflowMonitor::try_compile_untyped(spec).unwrap()
+        DataflowMonitor::compile_untyped(spec).unwrap()
     }
 
     fn row(monitor: &DataflowMonitor) -> Vec<Value> {

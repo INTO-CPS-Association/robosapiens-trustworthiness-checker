@@ -1,160 +1,198 @@
-use super::super::execution::plan_executor::PlanExecutor;
+use super::super::execution::stream_evaluator::StreamEvaluator;
+use super::super::execution_plan::{ExecutionPlan, StreamSlots};
+use super::super::ir::*;
 use super::super::monitor::DataflowMonitor;
-use super::super::plan::*;
 use super::super::*;
 use super::lower::*;
-use crate::lang::core::DepGraph;
+use crate::lang::core::DepGraph as NamedDependencyGraph;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 
 impl TryFrom<DsrvSpecification> for DataflowMonitor {
-    type Error = DataflowCompileError;
+    type Error = DataflowCompilationError;
 
-    fn try_from(spec: DsrvSpecification) -> Result<Self, Self::Error> {
-        DataflowMonitor::try_compile_untyped(spec)
+    fn try_from(specification: DsrvSpecification) -> Result<Self, Self::Error> {
+        DataflowMonitor::compile_untyped(specification)
     }
 }
 
 impl TryFrom<CheckedDsrvSpecification> for DataflowMonitor {
-    type Error = DataflowCompileError;
+    type Error = DataflowCompilationError;
 
-    fn try_from(spec: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
-        Self::try_compile_checked(spec)
+    fn try_from(specification: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
+        Self::compile_checked(specification)
     }
 }
 
 impl DataflowMonitor {
-    pub fn try_compile_checked(
-        spec: CheckedDsrvSpecification,
-    ) -> Result<Self, DataflowCompileError> {
-        Self::try_compile_spec(spec, lower_checked_expr_plan)
+    pub fn compile_checked(
+        specification: CheckedDsrvSpecification,
+    ) -> Result<Self, DataflowCompilationError> {
+        Self::compile_specification(specification, build_checked_expression_graph)
     }
 
-    pub fn try_compile_untyped(spec: DsrvSpecification) -> Result<Self, DataflowCompileError> {
-        Self::try_compile_spec(spec, lower_expr_plan)
+    pub fn compile_untyped(
+        specification: DsrvSpecification,
+    ) -> Result<Self, DataflowCompilationError> {
+        Self::compile_specification(specification, build_expression_graph)
     }
 
-    fn try_compile_spec<S>(
-        spec: S,
-        lower: impl Fn(S::Expr) -> UnboundPlanBody,
-    ) -> Result<Self, DataflowCompileError>
+    fn compile_specification<S>(
+        specification: S,
+        build_graph: impl Fn(S::Expr) -> UnboundEvaluationGraph,
+    ) -> Result<Self, DataflowCompilationError>
     where
         S: Specification,
     {
-        let input_vars = spec.input_vars().into_iter().collect::<Vec<_>>();
-        let output_vars = spec.output_vars().into_iter().collect::<Vec<_>>();
-        let stream_vars = spec.stream_vars();
-        let program = LoweredProgram::build(&input_vars, &stream_vars, |var| {
-            spec.var_expr(var).map(&lower)
+        let input_variables = specification.input_vars().into_iter().collect::<Vec<_>>();
+        let output_variables = specification.output_vars().into_iter().collect::<Vec<_>>();
+        let stream_variables = specification.stream_vars();
+        let dataflow = LoweredDataflow::build(&input_variables, &stream_variables, |variable| {
+            specification.var_expr(variable).map(&build_graph)
         })?;
-        program.into_monitor(input_vars, output_vars)
+        dataflow.into_monitor(input_variables, output_variables)
     }
 }
 
-struct LoweredProgram {
-    plans: BTreeMap<VarName, UnboundPlanBody>,
-    dependencies: BTreeMap<VarName, BTreeSet<VarName>>,
+pub(in crate::dataflow) type NamedDependencies = BTreeMap<VarName, BTreeSet<VarName>>;
+
+struct LoweredDataflow {
+    graphs: BTreeMap<VarName, UnboundEvaluationGraph>,
+    static_dependencies: NamedDependencies,
 }
 
-type OrderedPlans = (
-    Vec<(VarName, UnboundPlanBody)>,
-    BTreeMap<VarName, BTreeSet<VarName>>,
-);
+struct OrderedDataflow {
+    streams: Vec<LoweredStream>,
+    static_dependencies: NamedDependencies,
+}
 
-impl LoweredProgram {
+struct LoweredStream {
+    name: VarName,
+    graph: UnboundEvaluationGraph,
+}
+
+impl LoweredDataflow {
     fn build(
-        input_vars: &[VarName],
-        stream_vars: &BTreeSet<VarName>,
-        mut build: impl FnMut(&VarName) -> Option<UnboundPlanBody>,
-    ) -> Result<Self, DataflowCompileError> {
-        let available = input_vars
+        input_variables: &[VarName],
+        stream_variables: &BTreeSet<VarName>,
+        mut build_graph: impl FnMut(&VarName) -> Option<UnboundEvaluationGraph>,
+    ) -> Result<Self, DataflowCompilationError> {
+        let available_variables = input_variables
             .iter()
-            .chain(stream_vars)
+            .chain(stream_variables)
             .cloned()
             .collect::<BTreeSet<_>>();
-        let mut plans = BTreeMap::new();
-        let mut dependencies = BTreeMap::new();
-        for var in stream_vars {
-            let mut body =
-                build(var).ok_or_else(|| DataflowCompileError::MissingExpression(var.clone()))?;
-            body.configure_dynamic_scope(var, input_vars, stream_vars);
-            let free_vars = body.free_vars(Some(var));
-            let unsupported = free_vars
-                .iter()
-                .filter(|input| !available.contains(*input))
-                .cloned()
+        let mut graphs = BTreeMap::new();
+        let mut static_dependencies = NamedDependencies::new();
+        for variable in stream_variables {
+            let mut graph = build_graph(variable)
+                .ok_or_else(|| DataflowCompilationError::MissingExpression(variable.clone()))?;
+            graph.resolve_automatic_dynamic_scopes(variable, input_variables, stream_variables);
+            let unavailable_variables = graph
+                .free_vars(Some(variable))
+                .into_iter()
+                .filter(|dependency| !available_variables.contains(dependency))
                 .collect::<Vec<_>>();
-            if !unsupported.is_empty() {
-                return Err(DataflowCompileError::UnavailableInputs {
-                    stream: var.clone(),
-                    inputs: unsupported,
+            if !unavailable_variables.is_empty() {
+                return Err(DataflowCompilationError::UnavailableVariables {
+                    stream: variable.clone(),
+                    variables: unavailable_variables,
                 });
             }
-            dependencies.insert(var.clone(), body.immediate_free_vars(Some(var)));
-            plans.insert(var.clone(), body);
+            static_dependencies.insert(variable.clone(), graph.same_tick_free_vars(Some(variable)));
+            graphs.insert(variable.clone(), graph);
         }
         Ok(Self {
-            plans,
-            dependencies,
+            graphs,
+            static_dependencies,
         })
     }
 
-    fn into_ordered(self) -> Result<OrderedPlans, DataflowCompileError> {
-        let stream_vars = self.plans.keys().cloned().collect::<BTreeSet<_>>();
-        let ordered = DepGraph::from_dependencies(self.dependencies.clone())
-            .topological_streams(&stream_vars)
-            .map_err(DataflowCompileError::DependencyCycle)?;
-        debug_assert_eq!(ordered.len(), self.plans.len());
-        let mut plans = self.plans;
-        let ordered = ordered
+    fn into_static_order(self) -> Result<OrderedDataflow, DataflowCompilationError> {
+        let stream_variables = self.graphs.keys().cloned().collect::<BTreeSet<_>>();
+        let ordered_names =
+            NamedDependencyGraph::from_dependencies(self.static_dependencies.clone())
+                .topological_streams(&stream_variables)
+                .map_err(DataflowCompilationError::DependencyCycle)?;
+        debug_assert_eq!(ordered_names.len(), self.graphs.len());
+        let mut graphs = self.graphs;
+        let streams = ordered_names
             .into_iter()
-            .map(|var| {
-                let body = plans
-                    .remove(&var)
-                    .expect("dependency graph stream must have a lowered plan");
-                (var, body)
+            .map(|name| {
+                let graph = graphs
+                    .remove(&name)
+                    .expect("dependency graph stream must have a lowered evaluation graph");
+                LoweredStream { name, graph }
             })
             .collect();
-        debug_assert!(plans.is_empty());
-        Ok((ordered, self.dependencies))
+        debug_assert!(graphs.is_empty());
+        Ok(OrderedDataflow {
+            streams,
+            static_dependencies: self.static_dependencies,
+        })
     }
 
     fn into_monitor(
         self,
-        input_vars: Vec<VarName>,
-        output_vars: Vec<VarName>,
-    ) -> Result<DataflowMonitor, DataflowCompileError> {
-        let (plans, dependencies) = self.into_ordered()?;
-        let stream_vars = plans.iter().map(|(var, _)| var.clone()).collect::<Vec<_>>();
-        let environment = Rc::new(EnvironmentLayout::from_vars(
-            input_vars
+        input_variables: Vec<VarName>,
+        output_variables: Vec<VarName>,
+    ) -> Result<DataflowMonitor, DataflowCompilationError> {
+        let OrderedDataflow {
+            streams,
+            static_dependencies,
+        } = self.into_static_order()?;
+        let stream_variables = streams
+            .iter()
+            .map(|stream| stream.name.clone())
+            .collect::<Vec<_>>();
+        let environment_layout = Rc::new(EnvironmentLayout::from_variables(
+            input_variables
                 .iter()
                 .cloned()
-                .chain(plans.iter().map(|(var, _)| var.clone())),
+                .chain(streams.iter().map(|stream| stream.name.clone())),
         ));
-        let output_ids = output_vars
+        let output_slots = output_variables
             .iter()
-            .map(|var| {
-                environment
-                    .get(var)
-                    .ok_or_else(|| DataflowCompileError::UnknownOutput(var.clone()))
+            .map(|variable| {
+                environment_layout
+                    .slot(variable)
+                    .ok_or_else(|| DataflowCompilationError::UnknownOutput(variable.clone()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        debug_assert!(output_ids.iter().all(|id| id.index() < environment.len()));
+        debug_assert!(
+            output_slots
+                .iter()
+                .all(|slot| slot.index() < environment_layout.len())
+        );
 
-        let mut stream_executors = Vec::with_capacity(plans.len());
-        for (var, body) in plans {
-            let plan = body.bind(Some(var), Rc::clone(&environment))?;
-            stream_executors.push(PlanExecutor::new(plan));
-        }
+        let stream_programs = streams
+            .into_iter()
+            .map(|LoweredStream { name, graph }| {
+                graph.bind_graph(Some(name), Rc::clone(&environment_layout))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let stream_slots = StreamSlots::new(
+            EnvironmentSlot::new(input_variables.len()),
+            stream_programs.len(),
+        );
+        let execution_plan = ExecutionPlan::build(
+            stream_slots,
+            &stream_variables,
+            &static_dependencies,
+            &stream_programs,
+        )?;
+        let stream_evaluators = stream_programs
+            .into_iter()
+            .map(StreamEvaluator::new)
+            .collect();
 
-        Ok(DataflowMonitor::from_compiled_parts(
-            input_vars,
-            output_vars,
-            output_ids,
-            stream_vars,
-            dependencies,
-            stream_executors,
-            environment.len(),
+        Ok(DataflowMonitor::new(
+            input_variables,
+            output_variables,
+            output_slots,
+            stream_variables,
+            stream_evaluators,
+            execution_plan,
+            environment_layout.len(),
         ))
     }
 }

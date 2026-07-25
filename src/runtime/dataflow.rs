@@ -9,7 +9,7 @@ use smol::LocalExecutor;
 use unsync::spsc;
 
 use crate::core::{ExecutionPolicy, InputStream, OutputHandler, OutputStream, Runtime, Value};
-use crate::dataflow::{DataflowCompileError, DataflowMonitor};
+use crate::dataflow::{DataflowCompilationError, DataflowMonitor};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::stream_utils::channel_to_output_stream;
 
@@ -19,14 +19,14 @@ const DATAFLOW_OUTPUT_BATCH_CHANNEL_SIZE: usize = 1024;
 pub struct DataflowRuntime {
     input_stream: InputStream<Value>,
     output_handler: Box<dyn OutputHandler<Val = Value>>,
-    monitor: Result<DataflowMonitor, DataflowCompileError>,
+    monitor: Result<DataflowMonitor, DataflowCompilationError>,
     execution_policy: ExecutionPolicy,
 }
 
 pub struct DataflowRuntimeBuilder<S>
 where
     S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompileError>,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
 {
     model: Option<S>,
     input: Option<InputStream<Value>>,
@@ -37,7 +37,7 @@ where
 impl<S> DataflowRuntimeBuilder<S>
 where
     S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompileError>,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
 {
     pub fn execution_policy(self, execution_policy: ExecutionPolicy) -> Self {
         Self {
@@ -59,7 +59,7 @@ where
 impl<S> RuntimeBuilder<S, Value> for DataflowRuntimeBuilder<S>
 where
     S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompileError>,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
 {
     type Runtime = DataflowRuntime;
 
