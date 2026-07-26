@@ -1,44 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="defer-arrow-title">Deferred expression lifecycle and special values</title>
-<desc id="defer-arrow-desc">Before activation, NoVal and Deferred each propagate. Defer then installs the first accepted string in one StreamEvaluator permanently. Later strings, NoVal, and Deferred sources all tick the installed program. An installed NoVal result repeats its last result, while Deferred becomes the retained result.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="defer-arrow-title">Defer keeps the first active evaluator</title>
+<desc id="defer-arrow-desc">No evaluator is active before the first definition. The first string activates evaluator A and starts its delay rings. A later string and Deferred both advance A without replacing its program or state.</desc>
 <defs>
   <marker id="defer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
   </marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">defer: first accepted string fixes the program</text>
-<rect x="35" y="48" width="210" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="140" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">accepted source string</text>
-<text x="140" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">parse + type/scope check</text>
-<rect x="330" y="48" width="260" height="64" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="460" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">bind StreamProgram</text>
-<text x="460" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">existing EnvironmentLayout</text>
-<rect x="675" y="48" width="250" height="64" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="800" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">install StreamEvaluator</text>
-<text x="800" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fresh StreamState + dependencies</text>
-<line x1="245" y1="80" x2="330" y2="80" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="590" y1="80" x2="675" y2="80" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="25" y1="145" x2="935" y2="145" stroke="#a8b3bf" stroke-width="1"/>
-<rect x="35" y="175" width="180" height="68" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="125" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NoVal / Deferred</text>
-<text x="125" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">before activation: propagate</text>
-<rect x="275" y="175" width="180" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="365" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x + 1&quot;</text>
-<text x="365" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">install once; evaluate</text>
-<rect x="515" y="175" width="180" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="605" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">later &quot;x * 2&quot;</text>
-<text x="605" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">ignore source; evaluate x + 1</text>
-<rect x="755" y="175" width="180" height="68" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="845" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NoVal / Deferred</text>
-<text x="845" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">evaluate installed program</text>
-<line x1="215" y1="209" x2="275" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="455" y1="209" x2="515" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="695" y1="209" x2="755" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<rect x="155" y="285" width="250" height="68" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="280" y="317" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">installed result NoVal</text>
-<text x="280" y="335" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">repeat installed last result</text>
-<rect x="555" y="285" width="250" height="68" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="680" y="317" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">installed result Deferred</text>
-<text x="680" y="335" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">replace retained result</text>
-<text x="480" y="390" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">After activation every tick advances exactly the same StreamEvaluator</text>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">defer keeps its first evaluator</text>
+<text x="135" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 10</text>
+<rect x="35" y="75" width="200" height="54" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="135" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NoVal</text>
+<text x="365" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 11</text>
+<rect x="265" y="75" width="200" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="365" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x + 1&quot;</text>
+<text x="595" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 12</text>
+<rect x="495" y="75" width="200" height="54" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="595" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x * 2&quot;</text>
+<text x="825" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 13</text>
+<rect x="725" y="75" width="200" height="54" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="825" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred</text>
+<line x1="235" y1="102" x2="265" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="465" y1="102" x2="495" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="695" y1="102" x2="725" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="25" y1="160" x2="935" y2="160" stroke="#a8b3bf" stroke-width="1"/>
+<text x="35" y="192" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">active evaluator</text>
+<rect x="265" y="218" width="660" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="595" y="251" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator A: &quot;x + 1&quot;</text>
+<text x="595" y="269" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">delay rings start here and remain continuous</text>
+<line x1="365" y1="129" x2="365" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="595" y1="129" x2="595" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="825" y1="129" x2="825" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<text x="375" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">activate</text>
+<text x="605" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
+<text x="835" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
 </svg>

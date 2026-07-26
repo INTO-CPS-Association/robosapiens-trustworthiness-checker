@@ -1336,7 +1336,7 @@ fn dataflow_defer_reorders_once_and_ignores_later_definitions() {
 }
 
 #[test]
-fn dataflow_rejects_nested_reconfiguration_before_installation() {
+fn dataflow_rejects_nested_reconfiguration_before_activation() {
     let spec_src = "in source: Str\nin secret: Int\nout z: Int\nz = dynamic(source: Int, {source})";
     let spec = spec_src.parse::<DsrvSpecification>().unwrap();
     let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();

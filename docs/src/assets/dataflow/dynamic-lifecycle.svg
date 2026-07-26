@@ -1,44 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" role="img" aria-labelledby="dynamic-arrow-title dynamic-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="dynamic-arrow-title">Dynamic expression lifecycle and special values</title>
-<desc id="dynamic-arrow-desc">Before activation, NoVal and Deferred each propagate. Dynamic installs the first accepted string, reuses the evaluator for an equal or NoVal source, advances the active evaluator but emits Deferred for a Deferred source, and replaces evaluator state, dependencies, and retained result for a changed string. Active NoVal results repeat the current definition's last result; Deferred is retained.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" role="img" aria-labelledby="dynamic-arrow-title dynamic-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="dynamic-arrow-title">Dynamic evaluator replacement and activation-scoped history</title>
+<desc id="dynamic-arrow-desc">Dynamic source text equal to the active definition reuses evaluator A. Changed text drops A and activates a fresh evaluator B. Returning later to the old text drops B and creates a fresh evaluator C rather than reviving A. Each evaluator owns separate per-delay rings, and positive-delay history starts on that evaluator's activation tick without backfill.</desc>
 <defs>
   <marker id="dynamic-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
   </marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">dynamic: source and result special values</text>
-<rect x="35" y="48" width="210" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="140" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">accepted source string</text>
-<text x="140" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">parse + type/scope check</text>
-<rect x="330" y="48" width="260" height="64" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="460" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">bind StreamProgram</text>
-<text x="460" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">existing EnvironmentLayout</text>
-<rect x="675" y="48" width="250" height="64" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="800" y="78" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">install StreamEvaluator</text>
-<text x="800" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fresh StreamState + dependencies</text>
-<line x1="245" y1="80" x2="330" y2="80" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
-<line x1="590" y1="80" x2="675" y2="80" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
-<line x1="25" y1="145" x2="935" y2="145" stroke="#a8b3bf" stroke-width="1"/>
-<rect x="35" y="175" width="180" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="125" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x + 1&quot;</text>
-<text x="125" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">install fresh evaluator</text>
-<rect x="275" y="175" width="180" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="365" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">same string / NoVal</text>
-<text x="365" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">reuse; evaluate active</text>
-<rect x="515" y="175" width="180" height="68" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="605" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred source</text>
-<text x="605" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active advances; emit Deferred</text>
-<rect x="755" y="175" width="180" height="68" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="845" y="207" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x * 2&quot;</text>
-<text x="845" y="225" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">replace state + last result</text>
-<rect x="155" y="285" width="250" height="68" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="280" y="317" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">active result NoVal</text>
-<text x="280" y="335" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">repeat this definition's last result</text>
-<rect x="555" y="285" width="250" height="68" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="680" y="317" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">active result Deferred</text>
-<text x="680" y="335" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">retain Deferred as last result</text>
-<line x1="215" y1="209" x2="275" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
-<line x1="455" y1="209" x2="515" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
-<line x1="695" y1="209" x2="755" y2="209" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
-<text x="480" y="390" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Before activation: NoVal -&gt; NoVal, Deferred -&gt; Deferred; other non-strings fail</text>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">dynamic: source text selects an evaluator lifetime</text>
+<text x="35" y="62" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">activation timeline</text>
+<rect x="35" y="82" width="200" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="135" y="115" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">tick 10: &quot;x + 1&quot;</text>
+<text x="135" y="133" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">activate A • history starts</text>
+<rect x="265" y="82" width="200" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="365" y="115" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">tick 11: &quot;x + 1&quot;</text>
+<text x="365" y="133" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">equal text • reuse A</text>
+<rect x="495" y="82" width="200" height="70" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="595" y="115" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">tick 12: &quot;x * 2&quot;</text>
+<text x="595" y="133" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">drop A • activate fresh B</text>
+<rect x="725" y="82" width="200" height="70" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="825" y="115" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">tick 13: &quot;x + 1&quot;</text>
+<text x="825" y="133" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">drop B • activate fresh C</text>
+<line x1="235" y1="117" x2="265" y2="117" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
+<line x1="465" y1="117" x2="495" y2="117" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
+<line x1="695" y1="117" x2="725" y2="117" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-arrow)"/>
+<line x1="25" y1="185" x2="935" y2="185" stroke="#a8b3bf" stroke-width="1"/>
+<text x="35" y="217" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">per-activation delay history</text>
+<rect x="35" y="237" width="270" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="170" y="269" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator A</text>
+<text x="170" y="287" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">rings begin tick 10; advance tick 11</text>
+<rect x="345" y="237" width="270" height="68" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="480" y="269" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">fresh evaluator B</text>
+<text x="480" y="287" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">new rings begin tick 12</text>
+<rect x="655" y="237" width="270" height="68" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="790" y="269" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">fresh evaluator C</text>
+<text x="790" y="287" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">new rings begin tick 13</text>
+<text x="480" y="345" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">A and C have equal source text, but never share evaluator state or delay rings</text>
+<text x="480" y="371" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Positive-delay history starts on each activation tick; earlier rows are not backfilled</text>
 </svg>

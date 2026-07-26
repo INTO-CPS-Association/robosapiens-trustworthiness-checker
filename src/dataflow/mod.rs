@@ -68,8 +68,9 @@
 //! resolve runtime definitions and their exact dependencies, execute stream programs in dependency
 //! order while filling stable environment slots, commit temporal writes, and project outputs. This
 //! compile-once translation from synchronous stream equations to a dependency-ordered sequential
-//! machine follows the approach of Lustre [[2]], applied to the DSRV language and dynamic-property
-//! semantics introduced as DynSRV [[1]]. [`DataflowMonitor`] is the synchronous row interface;
+//! machine follows the approach of Lustre [[2]], applied to the DSRV dynamic-property semantics
+//! described in the language's original publication [[1]]. [`DataflowMonitor`] is the synchronous
+//! row interface;
 //! [`crate::runtime::dataflow::DataflowRuntimeBuilder`] adapts it to [`crate::core::InputStream`] and
 //! [`crate::core::OutputHandler`].
 //!
@@ -82,7 +83,7 @@
 //!
 //! [`DataflowMonitor::compile_checked`] accepts a [`crate::CheckedDsrvSpecification`]. Its equations
 //! are already type checked, and that checked type environment and each expected result type are
-//! retained so later `dynamic`/`defer` source strings are type checked at installation time.
+//! retained so later `dynamic`/`defer` source strings are type checked when they become active.
 //! [`DataflowMonitor::compile_untyped`] accepts a [`DsrvSpecification`], lowers its untyped
 //! expressions directly, and runtime-compiles dynamic definitions without a type-checking pass.
 //! Parsing a [`DsrvSpecification`] alone does not make it typed.
@@ -232,6 +233,29 @@
 //!   variants include `Delay`, `LazyIf`, `Function`, `PersistentCall`, and `Dynamic`, in addition to
 //!   the lifting state used by ordinary operators.
 //!
+//! ### Temporal state across a tick
+//!
+//! A logical tick needs both the current environment row and history from completed earlier ticks.
+//! Updating a delay ring as soon as its node runs would mix those time frames: another node evaluated
+//! later in the same tick could observe a current value as though it belonged to the past. The runtime
+//! therefore separates computing a tick from making that tick historical.
+//!
+//! During evaluation, delays read only committed history. **Staging** records that a temporal write is
+//! due without exposing the new sample in the ring. An ordinary delay marks a pending capture; its
+//! operand is read later from the completed environment row. A recursive delay stages the enclosing
+//! stream result after that result is known.
+//!
+//! After all scheduled streams have produced the current row, the monitor performs the **temporal
+//! commit**. It traverses stateful evaluators and pushes ordinary and recursive captures into their
+//! respective rings. Those samples become visible as history on the next logical tick. This is a
+//! temporal visibility boundary, not a general transaction: non-temporal state changes are not rolled
+//! back if evaluation fails.
+//!
+//! <figure style="margin:1.25rem 0">
+#![doc = include_str!("../../docs/src/assets/dataflow/history-retention.svg")]
+//! <figcaption>Both delay forms read history committed before tick n. A recursive self-delay feeds an earlier stream output into the body and stages the completed output back to its ring; both delay forms commit their new samples after row n completes.</figcaption>
+//! </figure>
+//!
 //! `StreamEvaluator::evaluate_infallible_and_stage` uses
 //! `execution::interpreter::evaluate_nodes`; `evaluate_and_stage` selects that same fast path for an
 //! infallible program or `try_evaluate_nodes` for a fallible one. `EvaluationContext` contains the
@@ -247,7 +271,7 @@
 //!    will be recomputed.
 //! 2. Evaluate, once and in static order, the infallible prerequisite streams needed to produce
 //!    `dynamic`/`defer` source values.
-//! 3. Resolve every reconfiguration point without evaluating its installed expression, collecting
+//! 3. Resolve every reconfiguration point without evaluating its active expression, collecting
 //!    the active expression's same-tick dependency slots.
 //! 4. Ask `Scheduler` to retain its cached order when valid or repair it with iterative DFS; reject
 //!    a same-tick runtime cycle.
@@ -270,44 +294,63 @@
 //!
 //! ## History management
 //!
-//! Top-level delays do not retain complete environment rows. Each positive `Delay` or
-//! `RecursiveDelay` node owns a `NodeState::Delay(DelayState)`: a circular `values` buffer with
-//! exactly as many entries as the requested offset, write/fill cursors, lifted last output, and
-//! pending-write state. For example, `x[3]` behaves as follows:
+//! ### Per-index delay history
 //!
-//! | tick | current `x` | retained before push | result |
-//! |-----:|------------:|:---------------------|:-------|
+//! The dataflow runtime does not retain complete environment rows or a shared historical sequence for
+//! every variable. Instead, each positive `Delay` or `RecursiveDelay` node owns a
+//! `NodeState::Delay(DelayState)`: a circular buffer with exactly as many entries as the requested
+//! offset, together with read/write cursors, a lifted last output, and pending-write state. For
+//! example, a statically compiled `x[3]` behaves as follows:
+//!
+//! | logical tick | current `x` | ring before commit | result |
+//! |-------------:|------------:|:-------------------|:-------|
 //! | 1 | 10 | empty | `Deferred` |
 //! | 2 | 20 | `[10]` | `Deferred` |
 //! | 3 | 30 | `[10, 20]` | `Deferred` |
 //! | 4 | 40 | `[10, 20, 30]` | 10 |
 //!
-//! An offset of zero lifts the current value without allocating a ring. Positive offsets store
-//! `Deferred` as a sample; when a stored `NoVal` emerges, ordinary output lifting applies. A
-//! positive ordinary delay reads history and stages a capture during node evaluation, then pushes
-//! its operand during the post-row commit. A `RecursiveDelay` similarly reads during the forward
-//! pass and stages the enclosing stream value after output computation; the same post-row traversal
-//! applies that write. A failed tick never reaches this commit traversal, so pending ordinary and
-//! recursive writes do not alter retained history.
+//! An offset of zero lifts the current value without allocating a ring. A positive delay returns
+//! `Deferred` until its ring has received enough samples. `Deferred` is stored as a sample; when a
+//! stored `NoVal` emerges, ordinary output lifting applies. Each syntactic index owns a separate
+//! ring, so repeated indices such as `x[2] + x[2]` have independent equivalent histories rather than
+//! sharing a per-variable buffer.
 //!
-//! <figure style="margin:1.25rem 0">
-#![doc = include_str!("../../docs/src/assets/dataflow/history-retention.svg")]
-//! <figcaption>Each index owns a fixed-size ring; recursive history is staged after output and committed after the row, and dynamic history belongs to the installed evaluator.</figcaption>
-//! </figure>
+//! ### How delay nodes participate
 //!
-//! Nested and repeated indices own separate rings, so retained storage is bounded by the sum of
-//! offsets in active programs rather than shared per variable. A dynamic or deferred definition owns
-//! a nested evaluator: reuse preserves its history, replacement drops it, and a new definition starts
-//! without samples from before installation. Other stateful operations retain only their documented
-//! last values or flags. Offsets are converted from `u64` to `usize` and allocated eagerly; the
-//! compiler does not yet impose a configurable maximum history size.
+//! A positive ordinary delay reads its existing ring during evaluation and stages a write. During
+//! the post-row temporal commit, it reads its operand from the completed environment and pushes that
+//! value into the ring. A `RecursiveDelay` similarly reads retained history during the forward pass,
+//! but stages the enclosing stream's completed output. The same post-row traversal commits that
+//! value.
 //!
-//! These structures encode the scheduling invariants visible in the diagrams: an immediate stream
-//! read observes a producer scheduled earlier, a historical stream read observes retained state and
-//! captures from the completed row, and a program node reads an earlier node slot. Ordinary lazy
-//! branches advance independent state (recursive calls select one branch), persistent function call
-//! sites retain nested evaluators (recursive frames reset per invocation), and recursive delays are
-//! committed only after their enclosing output is known.
+//! If a tick fails before temporal commit, pending writes do not enter the rings. Other node state
+//! may already have changed because evaluation errors are terminal and the complete evaluator is not
+//! transactionally rolled back.
+//!
+//! ### State ownership and memory bounds
+//!
+//! State belongs to the node or nested evaluator that implements an operation:
+//!
+//! | owner | retained state |
+//! |:------|:---------------|
+//! | Positive `Delay` or `RecursiveDelay` | A fixed-capacity ring and pending-write state. |
+//! | Ordinary `if` | Independent persistent `StreamState` values for both branches. |
+//! | Persistent function call site | A nested evaluator, including delay rings in the function body. |
+//! | Recursive function call | Resettable frames used for the active recursive evaluation. |
+//! | `dynamic` or `defer` | Source/result lifting state, an outer-environment shadow, and an optional active evaluator. |
+//! | Other lifted operations | Their required last operands, values, or control flags. |
+//!
+//! Delay storage is proportional to the sum of positive offsets across top-level evaluators and all
+//! retained nested evaluators. Replacing a `dynamic` evaluator releases its rings when the old
+//! evaluator is dropped. An activated `defer` evaluator remains retained until its enclosing state
+//! is reset or dropped. Offsets are converted from `u64` to `usize` and their rings are allocated
+//! eagerly; the compiler does not currently impose a configurable maximum history size.
+//!
+//! These structures also encode scheduling invariants: an immediate stream read observes a producer
+//! scheduled earlier, a historical read observes retained node state and captures from the completed
+//! row, and a program node reads an earlier node slot. Ordinary lazy branches advance independent
+//! state, persistent function call sites retain nested evaluators, recursive frames reset per
+//! invocation, and recursive delays commit only after their enclosing output is known.
 //!
 //! # `if` handling
 //!
@@ -488,7 +531,7 @@
 //! first formula. The surrounding `&&` and the rest of the model remain fixed, and a stream such as
 //! `decision` can contain more than one point.
 //!
-//! At the start of a tick, the monitor installs or reuses each formula and collects these active
+//! At the start of a tick, the monitor activates or reuses each formula and collects these active
 //! reads before evaluating the affected streams. When the containing stream later evaluates, the
 //! point behaves like an ordinary subexpression and contributes its current value to the fixed
 //! surrounding equation.
@@ -503,7 +546,7 @@
 //! `dynamic(source: T)` treats the current string value of `source` as a DSRV expression. `compiler::lower`
 //! lowers the construct to `ir::StreamOp::Dynamic` with a `ir::DynamicExpressionSpec`. The spec records
 //! the source operand, optional checked type information, allowed variables, and
-//! `ir::DynamicExpressionMode::Dynamic`. Because installation can fail at evaluation time, a graph
+//! `ir::DynamicExpressionMode::Dynamic`. Because activation can fail at evaluation time, a graph
 //! containing this node (including a nested branch graph) has `EvaluationMode::Fallible`.
 //!
 //! Scope resolution happens while the containing specification is compiled:
@@ -514,7 +557,7 @@
 //! - An explicit scope, as in `dynamic(source: T, {x, intermediate})`, is an allow-list. It restricts
 //!   which names a received expression may read, but unused names do not constrain scheduling.
 //! - Runtime lowering restricts any nested requested scopes to the outer allow-list. Nevertheless,
-//!   an installed expression that itself contains `dynamic` or `defer` is currently rejected with
+//!   an active expression that itself contains `dynamic` or `defer` is currently rejected with
 //!   [`DataflowEvaluationError::UnsupportedNestedReconfiguration`]; nested reconfiguration is not
 //!   supported.
 //!
@@ -528,9 +571,9 @@
 //! arrows follow the scheduler's convention: `A -> B` means “stream `A` reads stream `B`.” Execution
 //! therefore schedules `B` before `A`, opposite the direction in which the arrow is traversed.
 //! Automatic scopes for dynamic outputs `a` and `b` permit `a -> x`, `a -> b`, `b -> x`, and
-//! `b -> a`. Installing all four potential reads would invent an `a`/`b` cycle even on ticks where
+//! `b -> a`. Activating all four potential reads would invent an `a`/`b` cycle even on ticks where
 //! only one direction is used. The monitor instead activates only the names actually read by each
-//! installed expression.
+//! active expression.
 //!
 //! ```text
 //! in x: Int
@@ -557,8 +600,8 @@
 //! </figure>
 //!
 //! The `ExecutionPlan` determines source prerequisites and the `Scheduler` applies the tick phases
-//! listed above. Reconfiguration resolution installs or reuses programs and collects exact same-tick
-//! dependencies without evaluating the installed programs. The scheduler first checks its current
+//! listed above. Reconfiguration resolution activates or reuses programs and collects exact same-tick
+//! dependencies without evaluating the active programs. The scheduler first checks its current
 //! order and only runs its allocation-reusing iterative DFS when repair is needed; a cycle produces
 //! [`DataflowEvaluationError::DynamicDependencyCycle`]. `EnvironmentLayout` and bound
 //! `EnvironmentSlot` values remain stable; only stream IDs in the scheduled order change.
@@ -570,115 +613,251 @@
 //! produce [`DataflowCompilationError::UnsupportedReconfiguration`]. These constraints ensure source
 //! streams can run once before scheduling and then be omitted from the main execution order.
 //!
-//! ## Runtime compilation and state
+//! ## Temporal history of runtime-defined expressions
 //!
-//! During reconfiguration, `update_active_expression` compares the string with
-//! `DynamicExpressionState::active_expression`. A new string is parsed as a DSRV expression,
-//! optionally checked using the `StreamTypeEnvironment` and expected `TCType` retained by a checked
-//! `DynamicExpressionSpec`, lowered, checked against the resolved allow-list, and bound to the existing
-//! outer `EnvironmentLayout`. Its **same-tick** free variables become dependency slots; all free
-//! variables are still scope checked. The resulting `StreamProgram` is installed in a new
-//! `StreamEvaluator`. Repeating the same string reuses that evaluator, dependencies, and temporal
-//! state. Changing the string replaces those three and clears the dynamic node's retained result, so
-//! delay history such as `x[1]` begins at installation.
+//! Temporal history belongs to the operator that records it. A delay created inside a newly active
+//! expression starts with empty state; a delay that remains alive keeps the samples it has recorded.
+//! The Dataflow runtime does not maintain a monitor-wide archive from which new delays are backfilled.
 //!
-//! `DynamicExpressionState` also owns `last_source_value`, `last_result`, and two outer-environment
-//! vectors: `last_environment_values: Vec<Option<Value>>` and a private shadow
-//! `environment_values: Vec<Value>`. Before evaluating (and, when needed, committing) the installed
-//! program, every outer slot is lifted into that shadow: `NoVal` retains that slot's previous value,
-//! while `Deferred` replaces it. The installed evaluator reads and captures history from this shadow,
-//! not directly from the monitor row. The shadow survives a source replacement, but the installed
-//! evaluator's own node/delay history does not.
+//! ### How history becomes available
 //!
-//! The source and result are also lifted. In `Dynamic` mode, `NoVal` or `Deferred` still advances an
-//! installed evaluator to keep its timeline current, but the source special value is the node's raw
-//! result (`NoVal` therefore retains the prior dynamic output; `Deferred` replaces it). A string
-//! returns the installed expression's result. Before installation, `NoVal` yields `NoVal` and
-//! `Deferred` yields `Deferred`. A changed string clears the retained result, so an initial `NoVal`
-//! from the replacement cannot leak the old definition's output. Any non-string, non-special source
-//! produces [`DataflowEvaluationError::InvalidExpressionSource`]. Installation errors are terminal to
-//! the monitor.
+//! Consider a monitor whose expression source becomes `"x[2]"` only after two rows have already been
+//! processed:
+//!
+//! ```text
+//! in x: Int
+//! in source: Str
+//! out z: Int
+//!
+//! z = dynamic(source: Int)
+//! ```
+//!
+//! | tick | `x` | `source` | `z` | state recorded by the active `x[2]` |
+//! |-----:|----:|:---------|:----|:------------------------------------|
+//! | 0 | 10 | `NoVal` | `NoVal` | no active expression |
+//! | 1 | 20 | `NoVal` | `NoVal` | no active expression |
+//! | 2 | 30 | `"x[2]"` | `Deferred` | 30 |
+//! | 3 | 40 | `NoVal` | `Deferred` | 30, 40 |
+//! | 4 | 50 | `NoVal` | 30 | 40, 50 after producing 30 |
+//!
+//! The new delay does not receive 10 or 20. It sees 30 as its current operand on the activation tick,
+//! returns `Deferred`, and stages 30 as its first sample. At tick 3 it stages 40. At tick 4 the sample
+//! from tick 2 is two ticks old, so the expression can return 30. History is available to a new
+//! temporal expression as samples accumulate from its activation tick onward.
+//!
+//! ### Where the state lives
+//!
+//! A `dynamic` or `defer` node compiles its source string into a `StreamProgram` and evaluates it in a
+//! nested `StreamEvaluator`. That evaluator owns the operation state of the active expression,
+//! including one delay ring for each temporal operator. The surrounding node separately owns source
+//! and result lifting state, its active dependency set, and an environment shadow containing one
+//! current-or-lifted value for each available outer stream.
+//!
+//! The environment shadow lets a new expression use the current value of `x` immediately. It is not a
+//! sample archive: it cannot answer a new `x[1]` or `x[2]` using rows from before activation. A value
+//! retained in the shadow through an outer `NoVal` becomes the new evaluator's current sample, not a
+//! pre-activation sample.
+//!
+//! Reusing an evaluator preserves its operation state and delay rings. Replacing it keeps the
+//! surrounding environment shadow but clears the previous result, active dependencies, evaluator
+//! state, and delay rings. Temporal operators in the fixed surrounding specification are unaffected.
+//!
+//! <figure style="margin:1.25rem 0">
+#![doc = include_str!("../../docs/src/assets/dataflow/dynamic-history.svg")]
+//! <figcaption>Replacement creates fresh temporal state inside the active expression; temporal operators in the fixed surrounding specification continue.</figcaption>
+//! </figure>
+//!
+//! ## Activation, reuse, and replacement
+//!
+//! During reconfiguration, a new string is parsed as a DSRV expression, optionally type checked,
+//! lowered, checked against the resolved allow-list, and bound to the existing `EnvironmentLayout`.
+//! Its same-tick free variables become active dependency slots; all free variables are scope checked.
+//!
+//! `update_active_expression` compares the incoming string with the source text of the active
+//! expression. The first accepted string activates a fresh evaluator. Text equal to the current
+//! source reuses that evaluator, its dependencies, and all temporal state. Different text activates
+//! a fresh evaluator, recomputes dependencies, clears the retained dynamic result, and drops
+//! the previous evaluator state.
+//!
+//! Identity is textual rather than semantic: equivalent expressions with different text cause
+//! replacement. Replacement is also not a cache lookup. If the source changes from `"x[1]"` to
+//! `"x[0]"` and later returns to `"x[1]"`, the final string creates a third evaluator rather than
+//! recovering the first evaluator's history. The new evaluator consumes the replacement tick as its
+//! first tick; the discarded evaluator does not consume it. The lifecycle diagram follows this
+//! evaluator-A, evaluator-B, evaluator-C progression.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/dynamic-lifecycle.svg")]
-//! <figcaption>Equal source strings preserve evaluator state; a changed string installs a fresh evaluator.</figcaption>
+//! <figcaption>Equal source text preserves one evaluator timeline. Changed text drops that evaluator and activates a new one whose positive-delay history starts on the replacement tick.</figcaption>
 //! </figure>
 //!
-//! This example compiles once for the first two ticks, preserving the active program, then replaces it
-//! when the source changes:
+//! ## Source values and evaluator advancement
+//!
+//! Once active, the evaluator advances whenever the enclosing dynamic node evaluates,
+//! including ticks whose raw source is `NoVal` or `Deferred`. Source lifting happens first: `NoVal`
+//! repeats the previous source value if one exists, whereas a string or `Deferred` becomes the new
+//! retained source value. A `NoVal` after a string therefore behaves like that retained string; a
+//! `NoVal` after `Deferred` behaves like retained `Deferred`.
+//!
+//! An effective string exposes the active evaluator's result. An effective `Deferred` still advances
+//! the evaluator internally, preserving its temporal alignment, but makes `dynamic` emit `Deferred`.
+//! Result lifting retains the previous result when the evaluator returns `NoVal`; `Deferred` replaces
+//! it. A changed string clears the old retained result so a fresh definition cannot leak the previous
+//! definition's output.
+//!
+//! Before any string is accepted, there is no evaluator to advance: effective `NoVal` yields `NoVal`
+//! and `Deferred` yields `Deferred`. Any non-string, non-special source produces
+//! [`DataflowEvaluationError::InvalidExpressionSource`]. Parse, type, scope, binding, nested
+//! reconfiguration, and dependency-cycle errors are terminal to the monitor.
+//!
+//! For `z = dynamic(source: Int)`, the following sequence preserves the first `x[1]` history,
+//! replaces it with `x[0]`, and then activates a new `x[1]` evaluator:
 //!
 //! ```
-//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
-//! use trustworthiness_checker::dataflow::DataflowMonitor;
+//! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! # use trustworthiness_checker::dataflow::DataflowMonitor;
+//! # let spec = "in source: Str\nin x: Int\nout z: Int\nz = dynamic(source: Int)"
+//! #     .parse::<DsrvSpecification>().unwrap();
+//! # let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+//! # let input_vars = monitor.input_vars().to_vec();
+//! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {
+//! #     if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
+//! # }).collect::<Vec<_>>();
+//! # let mut output = vec![Value::NoVal];
+//! monitor.evaluate(&row(Value::Str("x[1]".into()), 10), &mut output).unwrap();
+//! assert_eq!(output, [Value::Deferred]);
 //!
-//! let source = "in source: Str\nin x: Int\nout z: Int\n\
-//!                   z = dynamic(source: Int)";
-//! let spec = source.parse::<DsrvSpecification>().unwrap();
-//! let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
-//! let input_vars = monitor.input_vars().to_vec();
-//! let row = |source: Value, x: i64| {
-//!     input_vars.iter().map(|var| {
-//!         if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
-//!     }).collect::<Vec<_>>()
-//! };
-//! let mut output = vec![Value::NoVal];
+//! monitor.evaluate(&row(Value::NoVal, 20), &mut output).unwrap();
+//! assert_eq!(output, [Value::Int(10)]); // The same evaluator retained 10.
 //!
-//! monitor.evaluate(&row(Value::Str("x + 1".into()), 10), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(11)]);
-//! monitor.evaluate(&row(Value::Str("x + 1".into()), 20), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(21)]);
-//! monitor.evaluate(&row(Value::Str("x * 2".into()), 3), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(6)]);
+//! monitor.evaluate(&row(Value::Str("x[0]".into()), 30), &mut output).unwrap();
+//! assert_eq!(output, [Value::Int(30)]); // Different text activates a new evaluator.
+//!
+//! monitor.evaluate(&row(Value::Str("x[1]".into()), 40), &mut output).unwrap();
+//! assert_eq!(output, [Value::Deferred]); // Returning to x[1] starts fresh.
 //! ```
+//!
+//! ## History outside the reconfiguration point
+//!
+//! A delay in the fixed surrounding specification has its own lifetime. For example:
+//!
+//! ```text
+//! z        = dynamic(source: Int)
+//! previous = z[1]
+//! ```
+//!
+//! | tick | active expression for `z` | `z` | `previous` |
+//! |-----:|:--------------------------|----:|:-----------|
+//! | 0 | `"x"` | 10 | `Deferred` |
+//! | 1 | `"x"` | 20 | 10 |
+//! | 2 | `"x + 100"` | 130 | 20 |
+//!
+//! Replacing the expression that computes `z` replaces state inside that expression. It does not
+//! replace the `z[1]` operator, which belongs to the fixed definition of `previous`. Consequently,
+//! `previous` can return the value produced by `z` before the replacement. This is the same ownership
+//! rule as above: state continues when its temporal operator continues.
 //!
 //! # `defer` handling
 //!
-//! `defer(source: T)` follows the same parse, type-check, scope-check, bind, and execution path as
-//! `dynamic`. `compiler::lower` represents it with the same `ir::DynamicExpressionSpec`, using
+//! `defer(source: T)` uses the same parsing, checking, scope validation, binding, environment shadow,
+//! and nested-evaluator representation as `dynamic`. `compiler::lower` selects
 //! `ir::DynamicExpressionMode::Defer`. Automatic and explicit scopes have the same availability and
-//! cycle rules described above. The difference is activation: the first string value installs the
-//! program and may reorder the monitor, while later string values replace neither the program nor its
-//! active dependencies. In other words, the source stream supplies a deferred definition once
-//! rather than a continuously reconfigurable definition.
+//! cycle rules described above.
 //!
-//! Before activation, `NoVal` yields `NoVal` and `Deferred` yields `Deferred`; there is no program to
-//! tick. After activation, every tick evaluates the installed program, including ticks whose source
-//! is special. A `NoVal` expression result repeats the installed expression's last result, while
-//! `Deferred` replaces it. Later source strings still tick the original program rather than
-//! recompiling them. Consequently, the installed expression's state and output timeline remain
-//! continuous after the definition arrives:
+//! Its activation policy differs: before activation, `NoVal` yields `NoVal` and `Deferred` yields
+//! `Deferred`. The first accepted string activates one fresh evaluator and may reorder the monitor.
+//! That evaluator and its active dependencies then remain fixed. Later strings do not replace or
+//! recompile the definition; every later source value merely accompanies another tick of the same
+//! active evaluator. DSRV syntax has no retained-history length argument for `defer`: its optional
+//! type annotation and explicit scope control typing and name availability, not historical backfill.
+//!
+//! Thus `defer` has exactly one evaluator timeline. Positive-delay history starts on the activation
+//! tick and remains continuous across later strings, `NoVal`, and `Deferred`. If `"x[1]"` is the
+//! first accepted definition, a later string such as `"x * 100"` does not change the program: the
+//! next output still comes from the continuing `x[1]` timeline. If the evaluator returns `NoVal`,
+//! result lifting repeats its previous result; if it returns `Deferred`, that value replaces the
+//! retained result.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/defer-lifecycle.svg")]
-//! <figcaption>The first accepted string fixes the program; every later tick advances that same evaluator.</figcaption>
+//! <figcaption>The first accepted string creates one evaluator. Its delay history starts on that activation tick and continues across every later source value without replacement.</figcaption>
 //! </figure>
 //!
+//! For `z = defer(source: Int)`, the later `"x * 100"` source does not replace the active `x[1]`
+//! evaluator, and a later `Deferred` source does not interrupt its history:
+//!
 //! ```
-//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
-//! use trustworthiness_checker::dataflow::DataflowMonitor;
-//!
-//! let source = "in source: Str\nin x: Int\nout z: Int\n\
-//!                   z = defer(source: Int)";
-//! let spec = source.parse::<DsrvSpecification>().unwrap();
-//! let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
-//! let input_vars = monitor.input_vars().to_vec();
-//! let row = |source: Value, x: i64| {
-//!     input_vars.iter().map(|var| {
-//!         if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
-//!     }).collect::<Vec<_>>()
-//! };
-//! let mut output = vec![Value::NoVal];
-//!
-//! monitor.evaluate(&row(Value::Deferred, 1), &mut output).unwrap();
+//! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! # use trustworthiness_checker::dataflow::DataflowMonitor;
+//! # let spec = "in source: Str\nin x: Int\nout z: Int\nz = defer(source: Int)"
+//! #     .parse::<DsrvSpecification>().unwrap();
+//! # let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+//! # let input_vars = monitor.input_vars().to_vec();
+//! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {
+//! #     if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
+//! # }).collect::<Vec<_>>();
+//! # let mut output = vec![Value::NoVal];
+//! monitor.evaluate(&row(Value::Str("x[1]".into()), 20), &mut output).unwrap();
 //! assert_eq!(output, [Value::Deferred]);
-//! monitor.evaluate(&row(Value::Str("x + 1".into()), 2), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(3)]);
-//! // A later string is ignored: the installed `x + 1` definition remains active.
-//! monitor.evaluate(&row(Value::Str("x * 100".into()), 3), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(4)]);
-//! monitor.evaluate(&row(Value::NoVal, 4), &mut output).unwrap();
-//! assert_eq!(output, [Value::Int(5)]);
+//!
+//! monitor.evaluate(&row(Value::Str("x * 100".into()), 30), &mut output).unwrap();
+//! assert_eq!(output, [Value::Int(20)]); // The original x[1] remains active.
+//!
+//! monitor.evaluate(&row(Value::Deferred, 40), &mut output).unwrap();
+//! assert_eq!(output, [Value::Int(30)]); // The same history continues.
 //! ```
+//!
+
+//! ## Memory policy and the published strategies
+//!
+//! Dataflow allocates history with each delay operator. A newly active `x[k]` therefore needs `k`
+//! successful ticks of its own before it can resolve, and its memory cost is bounded by the delay
+//! rings in the active program. The runtime does not retain every value of every stream, enlarge a
+//! shared history window when a new expression asks for a larger offset, or recover samples that were
+//! discarded before activation. History retained for an unrelated equation is not copied into the
+//! new evaluator.
+//!
+//! The published language definition [[1]] calls an expression *solvable* when the monitor has retained
+//! enough of every referenced stream, and has progressed far enough since those dependencies were
+//! introduced, to evaluate the requested temporal indices. It compares three memory strategies:
+//!
+//! | published strategy | memory bound | history available to a newly active property |
+//! |:-------------------|:-------------|:---------------------------------------------|
+//! | **1. Retain the entire history** | Unbounded in the trace length. | Any earlier retained sample can be used, so a temporal reference can resolve immediately when the trace is long enough and its operands are available. |
+//! | **2. Statically specify dynamic-property dependencies** | Bounded by declared stream and offset limits. | History is available up to each declared limit; a reference beyond that limit may never become solvable. |
+//! | **3. Dynamically update dependencies** | Bounded, but the bound may change when a property becomes active. | An existing sufficiently deep dependency may already have retained the requested samples. Otherwise retention grows from the tick that introduces the new dependency, and `x[k]` may remain unavailable until enough later ticks have passed. |
+//!
+//! Dataflow is closest to Strategy 3 in that it preserves bounded memory, accepts temporal offsets at
+//! runtime, and may require a new property to warm up. Its policy is stricter, however. If `x[k]`
+//! becomes active at tick `T`, Dataflow always creates a fresh delay ring, records the sample from `T`,
+//! and can first return it at `T + k`. It does not seed that ring from history retained for another
+//! equation, even when an existing dependency already retains at least `k` samples of `x`. In this
+//! runtime the warm-up result is `Deferred`. Replacing the active expression drops its rings, so the
+//! memory bound changes to the state required by the replacement.
+//!
+//! The mechanism also differs from the published implementation. Strategy 3 extends a dynamic
+//! dependency graph and uses the graph's weighted edges to decide how much history each stream
+//! retains. Dataflow updates active dependencies for scheduling, while temporal storage remains in
+//! delay nodes inside the nested evaluator. Consequently, Dataflow has no shared retained stream
+//! history for a new evaluator to reuse. This gap from the published Strategy 3 is shared by the
+//! Dataflow, Async, and Semisync implementations, which all exhibit the same activation-local result.
+//!
+//! Suppose `x` has already produced several samples and an existing equation `y = x[2]` has caused a
+//! runtime to retain two of them. When the source for `z = dynamic(source: Int)` then supplies
+//! `"x[2]"`, Strategy 3 can use that sufficiently deep retained history; the current runtimes instead
+//! return `Deferred` and begin collecting history for `z` from that tick.
+//!
+//! The current behavior also keeps `z` independent of whether the otherwise unrelated equation `y`
+//! is present. Reusing incidental history would let `z` resolve immediately with `y` in the
+//! specification but defer without it, even though the inputs and the definition of `z` are unchanged.
+//! Avoiding that difference is consistent with referentially transparent, compositional evaluation,
+//! although the repository does not establish referential transparency as the reason this policy was
+//! chosen.
+//!
+//! Strategy 1 is not available: Dataflow has no complete trace archive. Strategy 2 is also not exposed
+//! by the language. An explicit scope such as `dynamic(source: Int, {x})` or
+//! `defer(source: Int, {x})` permits the name `x`; it cannot declare a bound such as “retain four
+//! samples of `x`.” Neither construct accepts a memory-strategy selector or retained-history length.
 //!
 //! # Output buffering and asynchronous delivery
 //!

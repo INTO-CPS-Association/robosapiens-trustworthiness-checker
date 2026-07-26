@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 305" role="img" aria-labelledby="dynamic-history-arrow-title dynamic-history-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="dynamic-history-arrow-title">Temporal state follows the lifetime of its operator</title>
+<desc id="dynamic-history-arrow-desc">Before replacement, current x flows through evaluator A and its local x indexed-by-two ring to stream z, then through a fixed downstream z indexed-by-one ring. After replacement, evaluator B owns a fresh local ring, while the same downstream ring continues to record values produced by z.</desc>
+<defs>
+  <marker id="dynamic-history-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">History follows temporal operator lifetime</text>
+<text x="35" y="62" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">before replacement</text>
+<text x="35" y="202" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">after replacement</text>
+<rect x="35" y="82" width="130" height="52" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="100" y="113" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current x</text>
+<rect x="215" y="82" width="140" height="52" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="285" y="113" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator A</text>
+<rect x="405" y="82" width="175" height="52" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="492" y="113" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">local x[2] ring A</text>
+<rect x="630" y="82" width="80" height="52" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="670" y="113" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">z</text>
+<rect x="760" y="82" width="165" height="52" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="842" y="113" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">fixed z[1] ring</text>
+<line x1="165" y1="108" x2="215" y2="108" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="355" y1="108" x2="405" y2="108" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="580" y1="108" x2="630" y2="108" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="710" y1="108" x2="760" y2="108" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<rect x="35" y="222" width="130" height="52" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="100" y="253" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current x</text>
+<rect x="215" y="222" width="140" height="52" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="285" y="253" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator B</text>
+<rect x="405" y="222" width="175" height="52" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="492" y="253" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">fresh x[2] ring B</text>
+<rect x="630" y="222" width="80" height="52" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="670" y="253" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">z</text>
+<rect x="760" y="222" width="165" height="52" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="842" y="253" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">same z[1] ring</text>
+<line x1="165" y1="248" x2="215" y2="248" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="355" y1="248" x2="405" y2="248" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="580" y1="248" x2="630" y2="248" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="710" y1="248" x2="760" y2="248" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<line x1="285" y1="134" x2="285" y2="222" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)" stroke-dasharray="5 4"/>
+<text x="297" y="182" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">replace</text>
+<line x1="842" y1="134" x2="842" y2="222" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-history-arrow)"/>
+<text x="854" y="182" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">continues</text>
+</svg>

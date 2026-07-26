@@ -287,96 +287,147 @@ def history_retention() -> tuple[str, str]:
         text(
             24,
             27,
-            "History has a read/stage phase and a post-row commit",
+            "Read old state; commit new samples",
             anchor="start",
             cls="section",
-        )
+        ),
+        f'<rect x="25" y="48" width="440" height="350" rx="7" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        f'<rect x="495" y="48" width="440" height="350" rx="7" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
+        text(45, 76, "ordinary delay", anchor="start", cls="label"),
+        text(515, 76, "recursive self-delay", anchor="start", cls="label"),
+        box(
+            55,
+            95,
+            170,
+            58,
+            "ring through n - 1",
+            fill="blue_fill",
+            stroke="blue",
+            sublabel="committed history",
+        ),
+        box(
+            265,
+            95,
+            170,
+            58,
+            "Delay",
+            fill="orange_fill",
+            stroke="orange",
+            sublabel="read; mark pending",
+        ),
+        arrow(225, 124, 265, 124, marker),
+        box(
+            55,
+            270,
+            170,
+            58,
+            "row operand n",
+            fill="green_fill",
+            stroke="green",
+            sublabel="completed row",
+        ),
+        box(
+            265,
+            270,
+            170,
+            58,
+            "ordinary capture",
+            fill="orange_fill",
+            stroke="orange",
+            sublabel="sample for this delay",
+        ),
+        arrow(225, 299, 265, 299, marker),
+        f'<line x1="350" y1="153" x2="350" y2="270" stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
+        text(362, 218, "pending", anchor="start", cls="small"),
+        box(
+            525,
+            95,
+            170,
+            58,
+            "ring through n - 1",
+            fill="blue_fill",
+            stroke="blue",
+            sublabel="committed history",
+        ),
+        box(
+            735,
+            95,
+            170,
+            58,
+            "RecursiveDelay",
+            fill="purple_fill",
+            stroke="purple",
+            sublabel="previous output",
+        ),
+        arrow(695, 124, 735, 124, marker),
+        box(
+            525,
+            190,
+            170,
+            58,
+            "current operands n",
+            fill="green_fill",
+            stroke="green",
+        ),
+        box(
+            735,
+            190,
+            170,
+            58,
+            "stream body",
+            fill="green_fill",
+            stroke="green",
+            sublabel="combine current + previous",
+        ),
+        arrow(695, 219, 735, 219, marker),
+        arrow(820, 153, 820, 190, marker),
+        box(
+            735,
+            285,
+            170,
+            58,
+            "stream output n",
+            fill="purple_fill",
+            stroke="purple",
+            sublabel="stage for self-delay",
+        ),
+        arrow(820, 248, 820, 285, marker),
+        divider(420, 960),
+        text(35, 448, "after row n completes", anchor="start", cls="label"),
+        box(
+            350,
+            445,
+            210,
+            60,
+            "temporal commit",
+            fill="green_fill",
+            stroke="green",
+            sublabel="push staged samples",
+        ),
+        arrow(350, 328, 415, 445, marker),
+        arrow(820, 343, 505, 445, marker),
+        box(
+            650,
+            445,
+            255,
+            60,
+            "rings through n",
+            fill="blue_fill",
+            stroke="blue",
+            sublabel="readable at tick n + 1",
+        ),
+        arrow(560, 475, 650, 475, marker),
     ]
-    parts.extend(
-        [
-            text(35, 62, "Evaluate / read-stage", anchor="start", cls="label"),
-            box(
-                35,
-                82,
-                250,
-                64,
-                "Delay x[3]",
-                fill="orange_fill",
-                stroke="orange",
-                sublabel="read oldest 10; stage operand x=40",
-            ),
-            box(
-                355,
-                82,
-                250,
-                64,
-                "RecursiveDelay total[1]",
-                fill="purple_fill",
-                stroke="purple",
-                sublabel="read prior output; stage new output",
-            ),
-            box(
-                675,
-                82,
-                250,
-                64,
-                "StreamEvaluator result",
-                fill="blue_fill",
-                stroke="blue",
-                sublabel="write completed environment row",
-            ),
-            arrow(285, 114, 355, 114, marker),
-            arrow(605, 114, 675, 114, marker),
-            divider(178, 960),
-            text(35, 210, "Post-row temporal commit", anchor="start", cls="label"),
-            box(
-                35,
-                230,
-                250,
-                64,
-                "DelayState",
-                fill="orange_fill",
-                stroke="orange",
-                sublabel="push staged x=40; capacity stays 3",
-            ),
-            box(
-                355,
-                230,
-                250,
-                64,
-                "RecursiveDelay history",
-                fill="purple_fill",
-                stroke="purple",
-                sublabel="commit staged stream output",
-            ),
-            box(
-                675,
-                230,
-                250,
-                64,
-                "Dynamic evaluator state",
-                fill="green_fill",
-                stroke="green",
-                sublabel="committed only while installed",
-            ),
-            text(
-                480,
-                330,
-                "If evaluation fails, commit is skipped; retained history is unchanged",
-                cls="small",
-            ),
-        ]
-    )
     return (
         svg(
-            "Two-phase bounded history retention",
-            "During evaluation, ordinary Delay nodes read their rings and stage current operands, while RecursiveDelay nodes read retained outputs and stage completed stream outputs. Only after the row succeeds does the monitor commit staged writes. Dynamic history belongs to the installed StreamEvaluator.",
+            "Temporal delay staging and commit",
+            "During tick n, an ordinary Delay and a RecursiveDelay each read only their own ring committed through tick n minus one. The recursive delay supplies a previous stream output to the stream body; after the body combines it with current operands, the completed stream output is staged for that same self-delay. The ordinary delay captures its operand from the completed row. The temporal commit pushes both staged samples into their respective rings, where they become readable at tick n plus one.",
             960,
-            355,
+            525,
             "\n".join(parts),
             marker,
         ),
-        "Each index owns a fixed-size ring; recursive history is staged after output and committed after the row, and dynamic history belongs to the installed evaluator.",
+        "Both delay forms read history committed before tick n; their new samples enter their respective rings together at the end-of-tick temporal commit.",
     )
 
 
@@ -984,41 +1035,56 @@ def dynamic_dependencies() -> tuple[str, str]:
     )
 
 
-def lifecycle_prefix(marker: str) -> list[str]:
-    return [
-        box(
-            35,
-            48,
-            210,
-            64,
-            "accepted source string",
-            fill="blue_fill",
-            stroke="blue",
-            sublabel="parse + type/scope check",
+def dynamic_history() -> tuple[str, str]:
+    marker = "dynamic-history-arrow"
+    parts = [
+        text(
+            24,
+            27,
+            "History follows temporal operator lifetime",
+            anchor="start",
+            cls="section",
         ),
-        box(
-            330,
-            48,
-            260,
-            64,
-            "bind StreamProgram",
-            fill="panel",
-            stroke="border",
-            sublabel="existing EnvironmentLayout",
-        ),
-        box(
-            675,
-            48,
-            250,
-            64,
-            "install StreamEvaluator",
-            fill="purple_fill",
-            stroke="purple",
-            sublabel="fresh StreamState + dependencies",
-        ),
-        arrow(245, 80, 330, 80, marker),
-        arrow(590, 80, 675, 80, marker),
+        text(35, 62, "before replacement", anchor="start", cls="label"),
+        text(35, 202, "after replacement", anchor="start", cls="label"),
     ]
+    rows = [
+        (82, "current x", "evaluator A", "local x[2] ring A", "z", "fixed z[1] ring"),
+        (222, "current x", "evaluator B", "fresh x[2] ring B", "z", "same z[1] ring"),
+    ]
+    for y, current, evaluator, delay, output, downstream in rows:
+        parts.extend(
+            [
+                box(35, y, 130, 52, current, fill="blue_fill", stroke="blue"),
+                box(215, y, 140, 52, evaluator, fill="orange_fill", stroke="orange"),
+                box(405, y, 175, 52, delay, fill="orange_fill", stroke="orange"),
+                box(630, y, 80, 52, output, fill="green_fill", stroke="green"),
+                box(760, y, 165, 52, downstream, fill="purple_fill", stroke="purple"),
+                arrow(165, y + 26, 215, y + 26, marker),
+                arrow(355, y + 26, 405, y + 26, marker),
+                arrow(580, y + 26, 630, y + 26, marker),
+                arrow(710, y + 26, 760, y + 26, marker),
+            ]
+        )
+    parts.extend(
+        [
+            arrow(285, 134, 285, 222, marker, dashed=True),
+            text(297, 182, "replace", anchor="start", cls="small"),
+            arrow(842, 134, 842, 222, marker),
+            text(854, 182, "continues", anchor="start", cls="small"),
+        ]
+    )
+    return (
+        svg(
+            "Temporal state follows the lifetime of its operator",
+            "Before replacement, current x flows through evaluator A and its local x indexed-by-two ring to stream z, then through a fixed downstream z indexed-by-one ring. After replacement, evaluator B owns a fresh local ring, while the same downstream ring continues to record values produced by z.",
+            960,
+            305,
+            "\n".join(parts),
+            marker,
+        ),
+        "Replacement creates fresh temporal state inside the active expression; temporal operators in the fixed surrounding specification continue.",
+    )
 
 
 def dynamic_lifecycle() -> tuple[str, str]:
@@ -1027,66 +1093,91 @@ def dynamic_lifecycle() -> tuple[str, str]:
         text(
             24,
             27,
-            "dynamic: source and result special values",
+            "dynamic: source text selects an evaluator lifetime",
             anchor="start",
             cls="section",
         ),
-        *lifecycle_prefix(marker),
-        divider(145, 960),
+        text(35, 62, "activation timeline", anchor="start", cls="label"),
     ]
-    cells = [
-        (35, 175, '"x + 1"', "install fresh evaluator", "green"),
-        (275, 175, "same string / NoVal", "reuse; evaluate active", "green"),
-        (515, 175, "Deferred source", "active advances; emit Deferred", "purple"),
-        (755, 175, '"x * 2"', "replace state + last result", "orange"),
-        (
-            155,
-            285,
-            "active result NoVal",
-            "repeat this definition's last result",
-            "blue",
-        ),
-        (
-            555,
-            285,
-            "active result Deferred",
-            "retain Deferred as last result",
-            "purple",
-        ),
+    ticks = [
+        (35, 'tick 10: "x + 1"', "activate A • history starts", "green"),
+        (265, 'tick 11: "x + 1"', "equal text • reuse A", "green"),
+        (495, 'tick 12: "x * 2"', "drop A • activate fresh B", "orange"),
+        (725, 'tick 13: "x + 1"', "drop B • activate fresh C", "purple"),
     ]
-    for x, y, label, note, color in cells:
+    for x, label, note, color in ticks:
         parts.append(
             box(
                 x,
-                y,
-                180 if y == 175 else 250,
-                68,
+                82,
+                200,
+                70,
                 label,
                 fill=f"{color}_fill",
                 stroke=color,
                 sublabel=note,
             )
         )
-    for x1, x2 in [(215, 275), (455, 515), (695, 755)]:
-        parts.append(arrow(x1, 209, x2, 209, marker))
-    parts.append(
-        text(
-            480,
-            390,
-            "Before activation: NoVal -> NoVal, Deferred -> Deferred; other non-strings fail",
-            cls="small",
-        )
+    for x1, x2 in [(235, 265), (465, 495), (695, 725)]:
+        parts.append(arrow(x1, 117, x2, 117, marker))
+    parts.extend(
+        [
+            divider(185, 960),
+            text(35, 217, "per-activation delay history", anchor="start", cls="label"),
+            box(
+                35,
+                237,
+                270,
+                68,
+                "evaluator A",
+                fill="green_fill",
+                stroke="green",
+                sublabel="rings begin tick 10; advance tick 11",
+            ),
+            box(
+                345,
+                237,
+                270,
+                68,
+                "fresh evaluator B",
+                fill="orange_fill",
+                stroke="orange",
+                sublabel="new rings begin tick 12",
+            ),
+            box(
+                655,
+                237,
+                270,
+                68,
+                "fresh evaluator C",
+                fill="purple_fill",
+                stroke="purple",
+                sublabel="new rings begin tick 13",
+            ),
+            text(
+                480,
+                345,
+                "A and C have equal source text, but never share evaluator state or delay rings",
+                cls="small",
+            ),
+            text(
+                480,
+                371,
+                "Positive-delay history starts on each activation tick; earlier rows are not backfilled",
+                cls="small",
+            ),
+        ]
     )
     return (
         svg(
-            "Dynamic expression lifecycle and special values",
-            "Before activation, NoVal and Deferred each propagate. Dynamic installs the first accepted string, reuses the evaluator for an equal or NoVal source, advances the active evaluator but emits Deferred for a Deferred source, and replaces evaluator state, dependencies, and retained result for a changed string. Active NoVal results repeat the current definition's last result; Deferred is retained.",
+            "Dynamic evaluator replacement and activation-scoped history",
+            "Dynamic source text equal to the active definition reuses evaluator A. Changed text drops A and activates a fresh evaluator B. Returning later to the old text drops B and creates a fresh evaluator C rather than reviving A. Each evaluator owns separate per-delay rings, and positive-delay history starts on that evaluator's activation tick without backfill.",
             960,
-            420,
+            400,
             "\n".join(parts),
             marker,
         ),
-        "Equal source strings preserve evaluator state; a changed string installs a fresh evaluator and resets retained output.",
+        "Equal current source text reuses the active evaluator; each text change activates a fresh evaluator with new per-delay rings, even when the source later returns to an older string.",
     )
 
 
@@ -1096,74 +1187,66 @@ def defer_lifecycle() -> tuple[str, str]:
         text(
             24,
             27,
-            "defer: first accepted string fixes the program",
+            "defer keeps its first evaluator",
             anchor="start",
             cls="section",
-        ),
-        *lifecycle_prefix(marker),
-        divider(145, 960),
-    ]
-    cells = [
-        (35, "NoVal / Deferred", "before activation: propagate", "purple"),
-        (275, '"x + 1"', "install once; evaluate", "green"),
-        (515, 'later "x * 2"', "ignore source; evaluate x + 1", "green"),
-        (755, "NoVal / Deferred", "evaluate installed program", "blue"),
-    ]
-    for x, label, note, color in cells:
-        parts.append(
-            box(
-                x,
-                175,
-                180,
-                68,
-                label,
-                fill=f"{color}_fill",
-                stroke=color,
-                sublabel=note,
-            )
         )
-    for x1, x2 in [(215, 275), (455, 515), (695, 755)]:
-        parts.append(arrow(x1, 209, x2, 209, marker))
+    ]
+    ticks = [
+        (35, "tick 10", "NoVal", "blue"),
+        (265, "tick 11", '"x + 1"', "green"),
+        (495, "tick 12", '"x * 2"', "orange"),
+        (725, "tick 13", "Deferred", "purple"),
+    ]
+    for x, tick, source, color in ticks:
+        parts.extend(
+            [
+                text(x + 100, 62, tick, cls="small"),
+                box(
+                    x,
+                    75,
+                    200,
+                    54,
+                    source,
+                    fill=f"{color}_fill",
+                    stroke=color,
+                ),
+            ]
+        )
+    for x1, x2 in [(235, 265), (465, 495), (695, 725)]:
+        parts.append(arrow(x1, 102, x2, 102, marker))
     parts.extend(
         [
+            divider(160, 960),
+            text(35, 192, "active evaluator", anchor="start", cls="label"),
             box(
-                155,
-                285,
-                250,
-                68,
-                "installed result NoVal",
-                fill="blue_fill",
-                stroke="blue",
-                sublabel="repeat installed last result",
+                265,
+                218,
+                660,
+                70,
+                'evaluator A: "x + 1"',
+                fill="green_fill",
+                stroke="green",
+                sublabel="delay rings start here and remain continuous",
             ),
-            box(
-                555,
-                285,
-                250,
-                68,
-                "installed result Deferred",
-                fill="purple_fill",
-                stroke="purple",
-                sublabel="replace retained result",
-            ),
-            text(
-                480,
-                390,
-                "After activation every tick advances exactly the same StreamEvaluator",
-                cls="small",
-            ),
+            arrow(365, 129, 365, 218, marker),
+            arrow(595, 129, 595, 218, marker),
+            arrow(825, 129, 825, 218, marker),
+            text(375, 180, "activate", anchor="start", cls="small"),
+            text(605, 180, "advance", anchor="start", cls="small"),
+            text(835, 180, "advance", anchor="start", cls="small"),
         ]
     )
     return (
         svg(
-            "Deferred expression lifecycle and special values",
-            "Before activation, NoVal and Deferred each propagate. Defer then installs the first accepted string in one StreamEvaluator permanently. Later strings, NoVal, and Deferred sources all tick the installed program. An installed NoVal result repeats its last result, while Deferred becomes the retained result.",
+            "Defer keeps the first active evaluator",
+            "No evaluator is active before the first definition. The first string activates evaluator A and starts its delay rings. A later string and Deferred both advance A without replacing its program or state.",
             960,
-            420,
+            320,
             "\n".join(parts),
             marker,
         ),
-        "The first accepted string fixes the program; every later tick advances that same evaluator.",
+        "The first string activates evaluator A; every later source advances that same evaluator and its continuous delay history.",
     )
 
 
@@ -1178,6 +1261,7 @@ DIAGRAMS = {
     "function-call": function_call,
     "reconfiguration-points": reconfiguration_points,
     "dynamic-dependencies": dynamic_dependencies,
+    "dynamic-history": dynamic_history,
     "dynamic-lifecycle": dynamic_lifecycle,
     "defer-lifecycle": defer_lifecycle,
 }

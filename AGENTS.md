@@ -3,6 +3,10 @@
 - Prefer `--profile dev-fast` for routine builds, checks, and tests.
 - Do not use `dev-fast` for debugging or profiling; use the profile appropriate to the debugger or profiling task.
 
+# Git safety
+
+- Never force push to `origin/main`, including with `--force` or `--force-with-lease`.
+
 # Benchmarking
 
 - Once benchmarking has started, consistently use `--profile bench-fast` for subsequent builds, checks, and benchmark runs so the benchmark cache stays warm.
