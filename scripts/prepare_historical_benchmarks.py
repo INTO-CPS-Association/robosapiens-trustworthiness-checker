@@ -203,6 +203,29 @@ def ensure_pipeline(repo: Path) -> None:
     ensure_bench_target(repo, "backfill_compilation_phases")
 
 
+def hard_dynamic_defer_parser(repo: Path) -> str:
+    library = (repo / "src/lib.rs").read_text()
+    if "UntypedDsrvSpecification" in library:
+        return '{ let mut input = source.as_str(); trustworthiness_checker::dsrv_specification(&mut input).expect("hard dynamic/defer benchmark specification should parse") }'
+
+    existing_benchmark = (repo / "benches/dup_defer.rs").read_text()
+    if ".parse::<DsrvSpecification>()" in existing_benchmark:
+        return 'source.parse::<trustworthiness_checker::DsrvSpecification>().expect("hard dynamic/defer benchmark specification should parse")'
+    return 'trustworthiness_checker::lang::dsrv::parser::parse_str(&source).expect("hard dynamic/defer benchmark specification should parse")'
+
+
+def ensure_hard_dynamic_defer(repo: Path) -> None:
+    ensure_dataflow_helpers(repo)
+    ensure_limited_semisync(repo)
+    cargo = (repo / "Cargo.toml").read_text()
+    allocator = "tikv_jemallocator" if "tikv-jemallocator" in cargo else "jemallocator"
+    source = (Path(__file__).with_name("backfill_hard_dynamic_defer.rs")).read_text()
+    source = source.replace("__ALLOCATOR__", allocator)
+    source = source.replace("__PARSE_SPEC__", hard_dynamic_defer_parser(repo))
+    (repo / "benches/backfill_hard_dynamic_defer.rs").write_text(source)
+    ensure_bench_target(repo, "backfill_hard_dynamic_defer")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path)
@@ -216,6 +239,8 @@ def main() -> None:
     ensure_bench_target(repo, "maple_sequence")
     if requested & {"dup-dataflow", "dyn-dataflow", "maple-dataflow"}:
         ensure_dataflow_helpers(repo)
+    if "hard-dynamic-defer" in requested:
+        ensure_hard_dynamic_defer(repo)
 
     if "dup-semisync" in requested:
         clone_benchmark(

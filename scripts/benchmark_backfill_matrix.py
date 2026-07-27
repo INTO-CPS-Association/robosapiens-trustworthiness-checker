@@ -13,6 +13,12 @@ PREFIX = "window.BENCHMARK_DATA = "
 DATAFLOW_INTRODUCTION = "9f0f006d16a999c6297fa2ef10f17f23f2bb86ba"
 DYNAMIC_SEMISYNC_INTRODUCTION = "b5c9613a272bf6fa9d271bb6926880d45eb9eb55"
 MAPLE_DATAFLOW_INTRODUCTION = "c37e53f84acec84d229d84cb2edba6888e2b4d73"
+HARD_DYNAMIC_DEFER = [
+    "hard_dynamic_defer/automatic_scope_dataflow/1024",
+    "hard_dynamic_defer/automatic_scope_semisync/1024",
+    "hard_dynamic_defer/explicit_components_dataflow/1024",
+    "hard_dynamic_defer/explicit_components_semisync/1024",
+]
 
 
 def load_data(path: Path) -> dict[str, Any]:
@@ -75,6 +81,9 @@ def main() -> None:
                 for benchmark, name in dataflow_benchmarks.items()
                 if not has(benches, name)
             )
+            if any(name not in benches for name in HARD_DYNAMIC_DEFER):
+                requested.append("hard-dynamic-defer")
+
             if is_ancestor(MAPLE_DATAFLOW_INTRODUCTION, sha) and not has(
                 benches, "maple_sequence/maple_sequence_untyped_dataflow/25000"
             ):

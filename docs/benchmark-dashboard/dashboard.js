@@ -42,6 +42,36 @@ const IMPORTANT_SECTIONS = [
         ],
       },
       {
+        title: "Hard dynamic/defer — automatic scope, 1,024 inputs",
+        description:
+          "End-to-end execution of 32 defer and 32 dynamic nodes sharing an automatically scoped environment. Dynamic dependencies change every 64 ticks, with temporal reads and sparse inputs.",
+        series: [
+          {
+            label: "Dataflow",
+            name: "hard_dynamic_defer/automatic_scope_dataflow/1024",
+          },
+          {
+            label: "SemiSync",
+            name: "hard_dynamic_defer/automatic_scope_semisync/1024",
+          },
+        ],
+      },
+      {
+        title: "Hard dynamic/defer — four explicit components, 1,024 inputs",
+        description:
+          "Execution over four connected static components feeding 32 defer and 32 dynamic expressions with narrow explicit scopes and periodic dependency changes.",
+        series: [
+          {
+            label: "Dataflow",
+            name: "hard_dynamic_defer/explicit_components_dataflow/1024",
+          },
+          {
+            label: "SemiSync",
+            name: "hard_dynamic_defer/explicit_components_semisync/1024",
+          },
+        ],
+      },
+      {
         title: "Deferred expression — 25,000 inputs",
         description:
           "End-to-end evaluation of an expression deferred until runtime, comparing all three local execution engines.",

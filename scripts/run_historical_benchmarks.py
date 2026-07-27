@@ -29,6 +29,12 @@ EXPECTED = {
         "maple_sequence/maple_sequence_untyped_dataflow/25000",
     ),
 }
+HARD_DYNAMIC_DEFER = [
+    "hard_dynamic_defer/automatic_scope_dataflow/1024",
+    "hard_dynamic_defer/automatic_scope_semisync/1024",
+    "hard_dynamic_defer/explicit_components_dataflow/1024",
+    "hard_dynamic_defer/explicit_components_semisync/1024",
+]
 PIPELINE = [
     "compilation_phases/lalr_parse/1024",
     "compilation_phases/strict_type_check/1024",
@@ -129,6 +135,10 @@ def main() -> None:
         if request == "pipeline":
             targets.setdefault("backfill_compilation_phases", []).append(
                 ("compilation_phases/", set(PIPELINE))
+            )
+        elif request == "hard-dynamic-defer":
+            targets.setdefault("backfill_hard_dynamic_defer", []).extend(
+                (name, {name}) for name in HARD_DYNAMIC_DEFER
             )
         else:
             target, name = EXPECTED[request]
