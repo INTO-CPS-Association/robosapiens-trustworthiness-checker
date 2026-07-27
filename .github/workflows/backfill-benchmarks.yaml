@@ -2,6 +2,11 @@ name: Backfill benchmark history
 
 on:
   workflow_dispatch:
+    inputs:
+      only-hard-dynamic-defer:
+        description: Backfill only the hard dynamic/defer dashboard benchmark
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,7 +31,11 @@ jobs:
           path: benchmark-data
       - id: matrix
         run: |
-          matrix="$(python scripts/benchmark_backfill_matrix.py benchmark-data/benchmarks/data.js)"
+          matrix_args=()
+          if [ "${{ inputs.only-hard-dynamic-defer }}" = "true" ]; then
+            matrix_args+=(--only-hard-dynamic-defer)
+          fi
+          matrix="$(python scripts/benchmark_backfill_matrix.py benchmark-data/benchmarks/data.js "${matrix_args[@]}")"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           if [ "$matrix" = '{"include":[]}' ]; then
             echo "has_work=false" >> "$GITHUB_OUTPUT"

@@ -45,6 +45,7 @@ def has(benches: set[str], name: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data", type=Path)
+    parser.add_argument("--only-hard-dynamic-defer", action="store_true")
     args = parser.parse_args()
 
     entries = next(iter(load_data(args.data)["entries"].values()))
@@ -53,6 +54,15 @@ def main() -> None:
         sha = run["commit"]["id"]
         benches = {bench["name"] for bench in run["benches"]}
         requested: list[str] = []
+
+        if args.only_hard_dynamic_defer:
+            if is_ancestor(DATAFLOW_INTRODUCTION, sha) and any(
+                name not in benches for name in HARD_DYNAMIC_DEFER
+            ):
+                requested.append("hard-dynamic-defer")
+            if requested:
+                matrix.append({"sha": sha, "benchmarks": ",".join(requested)})
+            continue
 
         always_available = {
             "dup-semisync": "dup_defer/dup_defer_untyped_semisync/25000",
