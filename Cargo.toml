@@ -171,5 +171,9 @@ harness = false
 name = "threshold_property"
 harness = false
 
+[[bench]]
+name = "arithmetic_heavy"
+harness = false
+
 # [dev-dependencies.tc-testutils]
 # path = "libs/tc-testutils"

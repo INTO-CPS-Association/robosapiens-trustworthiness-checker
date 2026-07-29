@@ -351,15 +351,21 @@ mod tests {
             let mut events = aggregated_source(AggregationSemantics::PreserveTicks);
             let batch = events.next().await.unwrap().unwrap();
             assert_eq!(
-                batch.ticks().collect::<Vec<_>>(),
-                [[event("x", 1)].as_slice(), [event("y", 2)].as_slice(),]
+                batch
+                    .ticks()
+                    .map(|tick| tick.to_events())
+                    .collect::<Vec<_>>(),
+                [vec![event("x", 1)], vec![event("y", 2)]]
             );
 
             let mut steps = aggregated_source(AggregationSemantics::CoalesceToAtomicStep);
             let batch = steps.next().await.unwrap().unwrap();
             assert_eq!(
-                batch.ticks().collect::<Vec<_>>(),
-                [[event("x", 1), event("y", 2)].as_slice()]
+                batch
+                    .ticks()
+                    .map(|tick| tick.to_events())
+                    .collect::<Vec<_>>(),
+                [vec![event("x", 1), event("y", 2)]]
             );
         });
     }

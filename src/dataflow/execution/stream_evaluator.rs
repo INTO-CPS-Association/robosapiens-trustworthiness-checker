@@ -2,6 +2,7 @@ use super::super::ir::*;
 use super::super::*;
 use super::dynamic_expressions::update_active_expression;
 use super::interpreter::*;
+use super::specialization::{self, ScalarValue};
 use super::stream_state::*;
 
 #[derive(Clone, Copy)]
@@ -30,6 +31,7 @@ impl EvaluationContext<'_> {
 pub(in crate::dataflow) struct StreamEvaluator {
     pub(in crate::dataflow) program: Rc<StreamProgram>,
     pub(in crate::dataflow) state: StreamState,
+    specialization_state: Option<specialization::State>,
 }
 
 impl StreamEvaluator {
@@ -38,13 +40,31 @@ impl StreamEvaluator {
             .graph
             .debug_assert_valid(program.environment_layout.len());
         let state = StreamState::new(&program.graph);
+        let specialization_state = program
+            .specialization_plan
+            .as_deref()
+            .map(specialization::State::new);
         debug_assert_eq!(state.node_values.len(), program.graph.nodes.len());
         debug_assert_eq!(state.node_states.len(), program.graph.nodes.len());
-        Self { program, state }
+        Self {
+            program,
+            state,
+            specialization_state,
+        }
     }
 
     pub(in crate::dataflow) fn reset(&mut self) {
         self.state.reset();
+        if let Some(state) = &mut self.specialization_state {
+            state.reset();
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::dataflow) fn deoptimized_node_count(&self) -> usize {
+        self.specialization_state
+            .as_ref()
+            .map_or(0, specialization::State::deoptimized_node_count)
     }
 
     #[inline]
@@ -99,9 +119,11 @@ impl StreamEvaluator {
     }
 
     #[inline]
-    pub(in crate::dataflow) fn evaluate_infallible_and_stage(
+    pub(in crate::dataflow) fn evaluate_infallible_and_stage_with_plan(
         &mut self,
         environment_values: &[Value],
+        specialization_plan_override: Option<&specialization::Plan>,
+        published_scalars: &[Option<ScalarValue>],
     ) -> Value {
         debug_assert!(self.program.is_infallible());
         let body = &self.program.graph;
@@ -113,10 +135,52 @@ impl StreamEvaluator {
             recursive_call: None,
         };
 
-        evaluate_nodes(&body.nodes, &mut self.state, context);
+        let specialization_plan =
+            specialization_plan_override.or(self.program.specialization_plan.as_deref());
+        if let (Some(plan), Some(state)) = (specialization_plan, &mut self.specialization_state) {
+            specialization::execute(
+                state,
+                plan,
+                body,
+                &mut self.state,
+                context,
+                published_scalars,
+            );
+        } else {
+            debug_assert!(specialization_plan.is_none() && self.specialization_state.is_none());
+            evaluate_nodes(&body.nodes, &mut self.state, context);
+        }
         let value = context.read_value(&self.state, &body.output);
         stage_recursive_delays(&body.recursive_delays, &mut self.state, &value);
         value
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn evaluate_single_scalar_with_plan(
+        &mut self,
+        environment_values: &[Value],
+        plan: &specialization::SingleScalarPlan,
+        published_scalars: &[Option<ScalarValue>],
+    ) -> specialization::DirectResult {
+        let body = &self.program.graph;
+        debug_assert_eq!(body.nodes.len(), 1);
+        debug_assert_eq!(body.output, BoundRef::Node(NodeId::new(0)));
+        debug_assert!(body.recursive_delays.is_empty());
+        let context = EvaluationContext {
+            environment_values,
+            environment_layout: &self.program.environment_layout,
+            recursive_call: None,
+        };
+        specialization::execute_single(
+            self.specialization_state
+                .as_mut()
+                .expect("single scalar plan requires specialization state"),
+            plan,
+            body,
+            &mut self.state,
+            context,
+            published_scalars,
+        )
     }
 
     pub(in crate::dataflow) fn commit_temporal_state(&mut self, environment_values: &[Value]) {
@@ -143,7 +207,21 @@ impl StreamEvaluator {
         };
 
         if self.program.is_infallible() {
-            evaluate_nodes(&body.nodes, &mut self.state, context);
+            if let Some(state) = &mut self.specialization_state {
+                specialization::execute(
+                    state,
+                    self.program
+                        .specialization_plan
+                        .as_deref()
+                        .expect("specialization state requires a plan"),
+                    body,
+                    &mut self.state,
+                    context,
+                    &[],
+                );
+            } else {
+                evaluate_nodes(&body.nodes, &mut self.state, context);
+            }
         } else {
             try_evaluate_nodes(&body.nodes, &mut self.state, context)?;
         }

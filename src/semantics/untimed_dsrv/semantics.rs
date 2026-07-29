@@ -469,7 +469,7 @@ where
 
 /// Untimed semantics for checked DSRV expressions.
 ///
-/// Immutable type annotations select specialised scalar streams where possible
+/// Immutable type annotations select specialized scalar streams where possible
 /// and support type-checking of
 /// expressions introduced by `dynamic` and `defer` at runtime.
 #[derive(Clone)]
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn checked_float_arithmetic_and_comparison_are_specialised(
+    async fn checked_float_arithmetic_and_comparison_are_specialized(
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let checked = CheckedDsrvSpecification::parse_with(

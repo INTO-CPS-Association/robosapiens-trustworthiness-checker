@@ -256,6 +256,7 @@ fn bind_graph(
     recursive_output: Option<&VarName>,
 ) -> Result<BoundEvaluationGraph, StreamProgramError> {
     let output = bind_ref(body.output, environment, recursive_output)?;
+    let scalar_signatures = body.scalar_signatures;
     let nodes = body
         .nodes
         .into_iter()
@@ -269,6 +270,7 @@ fn bind_graph(
         .collect();
     Ok(BoundEvaluationGraph {
         nodes,
+        scalar_signatures,
         output,
         recursive_delays,
     })

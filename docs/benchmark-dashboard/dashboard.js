@@ -13,12 +13,31 @@ const IMPORTANT_SECTIONS = [
             name: "maple_sequence/maple_sequence_untyped_dataflow/25000",
           },
           {
+            label: "Dataflow specialized",
+            name: "maple_sequence/maple_sequence_typed_dataflow/25000",
+          },
+          {
             label: "SemiSync",
             name: "maple_sequence/maple_sequence_untyped_semisync/25000",
           },
           {
             label: "Async stream runtime",
             name: "maple_sequence/maple_sequence_untyped_async/25000",
+          },
+        ],
+      },
+      {
+        title: "Arithmetic-heavy pipeline — 64 stages, 25,000 inputs",
+        description:
+          "End-to-end execution of a bounded integer pipeline containing addition, multiplication, subtraction and modulo operations.",
+        series: [
+          {
+            label: "Dataflow",
+            name: "arithmetic_heavy/dataflow/25000",
+          },
+          {
+            label: "Dataflow specialized",
+            name: "arithmetic_heavy/dataflow_specialised/25000",
           },
         ],
       },
@@ -30,6 +49,10 @@ const IMPORTANT_SECTIONS = [
           {
             label: "Dataflow",
             name: "dyn_paper/dyn_paper_50_dataflow/100000",
+          },
+          {
+            label: "Dataflow specialized",
+            name: "dyn_paper/dyn_paper_50_dataflow_specialised/100000",
           },
           {
             label: "SemiSync",
@@ -81,6 +104,10 @@ const IMPORTANT_SECTIONS = [
             name: "dup_defer/dup_defer_untyped_dataflow/25000",
           },
           {
+            label: "Dataflow specialized",
+            name: "dup_defer/dup_defer_dataflow_specialised/25000",
+          },
+          {
             label: "SemiSync",
             name: "dup_defer/dup_defer_untyped_semisync/25000",
           },
@@ -111,6 +138,10 @@ const IMPORTANT_SECTIONS = [
         series: [
           {
             label: "Dataflow",
+            name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
+          },
+          {
+            label: "Dataflow specialized",
             name: "time_dependent_property/dsrv_default_window_dataflow/10000",
           },
           {
@@ -171,6 +202,10 @@ const IMPORTANT_SECTIONS = [
         series: [
           {
             label: "DSRV dataflow",
+            name: "threshold_property/dsrv_dataflow_untyped/10000",
+          },
+          {
+            label: "DSRV dataflow specialized",
             name: "threshold_property/dsrv_dataflow/10000",
           },
           {
@@ -193,6 +228,10 @@ const IMPORTANT_SECTIONS = [
         series: [
           {
             label: "DSRV dataflow",
+            name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
+          },
+          {
+            label: "DSRV dataflow specialized",
             name: "time_dependent_property/dsrv_default_window_dataflow/10000",
           },
           {
@@ -219,7 +258,7 @@ const BENCHMARK_ALIASES = {
   ],
 };
 
-const COLORS = ["#0969da", "#cf222e", "#1a7f37", "#8250df"];
+const COLORS = ["#0969da", "#cf222e", "#1a7f37", "#8250df", "#bc4c00", "#0550ae"];
 const AREA_COLORS = [
   "rgba(9, 105, 218, 0.45)",
   "rgba(207, 34, 46, 0.45)",

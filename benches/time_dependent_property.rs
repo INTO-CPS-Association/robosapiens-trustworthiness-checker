@@ -97,6 +97,23 @@ async fn run_dsrv(
     input: InputStream<Value>,
     runtime_spec: RuntimeSpec,
 ) {
+    run_dsrv_with_semantics(
+        executor,
+        spec,
+        input,
+        runtime_spec,
+        Semantics::GradualTypedUntimed,
+    )
+    .await;
+}
+
+async fn run_dsrv_with_semantics(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input: InputStream<Value>,
+    runtime_spec: RuntimeSpec,
+    semantics: Semantics,
+) {
     let output = Box::new(NullOutputHandler::new(
         executor.clone(),
         BTreeSet::from([VarName::new("always_x")]),
@@ -108,7 +125,7 @@ async fn run_dsrv(
         .input(input)
         .output(output)
         .runtime(runtime_spec)
-        .semantics(Semantics::GradualTypedUntimed)
+        .semantics(semantics)
         .build()
         .await;
 
@@ -315,6 +332,23 @@ fn compare_time_dependent_property(c: &mut Criterion) {
                         dsrv_spec.clone(),
                         dsrv_input(size),
                         RuntimeSpec::SemiSync,
+                    )
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("dsrv_default_window_dataflow_untyped", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    run_dsrv_with_semantics(
+                        benchmark_executor.executor.clone(),
+                        dsrv_spec.clone(),
+                        dsrv_input(size),
+                        RuntimeSpec::Dataflow(Default::default()),
+                        Semantics::Untimed,
                     )
                 })
             },

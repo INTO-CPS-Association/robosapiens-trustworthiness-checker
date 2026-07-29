@@ -493,6 +493,23 @@ fn compare_threshold_property(c: &mut Criterion) {
         );
 
         group.bench_with_input(
+            BenchmarkId::new("dsrv_dataflow_untyped", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    run_dsrv_with_semantics(
+                        benchmark_executor.executor.clone(),
+                        dsrv_spec.clone(),
+                        dsrv_input(size),
+                        RuntimeSpec::Dataflow(Default::default()),
+                        Semantics::Untimed,
+                    )
+                })
+            },
+        );
+
+        group.bench_with_input(
             BenchmarkId::new("dsrv_dataflow", size),
             &size,
             |b, &size| {

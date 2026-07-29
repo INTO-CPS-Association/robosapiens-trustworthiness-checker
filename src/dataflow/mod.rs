@@ -51,18 +51,18 @@
 //! | **1. Read the model** | `DsrvSpecification` or `CheckedDsrvSpecification` | Supply untyped expressions or expressions with checked types. |
 //! | **2. Lower expressions** | `UnboundEvaluationGraph` | Convert syntax into ordered operations whose external references are still `VarName` values. |
 //! | **3. Order and bind streams** | `BoundEvaluationGraph` | Topologically order same-tick dependencies and replace names with stable `EnvironmentSlot` values. |
-//! | **4. Build executables** | `StreamProgram` and `StreamEvaluator` | Pair each immutable bound program with its persistent per-stream state. |
-//! | **5. Plan execution** | `ExecutionPlan` and `Scheduler` | Record static structure and maintain the active runtime evaluation order. |
+//! | **4. Build executables** | `StreamProgram` and `MonitorPlan` | Record immutable programs, dependencies, reconfiguration points, and temporal streams. |
+//! | **5. Schedule execution** | `MonitorExecution` and `Scheduler` | Keep persistent evaluators and follow the active dependency order. |
 //! | **6. Run ticks** | `DataflowMonitor` | Load input rows, evaluate streams, commit temporal state, and project output rows. |
 //!
 //! The monitor is compiled once and evaluated many times. Compilation lowers each equation into a
 //! `compiler::pipeline::LoweredDataflow`, derives a temporary [`crate::lang::core::DepGraph`] from
 //! same-tick free variables, topologically orders the streams, assigns environment slots, validates
-//! and binds references, and creates one stateful evaluator per computed stream. It also builds an
-//! immutable `execution_plan::ExecutionPlan`: stable stream slots, static dependencies, the
+//! and binds references, and creates one stateful evaluator per computed stream. It
+//! also builds an immutable `execution_plan::MonitorPlan`: stable stream slots, static dependencies, the
 //! reconfiguration points and prerequisite source streams, the streams requiring a temporal commit,
-//! and fast-path flags. The monitor separately owns the mutable `scheduler::Scheduler`, whose cached
-//! order, active dynamic edges, and iterative-DFS workspace are reused across ticks.
+//! and the initial order. The monitor separately owns the mutable `scheduler::Scheduler`, whose
+//! cached order, active dynamic edges, and iterative-DFS workspace are reused across ticks.
 //!
 //! Evaluation repeats the right-hand side of the figure for every logical tick: load the input row,
 //! resolve runtime definitions and their exact dependencies, execute stream programs in dependency
@@ -156,9 +156,9 @@
 //!
 //! `LoweredDataflow::into_monitor` consumes the named graphs. It assigns a slot to every declared
 //! input followed by every computed stream in the initial dependency order, binds each graph,
-//! creates its `StreamEvaluator`, and builds the `ExecutionPlan`. The temporary named dependency
-//! graph is discarded, but its per-stream static dependency sets are retained in the plan so the
-//! scheduler can merge them with active runtime dependencies.
+//! creates the monitor plan and persistent evaluator state, and returns the monitor. The temporary
+//! named dependency graph is discarded, but its per-stream static dependency sets are retained in
+//! the plan so the scheduler can merge them with active runtime dependencies.
 //! `EnvironmentLayout` maps each `VarName` to an `EnvironmentSlot` used during binding.
 //! `DataflowMonitor::environment_values` is the matching fixed-size row: input values occupy its
 //! initial slots and each stream evaluator writes its result to its assigned slot.
@@ -174,7 +174,7 @@
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/environment-layout.svg")]
-//! <figcaption>Environment slots remain stable even if runtime dependencies reorder evaluators; outputs project their own API order through saved IDs.</figcaption>
+//! <figcaption>Environment slots remain stable even if runtime dependencies reorder evaluators; outputs project their own API order through saved slots.</figcaption>
 //! </figure>
 //!
 //! `EnvironmentLayout` owns the immutable `VarName -> EnvironmentSlot` mapping and assigns contiguous
@@ -184,13 +184,13 @@
 //! function bodies use a local captures-then-parameters layout, and runtime-compiled dynamic programs
 //! bind against the outer layout after scope validation.
 //!
-//! `DataflowMonitor` owns the mutable row as `environment_values: Vec<Value>`, a stable
-//! `Vec<StreamEvaluator>`, the immutable `ExecutionPlan`, the mutable `Scheduler`, and the output
-//! projection in `output_slots`. The scheduler stores stream IDs rather than moving evaluators.
-//! During one program, `EvaluationContext` borrows the complete row and resolves bound
-//! `DataRef::External` directly against it. Dependency scheduling guarantees that a computed slot is
-//! filled before a same-tick read. The shared layout and bound slots never change, even when the
-//! scheduler repairs evaluation order.
+//! `DataflowMonitor` owns the mutable row as `environment_values: Vec<Value>`, the immutable
+//! `MonitorPlan`, the mutable `Scheduler`, a `MonitorExecution`, and the output projection in
+//! `output_slots`. `MonitorExecution` owns the persistent stream evaluators. During one program,
+//! `EvaluationContext` borrows the complete row and resolves bound `DataRef::External` directly
+//! against it. Dependency scheduling guarantees that a computed slot is filled before a same-tick
+//! read. The shared environment layout, persistent evaluator state, and bound slots never change
+//! when the scheduler repairs evaluation order.
 //!
 //! ## Bind and validate
 //!
@@ -202,7 +202,8 @@
 //! recursive delay stores a `NonZeroU64`. Binding also resolves dynamic scopes, prepares function
 //! capture layouts, and records the exact recursive-delay node IDs used by the post-output commit.
 //!
-//! The program figure shows the bound body for `total`. A `EvaluationGraph` owns an ordered
+//! The program figure shows the bound body for `total`. The semantic contents of an
+//! `EvaluationGraph` are an ordered
 //! `Vec<StreamOp>`, a `DataRef` identifying its result, and the IDs of recursive delays. `NodeId`
 //! is an index into that operation vector and its matching value/state vectors. The positive
 //! self-reference has become `RecursiveDelay`; it reads previous-output history during the forward
@@ -216,16 +217,18 @@
 //! <figcaption>Solid arrows are forward-pass reads; the dashed path is the post-output recursive-delay commit.</figcaption>
 //! </figure>
 //!
-//! The bound graph becomes an `ir::StreamProgram`. This immutable structure owns the graph, an
+//! The bound graph becomes an `ir::StreamProgram`. Its canonical execution data is the graph, an
 //! `Rc<EnvironmentLayout>`, an `EvaluationMode::{Infallible, Fallible}` classification, and a cached
 //! `requires_temporal_commit` flag. Sharing the program is important for function call sites and
 //! runtime-compiled programs: each evaluator can own state without cloning operation vectors or
-//! layouts.
+//! layouts. The later [execution layouts and type specialization](#execution-layouts-and-type-specialization)
+//! section describes the optional metadata stored beside these semantic fields.
 //!
 //! ## Execute one tick
 //!
-//! `execution::stream_evaluator::StreamEvaluator` pairs an `Rc<StreamProgram>` with one mutable
-//! `execution::stream_state::StreamState`. `StreamState` has two parallel vectors indexed by `NodeId`:
+//! The canonical state owned by `execution::stream_evaluator::StreamEvaluator` is one mutable
+//! `execution::stream_state::StreamState` paired with an `Rc<StreamProgram>`. `StreamState` has two
+//! vectors indexed by `NodeId`:
 //!
 //! - `node_values: Vec<Value>` is the current result of each operation. A forward pass overwrites
 //!   these slots on every evaluation, so later nodes can resolve `DataRef::Node` in constant time.
@@ -256,15 +259,16 @@
 //! <figcaption>Both delay forms read history committed before tick n. A recursive self-delay feeds an earlier stream output into the body and stages the completed output back to its ring; both delay forms commit their new samples after row n completes.</figcaption>
 //! </figure>
 //!
-//! `StreamEvaluator::evaluate_infallible_and_stage` uses
-//! `execution::interpreter::evaluate_nodes`; `evaluate_and_stage` selects that same fast path for an
-//! infallible program or `try_evaluate_nodes` for a fallible one. `EvaluationContext` contains the
-//! environment row, its layout, and an optional recursive-call callback. After traversal the evaluator
-//! reads `EvaluationGraph::output`, stages recursive self-delays, and returns one stream value.
+//! The canonical path uses `execution::interpreter::evaluate_nodes` for infallible programs.
+//! Fallible programs use `execution::interpreter::try_evaluate_nodes`, which handles dynamic nodes
+//! and delegates ordinary operations to the same canonical evaluator. `EvaluationContext` contains
+//! the environment row, its layout, and an optional recursive-call callback. After traversal the
+//! evaluator reads `EvaluationGraph::output`, stages recursive self-delays, and returns one stream
+//! value.
 //! `evaluate_and_commit` is used where a nested invocation owns its complete tick; top-level stream
 //! evaluators stage writes for the monitor's common commit phase.
 //!
-//! `DataflowMonitor::execute_tick` has these exact phases:
+//! `DataflowMonitor::execute_tick` has these logical phases:
 //!
 //! 1. Load the complete input slice. A monitor with reconfiguration first clears the whole
 //!    environment row to `NoVal`; a static monitor can overwrite in place because every stream slot
@@ -275,9 +279,9 @@
 //!    the active expression's same-tick dependency slots.
 //! 4. Ask `Scheduler` to retain its cached order when valid or repair it with iterative DFS; reject
 //!    a same-tick runtime cycle.
-//! 5. Evaluate every stream not already consumed as a source prerequisite exactly once, using the
-//!    infallible static fast path when possible, and write each result to its stable slot.
-//! 6. Commit staged temporal state only for streams marked by `ExecutionPlan::temporal_streams`.
+//! 5. Evaluate every stream not already consumed as a source prerequisite exactly once in the
+//!    active dependency order, and write each result to its stable slot.
+//! 6. Commit staged temporal state only for streams marked by `MonitorPlan::temporal_streams`.
 //! 7. Back in `evaluate`, project `output_slots` into the caller's output slice.
 //!
 //! The common commit lets mutually delayed streams capture each other's completed current values
@@ -437,7 +441,8 @@
 //! Direct recursive evaluation uses the private `execution::functions::RecursiveCall`. Every
 //! invocation obtains a reset `CallFrame`, fills parameter slots in a captures-first environment,
 //! evaluates and commits the shared non-fallible body, and returns the frame to a pool for that
-//! outer recursive call.
+//! outer recursive call. Resetting a recursive frame clears its per-invocation values and lifting
+//! state.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/function-call.svg")]
@@ -449,7 +454,7 @@
 //! `ir::StreamOp::RecursiveApply` and rewrites self calls as `ir::StreamOp::RecursiveCall`.
 //! `evaluate_recursive_apply` supplies the callback through `EvaluationContext`. The recursive
 //! `if` rule above evaluates only the selected branch, so a base case can return without evaluating
-//! the recursive branch. Non-specialized function values still use the general `Fix` wrapper.
+//! the recursive branch. Other function values use the general `Fix` wrapper.
 //!
 //! This example shows both capture-by-current-tick and direct recursive application. `bias` is
 //! captured anew when each function node is evaluated, while every recursive call in that tick
@@ -599,7 +604,7 @@
 //! <figcaption>The full graph and matrix show the same compile-time permissions; each runtime tick activates a subset and repairs the cached dependency-first schedule when necessary.</figcaption>
 //! </figure>
 //!
-//! The `ExecutionPlan` determines source prerequisites and the `Scheduler` applies the tick phases
+//! The `MonitorPlan` determines source prerequisites and the `Scheduler` applies the tick phases
 //! listed above. Reconfiguration resolution activates or reuses programs and collects exact same-tick
 //! dependencies without evaluating the active programs. The scheduler first checks its current
 //! order and only runs its allocation-reusing iterative DFS when repair is needed; a cycle produces
@@ -859,50 +864,200 @@
 //! `defer(source: Int, {x})` permits the name `x`; it cannot declare a bound such as “retain four
 //! samples of `x`.” Neither construct accepts a memory-strategy selector or retained-history length.
 //!
-//! # Output buffering and asynchronous delivery
+//! # Execution layouts and type specialization
 //!
-//! [`DataflowMonitor::evaluate`] returns one fixed-width output row immediately for each logical tick.
-//! The asynchronous dataflow runtime transposes successive rows into one `Vec<Value>` buffer per
-//! declared output stream. A flush sends each vector through that output's channel; the receiving side
-//! flattens the vectors back into an ordered stream of individual values for the
-//! [`crate::core::OutputHandler`]. Buffering therefore changes transport granularity, not monitor
-//! values or logical time.
+//! Everything above describes the canonical dataflow machine: bound graphs, stable environment
+//! slots, dependency scheduling, persistent evaluator state, and the common temporal commit. That
+//! model is sufficient to understand the language semantics and correctness of the interpreter.
+//! This section elaborates the current execution architecture. It adds schedule-specific routing
+//! and optional type-specialized scalar instructions without replacing the canonical graph or its
+//! state.
 //!
-//! ## Flush policies
+//! ## Type-specialized scalar plans
 //!
-//! | policy | when buffers flush | intended effect |
-//! |:-------|:-------------------|:----------------|
-//! | [`crate::core::ExecutionPolicy::Buffered`] (default) | After 256 logical ticks, or once more at input EOF for a partial batch. | Amortize channel and output-handler overhead across many values. |
-//! | `ExecutionPolicy::Synchronous` | After every logical tick. | Ensure that tick's output batch has entered the bounded channels before polling the next input tick. |
+//! Checked lowering records an optional `ScalarSignature` beside each graph operation. It contains
+//! the exact input and output kinds for supported unary and binary AST nodes. Untyped lowering and
+//! non-scalar nodes record `None`. These annotations do not change the graph's semantics: every
+//! canonical operation remains present.
 //!
-//! [`crate::runtime::dataflow::DataflowRuntimeBuilder::controlled_input`] selects synchronous policy,
-//! so the runtime does not poll the next controlled input tick until the current output batches have
-//! reached the channel boundary. “Synchronous” does not mean the external sink has already persisted
-//! or consumed the values; the output handler still runs asynchronously.
+//! An infallible `StreamProgram` with eligible scalar work owns an immutable
+//! `execution::specialization::Plan` in addition to its canonical graph. The plan has exactly one
+//! instruction per graph node. A supported checked unary or binary operation becomes a scalar
+//! instruction; an eligible `if` may carry plans for its branches; every other node becomes a
+//! `Canonical` instruction. Fallible graphs and graphs with no specialized instruction have no plan.
 //!
-//! ## Backpressure and shutdown
+//! `StreamEvaluator` always owns its canonical `StreamState`. When its program has a plan, it also
+//! owns a parallel `specialization::State` containing compact node values, lifting state, and any
+//! persistent deoptimization decisions. The canonical state remains the semantic authority.
 //!
-//! Each declared output has a bounded channel holding at most 1024 **batches**. A flush awaits channel
-//! capacity, so a slow output handler eventually stops the engine from polling further input. If an
-//! output receiver closes during a normal flush, the engine treats that as successful early
-//! termination. If the output handler itself finishes first, its result wins and the engine future is
-//! dropped.
+//! Scalar instructions operate on `ScalarValue::{Int, Float, Bool, NoVal, Deferred}`. The direct set
+//! is deliberately small:
 //!
-//! At normal input EOF, the engine attempts one final flush of its non-empty partial buffers, drops
-//! its senders, and waits for the output handler to drain and finish. Input-stream errors, undeclared
-//! variables, and monitor errors terminate the run; values accumulated since the previous successful
-//! flush may therefore remain undelivered. EOF does not synthesize extra logical ticks, so delayed
-//! monitor values are not drained after the last input row.
+//! | shape | directly handled operations |
+//! |:------|:----------------------------|
+//! | Boolean unary | `not` |
+//! | Integer unary | negation and absolute value |
+//! | Floating-point unary | negation, absolute value, sine, cosine, and tangent |
+//! | Numeric binary | addition, subtraction, multiplication, division, and modulo, including checked integer failure and mixed numeric promotion |
+//! | Boolean binary | conjunction, disjunction, and implication |
+//! | Scalar comparison | equality and ordered numeric/Boolean comparisons |
 //!
-//! ## Which inputs produce one buffered output row?
+//! Each operand is independently selected as a scalar constant, an earlier scalar node, a scalar
+//! published by an earlier stream in the current execution layout, or a canonical `DataRef`.
+//! Unsupported collections, maps, functions, temporal operators, and reconfiguration nodes continue
+//! through `execution::interpreter::evaluate_node`. The result is a mixed specialization overlay rather
+//! than a second semantic IR.
 //!
-//! The runtime converts [`crate::core::InputBatch`] values into logical ticks before appending outputs
-//! to the buffers. `InputBatch::events` treats every event as a separate one-event tick;
-//! `InputBatch::step` groups its events into one simultaneous tick; and internally packed fixed-width
-//! steps represent several simultaneous ticks. For each tick, `DataflowEngine` starts with an
-//! all-`NoVal` row, writes that tick's named events, calls the monitor once, and appends exactly one
-//! value to every output buffer. Omitted inputs therefore receive `NoVal`. Undeclared event names are
-//! runtime errors, while duplicate names in an atomic step are rejected when the batch is built.
+//! <figure style="margin:1.25rem 0">
+#![doc = include_str!("../../docs/src/assets/dataflow/specialization-overlay.svg")]
+//! <figcaption>The optional scalar plan and state run beside the complete canonical graph and state; canonical execution remains available at every node.</figcaption>
+//! </figure>
+//!
+//! ## Schedule-specific execution layouts
+//!
+//! `MonitorExecution` owns every `StreamEvaluator` in a fixed `EvaluatorArena`, together with one
+//! optional published scalar slot per logical stream. The immutable `MonitorPlan` remains the
+//! logical description: stable stream slots, static dependencies, reconfiguration metadata, and the
+//! temporal commit set. An `ExecutionLayout` provides replaceable, schedule-specific routing over
+//! that stable state. It owns no evaluator or language state.
+//!
+//! A layout records the active stream order as `Graph` and `ScalarRun` steps:
+//!
+//! - A `Graph` step enters the normal graph-level evaluator. It may still execute a mixed scalar
+//!   plan internally.
+//! - A stream is eligible for direct scalar execution only when its complete graph is one unary or
+//!   binary node and that node is the output.
+//! - Consecutive eligible streams form a `ScalarRun`, avoiding repeated general graph traversal
+//!   while retaining a descriptor and publication boundary for every logical stream.
+//!
+//! Every step publishes its result as a canonical `Value` in the stable environment slot. A scalar
+//! result is additionally published in compact form for later streams in the same layout. Fan-out,
+//! intermediate outputs, canonical instructions, and nested evaluators therefore retain their
+//! ordinary observation points. A rich graph ends a direct run but can publish a scalar result that
+//! allows a later stream to specialize.
+//!
+//! The initial schedule creates the first layout. When dynamic dependencies change the order,
+//! `MonitorExecution` selects a matching cached layout or builds a new one; it retains at most four
+//! previous layouts. Since layouts contain only stream IDs and schedule routing, replacement cannot
+//! reset delay rings, branch state, function frames, active dynamic expressions, or deoptimization
+//! decisions.
+//!
+//! <figure style="margin:1.25rem 0">
+#![doc = include_str!("../../docs/src/assets/dataflow/execution-layout.svg")]
+//! <figcaption>The logical monitor plan and fixed evaluator arena survive schedule changes; only the small execution layout is selected or rebuilt.</figcaption>
+//! </figure>
+//!
+//! ## Example specialized execution layout
+//!
+//! Recall the three equations:
+//!
+//! | stream | equation | relevant shape |
+//! |:-------|:---------|:---------------|
+//! | `scaled` | `x * 2` | One stateless scalar operation. |
+//! | `total` | `default(total[1], 0) + scaled` | Temporal state and `default`, followed by scalar addition. |
+//! | `alert` | `total > 20` | One stateless scalar comparison. |
+//!
+//! The example near the start of this page uses the untyped entry point, which provides no scalar
+//! signatures and therefore executes all three streams as canonical `Graph` steps. Compiling the
+//! same specification through [`DataflowMonitor::compile_checked`] allows the specialization planner to
+//! select scalar instructions.
+//!
+//! Three labels are enough to read the resulting plan:
+//!
+//! - **`ScalarRun`** means that the complete current-tick computation of each enclosed stream can
+//!   use the direct scalar executor.
+//! - **`Graph`** means that the general graph traversal is required. Individual operations inside
+//!   it may still be scalar.
+//! - **publish** means that the stream result is written to the ordinary canonical environment and,
+//!   when scalar, also made available in compact form to later planned streams.
+//!
+//! With those definitions, the plan is:
+//!
+//! ```text
+//! input x
+//!   │
+//!   ▼
+//! ScalarRun [scaled]
+//!   scalar: x * 2
+//!   publish scaled
+//!   │
+//!   │ published scaled
+//!   ▼
+//! Graph [total]
+//!   canonical: read previous total, then apply default(..., 0)
+//!   scalar:    add published scaled
+//!   publish total
+//!   stage total as the next previous value
+//!   │
+//!   │ published total
+//!   ▼
+//! ScalarRun [alert]
+//!   scalar: total > 20
+//!   publish alert
+//!   │
+//!   ▼
+//! temporal commit, then output projection
+//! ```
+//!
+//! The dependency order is still `scaled, total, alert`; specialization has not reordered the
+//! language. `total` separates the two direct runs because its complete graph cannot use the narrow
+//! one-operation executor. It is not wholly unspecialized, however. Its temporal read and `default`
+//! use canonical state, after which the addition consumes the canonical base value and the published
+//! scalar `scaled`.
+//!
+//! The `total` result is then published in both representations. The canonical copy preserves the
+//! ordinary observable stream boundary; the compact copy lets `alert` perform its comparison without
+//! reading and converting the canonical value. Only after all three current-tick results exist does
+//! the temporal commit make the staged `total` visible as `total[1]` on the next tick.
+//!
+//! Tick 2 walks through that same plan as follows:
+//!
+//! | action | value flow | state effect |
+//! |:-------|:-----------|:-------------|
+//! | Load input | `x = 8` | No temporal state changes. |
+//! | Run `scaled` | Scalar multiplication produces and publishes `16`. | No temporal state. |
+//! | Enter `total` | Canonical history returns the previous `total`, `8`; `default` therefore also produces `8`. | The old history remains readable throughout the tick. |
+//! | Finish `total` | Scalar addition combines canonical `8` with published `scaled = 16`, producing and publishing `24`. | `24` is staged, but not committed yet. |
+//! | Run `alert` | Scalar comparison consumes published `total = 24` and publishes `true`. | No temporal state. |
+//! | Finish the tick | Commit staged `24`, then project `[alert, scaled, total]` as `[true, 16, 24]`. | Tick 3 will observe `total[1] = 24`. |
+//!
+//! ## Node-local deoptimization
+//!
+//! A scalar instruction deoptimizes when a runtime operand cannot be represented with its checked
+//! kind—for example, when the public monitor API supplies a value inconsistent with the checked
+//! model. On the first mismatch, the instruction transfers its retained scalar lifting operands
+//! into the corresponding canonical `NodeState`, marks only that specialization node
+//! `Deoptimized`, and evaluates the canonical operation for the current tick. Later ticks enter that
+//! canonical operation directly.
+//!
+//! Other nodes and streams remain specialized. Scalar results are always mirrored into canonical
+//! `node_values`; canonical and deoptimized stream results are converted back into published scalars
+//! when their actual values permit it. Downstream specialization can therefore continue after a
+//! local fallback.
+//!
+//! ## Interaction with the full language
+//!
+//! Type specialization does not define separate semantics for richer language features:
+//!
+//! - Temporal nodes remain canonical and use the same staging and post-row commit described above.
+//!   Scalar nodes before or after them can still use the mixed plan.
+//! - A non-recursive `if` keeps canonical selection and independent branch `StreamState` values,
+//!   while either branch may carry its own plan. An `if` containing a recursive call stays
+//!   canonical because active recursive depths use reset frames. At monitor level every `if` stream
+//!   is a `Graph` step, but it can publish a scalar output for a later stream.
+//! - Persistent and recursive function frames use ordinary `StreamEvaluator` construction, so an
+//!   eligible checked function body can share its program's plan. Resetting a recursive frame clears
+//!   per-invocation values and lifting state; a persistent deoptimization decision remains local to
+//!   that instantiated evaluator.
+//! - A checked, runtime-compiled `dynamic` or `defer` expression can build its own plan when its
+//!   active program is infallible. The enclosing stream remains a fallible `Graph` step because
+//!   parsing, type checking, scope validation, and replacement can fail.
+//!
+//! In the seven-phase logical tick described earlier, only phase 5 is elaborated physically. The
+//! scheduler supplies the active dependency order, `MonitorExecution` selects the corresponding
+//! layout, and its `Graph` and `ScalarRun` steps address stable evaluators in that order. Each step
+//! still writes the canonical environment row exactly once. Source resolution, cycle rejection,
+//! temporal commit, error handling, and output projection are unchanged.
 //!
 //! # References
 //!

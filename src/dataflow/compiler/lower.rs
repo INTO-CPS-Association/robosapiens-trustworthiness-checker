@@ -7,24 +7,38 @@ use super::super::ir::*;
 use super::super::*;
 use crate::core::UnaryOperator;
 use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView};
+use crate::lang::dsrv::type_checker::TCType;
 
 struct EvaluationGraphBuilder {
     nodes: Vec<UnboundOp>,
+    scalar_signatures: Vec<Option<ScalarSignature>>,
 }
 
 impl EvaluationGraphBuilder {
     fn new() -> Self {
-        Self { nodes: Vec::new() }
+        Self {
+            nodes: Vec::new(),
+            scalar_signatures: Vec::new(),
+        }
     }
 
     fn push(&mut self, op: UnboundOp) -> UnboundRef {
+        self.push_with_signature(op, None)
+    }
+
+    fn push_with_signature(
+        &mut self,
+        op: UnboundOp,
+        scalar_signature: Option<ScalarSignature>,
+    ) -> UnboundRef {
         let id = self.nodes.len();
         self.nodes.push(op);
+        self.scalar_signatures.push(scalar_signature);
         UnboundRef::Node(NodeId::new(id))
     }
 
     fn finish(self, output: UnboundRef) -> UnboundEvaluationGraph {
-        UnboundEvaluationGraph::new(self.nodes, output)
+        UnboundEvaluationGraph::new(self.nodes, self.scalar_signatures, output)
     }
 }
 
@@ -53,20 +67,22 @@ fn build_graph_from_cursor(expr: ExprCursor<'_>) -> UnboundEvaluationGraph {
 fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) -> UnboundRef {
     use ExprView::*;
 
+    let result_kind = scalar_kind(expr.typ());
     match expr.view() {
         Val(value) => UnboundRef::Const(value.clone()),
         Var(var) => UnboundRef::External(var.clone()),
         BinOp(lhs, rhs, op) => {
+            let signature = scalar_binary_signature(lhs.typ(), rhs.typ(), result_kind);
             let lhs = lower_expression(lhs, builder);
             let rhs = lower_expression(rhs, builder);
-            builder.push(UnboundOp::Binary { op, lhs, rhs })
+            builder.push_with_signature(UnboundOp::Binary { op, lhs, rhs }, signature)
         }
-        Not(arg) => lower_unary(builder, UnaryOperator::Not, arg),
-        Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg),
-        Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg),
-        Cos(arg) => lower_unary(builder, UnaryOperator::Cos, arg),
-        Tan(arg) => lower_unary(builder, UnaryOperator::Tan, arg),
-        Abs(arg) => lower_unary(builder, UnaryOperator::Absolute, arg),
+        Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
+        Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg, result_kind),
+        Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg, result_kind),
+        Cos(arg) => lower_unary(builder, UnaryOperator::Cos, arg, result_kind),
+        Tan(arg) => lower_unary(builder, UnaryOperator::Tan, arg, result_kind),
+        Abs(arg) => lower_unary(builder, UnaryOperator::Absolute, arg, result_kind),
         If(cond, then_value, else_value) => {
             let cond = lower_expression(cond, builder);
             let then_branch = lower_branch(then_value);
@@ -283,9 +299,42 @@ fn lower_unary(
     builder: &mut EvaluationGraphBuilder,
     op: UnaryOperator,
     arg: ExprCursor<'_>,
+    output: Option<ScalarKind>,
 ) -> UnboundRef {
+    let signature = scalar_unary_signature(arg.typ(), output);
     let arg = lower_expression(arg, builder);
-    builder.push(UnboundOp::Unary { op, arg })
+    builder.push_with_signature(UnboundOp::Unary { op, arg }, signature)
+}
+
+fn scalar_kind(typ: Option<&TCType>) -> Option<ScalarKind> {
+    match typ? {
+        TCType::Int => Some(ScalarKind::Int),
+        TCType::Float => Some(ScalarKind::Float),
+        TCType::Bool => Some(ScalarKind::Bool),
+        _ => None,
+    }
+}
+
+fn scalar_unary_signature(
+    input: Option<&TCType>,
+    output: Option<ScalarKind>,
+) -> Option<ScalarSignature> {
+    Some(ScalarSignature::Unary {
+        input: scalar_kind(input)?,
+        output: output?,
+    })
+}
+
+fn scalar_binary_signature(
+    left: Option<&TCType>,
+    right: Option<&TCType>,
+    output: Option<ScalarKind>,
+) -> Option<ScalarSignature> {
+    Some(ScalarSignature::Binary {
+        left: scalar_kind(left)?,
+        right: scalar_kind(right)?,
+        output: output?,
+    })
 }
 
 fn lower_expressions<'arena>(

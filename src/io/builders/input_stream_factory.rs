@@ -4,7 +4,6 @@ use std::rc::Rc;
 use async_stream::stream;
 use smol::LocalExecutor;
 use tracing::{debug_span, warn};
-use winnow::Parser;
 
 use crate::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
 use crate::io::InputAggregation;
@@ -308,10 +307,9 @@ impl InputStreamFactory {
         let _open = debug_span!("open input stream").entered();
         let stream = match &self.kind {
             InputFactoryKind::File { path } => {
-                let data = tc::parse_file(
+                let packed_input = tc::parse_file(
                     |contents| {
-                        tc::lang::untimed_input::untimed_input_file
-                            .parse(contents)
+                        tc::lang::untimed_input::parser::packed_untimed_input(contents, input_vars)
                             .map_err(|error| error.to_string())
                     },
                     path,
@@ -320,7 +318,7 @@ impl InputStreamFactory {
                 .map_err(|error| {
                     anyhow::anyhow!(error).context("Input file could not be parsed")
                 })?;
-                tc::io::file::input_stream(data, input_vars)
+                tc::io::file::packed_input_stream(packed_input)
             }
             InputFactoryKind::Ros {
                 topics: _topic_mapping,

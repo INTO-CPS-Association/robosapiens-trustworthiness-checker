@@ -1,4 +1,4 @@
-//! Type-specialised scalar stream combinators used by checked expressions.
+//! Type-specialized scalar stream combinators used by checked expressions.
 
 use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn specialised_arithmetic_operations_and_propagation() {
+    fn specialized_arithmetic_operations_and_propagation() {
         smol::block_on(async {
             let known = |value| PartialStreamValue::Known(value);
             assert_eq!(
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn specialised_boolean_and_comparison_operations() {
+    fn specialized_boolean_and_comparison_operations() {
         smol::block_on(async {
             let known = PartialStreamValue::Known;
             assert_eq!(
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn specialised_temporal_selection_operations() {
+    fn specialized_temporal_selection_operations() {
         smol::block_on(async {
             let known = PartialStreamValue::Known;
             assert_eq!(

@@ -9,6 +9,7 @@ use criterion::Throughput;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
+use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
@@ -126,6 +127,20 @@ fn from_elem(c: &mut Criterion) {
                 b.to_async(dataflow_executor.clone()).iter(|| {
                     monitor_outputs_untyped_dataflow(
                         dataflow_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        let specialized_dataflow_executor = LocalSmolExecutor::new();
+        group.bench_with_input(
+            BenchmarkId::new("dup_defer_dataflow_specialised", size),
+            &(&spec),
+            |b, &spec| {
+                b.to_async(specialized_dataflow_executor.clone()).iter(|| {
+                    monitor_outputs_specialized_dataflow(
+                        specialized_dataflow_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )

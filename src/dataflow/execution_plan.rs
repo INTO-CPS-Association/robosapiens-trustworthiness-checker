@@ -312,15 +312,14 @@ impl ReconfigurationPlan {
     }
 }
 
-pub(super) struct ExecutionPlan {
+pub(super) struct MonitorPlan {
     pub(super) stream_slots: StreamSlots,
     pub(super) dependencies: DependencyGraph,
     pub(super) reconfiguration: ReconfigurationPlan,
     pub(super) temporal_streams: StreamSet,
-    pub(super) all_streams_infallible: bool,
 }
 
-impl ExecutionPlan {
+impl MonitorPlan {
     pub(super) fn build(
         stream_slots: StreamSlots,
         stream_vars: &[VarName],
@@ -339,14 +338,11 @@ impl ExecutionPlan {
                     .requires_temporal_commit()
                     .then(|| StreamId::new(index))
             }));
-        let all_streams_infallible = programs.iter().all(|program| program.is_infallible());
-
         Ok(Self {
             stream_slots,
             dependencies,
             reconfiguration,
             temporal_streams,
-            all_streams_infallible,
         })
     }
 }

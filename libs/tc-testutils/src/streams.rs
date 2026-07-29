@@ -161,7 +161,11 @@ where
     let mut ticks = batch.ticks();
     let matches_expected = matches!(
         (ticks.next(), ticks.next()),
-        (Some(actual), None) if actual == expected
+        (Some(actual), None)
+            if actual.len() == 1
+                && actual.iter().zip(&expected).all(|(actual, expected)| {
+                    actual.var == &expected.var && actual.value == &expected.value
+                })
     );
     if !matches_expected {
         return Err(anyhow!(

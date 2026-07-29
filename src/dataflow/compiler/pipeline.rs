@@ -1,5 +1,4 @@
-use super::super::execution::stream_evaluator::StreamEvaluator;
-use super::super::execution_plan::{ExecutionPlan, StreamSlots};
+use super::super::execution_plan::{MonitorPlan, StreamSlots};
 use super::super::ir::*;
 use super::super::monitor::DataflowMonitor;
 use super::super::*;
@@ -174,24 +173,19 @@ impl LoweredDataflow {
             EnvironmentSlot::new(input_variables.len()),
             stream_programs.len(),
         );
-        let execution_plan = ExecutionPlan::build(
+        let monitor_plan = MonitorPlan::build(
             stream_slots,
             &stream_variables,
             &static_dependencies,
             &stream_programs,
         )?;
-        let stream_evaluators = stream_programs
-            .into_iter()
-            .map(StreamEvaluator::new)
-            .collect();
-
         Ok(DataflowMonitor::new(
             input_variables,
             output_variables,
             output_slots,
             stream_variables,
-            stream_evaluators,
-            execution_plan,
+            stream_programs,
+            monitor_plan,
             environment_layout.len(),
         ))
     }

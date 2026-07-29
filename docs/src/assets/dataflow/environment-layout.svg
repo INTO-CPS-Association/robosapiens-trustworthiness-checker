@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 375" role="img" aria-labelledby="environment-arrow-title environment-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
 <title id="environment-arrow-title">Stable environment slots and output projection</title>
-<desc id="environment-arrow-desc">Input and computed values occupy stable EnvironmentSlot indices. The Scheduler may reorder StreamEvaluator execution, while output slots continue to project alert, total, and scaled from slots three, two, and one.</desc>
+<desc id="environment-arrow-desc">Input and computed values occupy stable EnvironmentSlot indices. The scheduler may change stream evaluation order without moving evaluator state, while output slots continue to project alert, total, and scaled from slots three, two, and one.</desc>
 <defs>
   <marker id="environment-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
@@ -39,6 +39,6 @@
 <rect x="735" y="262" width="190" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
 <text x="830" y="289" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output[2]: scaled</text>
 <path d="M 635 164 C 685 164, 685 284, 735 284" fill="none" stroke="#147d64" stroke-width="1.8" marker-end="url(#environment-arrow)"/>
-<text x="35" y="346" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Scheduler may reorder StreamEvaluators; slots do not move</text>
+<text x="35" y="346" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">The scheduler may reorder stream evaluation; state and slots do not move</text>
 <text x="735" y="346" text-anchor="start" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output slots = [3, 2, 1]</text>
 </svg>

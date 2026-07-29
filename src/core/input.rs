@@ -19,6 +19,89 @@ impl<Val> InputEvent<Val> {
 pub type InputStream<Val> = OutputStream<anyhow::Result<InputBatch<Val>>>;
 pub(crate) type InputTickStream<Val> = OutputStream<anyhow::Result<Vec<InputEvent<Val>>>>;
 
+/// A borrowed logical input tick, independent of its transport representation.
+#[derive(Clone, Copy, Debug)]
+pub struct InputTick<'a, V> {
+    representation: InputTickRepresentation<'a, V>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InputTickRepresentation<'a, V> {
+    Events(&'a [InputEvent<V>]),
+    PackedRow {
+        layout: &'a [VarName],
+        values: &'a [V],
+    },
+}
+
+/// A borrowed input event produced while iterating an [`InputTick`].
+#[derive(Clone, Copy, Debug)]
+pub struct InputEventRef<'a, V> {
+    pub var: &'a VarName,
+    pub value: &'a V,
+}
+
+enum InputTickIter<'a, V> {
+    Events(std::slice::Iter<'a, InputEvent<V>>),
+    Packed(std::iter::Zip<std::slice::Iter<'a, VarName>, std::slice::Iter<'a, V>>),
+}
+
+impl<'a, V> Iterator for InputTickIter<'a, V> {
+    type Item = InputEventRef<'a, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Events(events) => events.next().map(|event| InputEventRef {
+                var: &event.var,
+                value: &event.value,
+            }),
+            Self::Packed(values) => values
+                .next()
+                .map(|(var, value)| InputEventRef { var, value }),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Events(events) => events.size_hint(),
+            Self::Packed(values) => values.size_hint(),
+        }
+    }
+}
+
+impl<V> ExactSizeIterator for InputTickIter<'_, V> {}
+
+impl<'a, V> InputTick<'a, V> {
+    pub fn len(&self) -> usize {
+        match self.representation {
+            InputTickRepresentation::Events(events) => events.len(),
+            InputTickRepresentation::PackedRow { values, .. } => values.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = InputEventRef<'a, V>> + '_ {
+        match self.representation {
+            InputTickRepresentation::Events(events) => InputTickIter::Events(events.iter()),
+            InputTickRepresentation::PackedRow { layout, values } => {
+                InputTickIter::Packed(layout.iter().zip(values))
+            }
+        }
+    }
+
+    pub fn to_events(&self) -> Vec<InputEvent<V>>
+    where
+        V: Clone,
+    {
+        self.iter()
+            .map(|event| InputEvent::new(event.var.clone(), event.value.clone()))
+            .collect()
+    }
+}
+
 /// A transport batch containing zero or more logical input ticks.
 #[derive(Debug, PartialEq)]
 pub struct InputBatch<V> {
@@ -42,6 +125,13 @@ enum InputBatchRepresentation<V> {
     AtomicTicks {
         events: Vec<InputEvent<V>>,
         tick_width: NonZeroUsize,
+    },
+
+    /// Fixed-layout logical rows. Variable names are stored once for the
+    /// entire transport batch, while values remain contiguous by row.
+    PackedRows {
+        layout: Box<[VarName]>,
+        values: Vec<V>,
     },
 }
 
@@ -77,6 +167,24 @@ impl<V> InputBatch<V> {
         Self::validated_atomic_ticks(events, tick_width)
     }
 
+    /// Construct fixed-layout rows created by a trusted in-crate producer.
+    ///
+    /// The layout must be non-empty and contain distinct variables. Values
+    /// must contain at least one complete row.
+    pub(crate) fn trusted_packed_rows(layout: Box<[VarName]>, values: Vec<V>) -> Self {
+        debug_assert!(!layout.is_empty());
+        debug_assert!(!values.is_empty());
+        debug_assert!(values.len().is_multiple_of(layout.len()));
+        debug_assert_eq!(
+            layout.iter().collect::<HashSet<_>>().len(),
+            layout.len(),
+            "packed input layout contains duplicate variables"
+        );
+        Self {
+            representation: InputBatchRepresentation::PackedRows { layout, values },
+        }
+    }
+
     fn validated_atomic_ticks(
         events: Vec<InputEvent<V>>,
         tick_width: NonZeroUsize,
@@ -98,14 +206,43 @@ impl<V> InputBatch<V> {
         })
     }
 
-    pub fn ticks(&self) -> impl Iterator<Item = &[InputEvent<V>]> {
-        let (events, tick_width) = match &self.representation {
-            InputBatchRepresentation::Events(events) => (events.as_slice(), 1),
-            InputBatchRepresentation::AtomicTicks { events, tick_width } => {
-                (events.as_slice(), tick_width.get())
+    pub fn ticks(&self) -> impl Iterator<Item = InputTick<'_, V>> {
+        let mut offset = 0;
+        std::iter::from_fn(move || match &self.representation {
+            InputBatchRepresentation::Events(events) => {
+                let event = events.get(offset)?;
+                offset += 1;
+                Some(InputTick {
+                    representation: InputTickRepresentation::Events(std::slice::from_ref(event)),
+                })
             }
-        };
-        events.chunks(tick_width)
+            InputBatchRepresentation::AtomicTicks { events, tick_width } => {
+                let end = offset.checked_add(tick_width.get())?;
+                let tick = events.get(offset..end)?;
+                offset = end;
+                Some(InputTick {
+                    representation: InputTickRepresentation::Events(tick),
+                })
+            }
+            InputBatchRepresentation::PackedRows { layout, values } => {
+                let end = offset.checked_add(layout.len())?;
+                let row = values.get(offset..end)?;
+                offset = end;
+                Some(InputTick {
+                    representation: InputTickRepresentation::PackedRow {
+                        layout,
+                        values: row,
+                    },
+                })
+            }
+        })
+    }
+
+    pub(crate) fn packed_rows(&self) -> Option<(&[VarName], &[V])> {
+        match &self.representation {
+            InputBatchRepresentation::PackedRows { layout, values } => Some((layout, values)),
+            _ => None,
+        }
     }
 
     /// Consume a batch of independent events, returning the atomic tick width
@@ -114,22 +251,54 @@ impl<V> InputBatch<V> {
         match self.representation {
             InputBatchRepresentation::Events(events) => Ok(events),
             InputBatchRepresentation::AtomicTicks { tick_width, .. } => Err(tick_width),
+            InputBatchRepresentation::PackedRows { layout, .. } => {
+                Err(NonZeroUsize::new(layout.len()).unwrap())
+            }
         }
     }
 
     pub(crate) fn into_ticks(self) -> impl Iterator<Item = Vec<InputEvent<V>>> {
-        let (events, tick_width) = match self.representation {
-            InputBatchRepresentation::Events(events) => (events, 1),
-            InputBatchRepresentation::AtomicTicks { events, tick_width } => {
-                (events, tick_width.get())
-            }
+        enum Storage<V> {
+            Events {
+                events: std::vec::IntoIter<InputEvent<V>>,
+                tick_width: usize,
+            },
+            PackedRows {
+                layout: Box<[VarName]>,
+                values: std::vec::IntoIter<V>,
+            },
+        }
+
+        let mut storage = match self.representation {
+            InputBatchRepresentation::Events(events) => Storage::Events {
+                events: events.into_iter(),
+                tick_width: 1,
+            },
+            InputBatchRepresentation::AtomicTicks { events, tick_width } => Storage::Events {
+                events: events.into_iter(),
+                tick_width: tick_width.get(),
+            },
+            InputBatchRepresentation::PackedRows { layout, values } => Storage::PackedRows {
+                layout,
+                values: values.into_iter(),
+            },
         };
-        let mut events = events.into_iter();
-        std::iter::from_fn(move || {
-            if events.as_slice().is_empty() {
-                None
-            } else {
-                Some(events.by_ref().take(tick_width).collect())
+        std::iter::from_fn(move || match &mut storage {
+            Storage::Events { events, tick_width } => {
+                (!events.as_slice().is_empty()).then(|| events.by_ref().take(*tick_width).collect())
+            }
+            Storage::PackedRows { layout, values } => {
+                if values.as_slice().is_empty() {
+                    return None;
+                }
+                Some(
+                    values
+                        .by_ref()
+                        .take(layout.len())
+                        .enumerate()
+                        .map(|(index, value)| InputEvent::new(layout[index].clone(), value))
+                        .collect(),
+                )
             }
         })
     }
@@ -163,7 +332,7 @@ mod tests {
         let rows = InputBatch::packed_steps(NonZeroUsize::new(2).unwrap(), batch.into())
             .unwrap()
             .ticks()
-            .map(|row| row.iter().map(|event| event.value).collect::<Vec<_>>())
+            .map(|row| row.iter().map(|event| *event.value).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         assert_eq!(rows, [vec![1, 2], vec![3, 4]]);
     }
@@ -275,6 +444,50 @@ mod tests {
         ];
         let batch = InputBatch::packed_steps(NonZeroUsize::new(1).unwrap(), batch.into()).unwrap();
         assert_eq!(batch.ticks().count(), 2);
+    }
+
+    #[test]
+    fn packed_rows_share_one_layout() {
+        let batch = InputBatch::trusted_packed_rows(
+            vec![VarName::new("x"), VarName::new("y")].into_boxed_slice(),
+            vec![1, 2, 3, 4],
+        );
+        let rows = batch
+            .ticks()
+            .map(|tick| {
+                tick.iter()
+                    .map(|event| (event.var.clone(), *event.value))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                vec![(VarName::new("x"), 1), (VarName::new("y"), 2)],
+                vec![(VarName::new("x"), 3), (VarName::new("y"), 4)],
+            ]
+        );
+    }
+
+    #[test]
+    fn packed_rows_expand_only_when_owned_ticks_are_requested() {
+        let batch = InputBatch::trusted_packed_rows(
+            vec![VarName::new("x"), VarName::new("y")].into_boxed_slice(),
+            vec![1, 2, 3, 4],
+        );
+        assert_eq!(
+            batch.into_ticks().collect::<Vec<_>>(),
+            [
+                vec![
+                    InputEvent::new(VarName::new("x"), 1),
+                    InputEvent::new(VarName::new("y"), 2),
+                ],
+                vec![
+                    InputEvent::new(VarName::new("x"), 3),
+                    InputEvent::new(VarName::new("y"), 4),
+                ],
+            ]
+        );
     }
 
     #[test]

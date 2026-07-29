@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 445" role="img" aria-labelledby="layout-arrow-title layout-arrow-desc" style="width:100%;max-width:1030px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="layout-arrow-title">Execution layouts route into a fixed evaluator arena</title>
+<desc id="layout-arrow-desc">The immutable MonitorPlan feeds a Scheduler whose dependency-first order selects a replaceable and cacheable ExecutionLayout. ScalarRun and Graph steps address stable evaluator IDs in the fixed arena. Graph steps may still use mixed specialization. Layout replacement never moves histories, function frames, dynamic evaluators, or deoptimization state.</desc>
+<defs>
+  <marker id="layout-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Logical plan, replaceable routing, fixed state</text>
+<rect x="35" y="52" width="270" height="72" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="170" y="86" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">MonitorPlan</text>
+<text x="170" y="104" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">slots, dependencies, commit set</text>
+<rect x="380" y="52" width="270" height="72" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="515" y="86" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Scheduler</text>
+<text x="515" y="104" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">current dependency-first order</text>
+<rect x="725" y="52" width="270" height="72" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="860" y="86" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ExecutionLayout</text>
+<text x="860" y="104" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">routing steps only; ≤ 4 cached</text>
+<line x1="305" y1="88" x2="380" y2="88" stroke="#65758b" stroke-width="1.8" marker-end="url(#layout-arrow)"/>
+<line x1="650" y1="88" x2="725" y2="88" stroke="#65758b" stroke-width="1.8" marker-end="url(#layout-arrow)"/>
+<text x="35" y="166" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">selected layout steps</text>
+<rect x="35" y="184" width="280" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="175" y="215" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ScalarRun [stream 0, 1]</text>
+<text x="175" y="233" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">two complete one-node streams</text>
+<rect x="375" y="184" width="280" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="515" y="215" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Graph stream 2</text>
+<text x="515" y="233" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">may use a mixed scalar plan</text>
+<rect x="715" y="184" width="280" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="855" y="215" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ScalarRun [stream 3]</text>
+<text x="855" y="233" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">consumes stream 2 if scalar</text>
+<line x1="315" y1="217" x2="375" y2="217" stroke="#65758b" stroke-width="1.8" marker-end="url(#layout-arrow)"/>
+<line x1="655" y1="217" x2="715" y2="217" stroke="#65758b" stroke-width="1.8" marker-end="url(#layout-arrow)"/>
+<text x="35" y="292" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">fixed EvaluatorArena</text>
+<rect x="35" y="310" width="215" height="72" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="142" y="344" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator 0</text>
+<text x="142" y="362" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">canonical + scalar state</text>
+<rect x="285" y="310" width="215" height="72" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="392" y="344" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator 1</text>
+<text x="392" y="362" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">canonical + scalar state</text>
+<rect x="535" y="310" width="215" height="72" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="642" y="344" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator 2</text>
+<text x="642" y="362" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">functions, delays, dynamic</text>
+<rect x="785" y="310" width="210" height="72" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="890" y="344" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator 3</text>
+<text x="890" y="362" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">canonical + scalar state</text>
+<path d="M 145 250 L 145 310" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#layout-arrow)"/>
+<path d="M 245 250 L 392 310" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#layout-arrow)"/>
+<path d="M 515 250 L 642 310" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#layout-arrow)"/>
+<path d="M 855 250 L 890 310" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#layout-arrow)"/>
+<text x="515" y="418" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">layout replacement changes routing, never evaluator identity or language state</text>
+</svg>

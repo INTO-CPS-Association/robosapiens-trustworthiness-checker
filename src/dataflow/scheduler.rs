@@ -54,6 +54,7 @@ impl ExecutionSchedule {
     }
 
     #[inline]
+    #[cfg(test)]
     pub(super) fn uses_static_order(&self) -> bool {
         self.uses_static_order
     }
@@ -125,15 +126,15 @@ impl Scheduler {
         dependencies: &DependencyGraph,
         reconfiguration: &ReconfigurationPlan,
         stream_vars: &[VarName],
-    ) -> Result<(), DataflowEvaluationError> {
+    ) -> Result<bool, DataflowEvaluationError> {
         if self.scheduled_order_is_valid(dependencies) {
-            return Ok(());
+            return Ok(false);
         }
         self.repair_scheduled_order(dependencies, stream_vars)?;
         std::mem::swap(&mut self.scheduled_order, &mut self.repaired_order);
         self.repaired_order.clear();
         self.build_execution_schedule(reconfiguration);
-        Ok(())
+        Ok(true)
     }
 
     #[inline]
@@ -279,13 +280,15 @@ mod tests {
         );
         set_dynamic_dependencies(&mut scheduler, 2, &[0, 1]);
 
-        scheduler
-            .update_schedule(
-                &graph,
-                &reconfiguration,
-                &["a".into(), "b".into(), "c".into()],
-            )
-            .unwrap();
+        assert!(
+            !scheduler
+                .update_schedule(
+                    &graph,
+                    &reconfiguration,
+                    &["a".into(), "b".into(), "c".into()],
+                )
+                .unwrap()
+        );
 
         assert_eq!(
             scheduler
@@ -310,13 +313,15 @@ mod tests {
         );
         set_dynamic_dependencies(&mut scheduler, 0, &[2]);
 
-        scheduler
-            .update_schedule(
-                &graph,
-                &reconfiguration,
-                &["a".into(), "b".into(), "c".into()],
-            )
-            .unwrap();
+        assert!(
+            scheduler
+                .update_schedule(
+                    &graph,
+                    &reconfiguration,
+                    &["a".into(), "b".into(), "c".into()],
+                )
+                .unwrap()
+        );
 
         let order = scheduler.execution_schedule().evaluation_order();
         let producer = order.iter().position(|stream| stream.index() == 2).unwrap();

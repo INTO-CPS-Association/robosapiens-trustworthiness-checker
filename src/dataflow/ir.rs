@@ -1,4 +1,5 @@
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
+use super::execution::specialization;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::DynamicExprScope;
@@ -15,6 +16,26 @@ impl NodeId {
     pub(super) fn index(self) -> usize {
         self.0
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScalarKind {
+    Int,
+    Float,
+    Bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScalarSignature {
+    Unary {
+        input: ScalarKind,
+        output: ScalarKind,
+    },
+    Binary {
+        left: ScalarKind,
+        right: ScalarKind,
+        output: ScalarKind,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,14 +120,21 @@ impl GraphReference for EnvironmentSlot {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct EvaluationGraph<E: GraphReference> {
     pub(super) nodes: Vec<StreamOp<E>>,
+    pub(super) scalar_signatures: Vec<Option<ScalarSignature>>,
     pub(super) output: DataRef<E>,
     pub(super) recursive_delays: Vec<NodeId>,
 }
 
 impl<E: GraphReference> EvaluationGraph<E> {
-    pub(super) fn new(nodes: Vec<StreamOp<E>>, output: DataRef<E>) -> Self {
+    pub(super) fn new(
+        nodes: Vec<StreamOp<E>>,
+        scalar_signatures: Vec<Option<ScalarSignature>>,
+        output: DataRef<E>,
+    ) -> Self {
+        debug_assert_eq!(nodes.len(), scalar_signatures.len());
         Self {
             nodes,
+            scalar_signatures,
             output,
             recursive_delays: Vec::new(),
         }
@@ -158,6 +186,7 @@ impl BoundEvaluationGraph {
         }
 
         assert_ref(&self.output, self.nodes.len(), environment_len);
+        debug_assert_eq!(self.nodes.len(), self.scalar_signatures.len());
         for (index, op) in self.nodes.iter().enumerate() {
             op.for_each_operand(|operand| assert_ref(operand, index, environment_len));
             match op {
@@ -196,6 +225,7 @@ pub(super) struct StreamProgram {
     pub(super) environment_layout: Rc<EnvironmentLayout>,
     pub(super) evaluation_mode: EvaluationMode,
     pub(super) requires_temporal_commit: bool,
+    pub(super) specialization_plan: Option<Rc<specialization::Plan>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,11 +245,16 @@ impl StreamProgram {
             EvaluationMode::Infallible
         };
         let requires_temporal_commit = graph_requires_temporal_commit(&graph);
+        let specialization_plan = (evaluation_mode == EvaluationMode::Infallible)
+            .then(|| specialization::Plan::new(&graph))
+            .flatten()
+            .map(Rc::new);
         Self {
             graph,
             environment_layout,
             evaluation_mode,
             requires_temporal_commit,
+            specialization_plan,
         }
     }
 

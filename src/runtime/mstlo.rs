@@ -429,9 +429,12 @@ impl<RS> MstloInputState<'_, RS>
 where
     RS: RobustnessSemantics + MstloOutputValue + Debug + 'static,
 {
-    fn process_event(&mut self, event: &crate::InputEvent<Value>) -> anyhow::Result<()> {
+    fn process_event(
+        &mut self,
+        event: crate::core::InputEventRef<'_, Value>,
+    ) -> anyhow::Result<()> {
         let Some(step) =
-            MstloRuntime::<RS>::step_from_input_value(self.signal_names, &event.var, &event.value)?
+            MstloRuntime::<RS>::step_from_input_value(self.signal_names, event.var, event.value)?
         else {
             return Ok(());
         };
@@ -448,13 +451,13 @@ where
         Ok(())
     }
 
-    fn process_step(&mut self, events: &[crate::InputEvent<Value>]) -> anyhow::Result<()> {
-        let mut steps = Vec::with_capacity(events.len());
-        for event in events {
+    fn process_step(&mut self, tick: &crate::core::InputTick<'_, Value>) -> anyhow::Result<()> {
+        let mut steps = Vec::with_capacity(tick.len());
+        for event in tick.iter() {
             let Some(step) = MstloRuntime::<RS>::step_from_input_value(
                 self.signal_names,
-                &event.var,
-                &event.value,
+                event.var,
+                event.value,
             )?
             else {
                 continue;
@@ -546,8 +549,8 @@ where
             while let Some(batch) = input_batches.next().await {
                 let batch = batch?;
                 for tick in batch.ticks() {
-                    match tick {
-                        [event] => {
+                    if tick.len() == 1 {
+                        if let Some(event) = tick.iter().next() {
                             input.process_event(event)?;
                             if self.execution_policy == ExecutionPolicy::Synchronous
                                 && !input.flush_pending().await
@@ -555,13 +558,12 @@ where
                                 return Ok(());
                             }
                         }
-                        events => {
-                            input.process_step(events)?;
-                            let flush = self.execution_policy == ExecutionPolicy::Synchronous
-                                || input.blocked;
-                            if flush && !input.flush_pending().await {
-                                return Ok(());
-                            }
+                    } else {
+                        input.process_step(&tick)?;
+                        let flush =
+                            self.execution_policy == ExecutionPolicy::Synchronous || input.blocked;
+                        if flush && !input.flush_pending().await {
+                            return Ok(());
                         }
                     }
                 }

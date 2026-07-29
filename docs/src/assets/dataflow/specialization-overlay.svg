@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 435" role="img" aria-labelledby="specialization-arrow-title specialization-arrow-desc" style="width:100%;max-width:1030px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="specialization-arrow-title">Mixed scalar specialization beside the canonical graph</title>
+<desc id="specialization-arrow-desc">The canonical BoundEvaluationGraph, StreamState, and environment Value row remain authoritative. An optional plan places scalar and canonical instructions side by side. Scalar results mirror to canonical Values. A runtime kind mismatch transfers retained lifting state and permanently deoptimizes only that node, while neighbouring scalar nodes continue.</desc>
+<defs>
+  <marker id="specialization-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">One semantic graph with a mixed specialization overlay</text>
+<text x="35" y="61" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">canonical authority</text>
+<rect x="35" y="78" width="265" height="66" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="167" y="109" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">BoundEvaluationGraph</text>
+<text x="167" y="127" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">all semantic operations remain</text>
+<rect x="340" y="78" width="265" height="66" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="472" y="109" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">StreamState</text>
+<text x="472" y="127" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">node_values + canonical NodeState</text>
+<rect x="645" y="78" width="350" height="66" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="820" y="109" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">environment_values</text>
+<text x="820" y="127" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">every result is published as Value</text>
+<line x1="300" y1="111" x2="340" y2="111" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<line x1="605" y1="111" x2="645" y2="111" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<line x1="25" y1="174" x2="1005" y2="174" stroke="#a8b3bf" stroke-width="1"/>
+<text x="35" y="205" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">optional parallel plan and state</text>
+<rect x="35" y="225" width="215" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="142" y="258" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Scalar Add</text>
+<text x="142" y="276" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">typed sources + lift state</text>
+<rect x="295" y="225" width="215" height="70" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="402" y="258" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Canonical Default</text>
+<text x="402" y="276" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">normal interpreter node</text>
+<rect x="555" y="225" width="215" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="662" y="258" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Scalar &gt;</text>
+<text x="662" y="276" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">may read canonical scalar</text>
+<rect x="815" y="225" width="180" height="70" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="905" y="258" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ScalarValue</text>
+<text x="905" y="276" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">mirror to canonical Value</text>
+<line x1="250" y1="260" x2="295" y2="260" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<line x1="510" y1="260" x2="555" y2="260" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<line x1="770" y1="260" x2="815" y2="260" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<path d="M 925 225 C 925 185, 825 185, 825 144" fill="none" stroke="#8055a3" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<rect x="35" y="340" width="270" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="170" y="371" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">runtime kind mismatch</text>
+<text x="170" y="389" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">transfer retained lifted operands</text>
+<rect x="380" y="340" width="270" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="515" y="371" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deoptimized</text>
+<text x="515" y="389" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">this node stays canonical</text>
+<rect x="725" y="340" width="270" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="860" y="371" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">neighbouring scalar nodes</text>
+<text x="860" y="389" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">continue unchanged</text>
+<line x1="305" y1="373" x2="380" y2="373" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+<line x1="650" y1="373" x2="725" y2="373" stroke="#65758b" stroke-width="1.8" marker-end="url(#specialization-arrow)" stroke-dasharray="5 4"/>
+<path d="M 380 373 C 275 373, 275 174, 340 130" fill="none" stroke="#b54708" stroke-width="1.8" marker-end="url(#specialization-arrow)"/>
+</svg>

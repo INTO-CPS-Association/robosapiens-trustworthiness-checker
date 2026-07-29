@@ -74,9 +74,17 @@ mod tests {
             let drive = async move {
                 while let Some(batch) = batches.next().await {
                     let batch = batch.unwrap();
-                    consumed
-                        .borrow_mut()
-                        .push(batch.ticks().next().unwrap()[0].value.clone());
+                    consumed.borrow_mut().push(
+                        batch
+                            .ticks()
+                            .next()
+                            .unwrap()
+                            .iter()
+                            .next()
+                            .unwrap()
+                            .value
+                            .clone(),
+                    );
                 }
             };
             let control = async {
@@ -116,7 +124,7 @@ mod tests {
                             .next()
                             .unwrap()
                             .iter()
-                            .map(|event| event.value)
+                            .map(|event| *event.value)
                             .collect::<Vec<_>>(),
                     );
                 }
