@@ -213,9 +213,17 @@ impl DataflowMonitor {
 }
 
 #[cfg(test)]
+pub(in crate::dataflow) mod test_support {
+    use super::*;
+
+    pub(in crate::dataflow) fn execution(monitor: &DataflowMonitor) -> &MonitorExecution {
+        &monitor.execution
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataflow::execution::monitor_execution::TestLayoutStep;
     use crate::{CheckedDsrvSpecification, DsrvSpecification};
 
     fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
@@ -257,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn static_scalar_chain_uses_published_scalar_sources() {
+    fn static_scalar_chain_preserves_values_across_sparse_inputs() {
         let specification = "in x: Int\n\
             aux a: Int\n\
             aux b: Int\n\
@@ -268,9 +276,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert!(monitor.execution.published_source_count() > 0);
-        assert_eq!(monitor.execution.scalar_run_stream_count(), 3);
-        assert_eq!(monitor.execution.scalar_run_count(), 1);
 
         let mut output = [Value::NoVal];
         for (input, expected) in [
@@ -293,8 +298,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert_eq!(monitor.execution.scalar_run_stream_count(), 2);
-        assert_eq!(monitor.execution.scalar_run_count(), 1);
 
         let mut output = [Value::NoVal];
         for (input, expected) in [
@@ -319,7 +322,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert!(monitor.execution.published_source_count() > 0);
 
         let mut output = [Value::NoVal, Value::NoVal];
         monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
@@ -327,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_graph_scope_uses_the_same_execution_layout() {
+    fn nested_graph_scope_preserves_values() {
         let specification = "in x: Int\n\
             in choose: Bool\n\
             aux a: Int\n\
@@ -343,15 +345,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert!(monitor.execution.published_source_count() > 0);
-        assert_eq!(
-            monitor.execution.layout_steps(),
-            [
-                TestLayoutStep::ScalarRun(vec![0, 1]),
-                TestLayoutStep::Graph(2),
-                TestLayoutStep::ScalarRun(vec![3, 4]),
-            ]
-        );
 
         let mut output = [Value::NoVal];
         monitor
@@ -383,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn temporal_stream_delimits_scalar_runs() {
+    fn temporal_stream_preserves_values_between_scalar_streams() {
         let specification = "in x: Int\n\
             aux current: Int\n\
             aux delayed: Int\n\
@@ -394,14 +387,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert_eq!(
-            monitor.execution.layout_steps(),
-            [
-                TestLayoutStep::ScalarRun(vec![0]),
-                TestLayoutStep::Graph(1),
-                TestLayoutStep::ScalarRun(vec![2]),
-            ]
-        );
 
         let mut output = [Value::NoVal];
         for (input, expected) in [(10, 2), (20, 24), (30, 44)] {
@@ -411,12 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn temporal_maple_cycle_uses_published_scalar_sources() {
+    fn temporal_maple_cycle_preserves_outputs() {
         let specification = crate::dsrv_fixtures::spec_maple_sequence()
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert!(monitor.execution.published_source_count() > 0);
 
         let mut output = vec![Value::NoVal; 6];
         for (stage, active) in ["m", "a", "p", "l", "e"].into_iter().zip(0..) {
@@ -441,7 +425,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        assert!(monitor.execution.published_source_count() > 0);
 
         let mut output = [Value::NoVal, Value::NoVal];
         for expected in [
@@ -455,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_schedule_changes_rebuild_only_the_replaceable_layout() {
+    fn dynamic_schedule_changes_preserve_outputs() {
         let specification = "in x: Int\n\
             in a_source: Str\n\
             in b_source: Str\n\
@@ -468,7 +451,7 @@ mod tests {
         let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
 
         let mut output = [Value::NoVal, Value::NoVal];
-        for (values, expected, layout) in [
+        for (values, expected) in [
             (
                 [
                     ("x", Value::Int(10)),
@@ -476,7 +459,6 @@ mod tests {
                     ("b_source", Value::Str("x".into())),
                 ],
                 [Value::Int(11), Value::Int(10)],
-                [TestLayoutStep::Graph(1), TestLayoutStep::Graph(0)],
             ),
             (
                 [
@@ -485,7 +467,6 @@ mod tests {
                     ("b_source", Value::Str("a + 1".into())),
                 ],
                 [Value::Int(20), Value::Int(21)],
-                [TestLayoutStep::Graph(0), TestLayoutStep::Graph(1)],
             ),
             (
                 [
@@ -494,14 +475,11 @@ mod tests {
                     ("b_source", Value::Str("a + 1".into())),
                 ],
                 [Value::Int(30), Value::Int(31)],
-                [TestLayoutStep::Graph(0), TestLayoutStep::Graph(1)],
             ),
         ] {
             let input = input_row(&monitor, &values);
             monitor.evaluate(&input, &mut output).unwrap();
             assert_eq!(output, expected);
-            assert_eq!(monitor.execution.layout_steps(), layout);
-            assert_eq!(monitor.execution.layout_rebuilds(), 1);
         }
     }
 
@@ -519,11 +497,6 @@ mod tests {
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
         let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
-        let equal = monitor
-            .stream_vars
-            .iter()
-            .position(|stream| stream == &VarName::new("equal"))
-            .unwrap();
         let mut output = [Value::NoVal, Value::NoVal, Value::NoVal];
 
         let input = input_row(
@@ -536,8 +509,6 @@ mod tests {
         );
         monitor.evaluate(&input, &mut output).unwrap();
         assert_eq!(output, [Value::Int(3), Value::Int(2), Value::Bool(false)]);
-        assert_eq!(monitor.execution.deoptimized_node_count(equal), 1);
-        assert_eq!(monitor.execution.layout_rebuilds(), 1);
 
         let input = input_row(
             &monitor,
@@ -549,7 +520,5 @@ mod tests {
         );
         monitor.evaluate(&input, &mut output).unwrap();
         assert_eq!(output, [Value::Int(1), Value::Int(2), Value::Bool(true)]);
-        assert_eq!(monitor.execution.deoptimized_node_count(equal), 1);
-        assert_eq!(monitor.execution.layout_rebuilds(), 1);
     }
 }

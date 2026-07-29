@@ -52,12 +52,6 @@ impl ExecutionSchedule {
     pub(super) fn evaluation_order(&self) -> &[StreamId] {
         &self.evaluation_order
     }
-
-    #[inline]
-    #[cfg(test)]
-    pub(super) fn uses_static_order(&self) -> bool {
-        self.uses_static_order
-    }
 }
 
 #[repr(u8)]
@@ -249,14 +243,9 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dependency_graph(stream_count: usize) -> DependencyGraph {
-        DependencyGraph::without_static_dependencies(stream_count)
-    }
-
-    fn reconfiguration_plan(stream_count: usize) -> ReconfigurationPlan {
-        ReconfigurationPlan::empty(stream_count)
-    }
+    use crate::dataflow::execution_plan::test_support::{
+        dependency_graph_without_static_dependencies, empty_reconfiguration_plan,
+    };
 
     fn set_dynamic_dependencies(scheduler: &mut Scheduler, consumer: usize, producers: &[usize]) {
         let dependencies = scheduler.begin_dynamic_dependency_update(StreamId::new(consumer));
@@ -271,8 +260,8 @@ mod tests {
 
     #[test]
     fn scheduled_order_is_retained_when_dynamic_edges_are_satisfied() {
-        let graph = dependency_graph(3);
-        let reconfiguration = reconfiguration_plan(3);
+        let graph = dependency_graph_without_static_dependencies(3);
+        let reconfiguration = empty_reconfiguration_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -299,13 +288,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 1, 2]
         );
-        assert!(scheduler.execution_schedule().uses_static_order());
+        assert!(scheduler.execution_schedule.uses_static_order);
     }
 
     #[test]
     fn iterative_repair_orders_dynamic_dependencies_before_consumers() {
-        let graph = dependency_graph(3);
-        let reconfiguration = reconfiguration_plan(3);
+        let graph = dependency_graph_without_static_dependencies(3);
+        let reconfiguration = empty_reconfiguration_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -327,13 +316,13 @@ mod tests {
         let producer = order.iter().position(|stream| stream.index() == 2).unwrap();
         let consumer = order.iter().position(|stream| stream.index() == 0).unwrap();
         assert!(producer < consumer);
-        assert!(!scheduler.execution_schedule().uses_static_order());
+        assert!(!scheduler.execution_schedule.uses_static_order);
     }
 
     #[test]
     fn dynamic_cycles_are_rejected() {
-        let graph = dependency_graph(2);
-        let reconfiguration = reconfiguration_plan(2);
+        let graph = dependency_graph_without_static_dependencies(2);
+        let reconfiguration = empty_reconfiguration_plan(2);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 2),
             &graph,
@@ -351,8 +340,8 @@ mod tests {
     #[test]
     fn repair_uses_an_explicit_stack_for_long_chains() {
         let stream_count = 4_096;
-        let graph = dependency_graph(stream_count);
-        let reconfiguration = reconfiguration_plan(stream_count);
+        let graph = dependency_graph_without_static_dependencies(stream_count);
+        let reconfiguration = empty_reconfiguration_plan(stream_count);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), stream_count),
             &graph,

@@ -168,14 +168,6 @@ impl DependencyGraph {
     pub(super) fn stream_count(&self) -> usize {
         self.static_dependencies.len()
     }
-
-    #[cfg(test)]
-    pub(super) fn without_static_dependencies(stream_count: usize) -> Self {
-        Self {
-            static_dependencies: (0..stream_count).map(|_| StreamSet::empty()).collect(),
-            reconfigurable_streams: StreamSet::from_streams((0..stream_count).map(StreamId::new)),
-        }
-    }
 }
 
 pub(super) struct ReconfigurationPlan {
@@ -300,10 +292,25 @@ impl ReconfigurationPlan {
     pub(super) fn points_for(&self, stream: StreamId) -> &[ReconfigurationPoint] {
         &self.points[self.point_ranges_by_stream[stream.index()].clone()]
     }
+}
 
-    #[cfg(test)]
-    pub(super) fn empty(stream_count: usize) -> Self {
-        Self {
+#[cfg(test)]
+pub(super) mod test_support {
+    use super::*;
+
+    pub(in crate::dataflow) fn dependency_graph_without_static_dependencies(
+        stream_count: usize,
+    ) -> DependencyGraph {
+        DependencyGraph {
+            static_dependencies: (0..stream_count).map(|_| StreamSet::empty()).collect(),
+            reconfigurable_streams: StreamSet::from_streams((0..stream_count).map(StreamId::new)),
+        }
+    }
+
+    pub(in crate::dataflow) fn empty_reconfiguration_plan(
+        stream_count: usize,
+    ) -> ReconfigurationPlan {
+        ReconfigurationPlan {
             evaluation_streams: StreamSet::empty(),
             evaluation_order: Vec::new(),
             points: Vec::new(),

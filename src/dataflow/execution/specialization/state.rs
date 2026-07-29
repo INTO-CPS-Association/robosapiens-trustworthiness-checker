@@ -89,25 +89,6 @@ impl State {
             }
         }
     }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn deoptimized_node_count(&self) -> usize {
-        self.nodes
-            .iter()
-            .map(|node| match &node.state {
-                NodeState::Deoptimized { .. } => 1,
-                NodeState::If {
-                    then_state,
-                    else_state,
-                } => then_state
-                    .iter()
-                    .chain(else_state)
-                    .map(State::deoptimized_node_count)
-                    .sum(),
-                _ => 0,
-            })
-            .sum()
-    }
 }
 
 impl NodeState {
@@ -134,5 +115,74 @@ impl NodeState {
             }
             _ => unreachable!("specialization state has incompatible canonical state"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_preserves_deoptimization_and_clears_transient_state() {
+        let mut state = State {
+            nodes: vec![
+                Node {
+                    value: Some(ScalarValue::Int(1)),
+                    state: NodeState::Deoptimized {
+                        output_kind: ScalarKind::Int,
+                    },
+                },
+                Node {
+                    value: Some(ScalarValue::Bool(true)),
+                    state: NodeState::If {
+                        then_state: Some(State {
+                            nodes: vec![Node {
+                                value: Some(ScalarValue::Bool(false)),
+                                state: NodeState::Deoptimized {
+                                    output_kind: ScalarKind::Bool,
+                                },
+                            }],
+                        }),
+                        else_state: Some(State {
+                            nodes: vec![Node {
+                                value: Some(ScalarValue::Int(2)),
+                                state: NodeState::Unary {
+                                    last_input: Some(ScalarValue::Int(3)),
+                                },
+                            }],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        state.reset();
+
+        assert!(state.nodes.iter().all(|node| node.value.is_none()));
+        assert!(matches!(
+            state.nodes[0].state,
+            NodeState::Deoptimized {
+                output_kind: ScalarKind::Int
+            }
+        ));
+        let NodeState::If {
+            then_state: Some(then_state),
+            else_state: Some(else_state),
+        } = &state.nodes[1].state
+        else {
+            panic!("reset changed the conditional specialization state");
+        };
+        assert!(matches!(
+            then_state.nodes[0].state,
+            NodeState::Deoptimized {
+                output_kind: ScalarKind::Bool
+            }
+        ));
+        assert!(then_state.nodes[0].value.is_none());
+        assert!(matches!(
+            else_state.nodes[0].state,
+            NodeState::Unary { last_input: None }
+        ));
+        assert!(else_state.nodes[0].value.is_none());
     }
 }

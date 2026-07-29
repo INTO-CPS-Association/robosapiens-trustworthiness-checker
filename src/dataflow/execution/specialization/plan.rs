@@ -141,14 +141,6 @@ impl Plan {
             .any(|instruction| !matches!(instruction, Instruction::Canonical))
             .then_some(Self { instructions })
     }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn published_source_count(&self) -> usize {
-        self.instructions
-            .iter()
-            .map(Instruction::published_source_count)
-            .sum()
-    }
 }
 
 impl Instruction {
@@ -165,33 +157,6 @@ impl Instruction {
     #[inline]
     fn has_scalar_output(&self) -> bool {
         matches!(self, Self::Unary { .. } | Self::Binary { .. })
-    }
-
-    #[cfg(test)]
-    fn published_source_count(&self) -> usize {
-        match self {
-            Self::Canonical => 0,
-            Self::If {
-                then_plan,
-                else_plan,
-            } => then_plan
-                .iter()
-                .chain(else_plan)
-                .map(Plan::published_source_count)
-                .sum(),
-            Self::Unary { input, .. } => usize::from(matches!(input, Source::Published(_))),
-            Self::Binary { left, right, .. } => {
-                usize::from(matches!(left, Source::Published(_)))
-                    + usize::from(matches!(right, Source::Published(_)))
-            }
-        }
-    }
-}
-
-impl SingleScalarPlan {
-    #[cfg(test)]
-    pub(in crate::dataflow) fn published_source_count(&self) -> usize {
-        self.instruction.published_source_count()
     }
 }
 
@@ -227,4 +192,39 @@ fn has_recursive_call(graph: &BoundEvaluationGraph) -> bool {
         } => has_recursive_call(then_branch) || has_recursive_call(else_branch),
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn published_sources_are_selected_only_when_available() {
+        let published_slot = EnvironmentSlot::new(0);
+        let canonical_slot = EnvironmentSlot::new(1);
+        let graph = BoundEvaluationGraph::new(
+            vec![BoundOp::Binary {
+                op: BinaryOperator::Add,
+                lhs: BoundRef::External(published_slot),
+                rhs: BoundRef::External(canonical_slot),
+            }],
+            vec![Some(ScalarSignature::Binary {
+                left: ScalarKind::Int,
+                right: ScalarKind::Int,
+                output: ScalarKind::Int,
+            })],
+            BoundRef::Node(NodeId::new(0)),
+        );
+
+        let plan =
+            Plan::with_published_sources(&graph, |slot| (slot == published_slot).then_some(7))
+                .unwrap();
+        let single = plan.try_into_single_scalar(&graph).unwrap();
+
+        let Instruction::Binary { left, right, .. } = single.instruction else {
+            panic!("single scalar plan did not retain its binary instruction");
+        };
+        assert_eq!(left, Source::Published(7));
+        assert_eq!(right, Source::Canonical(BoundRef::External(canonical_slot)));
+    }
 }

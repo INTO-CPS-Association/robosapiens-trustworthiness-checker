@@ -61,13 +61,6 @@ impl StreamEvaluator {
         }
     }
 
-    #[cfg(test)]
-    pub(in crate::dataflow) fn deoptimized_node_count(&self) -> usize {
-        self.specialization_state
-            .as_ref()
-            .map_or(0, specialization::State::deoptimized_node_count)
-    }
-
     #[inline]
     pub(in crate::dataflow) fn resolve_reconfiguration_point(
         &mut self,

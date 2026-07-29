@@ -31,15 +31,6 @@ pub(in crate::dataflow) struct MonitorExecution {
     evaluators: EvaluatorArena,
     execution_layout: ExecutionLayout,
     cached_layouts: Vec<ExecutionLayout>,
-    #[cfg(test)]
-    layout_rebuilds: usize,
-}
-
-#[cfg(test)]
-#[derive(Debug, PartialEq, Eq)]
-pub(in crate::dataflow) enum TestLayoutStep {
-    ScalarRun(Vec<usize>),
-    Graph(usize),
 }
 
 impl MonitorExecution {
@@ -54,8 +45,6 @@ impl MonitorExecution {
             evaluators,
             execution_layout,
             cached_layouts: Vec::new(),
-            #[cfg(test)]
-            layout_rebuilds: 0,
         }
     }
 
@@ -115,10 +104,6 @@ impl MonitorExecution {
                 self.cached_layouts.remove(0);
             }
             self.cached_layouts.push(previous);
-            #[cfg(test)]
-            {
-                self.layout_rebuilds += 1;
-            }
         }
     }
 
@@ -150,69 +135,6 @@ impl MonitorExecution {
     #[inline]
     fn evaluator(&mut self, stream: StreamId) -> &mut StreamEvaluator {
         self.evaluators.evaluator(stream.index())
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn published_source_count(&self) -> usize {
-        self.execution_layout
-            .steps
-            .iter()
-            .map(|step| match step {
-                LayoutStep::ScalarRun(run) => run
-                    .iter()
-                    .map(|stream| stream.plan.published_source_count())
-                    .sum(),
-                LayoutStep::Graph(stream) => stream
-                    .specialization_plan
-                    .as_ref()
-                    .map_or(0, specialization::Plan::published_source_count),
-            })
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn scalar_run_stream_count(&self) -> usize {
-        self.execution_layout
-            .steps
-            .iter()
-            .map(|step| match step {
-                LayoutStep::ScalarRun(run) => run.len(),
-                LayoutStep::Graph(_) => 0,
-            })
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn scalar_run_count(&self) -> usize {
-        self.execution_layout
-            .steps
-            .iter()
-            .filter(|step| matches!(step, LayoutStep::ScalarRun(_)))
-            .count()
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn layout_steps(&self) -> Vec<TestLayoutStep> {
-        self.execution_layout
-            .steps
-            .iter()
-            .map(|step| match step {
-                LayoutStep::ScalarRun(run) => {
-                    TestLayoutStep::ScalarRun(run.iter().map(|step| step.stream.index()).collect())
-                }
-                LayoutStep::Graph(step) => TestLayoutStep::Graph(step.stream.index()),
-            })
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn deoptimized_node_count(&self, stream: usize) -> usize {
-        self.evaluators.evaluators[stream].deoptimized_node_count()
-    }
-
-    #[cfg(test)]
-    pub(in crate::dataflow) fn layout_rebuilds(&self) -> usize {
-        self.layout_rebuilds
     }
 }
 
@@ -378,5 +300,165 @@ impl EvaluatorArena {
     #[inline]
     fn program(&self, stream: usize) -> &StreamProgram {
         &self.evaluators[stream].program
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataflow::monitor::test_support::execution;
+    use crate::{CheckedDsrvSpecification, DsrvSpecification};
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum LayoutSnapshot {
+        ScalarRun(Vec<usize>),
+        Graph(usize),
+    }
+
+    fn layout_snapshot(monitor: &DataflowMonitor) -> Vec<LayoutSnapshot> {
+        execution(monitor)
+            .execution_layout
+            .steps
+            .iter()
+            .map(|step| match step {
+                LayoutStep::ScalarRun(run) => {
+                    LayoutSnapshot::ScalarRun(run.iter().map(|step| step.stream.index()).collect())
+                }
+                LayoutStep::Graph(step) => LayoutSnapshot::Graph(step.stream.index()),
+            })
+            .collect()
+    }
+
+    fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
+        monitor
+            .input_vars()
+            .iter()
+            .map(|variable| {
+                values
+                    .iter()
+                    .find_map(|(name, value)| {
+                        (variable == &VarName::new(name)).then(|| value.clone())
+                    })
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scalar_streams_form_one_execution_run() {
+        let specification = "in x: Int\n\
+            aux a: Int\n\
+            aux b: Int\n\
+            out c: Int\n\
+            a = x + 1\n\
+            b = a * 2\n\
+            c = b - 3"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+        assert_eq!(
+            layout_snapshot(&monitor),
+            [LayoutSnapshot::ScalarRun(vec![0, 1, 2])]
+        );
+    }
+
+    #[test]
+    fn graph_stream_splits_scalar_runs() {
+        let specification = "in x: Int\n\
+            in choose: Bool\n\
+            aux a: Int\n\
+            aux b: Int\n\
+            aux c: Int\n\
+            aux d: Int\n\
+            out e: Int\n\
+            a = x + 1\n\
+            b = a + 1\n\
+            c = if choose then b else x\n\
+            d = c + 1\n\
+            e = d + 1"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+        assert_eq!(
+            layout_snapshot(&monitor),
+            [
+                LayoutSnapshot::ScalarRun(vec![0, 1]),
+                LayoutSnapshot::Graph(2),
+                LayoutSnapshot::ScalarRun(vec![3, 4]),
+            ]
+        );
+    }
+
+    #[test]
+    fn temporal_stream_splits_scalar_runs() {
+        let specification = "in x: Int\n\
+            aux current: Int\n\
+            aux delayed: Int\n\
+            out result: Int\n\
+            current = x + 1\n\
+            delayed = default(current[1], 0) + 1\n\
+            result = delayed * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+        assert_eq!(
+            layout_snapshot(&monitor),
+            [
+                LayoutSnapshot::ScalarRun(vec![0]),
+                LayoutSnapshot::Graph(1),
+                LayoutSnapshot::ScalarRun(vec![2]),
+            ]
+        );
+    }
+
+    #[test]
+    fn dynamic_schedule_reuses_cached_execution_layout() {
+        let specification = "in x: Int\n\
+            in a_source: Str\n\
+            in b_source: Str\n\
+            out a: Int\n\
+            out b: Int\n\
+            a = dynamic(a_source: Int)\n\
+            b = dynamic(b_source: Int)"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
+        let mut output = [Value::NoVal, Value::NoVal];
+
+        let reverse = input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(10)),
+                ("a_source", Value::Str("b + 1".into())),
+                ("b_source", Value::Str("x".into())),
+            ],
+        );
+        monitor.evaluate(&reverse, &mut output).unwrap();
+        assert_eq!(
+            layout_snapshot(&monitor),
+            [LayoutSnapshot::Graph(1), LayoutSnapshot::Graph(0)]
+        );
+        assert_eq!(execution(&monitor).cached_layouts.len(), 1);
+
+        let forward = input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(20)),
+                ("a_source", Value::Str("x".into())),
+                ("b_source", Value::Str("a + 1".into())),
+            ],
+        );
+        monitor.evaluate(&forward, &mut output).unwrap();
+        assert_eq!(
+            layout_snapshot(&monitor),
+            [LayoutSnapshot::Graph(0), LayoutSnapshot::Graph(1)]
+        );
+        assert_eq!(execution(&monitor).cached_layouts.len(), 1);
+
+        monitor.evaluate(&forward, &mut output).unwrap();
+        assert_eq!(execution(&monitor).cached_layouts.len(), 1);
     }
 }
