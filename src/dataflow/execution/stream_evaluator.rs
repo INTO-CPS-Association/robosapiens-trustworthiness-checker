@@ -9,6 +9,7 @@ use super::stream_state::*;
 pub(in crate::dataflow) struct EvaluationContext<'a> {
     pub(in crate::dataflow) environment_values: &'a [Value],
     pub(in crate::dataflow) environment_layout: &'a Rc<EnvironmentLayout>,
+    pub(in crate::dataflow) retained_environment_values: Option<&'a [Value]>,
     pub(in crate::dataflow) recursive_call: Option<&'a dyn Fn(EcoVec<Value>) -> Value>,
 }
 
@@ -106,7 +107,8 @@ impl StreamEvaluator {
         environment_values: &[Value],
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
     ) -> Result<Value, DataflowEvaluationError> {
-        let value = self.evaluate_and_stage_with_context(environment_values, recursive_call)?;
+        let value =
+            self.evaluate_and_stage_with_context(environment_values, None, recursive_call)?;
         self.commit_temporal_state(environment_values);
         Ok(value)
     }
@@ -115,7 +117,19 @@ impl StreamEvaluator {
         &mut self,
         environment_values: &[Value],
     ) -> Result<Value, DataflowEvaluationError> {
-        self.evaluate_and_stage_with_context(environment_values, None)
+        self.evaluate_and_stage_with_context(environment_values, None, None)
+    }
+
+    pub(in crate::dataflow) fn evaluate_and_stage_with_retained_environment(
+        &mut self,
+        environment_values: &[Value],
+        retained_environment_values: &[Value],
+    ) -> Result<Value, DataflowEvaluationError> {
+        self.evaluate_and_stage_with_context(
+            environment_values,
+            Some(retained_environment_values),
+            None,
+        )
     }
 
     #[inline]
@@ -132,6 +146,7 @@ impl StreamEvaluator {
         let context = EvaluationContext {
             environment_values,
             environment_layout: &self.program.environment_layout,
+            retained_environment_values: None,
             recursive_call: None,
         };
 
@@ -169,6 +184,7 @@ impl StreamEvaluator {
         let context = EvaluationContext {
             environment_values,
             environment_layout: &self.program.environment_layout,
+            retained_environment_values: None,
             recursive_call: None,
         };
         specialization::execute_single(
@@ -184,9 +200,18 @@ impl StreamEvaluator {
     }
 
     pub(in crate::dataflow) fn commit_temporal_state(&mut self, environment_values: &[Value]) {
+        self.commit_temporal_state_with_retained_environment(environment_values, None);
+    }
+
+    pub(in crate::dataflow) fn commit_temporal_state_with_retained_environment(
+        &mut self,
+        environment_values: &[Value],
+        retained_environment_values: Option<&[Value]>,
+    ) {
         let context = EvaluationContext {
             environment_values,
             environment_layout: &self.program.environment_layout,
+            retained_environment_values,
             recursive_call: None,
         };
         commit_staged_temporal_state(&self.program.graph, &mut self.state, context);
@@ -195,6 +220,7 @@ impl StreamEvaluator {
     fn evaluate_and_stage_with_context(
         &mut self,
         environment_values: &[Value],
+        retained_environment_values: Option<&[Value]>,
         recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
     ) -> Result<Value, DataflowEvaluationError> {
         let body = &self.program.graph;
@@ -203,6 +229,7 @@ impl StreamEvaluator {
         let context = EvaluationContext {
             environment_values,
             environment_layout: &self.program.environment_layout,
+            retained_environment_values,
             recursive_call,
         };
 

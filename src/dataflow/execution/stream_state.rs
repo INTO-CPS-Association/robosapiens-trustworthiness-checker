@@ -87,25 +87,37 @@ pub(in crate::dataflow) struct DynamicExpressionState {
     pub(in crate::dataflow) active_expression: Option<ActiveExpression>,
     pub(in crate::dataflow) last_source_value: Option<Value>,
     pub(in crate::dataflow) last_result: Option<Value>,
-    pub(in crate::dataflow) last_environment_values: Vec<Option<Value>>,
     pub(in crate::dataflow) environment_values: Vec<Value>,
 }
 
 impl DynamicExpressionState {
-    pub(in crate::dataflow) fn update_environment(&mut self, environment_values: &[Value]) {
+    pub(in crate::dataflow) fn update_environment(
+        &mut self,
+        environment_values: &[Value],
+        retained_environment_values: Option<&[Value]>,
+    ) {
+        let Some(active) = &self.active_expression else {
+            return;
+        };
         if self.environment_values.len() != environment_values.len() {
             self.environment_values
                 .resize(environment_values.len(), Value::NoVal);
-            self.last_environment_values
-                .resize(environment_values.len(), None);
         }
-        for ((output, input), last) in self
-            .environment_values
-            .iter_mut()
-            .zip(environment_values)
-            .zip(&mut self.last_environment_values)
-        {
-            *output = super::lifting::retain_last_value(input.clone(), last);
+
+        if let Some(retained) = retained_environment_values {
+            debug_assert_eq!(environment_values.len(), retained.len());
+            for &slot in &active.environment_slots {
+                let current = &environment_values[slot.index()];
+                self.environment_values[slot.index()] = if current == &Value::NoVal {
+                    retained[slot.index()].clone()
+                } else {
+                    current.clone()
+                };
+            }
+        } else {
+            for &slot in &active.environment_slots {
+                self.environment_values[slot.index()] = environment_values[slot.index()].clone();
+            }
         }
     }
 }
@@ -115,6 +127,7 @@ pub(in crate::dataflow) struct ActiveExpression {
     pub(in crate::dataflow) source_text: EcoString,
     pub(in crate::dataflow) evaluator: StreamEvaluator,
     pub(in crate::dataflow) dependency_slots: Vec<EnvironmentSlot>,
+    pub(in crate::dataflow) environment_slots: Vec<EnvironmentSlot>,
 }
 
 #[derive(Clone)]

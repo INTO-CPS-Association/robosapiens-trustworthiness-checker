@@ -484,7 +484,6 @@ pub(in crate::dataflow) fn try_evaluate_nodes(
                 let NodeState::Dynamic(dynamic) = &mut state.node_states[index] else {
                     unreachable!("dynamic node has incompatible runtime state")
                 };
-                dynamic.update_environment(context.environment_values);
                 let current = retain_last_value(current, &mut dynamic.last_source_value);
                 let result = evaluate_dynamic_expression(current, spec, dynamic, context)?;
                 retain_last_value(result, &mut dynamic.last_result)
@@ -659,7 +658,10 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
                     .as_ref()
                     .is_some_and(|active| active.evaluator.program.requires_temporal_commit())
                 {
-                    dynamic.update_environment(context.environment_values);
+                    dynamic.update_environment(
+                        context.environment_values,
+                        context.retained_environment_values,
+                    );
                     let active = dynamic
                         .active_expression
                         .as_mut()

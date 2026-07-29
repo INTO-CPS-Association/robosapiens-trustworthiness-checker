@@ -746,6 +746,89 @@ fn dataflow_runtime_compiled_mutual_delays_commit_once_per_tick() {
 }
 
 #[test]
+fn dynamic_source_replacement_uses_retained_value_for_new_no_val_dependency() {
+    let spec = "in x: Int\nin y: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
+
+    for mut monitor in [
+        DataflowMonitor::compile_untyped(spec.clone()).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
+    ] {
+        let mut output = [Value::NoVal];
+        let first = runtime_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(10)),
+                ("y", Value::Int(20)),
+                ("source", Value::Str("x".into())),
+            ],
+        );
+        monitor.evaluate(&first, &mut output).unwrap();
+        assert_eq!(output, [Value::Int(10)]);
+
+        let replacement = runtime_input_row(
+            &monitor,
+            &[
+                ("x", Value::NoVal),
+                ("y", Value::NoVal),
+                ("source", Value::Str("y".into())),
+            ],
+        );
+        monitor.evaluate(&replacement, &mut output).unwrap();
+        assert_eq!(output, [Value::Int(20)]);
+    }
+}
+
+#[test]
+fn dynamic_environment_slots_include_delayed_free_variables() {
+    let spec = "in x: Int\nin source: Str\nout z: Int\
+                \nz = dynamic(source: Int)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
+
+    for mut monitor in [
+        DataflowMonitor::compile_untyped(spec).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
+    ] {
+        let mut output = [Value::NoVal];
+        for (x, expected) in [
+            (Value::Int(3), Value::Int(0)),
+            (Value::Int(4), Value::Int(3)),
+        ] {
+            let input = runtime_input_row(
+                &monitor,
+                &[("x", x), ("source", Value::Str("default(x[1], 0)".into()))],
+            );
+            monitor.evaluate(&input, &mut output).unwrap();
+            assert_eq!(output, [expected]);
+        }
+    }
+}
+
+#[test]
+fn dynamic_no_val_source_and_dependency_reuse_retained_outer_values() {
+    let spec = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+    let mut output = [Value::NoVal];
+
+    let activation = runtime_input_row(
+        &monitor,
+        &[("x", Value::Int(9)), ("source", Value::Str("x + 1".into()))],
+    );
+    monitor.evaluate(&activation, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(10)]);
+
+    let no_values = runtime_input_row(&monitor, &[("x", Value::NoVal), ("source", Value::NoVal)]);
+    monitor.evaluate(&no_values, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(10)]);
+}
+
+#[test]
 fn dataflow_delay_state_persists_across_evaluations() {
     let spec = "in x\nout z\nz = default(z[3], 0) + x"
         .parse::<DsrvSpecification>()

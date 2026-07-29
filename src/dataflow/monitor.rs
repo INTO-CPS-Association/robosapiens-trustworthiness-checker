@@ -20,6 +20,7 @@ pub struct DataflowMonitor {
     monitor_plan: MonitorPlan,
     scheduler: Scheduler,
     environment_values: Vec<Value>,
+    retained_environment_values: Option<Vec<Value>>,
     failed: bool,
 }
 
@@ -53,6 +54,8 @@ impl DataflowMonitor {
             scheduler.execution_schedule().evaluation_order(),
         );
 
+        let retained_environment_values = (!monitor_plan.reconfiguration.is_empty())
+            .then(|| vec![Value::NoVal; environment_size]);
         Self {
             input_vars,
             output_vars,
@@ -62,6 +65,7 @@ impl DataflowMonitor {
             monitor_plan,
             scheduler,
             environment_values: vec![Value::NoVal; environment_size],
+            retained_environment_values,
             failed: false,
         }
     }
@@ -106,7 +110,8 @@ impl DataflowMonitor {
     fn execute_tick(&mut self, input: &[Value]) -> Result<(), DataflowEvaluationError> {
         self.load_inputs(input);
         if self.monitor_plan.reconfiguration.is_empty() {
-            self.execution.evaluate(&mut self.environment_values)?;
+            self.execution
+                .evaluate(&mut self.environment_values, None)?;
             self.commit_temporal_state();
             return Ok(());
         }
@@ -125,6 +130,7 @@ impl DataflowMonitor {
         }
         self.evaluate_scheduled_streams()?;
         self.commit_temporal_state();
+        self.retain_environment_values();
         Ok(())
     }
 
@@ -171,13 +177,31 @@ impl DataflowMonitor {
     }
 
     fn evaluate_scheduled_streams(&mut self) -> Result<(), DataflowEvaluationError> {
-        self.execution.evaluate(&mut self.environment_values)
+        self.execution.evaluate(
+            &mut self.environment_values,
+            self.retained_environment_values.as_deref(),
+        )
     }
 
     fn commit_temporal_state(&mut self) {
         for stream in self.monitor_plan.temporal_streams.iter() {
-            self.execution
-                .commit_temporal_state(stream, &self.environment_values);
+            self.execution.commit_temporal_state(
+                stream,
+                &self.environment_values,
+                self.retained_environment_values.as_deref(),
+            );
+        }
+    }
+
+    fn retain_environment_values(&mut self) {
+        let retained = self
+            .retained_environment_values
+            .as_mut()
+            .expect("reconfigurable monitors retain their outer environment");
+        for (retained, current) in retained.iter_mut().zip(&self.environment_values) {
+            if current != &Value::NoVal {
+                retained.clone_from(current);
+            }
         }
     }
 
@@ -207,6 +231,29 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    #[test]
+    fn static_monitor_does_not_allocate_a_retained_environment() {
+        let specification = "in x: Int\nout z: Int\nz = x + 1"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+        assert!(monitor.retained_environment_values.is_none());
+    }
+
+    #[test]
+    fn reconfigurable_monitor_retains_an_outer_environment() {
+        let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+        assert_eq!(
+            monitor.retained_environment_values.as_ref().unwrap().len(),
+            monitor.environment_values.len()
+        );
     }
 
     #[test]

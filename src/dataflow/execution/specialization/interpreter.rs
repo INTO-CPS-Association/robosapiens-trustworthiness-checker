@@ -451,6 +451,7 @@ mod tests {
             EvaluationContext {
                 environment_values,
                 environment_layout,
+                retained_environment_values: None,
                 recursive_call: None,
             },
             &[],

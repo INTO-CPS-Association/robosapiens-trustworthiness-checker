@@ -85,9 +85,13 @@ impl MonitorExecution {
         &mut self,
         stream: StreamId,
         environment_values: &[Value],
+        retained_environment_values: Option<&[Value]>,
     ) {
         self.evaluator(stream)
-            .commit_temporal_state(environment_values);
+            .commit_temporal_state_with_retained_environment(
+                environment_values,
+                retained_environment_values,
+            );
     }
 
     pub(in crate::dataflow) fn select_schedule(
@@ -121,6 +125,7 @@ impl MonitorExecution {
     pub(in crate::dataflow) fn evaluate(
         &mut self,
         environment_values: &mut [Value],
+        retained_environment_values: Option<&[Value]>,
     ) -> Result<(), DataflowEvaluationError> {
         // A published source can only name an earlier stream in this layout, so
         // every value it can read has already been overwritten for this tick.
@@ -131,7 +136,11 @@ impl MonitorExecution {
                     evaluators.evaluate_scalar_run(run, environment_values);
                 }
                 LayoutStep::Graph(step) => {
-                    evaluators.evaluate_graph(step, environment_values)?;
+                    evaluators.evaluate_graph(
+                        step,
+                        environment_values,
+                        retained_environment_values,
+                    )?;
                 }
             }
         }
@@ -337,6 +346,7 @@ impl EvaluatorArena {
         &mut self,
         step: &GraphStep,
         environment_values: &mut [Value],
+        retained_environment_values: Option<&[Value]>,
     ) -> Result<(), DataflowEvaluationError> {
         let index = step.stream.index();
         let (evaluator, published_scalars) = self.evaluator_with_published(index);
@@ -346,6 +356,8 @@ impl EvaluatorArena {
                 step.specialization_plan.as_ref(),
                 published_scalars,
             )
+        } else if let Some(retained) = retained_environment_values {
+            evaluator.evaluate_and_stage_with_retained_environment(environment_values, retained)?
         } else {
             evaluator.evaluate_and_stage(environment_values)?
         };

@@ -16,6 +16,10 @@ pub(in crate::dataflow) fn evaluate_dynamic_expression(
         // `Defer` mode its output is also the node result, otherwise the
         // special value propagates.
         special @ (Value::Deferred | Value::NoVal) => {
+            dynamic.update_environment(
+                context.environment_values,
+                context.retained_environment_values,
+            );
             let result = evaluate_active_expression(dynamic);
             if spec.mode == DynamicExpressionMode::Defer && dynamic.active_expression.is_some() {
                 Ok(result?)
@@ -25,6 +29,10 @@ pub(in crate::dataflow) fn evaluate_dynamic_expression(
         }
         Value::Str(source) => {
             update_active_expression(source, spec, dynamic, context.environment_layout)?;
+            dynamic.update_environment(
+                context.environment_values,
+                context.retained_environment_values,
+            );
             evaluate_active_expression(dynamic)
         }
         other => Err(DataflowEvaluationError::InvalidExpressionSource(
@@ -62,6 +70,7 @@ pub(in crate::dataflow) fn update_active_expression(
         source_text,
         evaluator,
         dependency_slots: compiled.dependency_slots,
+        environment_slots: compiled.environment_slots,
     });
     dynamic.last_result = None;
     Ok(())
@@ -86,6 +95,7 @@ fn evaluate_active_expression(
 struct CompiledDynamicExpression {
     program: Rc<StreamProgram>,
     dependency_slots: Vec<EnvironmentSlot>,
+    environment_slots: Vec<EnvironmentSlot>,
 }
 
 #[cold]
@@ -132,6 +142,14 @@ fn compile_dynamic_expression(
             unsupported,
         ));
     }
+    let environment_slots = free_vars
+        .iter()
+        .map(|name| {
+            environment
+                .slot(name)
+                .expect("validated dynamic environment variable must have an environment slot")
+        })
+        .collect();
     let dependency_slots = graph
         .same_tick_free_vars(None)
         .iter()
@@ -147,5 +165,6 @@ fn compile_dynamic_expression(
     Ok(CompiledDynamicExpression {
         program,
         dependency_slots,
+        environment_slots,
     })
 }
