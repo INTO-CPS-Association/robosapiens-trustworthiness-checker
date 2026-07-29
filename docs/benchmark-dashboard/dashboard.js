@@ -14,7 +14,7 @@ const IMPORTANT_SECTIONS = [
           },
           {
             label: "Dataflow specialized",
-            name: "maple_sequence/maple_sequence_typed_dataflow/25000",
+            name: "maple_sequence/maple_sequence_dataflow_specialised/25000",
           },
           {
             label: "SemiSync",
@@ -38,6 +38,14 @@ const IMPORTANT_SECTIONS = [
           {
             label: "Dataflow specialized",
             name: "arithmetic_heavy/dataflow_specialised/25000",
+          },
+          {
+            label: "SemiSync untyped",
+            name: "arithmetic_heavy/semisync_untyped/25000",
+          },
+          {
+            label: "SemiSync typed",
+            name: "arithmetic_heavy/semisync_typed/25000",
           },
         ],
       },
@@ -74,6 +82,10 @@ const IMPORTANT_SECTIONS = [
             name: "hard_dynamic_defer/automatic_scope_dataflow/1024",
           },
           {
+            label: "Dataflow specialized",
+            name: "hard_dynamic_defer/automatic_scope_dataflow_specialised/1024",
+          },
+          {
             label: "SemiSync",
             name: "hard_dynamic_defer/automatic_scope_semisync/1024",
           },
@@ -87,6 +99,10 @@ const IMPORTANT_SECTIONS = [
           {
             label: "Dataflow",
             name: "hard_dynamic_defer/explicit_components_dataflow/1024",
+          },
+          {
+            label: "Dataflow specialized",
+            name: "hard_dynamic_defer/explicit_components_dataflow_specialised/1024",
           },
           {
             label: "SemiSync",
@@ -142,7 +158,7 @@ const IMPORTANT_SECTIONS = [
           },
           {
             label: "Dataflow specialized",
-            name: "time_dependent_property/dsrv_default_window_dataflow/10000",
+            name: "time_dependent_property/dsrv_default_window_dataflow_specialised/10000",
           },
           {
             label: "SemiSync",
@@ -206,7 +222,7 @@ const IMPORTANT_SECTIONS = [
           },
           {
             label: "DSRV dataflow specialized",
-            name: "threshold_property/dsrv_dataflow/10000",
+            name: "threshold_property/dsrv_dataflow_specialised/10000",
           },
           {
             label: "DSRV SemiSync",
@@ -232,7 +248,7 @@ const IMPORTANT_SECTIONS = [
           },
           {
             label: "DSRV dataflow specialized",
-            name: "time_dependent_property/dsrv_default_window_dataflow/10000",
+            name: "time_dependent_property/dsrv_default_window_dataflow_specialised/10000",
           },
           {
             label: "DSRV SemiSync",
@@ -255,6 +271,12 @@ const IMPORTANT_SECTIONS = [
 const BENCHMARK_ALIASES = {
   "compilation_phases/parse_and_validate_specification/1024": [
     "compilation_phases/lalr_parse/1024",
+  ],
+  "threshold_property/dsrv_dataflow_untyped/10000": [
+    "threshold_property/dsrv_dataflow/10000",
+  ],
+  "time_dependent_property/dsrv_default_window_dataflow_untyped/10000": [
+    "time_dependent_property/dsrv_default_window_dataflow/10000",
   ],
 };
 
@@ -292,8 +314,9 @@ function benchmarkNames(name) {
 }
 
 function benchmarkFor(run, name) {
-  const names = benchmarkNames(name);
-  return run.benches.find((benchmark) => names.includes(benchmark.name));
+  return benchmarkNames(name)
+    .map((benchmarkName) => run.benches.find((benchmark) => benchmark.name === benchmarkName))
+    .find((benchmark) => benchmark !== undefined);
 }
 
 function valueInNanoseconds(benchmark) {
@@ -395,7 +418,9 @@ function cardHasData(cardDefinition, availableNames) {
       benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
     );
   }
-  return sources.some(({ name }) => availableNames.has(name));
+  return sources.some(({ name }) =>
+    benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
+  );
 }
 
 function destroyCharts() {
@@ -468,7 +493,9 @@ function interactionOptions(relevantRuns) {
 }
 
 function renderLineCard(cardDefinition, runs, availableNames) {
-  const series = cardDefinition.series.filter(({ name }) => availableNames.has(name));
+  const series = cardDefinition.series.filter(({ name }) =>
+    benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
+  );
   if (series.length === 0) return false;
 
   const relevantRuns = runs.filter((run) => series.some(({ name }) => benchmarkFor(run, name)));

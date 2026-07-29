@@ -355,7 +355,7 @@ fn compare_time_dependent_property(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("dsrv_default_window_dataflow", size),
+            BenchmarkId::new("dsrv_default_window_dataflow_specialised", size),
             &size,
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();

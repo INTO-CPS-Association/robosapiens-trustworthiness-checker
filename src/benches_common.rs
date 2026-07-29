@@ -20,9 +20,12 @@ use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
-use crate::runtime::builder::{CheckedValueConfig, SemiSyncValueConfig};
+use crate::runtime::builder::{
+    CheckedSemiSyncValueConfig, CheckedValueConfig, SemiSyncValueConfig,
+};
 use crate::runtime::dataflow::DataflowRuntimeBuilder;
 use crate::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
+use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::{CheckedUntimedDsrvSemantics, UntimedDsrvSemantics};
 use crate::stream_utils::Fanout;
 use crate::stream_utils::FanoutSender;
@@ -206,6 +209,27 @@ pub async fn monitor_outputs_specialized_dataflow(
         None,
     )
     .await;
+}
+
+pub async fn monitor_outputs_typed_semisync(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+) {
+    let output_handler = Box::new(NullOutputHandler::new(
+        executor.clone(),
+        spec.output_vars().clone(),
+    ));
+
+    let monitor =
+        SemiSyncRuntimeBuilder::<CheckedSemiSyncValueConfig, CheckedUntimedDsrvSemantics>::new()
+            .executor(executor)
+            .model(spec)
+            .output(output_handler)
+            .input(input_stream)
+            .build()
+            .await;
+    monitor.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_typed_dataflow(

@@ -38,15 +38,15 @@ jobs:
       - name: Select key dashboard benchmarks
         run: |
           cat > benchmark-targets.tsv <<'EOF'
-          maple_sequence	^maple_sequence/(maple_sequence_untyped_dataflow|maple_sequence_typed_dataflow|maple_sequence_untyped_semisync|maple_sequence_untyped_async)/25000$
+          maple_sequence	^maple_sequence/(maple_sequence_untyped_dataflow|maple_sequence_dataflow_specialised|maple_sequence_untyped_semisync|maple_sequence_untyped_async)/25000$
           dyn_paper	^dyn_paper/(dyn_paper_50_dataflow|dyn_paper_50_dataflow_specialised|dyn_paper_50_semisync|dyn_paper_50)/100000$
-          dup_defer	^(dup_defer/(dup_defer_untyped_dataflow|dup_defer_dataflow_specialised|dup_defer_untyped_semisync|dup_defer_untyped_async)/25000|hard_dynamic_defer/(automatic_scope|explicit_components)_(dataflow|semisync)/1024)$
-          arithmetic_heavy	^arithmetic_heavy/(dataflow|dataflow_specialised)/25000$
+          dup_defer	^(dup_defer/(dup_defer_untyped_dataflow|dup_defer_dataflow_specialised|dup_defer_untyped_semisync|dup_defer_untyped_async)/25000|hard_dynamic_defer/(automatic_scope|explicit_components)_(dataflow|dataflow_specialised|semisync)/1024)$
+          arithmetic_heavy	^arithmetic_heavy/(dataflow|dataflow_specialised|semisync_untyped|semisync_typed)/25000$
           dsrv_paper	^rec_moving_average/reconf_ct_(on|off)_percent_10/100$
           parsing	^parse_small_varied_inputs/parsing_lalrpop/10000$
           compilation_phases	^compilation_phases/(parse_and_validate_specification|strict_type_check|typed_dependency_graph|parse_typecheck_dependency_compile_typed)/1024$
-          threshold_property	^threshold_property/(dsrv_dataflow_untyped|dsrv_dataflow|dsrv_semisync|mstlo_runtime_qual|mstlo_direct_qual)/10000$
-          time_dependent_property	^time_dependent_property/(dsrv_default_window_dataflow_untyped|dsrv_default_window_dataflow|dsrv_default_window_semisync|mstlo_globally_window_qual|mstlo_direct_globally_window_qual)/10000$
+          threshold_property	^threshold_property/(dsrv_dataflow_untyped|dsrv_dataflow_specialised|dsrv_semisync|mstlo_runtime_qual|mstlo_direct_qual)/10000$
+          time_dependent_property	^time_dependent_property/(dsrv_default_window_dataflow_untyped|dsrv_default_window_dataflow_specialised|dsrv_default_window_semisync|mstlo_globally_window_qual|mstlo_direct_globally_window_qual)/10000$
           EOF
       - name: Build project for benching
         run: |
@@ -66,7 +66,7 @@ jobs:
               tee -a benchmark-output.txt
           done < benchmark-targets.tsv
 
-      - name: Validate pipeline benchmark output
+      - name: Validate required benchmark output
         run: |
           while read -r benchmark; do
             if ! grep -Fq "test $benchmark ... bench:" benchmark-output.txt; then
@@ -78,10 +78,17 @@ jobs:
           compilation_phases/strict_type_check/1024
           compilation_phases/typed_dependency_graph/1024
           compilation_phases/parse_typecheck_dependency_compile_typed/1024
+          maple_sequence/maple_sequence_dataflow_specialised/25000
+          arithmetic_heavy/semisync_untyped/25000
+          arithmetic_heavy/semisync_typed/25000
           hard_dynamic_defer/automatic_scope_dataflow/1024
+          hard_dynamic_defer/automatic_scope_dataflow_specialised/1024
           hard_dynamic_defer/automatic_scope_semisync/1024
           hard_dynamic_defer/explicit_components_dataflow/1024
+          hard_dynamic_defer/explicit_components_dataflow_specialised/1024
           hard_dynamic_defer/explicit_components_semisync/1024
+          threshold_property/dsrv_dataflow_specialised/10000
+          time_dependent_property/dsrv_default_window_dataflow_specialised/10000
           EOF
 
       - name: Validate benchmark history

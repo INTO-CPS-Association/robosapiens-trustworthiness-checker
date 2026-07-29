@@ -10,6 +10,7 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow;
+use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
@@ -352,6 +353,22 @@ fn hard_dynamic_defer(c: &mut Criterion) {
                     b.to_async(dataflow_executor.clone()).iter(|| {
                         monitor_outputs_untyped_dataflow_limited(
                             dataflow_executor.executor.clone(),
+                            spec.clone(),
+                            hard_dynamic_defer_input_stream(size, variant),
+                            size,
+                        )
+                    })
+                },
+            );
+
+            let specialized_dataflow_executor = LocalSmolExecutor::new();
+            group.bench_with_input(
+                BenchmarkId::new(format!("{}_dataflow_specialised", variant.name()), size),
+                &size,
+                |b, &size| {
+                    b.to_async(specialized_dataflow_executor.clone()).iter(|| {
+                        monitor_outputs_specialized_dataflow_limited(
+                            specialized_dataflow_executor.executor.clone(),
                             spec.clone(),
                             hard_dynamic_defer_input_stream(size, variant),
                             size,

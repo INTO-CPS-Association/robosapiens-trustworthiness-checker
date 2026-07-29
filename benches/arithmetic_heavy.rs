@@ -5,7 +5,8 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use smol::LocalExecutor;
 use trustworthiness_checker::benches_common::{
-    monitor_outputs_typed_dataflow, monitor_outputs_untyped_dataflow,
+    monitor_outputs_typed_dataflow, monitor_outputs_typed_semisync,
+    monitor_outputs_untyped_dataflow, monitor_outputs_untyped_little,
 };
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
@@ -108,6 +109,34 @@ fn arithmetic_heavy(c: &mut Criterion) {
                         checked.clone(),
                         arithmetic_input(size),
                         trustworthiness_checker::core::Semantics::TypedUntimed,
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("semisync_untyped", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_little(
+                        benchmark_executor.executor.clone(),
+                        untyped.clone(),
+                        arithmetic_input(size),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("semisync_typed", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_typed_semisync(
+                        benchmark_executor.executor.clone(),
+                        checked.clone(),
+                        arithmetic_input(size),
                     )
                 })
             },

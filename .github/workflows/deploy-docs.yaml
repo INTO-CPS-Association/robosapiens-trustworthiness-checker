@@ -64,6 +64,23 @@ jobs:
           mkdir -p .pages-site/benchmarks
           cp -a docs/benchmark-dashboard/. .pages-site/benchmarks/
 
+          # Fingerprinted asset names prevent a browser or CDN from reusing files
+          # from an earlier documentation or benchmark-history deployment.
+          site_version="$(git rev-parse HEAD)"
+          benchmark_version="$(git -C .benchmark-data rev-parse HEAD)"
+          cp .pages-site/benchmarks/dashboard.css \
+            ".pages-site/benchmarks/dashboard.${site_version}.css"
+          cp .pages-site/benchmarks/dashboard.js \
+            ".pages-site/benchmarks/dashboard.${site_version}.js"
+          cp .pages-site/benchmarks/data.js \
+            ".pages-site/benchmarks/data.${benchmark_version}.js"
+          sed -i \
+            -e "s|dashboard.css|dashboard.${site_version}.css|g" \
+            -e "s|dashboard.js|dashboard.${site_version}.js|g" \
+            -e "s|data.js|data.${benchmark_version}.js|g" \
+            .pages-site/benchmarks/index.html \
+            .pages-site/benchmarks/all.html
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

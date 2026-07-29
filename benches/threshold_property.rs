@@ -510,7 +510,7 @@ fn compare_threshold_property(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("dsrv_dataflow", size),
+            BenchmarkId::new("dsrv_dataflow_specialised", size),
             &size,
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();

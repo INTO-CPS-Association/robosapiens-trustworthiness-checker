@@ -114,7 +114,7 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("maple_sequence_typed_dataflow", size),
+            BenchmarkId::new("maple_sequence_dataflow_specialised", size),
             &(&spec_typed),
             |b, &spec_typed| {
                 let benchmark_executor = LocalSmolExecutor::new();
