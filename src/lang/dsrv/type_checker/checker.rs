@@ -254,10 +254,15 @@ fn check(
             };
             (typ, None)
         }
-        Update(a, b) | Default(a, b) | Latch(a, b) | Init(a, b) => {
+        Update(a, b) | Default(a, b) | Init(a, b) => {
             let a = check(a, expected, context)?;
             let b = check(b, Some(&a), context)?;
             (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
+        }
+        Latch(value, trigger) => {
+            let value = check(value, expected, context)?;
+            check(trigger, None, context)?;
+            (value, None)
         }
         IsDefined(value) | When(value) => {
             check(value, None, context)?;

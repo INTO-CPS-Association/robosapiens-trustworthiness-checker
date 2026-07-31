@@ -107,6 +107,27 @@ fn arb_valid_dataflow_program_and_inputs()
                 annotations.insert(name, StreamType::Int);
             }
 
+            // Guarantee that every generated case executes both the direct single-scalar path and
+            // scalar publication between streams. The remaining recipes exercise mixed canonical
+            // and specialized graphs.
+            let specialized_unary = VarName::new("specialized_unary");
+            exprs.insert(
+                specialized_unary.clone(),
+                Expr::Abs(Box::new(Expr::Var(VarName::new("x")))).into(),
+            );
+            annotations.insert(specialized_unary.clone(), StreamType::Int);
+            let specialized_binary = VarName::new("specialized_binary");
+            exprs.insert(
+                specialized_binary.clone(),
+                Expr::BinOp(
+                    Box::new(Expr::Var(specialized_unary)),
+                    Box::new(Expr::Var(VarName::new("x"))),
+                    BinaryOperator::Add,
+                )
+                .into(),
+            );
+            annotations.insert(specialized_binary, StreamType::Int);
+
             let stream_vars = exprs.keys().cloned().collect::<BTreeSet<_>>();
             let spec = DsrvSpecification::new(
                 BTreeSet::from([VarName::new("x"), VarName::new("flag")]),
@@ -116,6 +137,81 @@ fn arb_valid_dataflow_program_and_inputs()
                 Vec::new(),
             );
             (spec, rows)
+        })
+}
+
+fn arb_specialized_runtime_program_and_inputs()
+-> impl Strategy<Value = (DsrvSpecification, Vec<(Value, Value)>)> {
+    (
+        prop::collection::vec(any::<[u8; 3]>(), 1..16),
+        prop::collection::vec((sparse_int(), sparse_bool()), 1..40),
+    )
+        .prop_map(|(recipes, rows)| {
+            let x = VarName::new("x");
+            let flag = VarName::new("flag");
+            let unary = VarName::new("unary");
+            let binary = VarName::new("binary");
+            let mut exprs = BTreeMap::from([
+                (
+                    unary.clone(),
+                    Expr::Abs(Box::new(Expr::Var(x.clone()))).into(),
+                ),
+                (
+                    binary.clone(),
+                    Expr::BinOp(
+                        Box::new(Expr::Var(unary.clone())),
+                        Box::new(Expr::Var(x.clone())),
+                        BinaryOperator::Add,
+                    )
+                    .into(),
+                ),
+            ]);
+            let mut annotations = BTreeMap::from([
+                (x.clone(), StreamType::Int),
+                (flag.clone(), StreamType::Bool),
+                (unary, StreamType::Int),
+                (binary, StreamType::Int),
+            ]);
+            let mut available = vec![x.clone()];
+
+            for (index, [operator, first, second]) in recipes.into_iter().enumerate() {
+                let name = VarName::from(format!("generated_{index}"));
+                let lhs = available[usize::from(first) % available.len()].clone();
+                let rhs = available[usize::from(second) % available.len()].clone();
+                let expression = match operator % 4 {
+                    0 => Expr::BinOp(
+                        Box::new(Expr::Var(lhs)),
+                        Box::new(Expr::Var(rhs)),
+                        BinaryOperator::Add,
+                    ),
+                    1 => Expr::BinOp(
+                        Box::new(Expr::Var(lhs)),
+                        Box::new(Expr::Var(rhs)),
+                        BinaryOperator::Subtract,
+                    ),
+                    2 => Expr::Abs(Box::new(Expr::Var(lhs))),
+                    _ => Expr::If(
+                        Box::new(Expr::Var(flag.clone())),
+                        Box::new(Expr::Var(lhs)),
+                        Box::new(Expr::Var(rhs)),
+                    ),
+                };
+                exprs.insert(name.clone(), expression.into());
+                annotations.insert(name.clone(), StreamType::Int);
+                available.push(name);
+            }
+
+            let stream_vars = exprs.keys().cloned().collect();
+            (
+                DsrvSpecification::new(
+                    BTreeSet::from([x, flag]),
+                    stream_vars,
+                    exprs,
+                    annotations,
+                    Vec::new(),
+                ),
+                rows,
+            )
         })
 }
 
@@ -146,7 +242,7 @@ fn arb_runtime_compiled_program(
                         1 => Value::Deferred,
                         _ => {
                             let offset = expression % 5;
-                            let source = match (combinator, expression % 7) {
+                            let source = match (combinator, expression % 10) {
                                 ("defer", 2) => "x + y".to_owned(),
                                 ("defer", 5) => format!("default(y[{offset}], x)"),
                                 (_, 0) => "x".to_owned(),
@@ -155,7 +251,10 @@ fn arb_runtime_compiled_program(
                                 (_, 3) => "x + y".to_owned(),
                                 (_, 4) => format!("default(x[{offset}], 0) + y"),
                                 (_, 5) => format!("default(sum[{offset}], x)"),
-                                _ => "if x > y then x + y else x".to_owned(),
+                                (_, 6) => "if x > y then x + y else x".to_owned(),
+                                (_, 7) => "latch(x, x > y)".to_owned(),
+                                (_, 8) => "update(x, y)".to_owned(),
+                                _ => "if when(x) then 1 else 0".to_owned(),
                             };
                             Value::Str(source.into())
                         }
@@ -218,7 +317,7 @@ const DATAFLOW_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
     256
 };
 
-const RUNTIME_COMPILED_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
+const RUNTIME_EQUIVALENCE_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
     1_000
 } else {
     64
@@ -321,20 +420,39 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(RUNTIME_COMPILED_PROPTEST_CASES))]
+    #![proptest_config(ProptestConfig::with_cases(RUNTIME_EQUIVALENCE_PROPTEST_CASES))]
 
     #[test]
-    fn dynamic_typed_and_untyped_traces_agree(
-        (spec, rows) in arb_runtime_compiled_program("dynamic")
+    fn specialized_runtime_matches_both_reference_runtimes(
+        (spec, rows) in arb_specialized_runtime_program_and_inputs()
     ) {
-        evaluate_runtime_compiled_property(spec, &rows);
+        let inputs = BTreeMap::from([
+            (
+                VarName::new("x"),
+                rows.iter().map(|(x, _)| x.clone()).collect(),
+            ),
+            (
+                VarName::new("flag"),
+                rows.iter().map(|(_, flag)| flag.clone()).collect(),
+            ),
+        ]);
+        assert_generated_runtime_parity(spec, inputs);
     }
 
     #[test]
-    fn defer_typed_and_untyped_traces_agree(
+    fn dynamic_specialized_runtime_matches_both_reference_runtimes(
+        (spec, rows) in arb_runtime_compiled_program("dynamic")
+    ) {
+        evaluate_runtime_compiled_property(spec.clone(), &rows);
+        assert_generated_runtime_parity(spec, dynamic_inputs(&rows));
+    }
+
+    #[test]
+    fn defer_specialized_runtime_matches_both_reference_runtimes(
         (spec, rows) in arb_runtime_compiled_program("defer")
     ) {
-        evaluate_runtime_compiled_property(spec, &rows);
+        evaluate_runtime_compiled_property(spec.clone(), &rows);
+        assert_generated_runtime_parity(spec, dynamic_inputs(&rows));
     }
 }
 
@@ -508,6 +626,29 @@ async fn eval_dataflow_runtime(
     outputs.take(limit).collect().await
 }
 
+async fn eval_specialized_dataflow_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    inputs: BTreeMap<VarName, Vec<Value>>,
+    limit: usize,
+) -> Vec<BTreeMap<VarName, Value>> {
+    let mut output_handler = Box::new(ManualOutputHandler::new(
+        executor.clone(),
+        spec.output_vars().clone(),
+    ));
+    let outputs = output_handler.get_output();
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(map::input_stream(inputs))
+        .output(output_handler)
+        .build()
+        .await;
+
+    executor.spawn(runtime.run()).detach();
+    outputs.take(limit).collect().await
+}
+
 async fn eval_semisync_runtime(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
@@ -531,6 +672,59 @@ async fn eval_semisync_runtime(
     outputs.take(limit).collect().await
 }
 
+async fn assert_runtime_parity(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    inputs: BTreeMap<VarName, Vec<Value>>,
+) -> Vec<BTreeMap<VarName, Value>> {
+    let ticks = inputs.values().next().map_or(0, Vec::len);
+    assert!(
+        inputs.values().all(|values| values.len() == ticks),
+        "parity test inputs must describe complete logical rows"
+    );
+    let checked_spec = spec
+        .clone()
+        .type_check(TypeCheckOptions::STRICT)
+        .expect("parity specifications must pass strict type checking");
+    let spec_trace = format!("{spec:#?}");
+    let input_trace = format!("{inputs:#?}");
+    let dataflow = with_timeout(
+        eval_dataflow_runtime(executor.clone(), spec.clone(), inputs.clone(), ticks),
+        10,
+        "unspecialized dataflow parity runtime",
+    )
+    .await
+    .expect("unspecialized dataflow parity runtime did not produce the expected outputs");
+    let specialized = with_timeout(
+        eval_specialized_dataflow_runtime(executor.clone(), checked_spec, inputs.clone(), ticks),
+        10,
+        "specialized dataflow parity runtime",
+    )
+    .await
+    .expect("specialized dataflow parity runtime did not produce the expected outputs");
+    let semisync = with_timeout(
+        eval_semisync_runtime(executor.clone(), spec, inputs, ticks),
+        10,
+        "semi-sync parity runtime",
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!(
+            "semi-sync parity runtime did not produce the expected outputs: {error}\n\
+             specification:\n{spec_trace}\ninputs:\n{input_trace}"
+        )
+    });
+    assert_eq!(
+        specialized, dataflow,
+        "specialized and unspecialized dataflow differed for:\n{spec_trace}\ninputs:\n{input_trace}"
+    );
+    assert_eq!(
+        specialized, semisync,
+        "specialized dataflow and semi-sync differed for:\n{spec_trace}\ninputs:\n{input_trace}"
+    );
+    specialized
+}
+
 async fn assert_dataflow_semisync_runtime_parity(
     executor: Rc<LocalExecutor<'static>>,
     spec_src: &str,
@@ -551,7 +745,7 @@ async fn assert_dataflow_semisync_runtime_parity(
     .await
     .expect("dataflow parity runtime did not produce the expected outputs");
     let semisync = with_timeout(
-        eval_semisync_runtime(executor.clone(), spec.clone(), inputs.clone(), ticks),
+        eval_semisync_runtime(executor, spec, inputs, ticks),
         10,
         "semi-sync parity runtime",
     )
@@ -562,6 +756,28 @@ async fn assert_dataflow_semisync_runtime_parity(
         "dataflow and semi-sync differed for:\n{spec_src}\ninputs:\n{input_trace}"
     );
     dataflow
+}
+
+fn dynamic_inputs(rows: &[DynamicInputRow]) -> BTreeMap<VarName, Vec<Value>> {
+    BTreeMap::from([
+        (
+            VarName::new("x"),
+            rows.iter().map(|(x, _, _)| x.clone()).collect(),
+        ),
+        (
+            VarName::new("y"),
+            rows.iter().map(|(_, y, _)| y.clone()).collect(),
+        ),
+        (
+            VarName::new("source"),
+            rows.iter().map(|(_, _, source)| source.clone()).collect(),
+        ),
+    ])
+}
+
+fn assert_generated_runtime_parity(spec: DsrvSpecification, inputs: BTreeMap<VarName, Vec<Value>>) {
+    let executor: Rc<LocalExecutor<'static>> = Rc::new(LocalExecutor::new());
+    smol::block_on(executor.run(assert_runtime_parity(executor.clone(), spec, inputs)));
 }
 
 fn output_trace(rows: &[BTreeMap<VarName, Value>], name: &str) -> Vec<Value> {

@@ -198,6 +198,15 @@ mod tests {
     }
 
     #[test]
+    fn latch_trigger_may_have_a_different_type_from_its_value() {
+        let spec = "in x: Int\nin trigger: Bool\nout z: Int\nz = latch(x, trigger)"
+            .parse()
+            .unwrap();
+
+        type_check(spec, false).expect("latch trigger type must not constrain its value type");
+    }
+
+    #[test]
     fn annotation_mismatch_uses_expression_span() {
         let input = "out z: Bool\nz = 1";
         let source = input;
