@@ -564,46 +564,50 @@ fn check(
         }
         Struct(fields) => {
             reject_duplicate_fields(expr, &fields)?;
-            let Some(TCType::Struct(expected_fields, allow_extra)) = expected else {
-                if context.expr_types.is_some() {
+            match expected {
+                Some(TCType::Struct(expected_fields, allow_extra)) => {
+                    if !allow_extra
+                        && fields.keys().any(|name| {
+                            !expected_fields.iter().any(|(expected, _)| expected == name)
+                        })
+                    {
+                        return Err(error(
+                            expr,
+                            TypeErrorKind::StructUnknownField,
+                            "Struct constructor contains unknown fields",
+                        ));
+                    }
+                    for (name, expected_type) in expected_fields {
+                        let Some(value) = fields.get(name) else {
+                            return Err(error(
+                                expr,
+                                TypeErrorKind::StructMissingField,
+                                format!("Struct constructor is missing required field {name}"),
+                            ));
+                        };
+                        require(
+                            check(value, Some(expected_type), context)?,
+                            expected_type,
+                            expr,
+                        )?;
+                    }
+                    (expected.cloned().expect("matched expected Struct"), None)
+                }
+                Some(_) => {
                     return Err(error(
                         expr,
                         TypeErrorKind::StructExpected,
                         "Struct constructor requires an expected Struct type",
                     ));
                 }
-                let mut inferred = EcoVec::new();
-                for (name, value) in fields.iter() {
-                    inferred.push((name.clone(), check(value, None, context)?));
+                None => {
+                    let mut inferred = EcoVec::new();
+                    for (name, value) in fields.iter() {
+                        inferred.push((name.clone(), check(value, None, context)?));
+                    }
+                    (TCType::Struct(inferred, false), None)
                 }
-                return Ok(TCType::Struct(inferred, false));
-            };
-            if !allow_extra
-                && fields
-                    .keys()
-                    .any(|name| !expected_fields.iter().any(|(expected, _)| expected == name))
-            {
-                return Err(error(
-                    expr,
-                    TypeErrorKind::StructUnknownField,
-                    "Struct constructor contains unknown fields",
-                ));
             }
-            for (name, expected_type) in expected_fields {
-                let Some(value) = fields.get(name) else {
-                    return Err(error(
-                        expr,
-                        TypeErrorKind::StructMissingField,
-                        format!("Struct constructor is missing required field {name}"),
-                    ));
-                };
-                require(
-                    check(value, Some(expected_type), context)?,
-                    expected_type,
-                    expr,
-                )?;
-            }
-            (expected.cloned().expect("matched expected Struct"), None)
         }
         ObjectLiteral(fields) => {
             reject_duplicate_fields(expr, &fields)?;
