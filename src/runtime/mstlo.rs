@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt::Debug, rc::Rc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+    rc::Rc,
+    time::Duration,
+};
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
@@ -212,19 +217,45 @@ pub trait MstloStreamValue: StreamData {
     fn output_value<RS: IntoMstloOutput>(timestamp: Duration, value: RS) -> anyhow::Result<Self>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MstloRouting {
+    /// Preserve the historical behaviour. This is required for RoSI, whose
+    /// refinements expose repeated updates at the same timestamp, and for
+    /// formulas with no input signals, whose output cadence is the input
+    /// cadence.
+    FanOut,
+    /// Deliver every referenced sample and one additional sample per input
+    /// timestamp to keep temporal operators' clocks and synchronizer timelines
+    /// unchanged without evaluating every unrelated sample.
+    ReferencedWithClock,
+}
+
 struct MstloRuntime<RS, V = Value> {
     _executor: Rc<LocalExecutor<'static>>,
     input_vars: Vec<VarName>,
     monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
+    monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
+    routing: MstloRouting,
     input_stream: InputStream<V>,
     output_handler: Box<dyn OutputHandler<Val = V>>,
     execution_policy: ExecutionPolicy,
 }
 
+type MstloMonitorId = usize;
+
+struct MstloMonitorSlot<RS, V> {
+    monitor: StlMonitor<f64, RS>,
+    output: MstloOutputStream<V>,
+}
+
 struct MstloInputState<'a, RS, V = Value> {
     signal_names: &'a BTreeMap<VarName, &'static str>,
-    monitors: &'a mut BTreeMap<VarName, StlMonitor<f64, RS>>,
-    outputs: BTreeMap<VarName, MstloOutputStream<V>>,
+    monitors: Vec<MstloMonitorSlot<RS, V>>,
+    signal_monitors: BTreeMap<&'static str, Vec<MstloMonitorId>>,
+    fanout_monitors: Vec<MstloMonitorId>,
+    clocked_monitors: Vec<MstloMonitorId>,
+    routing: MstloRouting,
+    last_clock_timestamp: Option<Duration>,
     blocked: bool,
 }
 
@@ -314,6 +345,8 @@ where
         executor: Rc<LocalExecutor<'static>>,
         input_vars: Vec<VarName>,
         monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
+        monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
+        routing: MstloRouting,
         input_stream: InputStream<V>,
         output_handler: Box<dyn OutputHandler<Val = V>>,
         execution_policy: ExecutionPolicy,
@@ -326,6 +359,8 @@ where
             _executor: executor,
             input_vars,
             monitors,
+            monitor_signals,
+            routing,
             input_stream,
             output_handler,
             execution_policy,
@@ -378,9 +413,15 @@ where
             let executor = self.executor.expect("MSTLO runtime executor must be set");
             let formulae = self.formula.expect("MSTLO formula/spec must be set");
             let input_vars = formulae.var_names().to_vec();
+            let monitor_signals = formulae.formula_signals().clone();
             let formulae = formulae.into_formulae();
             let algorithm = self.algorithm;
             let semantics = self.semantics;
+            let routing = if semantics == Semantics::RobustnessInterval {
+                MstloRouting::FanOut
+            } else {
+                MstloRouting::ReferencedWithClock
+            };
             let synchronization_strategy = self.synchronization_strategy;
             let variables = self.variables;
             let input_stream = self.input.expect("MSTLO input stream must be set");
@@ -408,6 +449,8 @@ where
                         executor,
                         input_vars,
                         monitors,
+                        monitor_signals,
+                        routing,
                         input_stream,
                         output_handler,
                         execution_policy,
@@ -433,6 +476,8 @@ where
                         executor,
                         input_vars,
                         monitors,
+                        monitor_signals,
+                        routing,
                         input_stream,
                         output_handler,
                         execution_policy,
@@ -458,6 +503,8 @@ where
                         executor,
                         input_vars,
                         monitors,
+                        monitor_signals,
+                        routing,
                         input_stream,
                         output_handler,
                         execution_policy,
@@ -483,6 +530,8 @@ where
                         executor,
                         input_vars,
                         monitors,
+                        monitor_signals,
+                        routing,
                         input_stream,
                         output_handler,
                         execution_policy,
@@ -758,27 +807,173 @@ impl OutputHandler for MstloValueOutputAdapter {
     }
 }
 
-impl<RS, V> MstloInputState<'_, RS, V>
+impl<'a, RS, V> MstloInputState<'a, RS, V>
 where
     RS: RobustnessSemantics + IntoMstloOutput + Debug + 'static,
     V: MstloStreamValue,
 {
+    fn new(
+        signal_names: &'a BTreeMap<VarName, &'static str>,
+        monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
+        mut outputs: BTreeMap<VarName, MstloOutputStream<V>>,
+        mut monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
+        routing: MstloRouting,
+    ) -> anyhow::Result<Self> {
+        let mut monitor_slots = Vec::with_capacity(monitors.len());
+        let mut signal_monitors: BTreeMap<&'static str, Vec<MstloMonitorId>> = BTreeMap::new();
+        let mut fanout_monitors = Vec::new();
+        let mut clocked_monitors = Vec::new();
+
+        // `monitors` is a `BTreeMap`, so IDs are assigned in formula-name
+        // order. Every signal route is therefore sorted, allowing a linear
+        // merge when deciding whether its first sample is also the clock.
+        for (formula_name, monitor) in monitors {
+            let output = outputs.remove(&formula_name).ok_or_else(|| {
+                anyhow!("Missing output stream for MSTLO formula `{formula_name}`")
+            })?;
+            let signals = monitor_signals.remove(&formula_name).ok_or_else(|| {
+                anyhow!("Missing signal metadata for MSTLO formula `{formula_name}`")
+            })?;
+            let monitor_id = monitor_slots.len();
+
+            if signals.is_empty() || routing == MstloRouting::FanOut {
+                fanout_monitors.push(monitor_id);
+            } else {
+                for signal in signals {
+                    signal_monitors.entry(signal).or_default().push(monitor_id);
+                }
+                clocked_monitors.push(monitor_id);
+            }
+
+            monitor_slots.push(MstloMonitorSlot { monitor, output });
+        }
+
+        if let Some(formula_name) = outputs.keys().next() {
+            return Err(anyhow!(
+                "Missing MSTLO monitor for output stream `{formula_name}`"
+            ));
+        }
+        if let Some(formula_name) = monitor_signals.keys().next() {
+            return Err(anyhow!(
+                "Missing MSTLO monitor for signal metadata `{formula_name}`"
+            ));
+        }
+
+        Ok(Self {
+            signal_names,
+            monitors: monitor_slots,
+            signal_monitors,
+            fanout_monitors,
+            clocked_monitors,
+            routing,
+            last_clock_timestamp: None,
+            blocked: false,
+        })
+    }
+
+    fn deliver_monitor_step(
+        slot: &mut MstloMonitorSlot<RS, V>,
+        blocked: &mut bool,
+        step: &Step<f64>,
+    ) -> anyhow::Result<()> {
+        let output = slot.monitor.update(step);
+        for verdict in output.into_verdicts() {
+            let value = V::output_value(verdict.timestamp, verdict.value)?;
+            *blocked |= slot.output.push(value);
+        }
+        Ok(())
+    }
+
+    fn process_routed_step(&mut self, step: &Step<f64>) -> anyhow::Result<()> {
+        match self.routing {
+            MstloRouting::FanOut => {
+                for &monitor_id in &self.fanout_monitors {
+                    Self::deliver_monitor_step(
+                        &mut self.monitors[monitor_id],
+                        &mut self.blocked,
+                        step,
+                    )?;
+                }
+            }
+            MstloRouting::ReferencedWithClock => {
+                let relevant_monitors = self.signal_monitors.get(step.signal);
+                let last_timestamp = self.last_clock_timestamp;
+                let timestamp_regressed = last_timestamp.is_some_and(|last| step.timestamp < last);
+                let new_timestamp = last_timestamp.map_or(true, |last| step.timestamp > last);
+
+                if timestamp_regressed {
+                    // The input path is normally chronological, but preserve
+                    // the old behaviour for a late event rather than silently
+                    // changing a monitor's ordering.
+                    for &monitor_id in &self.clocked_monitors {
+                        Self::deliver_monitor_step(
+                            &mut self.monitors[monitor_id],
+                            &mut self.blocked,
+                            step,
+                        )?;
+                    }
+                } else {
+                    if new_timestamp {
+                        // A temporal monitor must still observe the input
+                        // clock, and a multi-signal monitor's synchronizer
+                        // must still see every timestamp. One representative
+                        // step is enough; repeated unrelated steps at the
+                        // same timestamp do not add information for the
+                        // non-RoSI semantics.
+                        let relevant_ids = relevant_monitors.map_or(&[][..], Vec::as_slice);
+                        let mut relevant_index = 0;
+                        for &monitor_id in &self.clocked_monitors {
+                            while relevant_ids
+                                .get(relevant_index)
+                                .is_some_and(|&relevant_id| relevant_id < monitor_id)
+                            {
+                                relevant_index += 1;
+                            }
+                            if relevant_ids.get(relevant_index) == Some(&monitor_id) {
+                                relevant_index += 1;
+                                continue;
+                            }
+                            Self::deliver_monitor_step(
+                                &mut self.monitors[monitor_id],
+                                &mut self.blocked,
+                                step,
+                            )?;
+                        }
+                        self.last_clock_timestamp = Some(step.timestamp);
+                    }
+
+                    if let Some(monitor_ids) = relevant_monitors {
+                        for &monitor_id in monitor_ids {
+                            Self::deliver_monitor_step(
+                                &mut self.monitors[monitor_id],
+                                &mut self.blocked,
+                                step,
+                            )?;
+                        }
+                    }
+                }
+
+                // A formula with no signal references is intentionally kept on
+                // the input cadence; otherwise even `True` would change its
+                // observable output stream.
+                for &monitor_id in &self.fanout_monitors {
+                    Self::deliver_monitor_step(
+                        &mut self.monitors[monitor_id],
+                        &mut self.blocked,
+                        step,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn process_event(&mut self, event: crate::core::InputEventRef<'_, V>) -> anyhow::Result<()> {
         let Some(step) = V::step_from_input_value(self.signal_names, event.var, event.value)?
         else {
             return Ok(());
         };
-        for (formula_name, monitor) in self.monitors.iter_mut() {
-            let output = monitor.update(&step);
-            let destination = self.outputs.get_mut(formula_name).ok_or_else(|| {
-                anyhow!("Missing output stream for MSTLO formula `{formula_name}`")
-            })?;
-            for verdict in output.into_verdicts() {
-                let value = V::output_value(verdict.timestamp, verdict.value)?;
-                self.blocked |= destination.push(value);
-            }
-        }
-        Ok(())
+        self.process_routed_step(&step)
     }
 
     fn process_step(&mut self, tick: &crate::core::InputTick<'_, V>) -> anyhow::Result<()> {
@@ -791,26 +986,16 @@ where
             steps.push(step);
         }
         // `mstlo` otherwise preserves the input iteration order for equal
-        // timestamps, so use the signal name as a stable tie-breaker.
+        // timestamps, so use the signal name as a stable tie-breaker. The
+        // routed path consumes this same sorted sequence, so filtering cannot
+        // reorder the samples seen by any one monitor.
         steps.sort_by(|left, right| {
             left.timestamp
                 .cmp(&right.timestamp)
                 .then_with(|| left.signal.cmp(right.signal))
         });
-        if steps.is_empty() {
-            return Ok(());
-        }
-
-        for (formula_name, monitor) in self.monitors.iter_mut() {
-            let destination = self.outputs.get_mut(formula_name).ok_or_else(|| {
-                anyhow!("Missing output stream for MSTLO formula `{formula_name}`")
-            })?;
-            for step in &steps {
-                for verdict in monitor.update(step).into_verdicts() {
-                    let value = V::output_value(verdict.timestamp, verdict.value)?;
-                    self.blocked |= destination.push(value);
-                }
-            }
+        for step in &steps {
+            self.process_routed_step(step)?;
         }
         Ok(())
     }
@@ -819,9 +1004,9 @@ where
         if !self.blocked {
             return true;
         }
-        for output in self.outputs.values_mut() {
-            for value in output.pending.drain(..) {
-                if output.sender.send(value).await.is_err() {
+        for slot in &mut self.monitors {
+            for value in slot.output.pending.drain(..) {
+                if slot.output.sender.send(value).await.is_err() {
                     return false;
                 }
             }
@@ -862,16 +1047,17 @@ where
                 )
             })
             .unzip();
+        let input = MstloInputState::new(
+            &signal_names,
+            self.monitors,
+            outputs,
+            self.monitor_signals,
+            self.routing,
+        )?;
         self.output_handler.provide_streams(output_streams);
         let output_task = self._executor.spawn(self.output_handler.run());
         let mut input_batches = self.input_stream;
 
-        let input = MstloInputState {
-            signal_names: &signal_names,
-            monitors: &mut self.monitors,
-            outputs,
-            blocked: false,
-        };
         let execution_policy = self.execution_policy;
         let input_task = Box::pin(async move {
             let mut input = input;
@@ -927,7 +1113,10 @@ mod tests {
     use crate::runtime::builder::RuntimeBuilder;
     use futures::{StreamExt, stream};
     use macro_rules_attribute::apply;
-    use mstlo::FormulaDefinition;
+    use mstlo::{
+        Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, FormulaDefinition,
+        RobustnessInterval, Rosi, Step, StlMonitor, SynchronizationStrategy, Variables, parse_stl,
+    };
     use smol::LocalExecutor;
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -1024,6 +1213,288 @@ mod tests {
             panic!("MSTLO output value must be a float");
         };
         (*time, *value)
+    }
+
+    fn run_direct_routing<RS, Build>(
+        formula: FormulaDefinition,
+        _synchronization_strategy: SynchronizationStrategy,
+        routing: MstloRouting,
+        trace: &[Step<f64>],
+        build: Build,
+    ) -> Vec<MstloTimedValue>
+    where
+        RS: RobustnessSemantics + IntoMstloOutput + Debug + 'static,
+        Build: FnOnce(FormulaDefinition) -> StlMonitor<f64, RS>,
+    {
+        let formula_name = VarName::new("out");
+        let specification = MstloSpecification::single(formula_name.clone(), formula.clone());
+        let input_vars = ["x", "y", "z"]
+            .into_iter()
+            .map(VarName::new)
+            .collect::<Vec<_>>();
+        let signal_names = MstloRuntime::<RS, MstloTimedValue>::signal_names(&input_vars);
+        let monitors = BTreeMap::from([(formula_name.clone(), build(formula))]);
+        let (sender, mut receiver) = unsync::spsc::unbounded();
+        let outputs = BTreeMap::from([(
+            formula_name,
+            MstloOutputStream {
+                sender,
+                pending: Vec::new(),
+            },
+        )]);
+
+        {
+            let mut state = MstloInputState::new(
+                &signal_names,
+                monitors,
+                outputs,
+                specification.formula_signals().clone(),
+                routing,
+            )
+            .unwrap();
+            for step in trace {
+                state.process_routed_step(step).unwrap();
+            }
+        }
+
+        smol::block_on(async move {
+            let mut outputs = Vec::new();
+            while let Some(value) = receiver.recv().await {
+                outputs.push(value);
+            }
+            outputs
+        })
+    }
+
+    fn correctness_trace() -> Vec<Step<f64>> {
+        vec![
+            Step::new("y", 4.0, Duration::from_millis(0)),
+            Step::new("x", 2.0, Duration::from_millis(0)),
+            Step::new("z", 3.0, Duration::from_millis(0)),
+            Step::new("y", -4.0, Duration::from_millis(1_000)),
+            Step::new("x", -2.0, Duration::from_millis(2_000)),
+            Step::new("z", 3.0, Duration::from_millis(3_000)),
+            Step::new("y", 4.0, Duration::from_millis(4_000)),
+            Step::new("x", 2.0, Duration::from_millis(4_000)),
+            Step::new("z", -3.0, Duration::from_millis(5_000)),
+            Step::new("y", -4.0, Duration::from_millis(6_000)),
+            Step::new("x", -2.0, Duration::from_millis(6_000)),
+            Step::new("z", 3.0, Duration::from_millis(7_000)),
+        ]
+    }
+
+    #[test]
+    fn indexed_route_preserves_non_rosi_verdicts_across_sync_strategies() {
+        let formula = parse_stl("G[0,2]((x > 0) && (z > 0))").unwrap();
+        let trace = correctness_trace();
+        let strategies = [
+            SynchronizationStrategy::None,
+            SynchronizationStrategy::ZeroOrderHold,
+            SynchronizationStrategy::Linear,
+        ];
+
+        macro_rules! assert_same_route {
+            ($marker:expr, $output:ty, $algorithms:expr) => {
+                for algorithm in $algorithms {
+                    for strategy in strategies {
+                        let fanout = run_direct_routing::<$output, _>(
+                            formula.clone(),
+                            strategy,
+                            MstloRouting::FanOut,
+                            &trace,
+                            |formula| {
+                                StlMonitor::builder()
+                                    .formula(formula)
+                                    .algorithm(algorithm)
+                                    .synchronization_strategy(strategy)
+                                    .variables(Variables::new())
+                                    .semantics($marker)
+                                    .build()
+                                    .unwrap()
+                            },
+                        );
+                        let routed = run_direct_routing::<$output, _>(
+                            formula.clone(),
+                            strategy,
+                            MstloRouting::ReferencedWithClock,
+                            &trace,
+                            |formula| {
+                                StlMonitor::builder()
+                                    .formula(formula)
+                                    .algorithm(algorithm)
+                                    .synchronization_strategy(strategy)
+                                    .variables(Variables::new())
+                                    .semantics($marker)
+                                    .build()
+                                    .unwrap()
+                            },
+                        );
+                        assert_eq!(
+                            routed, fanout,
+                            "routing changed {algorithm:?}/{strategy:?} verdicts"
+                        );
+                    }
+                }
+            };
+        }
+
+        assert_same_route!(
+            DelayedQuantitative,
+            f64,
+            [Algorithm::Naive, Algorithm::Incremental]
+        );
+        assert_same_route!(
+            DelayedQualitative,
+            bool,
+            [Algorithm::Naive, Algorithm::Incremental]
+        );
+        assert_same_route!(EagerQualitative, bool, [Algorithm::Incremental]);
+    }
+
+    #[test]
+    fn rosi_and_signal_free_routes_keep_their_cadence_sensitive_behaviour() {
+        let formula = parse_stl("(x > 0) && (z > 0)").unwrap();
+        let trace = vec![
+            Step::new("x", 2.0, Duration::ZERO),
+            Step::new("y", 4.0, Duration::ZERO),
+            Step::new("z", 3.0, Duration::ZERO),
+            Step::new("x", -2.0, Duration::from_millis(1_000)),
+            Step::new("y", -4.0, Duration::from_millis(1_000)),
+            Step::new("z", 3.0, Duration::from_millis(1_000)),
+        ];
+        let strategy = SynchronizationStrategy::ZeroOrderHold;
+        let fanout = run_direct_routing::<RobustnessInterval, _>(
+            formula.clone(),
+            strategy,
+            MstloRouting::FanOut,
+            &trace,
+            |formula| {
+                StlMonitor::builder()
+                    .formula(formula)
+                    .algorithm(Algorithm::Incremental)
+                    .synchronization_strategy(strategy)
+                    .variables(Variables::new())
+                    .semantics(Rosi)
+                    .build()
+                    .unwrap()
+            },
+        );
+        let clocked = run_direct_routing::<RobustnessInterval, _>(
+            formula,
+            strategy,
+            MstloRouting::ReferencedWithClock,
+            &trace,
+            |formula| {
+                StlMonitor::builder()
+                    .formula(formula)
+                    .algorithm(Algorithm::Incremental)
+                    .synchronization_strategy(strategy)
+                    .variables(Variables::new())
+                    .semantics(Rosi)
+                    .build()
+                    .unwrap()
+            },
+        );
+        assert_ne!(
+            clocked, fanout,
+            "the RoSI route must not be assumed equivalent"
+        );
+
+        let formula = MstloSpecification::single(VarName::new("out"), FormulaDefinition::True);
+        let signal_names = MstloRuntime::<bool, MstloTimedValue>::signal_names(&[
+            VarName::new("x"),
+            VarName::new("y"),
+        ]);
+        assert!(formula.formula_signals()[&VarName::new("out")].is_empty());
+        let monitors = BTreeMap::from([(
+            VarName::new("out"),
+            StlMonitor::builder()
+                .formula(FormulaDefinition::True)
+                .algorithm(Algorithm::Incremental)
+                .semantics(DelayedQualitative)
+                .build()
+                .unwrap(),
+        )]);
+        let (sender, mut receiver) = unsync::spsc::unbounded::<MstloTimedValue>();
+        let outputs = BTreeMap::from([(
+            VarName::new("out"),
+            MstloOutputStream {
+                sender,
+                pending: Vec::new(),
+            },
+        )]);
+        {
+            let mut state = MstloInputState::new(
+                &signal_names,
+                monitors,
+                outputs,
+                formula.formula_signals().clone(),
+                MstloRouting::ReferencedWithClock,
+            )
+            .unwrap();
+            for step in [
+                Step::new("x", 1.0, Duration::ZERO),
+                Step::new("y", 2.0, Duration::ZERO),
+            ] {
+                state.process_routed_step(&step).unwrap();
+            }
+        }
+        let outputs = smol::block_on(async move {
+            let mut values = Vec::new();
+            while let Some(value) = receiver.recv().await {
+                values.push(value);
+            }
+            values
+        });
+        assert_eq!(outputs.len(), 2);
+    }
+
+    #[test]
+    fn formula_with_no_present_signal_stays_silent() {
+        let formula = parse_stl("G[0,2](x > 0)").unwrap();
+        let trace = vec![
+            Step::new("y", 1.0, Duration::ZERO),
+            Step::new("z", 1.0, Duration::from_millis(1_000)),
+            Step::new("y", 2.0, Duration::from_millis(2_000)),
+        ];
+        for strategy in [
+            SynchronizationStrategy::None,
+            SynchronizationStrategy::ZeroOrderHold,
+            SynchronizationStrategy::Linear,
+        ] {
+            let fanout = run_direct_routing::<bool, _>(
+                formula.clone(),
+                strategy,
+                MstloRouting::FanOut,
+                &trace,
+                |formula| {
+                    StlMonitor::builder()
+                        .formula(formula)
+                        .algorithm(Algorithm::Incremental)
+                        .synchronization_strategy(strategy)
+                        .semantics(DelayedQualitative)
+                        .build()
+                        .unwrap()
+                },
+            );
+            let routed = run_direct_routing::<bool, _>(
+                formula.clone(),
+                strategy,
+                MstloRouting::ReferencedWithClock,
+                &trace,
+                |formula| {
+                    StlMonitor::builder()
+                        .formula(formula)
+                        .algorithm(Algorithm::Incremental)
+                        .synchronization_strategy(strategy)
+                        .semantics(DelayedQualitative)
+                        .build()
+                        .unwrap()
+                },
+            );
+            assert_eq!(routed, fanout);
+            assert!(routed.is_empty());
+        }
     }
 
     #[test]
@@ -1369,6 +1840,10 @@ mod tests {
     async fn builder_runs_multiple_named_formulae(executor: Rc<LocalExecutor<'static>>) {
         let formula = MstloSpecification::new(BTreeMap::from([
             (VarName::new("gt"), FormulaDefinition::GreaterThan("x", 5.0)),
+            (
+                VarName::new("gt_high"),
+                FormulaDefinition::GreaterThan("x", 6.0),
+            ),
             (VarName::new("lt"), FormulaDefinition::LessThan("y", 3.0)),
         ]));
         assert_eq!(formula.var_names(), &[VarName::new("x"), VarName::new("y")]);
@@ -1386,7 +1861,11 @@ mod tests {
         .unwrap();
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
-            BTreeSet::from([VarName::new("gt"), VarName::new("lt")]),
+            BTreeSet::from([
+                VarName::new("gt"),
+                VarName::new("gt_high"),
+                VarName::new("lt"),
+            ]),
         ));
         let outputs = output_handler.get_output();
 
@@ -1412,8 +1891,10 @@ mod tests {
 
         assert_eq!(outputs.len(), 2);
         assert_eq!(output_value(&outputs[0], "gt"), (0, 2.0));
+        assert_eq!(output_value(&outputs[0], "gt_high"), (0, 1.0));
         assert_eq!(output_value(&outputs[0], "lt"), (0, 1.0));
         assert_eq!(output_value(&outputs[1], "gt"), (10, -1.0));
+        assert_eq!(output_value(&outputs[1], "gt_high"), (10, -2.0));
         assert_eq!(output_value(&outputs[1], "lt"), (10, -2.0));
     }
 

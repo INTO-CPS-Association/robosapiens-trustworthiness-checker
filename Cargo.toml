@@ -172,6 +172,10 @@ name = "threshold_property"
 harness = false
 
 [[bench]]
+name = "mstlo_fanout"
+harness = false
+
+[[bench]]
 name = "arithmetic_heavy"
 harness = false
 

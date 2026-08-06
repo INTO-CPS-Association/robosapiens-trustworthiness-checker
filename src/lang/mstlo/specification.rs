@@ -11,14 +11,24 @@ use crate::{Specification, VarName, core::StreamType};
 pub struct MstloSpecification {
     formulae: BTreeMap<VarName, FormulaDefinition>,
     var_names: Vec<VarName>,
+    formula_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
 }
 
 impl MstloSpecification {
     pub fn new(formulae: BTreeMap<VarName, FormulaDefinition>) -> Self {
-        let var_names = Self::extract_var_names(formulae.values());
+        let formula_signals = Self::extract_formula_signals(&formulae);
+        let var_names = formula_signals
+            .values()
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(VarName::new)
+            .collect();
         Self {
             formulae,
             var_names,
+            formula_signals,
         }
     }
 
@@ -38,17 +48,22 @@ impl MstloSpecification {
         &self.var_names
     }
 
-    fn extract_var_names<'a>(
-        formulae: impl IntoIterator<Item = &'a FormulaDefinition>,
-    ) -> Vec<VarName> {
-        let mut names = Vec::new();
-        for formula in formulae {
-            let mut formula = formula.clone();
-            names.extend(formula.get_signal_identifiers());
-        }
-        names.sort();
-        names.dedup();
-        names.into_iter().map(VarName::new).collect()
+    /// Returns the signals referenced by each named formula.
+    pub(crate) fn formula_signals(&self) -> &BTreeMap<VarName, BTreeSet<&'static str>> {
+        &self.formula_signals
+    }
+
+    fn extract_formula_signals(
+        formulae: &BTreeMap<VarName, FormulaDefinition>,
+    ) -> BTreeMap<VarName, BTreeSet<&'static str>> {
+        formulae
+            .iter()
+            .map(|(name, formula)| {
+                let mut formula = formula.clone();
+                let signals = formula.get_signal_identifiers().into_iter().collect();
+                (name.clone(), signals)
+            })
+            .collect()
     }
 }
 

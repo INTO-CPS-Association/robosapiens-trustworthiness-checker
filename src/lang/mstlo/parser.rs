@@ -148,6 +148,14 @@ mod tests {
             formula.input_vars(),
             BTreeSet::from([VarName::new("x"), VarName::new("y")])
         );
+        assert_eq!(
+            formula.formula_signals()[&VarName::new("gt")],
+            BTreeSet::from(["x"]),
+        );
+        assert_eq!(
+            formula.formula_signals()[&VarName::new("temporal")],
+            BTreeSet::from(["x", "y"]),
+        );
     }
 
     #[test]
