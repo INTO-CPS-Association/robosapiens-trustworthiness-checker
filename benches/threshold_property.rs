@@ -6,13 +6,14 @@ use std::time::Duration;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use mstlo::{
-    Algorithm, DelayedQualitative, DelayedQuantitative, FormulaDefinition, Step, StlMonitor,
-    SynchronizationStrategy, Variables, parse_stl,
+    Algorithm, DelayedQualitative, DelayedQuantitative, FormulaDefinition,
+    Semantics as MstloSemantics, Step, StlMonitor, SynchronizationStrategy, Variables, parse_stl,
 };
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
 use trustworthiness_checker::io::testing::NullOutputHandler;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
+use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 use trustworthiness_checker::{InputStream, io::map};
@@ -72,35 +73,17 @@ fn dsrv_input(size: usize) -> InputStream<Value> {
     map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
-fn timed_value(time_ms: i64, value: f64) -> Value {
-    Value::List(vec![Value::Int(time_ms), Value::Float(value)].into())
-}
-
-fn mstlo_input(size: usize) -> InputStream<Value> {
+fn mstlo_input(size: usize) -> InputStream<MstloTimedValue> {
     let values = (0..size)
         .map(|idx| {
             let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
-            timed_value((idx as i64) * 1000, value)
+            MstloTimedValue::new(
+                Duration::from_millis((idx as u64) * 1000),
+                MstloValue::Float(value),
+            )
         })
         .collect::<Vec<_>>();
-    map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
-}
-
-fn timed_map_value(time_ms: i64, value: f64) -> Value {
-    Value::Map(BTreeMap::from([
-        ("time".into(), Value::Int(time_ms)),
-        ("value".into(), Value::Float(value)),
-    ]))
-}
-
-fn mstlo_map_input(size: usize) -> InputStream<Value> {
-    let values = (0..size)
-        .map(|idx| {
-            let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
-            timed_map_value((idx as i64) * 1000, value)
-        })
-        .collect::<Vec<_>>();
-    map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
+    map::typed_input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
 fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {
@@ -108,15 +91,6 @@ fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {
         .map(|idx| {
             let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
             Step::new("x", value, Duration::from_millis((idx as u64) * 1000))
-        })
-        .collect()
-}
-
-fn mstlo_value_input(size: usize) -> Vec<Value> {
-    (0..size)
-        .map(|idx| {
-            let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
-            timed_value((idx as i64) * 1000, value)
         })
         .collect()
 }
@@ -168,12 +142,23 @@ async fn run_dsrv(
 async fn run_mstlo(
     executor: Rc<LocalExecutor<'static>>,
     spec: MstloSpecification,
-    input: InputStream<Value>,
+    input: InputStream<MstloTimedValue>,
     semantics: Semantics,
 ) {
-    let output = Box::new(NullOutputHandler::new(executor.clone(), spec.output_vars()));
+    let output = Box::new(NullOutputHandler::<MstloTimedValue>::new(
+        executor.clone(),
+        spec.output_vars(),
+    ));
 
-    let runtime = GeneralRuntimeBuilder::new()
+    let semantics = match semantics {
+        Semantics::DelayedQuantitative => MstloSemantics::DelayedQuantitative,
+        Semantics::DelayedQualitative => MstloSemantics::DelayedQualitative,
+        Semantics::EagerQualitative => MstloSemantics::EagerQualitative,
+        Semantics::RobustnessInterval => MstloSemantics::RobustnessInterval,
+        Semantics::Untimed | Semantics::TypedUntimed => MstloSemantics::default(),
+        Semantics::GradualTypedUntimed => MstloSemantics::DelayedQuantitative,
+    };
+    let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
         .executor(executor)
         .model(spec)
         .input(input)
@@ -250,52 +235,9 @@ fn run_mstlo_direct_multi_qual(formula: FormulaDefinition, input: Vec<Step<f64>>
     black_box(verdicts);
 }
 
-fn run_mstlo_direct_with_value_adapter_qual(formula: FormulaDefinition, input: Vec<Value>) {
-    let mut monitor = mstlo_direct_monitor_builder(formula)
-        .semantics(DelayedQualitative)
-        .build()
-        .expect("Failed to build direct MSTLO qualitative threshold monitor");
-
-    let mut outputs = 0usize;
-    for value in input {
-        let Value::List(values) = value else {
-            panic!("expected compact MSTLO value input")
-        };
-        let [time, value]: [Value; 2] = values
-            .into_iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap_or_else(|_| panic!("expected two-element MSTLO value input"));
-        let time_ms = match time {
-            Value::Int(time_ms) => time_ms,
-            other => panic!("expected integer MSTLO time input, got {other:?}"),
-        };
-        let value = match value {
-            Value::Float(value) => value,
-            Value::Int(value) => value as f64,
-            other => panic!("expected numeric MSTLO value input, got {other:?}"),
-        };
-        let step = Step::new("x", value, Duration::from_millis(time_ms as u64));
-
-        for verdict in monitor.update(&step).into_verdicts() {
-            let output_value = Value::Map(BTreeMap::from([
-                (
-                    "time".into(),
-                    Value::Int(verdict.timestamp.as_millis() as i64),
-                ),
-                ("value".into(), Value::Bool(verdict.value)),
-            ]));
-            black_box(output_value);
-            outputs += 1;
-        }
-    }
-    black_box(outputs);
-}
-
 fn compare_threshold_property_diagnostics(c: &mut Criterion) {
     let size = 1_000;
     let dsrv_spec = dsrv_threshold_spec();
-    let mstlo_spec = mstlo_threshold_spec();
     let mstlo_formula = mstlo_threshold_formula();
 
     let mut group = c.benchmark_group("threshold_property_diagnostics");
@@ -366,51 +308,6 @@ fn compare_threshold_property_diagnostics(c: &mut Criterion) {
                     dsrv_input(size),
                     RuntimeSpec::Dataflow(Default::default()),
                     Semantics::GradualTypedUntimed,
-                )
-            })
-        },
-    );
-
-    group.bench_with_input(
-        BenchmarkId::new("mstlo_runtime_qual_list_input", size),
-        &size,
-        |b, &size| {
-            let benchmark_executor = LocalSmolExecutor::new();
-            b.to_async(benchmark_executor.clone()).iter(|| {
-                run_mstlo(
-                    benchmark_executor.executor.clone(),
-                    black_box(mstlo_spec.clone()),
-                    mstlo_input(size),
-                    Semantics::DelayedQualitative,
-                )
-            })
-        },
-    );
-
-    group.bench_with_input(
-        BenchmarkId::new("mstlo_runtime_qual_map_input", size),
-        &size,
-        |b, &size| {
-            let benchmark_executor = LocalSmolExecutor::new();
-            b.to_async(benchmark_executor.clone()).iter(|| {
-                run_mstlo(
-                    benchmark_executor.executor.clone(),
-                    black_box(mstlo_spec.clone()),
-                    mstlo_map_input(size),
-                    Semantics::DelayedQualitative,
-                )
-            })
-        },
-    );
-
-    group.bench_with_input(
-        BenchmarkId::new("mstlo_direct_value_adapter_qual", size),
-        &size,
-        |b, &size| {
-            b.iter(|| {
-                run_mstlo_direct_with_value_adapter_qual(
-                    black_box(mstlo_formula.clone()),
-                    black_box(mstlo_value_input(size)),
                 )
             })
         },
