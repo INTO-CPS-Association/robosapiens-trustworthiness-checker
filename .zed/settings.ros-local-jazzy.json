@@ -1,0 +1,43 @@
+{
+  "languages": {
+    "DSRV": {
+      "language_servers": [
+        "dsrv-lsp"
+      ]
+    }
+  },
+  "lsp": {
+    "dsrv-lsp": {
+      "binary": {
+        "path": ""
+      }
+    },
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "allTargets": false,
+          "features": [
+            "testcontainers",
+            "ros"
+          ],
+          "extraEnv": {}
+        },
+        "check": {
+          "allTargets": false,
+          "features": [
+            "testcontainers",
+            "ros"
+          ],
+          "extraEnv": {},
+          "workspace": false
+        }
+      }
+    }
+  },
+  "terminal": {
+    "shell": {
+      "program": "/bin/bash"
+    },
+    "env": {}
+  }
+}
