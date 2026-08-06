@@ -206,6 +206,41 @@ impl<V> InputBatch<V> {
         })
     }
 
+    /// Map the values in a batch without changing its transport
+    /// representation or logical tick boundaries.
+    pub(crate) fn try_map_values<U, E, F>(self, mut map: F) -> Result<InputBatch<U>, E>
+    where
+        F: FnMut(V) -> Result<U, E>,
+    {
+        let representation = match self.representation {
+            InputBatchRepresentation::Events(events) => InputBatchRepresentation::Events(
+                events
+                    .into_iter()
+                    .map(|event| Ok(InputEvent::new(event.var, map(event.value)?)))
+                    .collect::<Result<Vec<_>, E>>()?,
+            ),
+            InputBatchRepresentation::AtomicTicks { events, tick_width } => {
+                InputBatchRepresentation::AtomicTicks {
+                    events: events
+                        .into_iter()
+                        .map(|event| Ok(InputEvent::new(event.var, map(event.value)?)))
+                        .collect::<Result<Vec<_>, E>>()?,
+                    tick_width,
+                }
+            }
+            InputBatchRepresentation::PackedRows { layout, values } => {
+                InputBatchRepresentation::PackedRows {
+                    layout,
+                    values: values
+                        .into_iter()
+                        .map(&mut map)
+                        .collect::<Result<Vec<_>, E>>()?,
+                }
+            }
+        };
+        Ok(InputBatch { representation })
+    }
+
     pub fn ticks(&self) -> impl Iterator<Item = InputTick<'_, V>> {
         let mut offset = 0;
         std::iter::from_fn(move || match &self.representation {
@@ -335,6 +370,68 @@ mod tests {
             .map(|row| row.iter().map(|event| *event.value).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         assert_eq!(rows, [vec![1, 2], vec![3, 4]]);
+    }
+
+    #[test]
+    fn try_map_values_preserves_all_batch_representations() {
+        let events = InputBatch::events(vec![
+            InputEvent::new("x".into(), 1),
+            InputEvent::new("y".into(), 2),
+        ])
+        .try_map_values(|value| Ok::<_, ()>(value * 10))
+        .unwrap();
+        assert_eq!(
+            events
+                .ticks()
+                .map(|tick| tick.iter().map(|event| *event.value).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            [vec![10], vec![20]]
+        );
+
+        let atomic = InputBatch::packed_steps(
+            NonZeroUsize::new(2).unwrap(),
+            vec![
+                InputEvent::new("x".into(), 1),
+                InputEvent::new("y".into(), 2),
+                InputEvent::new("x".into(), 3),
+                InputEvent::new("y".into(), 4),
+            ],
+        )
+        .unwrap()
+        .try_map_values(|value| Ok::<_, ()>(value * 10))
+        .unwrap();
+        assert_eq!(
+            atomic
+                .ticks()
+                .map(|tick| tick.iter().map(|event| *event.value).collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            [vec![10, 20], vec![30, 40]]
+        );
+
+        let packed = InputBatch::trusted_packed_rows(
+            vec![VarName::new("x"), VarName::new("y")].into_boxed_slice(),
+            vec![1, 2, 3, 4],
+        )
+        .try_map_values(|value| Ok::<_, ()>(value * 10))
+        .unwrap();
+        assert_eq!(packed.packed_rows().unwrap().1, [10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn try_map_values_returns_conversion_errors() {
+        let error = InputBatch::events(vec![
+            InputEvent::new("x".into(), 1),
+            InputEvent::new("y".into(), 2),
+        ])
+        .try_map_values(|value| {
+            if value == 2 {
+                Err("invalid value")
+            } else {
+                Ok(value)
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "invalid value");
     }
 
     #[test]

@@ -17,7 +17,10 @@ use crate::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy},
     },
-    core::{OutputHandler, RuntimeSpec, Semantics, StreamData, StreamType},
+    core::{
+        JsonStreamValue, OutputHandler, RosStreamValue, RuntimeSpec, Semantics, StreamData,
+        StreamType,
+    },
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputStreamFactory, OutputHandlerBuilder},
     lang::dsrv::{
@@ -27,7 +30,7 @@ use crate::{
     lang::mstlo::MstloSpecification,
     runtime::{
         dataflow::DataflowRuntimeBuilder,
-        mstlo::MstloRuntimeBuilder,
+        mstlo::{MstloRuntimeBuilder, MstloStreamValue},
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
         semi_sync::{SemiSyncContext, SemiSyncRuntimeBuilder},
     },
@@ -599,9 +602,9 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     input: Option<InputStream<V>>,
-    input_factory: Option<InputStreamFactory>,
+    input_factory: Option<InputStreamFactory<V>>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
-    pub output_handler_builder: Option<OutputHandlerBuilder>,
+    pub output_handler_builder: Option<OutputHandlerBuilder<V>>,
     pub runtime: RuntimeSpec,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
@@ -642,7 +645,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
-    pub fn output_handler_builder(self, builder: OutputHandlerBuilder) -> Self {
+    pub fn output_handler_builder(self, builder: OutputHandlerBuilder<V>) -> Self {
         Self {
             output_handler_builder: Some(builder),
             ..self
@@ -731,7 +734,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
 }
 
 impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
-    pub fn input_factory(self, builder: InputStreamFactory) -> anyhow::Result<Self> {
+    pub fn input_factory(self, builder: InputStreamFactory<Value>) -> anyhow::Result<Self> {
         builder.ensure_reconfigurable()?;
         Ok(Self {
             input_factory: Some(builder),
@@ -741,7 +744,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
 }
 
 impl GeneralRuntimeBuilder<LangSpecification, Value> {
-    pub fn input_factory(self, builder: InputStreamFactory) -> anyhow::Result<Self> {
+    pub fn input_factory(self, builder: InputStreamFactory<Value>) -> anyhow::Result<Self> {
         builder.ensure_reconfigurable()?;
         Ok(Self {
             input_factory: Some(builder),
@@ -952,8 +955,9 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
     }
 }
 
-impl RuntimeBuilder<MstloSpecification, Value>
-    for GeneralRuntimeBuilder<MstloSpecification, Value>
+impl<V> RuntimeBuilder<MstloSpecification, V> for GeneralRuntimeBuilder<MstloSpecification, V>
+where
+    V: MstloStreamValue + JsonStreamValue + RosStreamValue,
 {
     type Runtime = Box<dyn Runtime>;
 
@@ -994,14 +998,14 @@ impl RuntimeBuilder<MstloSpecification, Value>
         }
     }
 
-    fn input(self, input: crate::InputStream<Value>) -> Self {
+    fn input(self, input: crate::InputStream<V>) -> Self {
         Self {
             input: Some(input),
             ..self
         }
     }
 
-    fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
+    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
         Self {
             output: Some(output),
             ..self
@@ -1009,13 +1013,14 @@ impl RuntimeBuilder<MstloSpecification, Value>
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(
-            async move { GeneralRuntimeBuilder::<MstloSpecification, Value>::build(self).await },
-        )
+        Box::pin(async move { GeneralRuntimeBuilder::<MstloSpecification, V>::build(self).await })
     }
 }
 
-impl GeneralRuntimeBuilder<MstloSpecification, Value> {
+impl<V> GeneralRuntimeBuilder<MstloSpecification, V>
+where
+    V: MstloStreamValue + JsonStreamValue + RosStreamValue,
+{
     fn mstlo_semantics(semantics: Semantics) -> mstlo::Semantics {
         match semantics {
             Semantics::DelayedQuantitative | Semantics::GradualTypedUntimed => {
@@ -1036,7 +1041,7 @@ impl GeneralRuntimeBuilder<MstloSpecification, Value> {
         let RuntimeSpec::Mstlo(execution_policy) = self.runtime else {
             panic!("MSTLO builder requires RuntimeSpec::Mstlo")
         };
-        let mut builder = MstloRuntimeBuilder::new()
+        let mut builder = MstloRuntimeBuilder::<V>::new()
             .maybe_executor(self.executor)
             .maybe_model(self.model)
             .execution_policy(execution_policy)
@@ -1051,7 +1056,10 @@ impl GeneralRuntimeBuilder<MstloSpecification, Value> {
         };
 
         builder = if let Some(output_handler_builder) = self.output_handler_builder {
-            let output = output_handler_builder.build().await;
+            let output = output_handler_builder
+                .build()
+                .await
+                .expect("MSTLO output handler could not be built");
             builder.output(output)
         } else if let Some(output) = self.output {
             builder.output(output)
@@ -1422,7 +1430,10 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             };
 
             if let Some(output_handler_builder) = self.output_handler_builder {
-                let output = output_handler_builder.build().await;
+                let output = output_handler_builder
+                    .build()
+                    .await
+                    .expect("DSRV output handler could not be built");
                 builder.output(output)
             } else if let Some(output) = self.output {
                 builder.output(output)

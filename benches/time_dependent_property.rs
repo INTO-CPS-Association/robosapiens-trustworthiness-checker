@@ -7,13 +7,14 @@ use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use futures::StreamExt;
 use mstlo::{
-    Algorithm, DelayedQualitative, DelayedQuantitative, FormulaDefinition, Step, StlMonitor,
-    SynchronizationStrategy, Variables, parse_stl,
+    Algorithm, DelayedQualitative, DelayedQuantitative, FormulaDefinition,
+    Semantics as MstloSemantics, Step, StlMonitor, SynchronizationStrategy, Variables, parse_stl,
 };
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::io::testing::{ManualOutputHandler, NullOutputHandler};
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
+use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 use trustworthiness_checker::{InputStream, io::map};
@@ -72,7 +73,7 @@ fn timed_value(time_ms: i64, value: f64) -> Value {
     Value::List(vec![Value::Int(time_ms), Value::Float(value)].into())
 }
 
-fn mstlo_input(size: usize) -> InputStream<Value> {
+fn mstlo_value_input(size: usize) -> InputStream<Value> {
     let values = (0..size)
         .map(|idx| {
             let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
@@ -80,6 +81,19 @@ fn mstlo_input(size: usize) -> InputStream<Value> {
         })
         .collect::<Vec<_>>();
     map::input_stream(BTreeMap::from([(VarName::new("x"), values)]))
+}
+
+fn mstlo_input(size: usize) -> InputStream<MstloTimedValue> {
+    let values = (0..size)
+        .map(|idx| {
+            let value = if idx % 8 == 3 { 2.0 } else { 5.0 };
+            MstloTimedValue::new(
+                Duration::from_millis((idx as u64) * 1000),
+                MstloValue::Float(value),
+            )
+        })
+        .collect::<Vec<_>>();
+    map::typed_input_stream(BTreeMap::from([(VarName::new("x"), values)]))
 }
 
 fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {
@@ -165,7 +179,7 @@ async fn run_dsrv_counted(
     black_box(outputs.len());
 }
 
-async fn run_mstlo(
+async fn run_mstlo_value(
     executor: Rc<LocalExecutor<'static>>,
     spec: MstloSpecification,
     input: InputStream<Value>,
@@ -185,7 +199,44 @@ async fn run_mstlo(
         .build()
         .await;
 
-    runtime.run().await.expect("MSTLO benchmark runtime failed");
+    runtime
+        .run()
+        .await
+        .expect("MSTLO Value runtime benchmark failed");
+}
+
+async fn run_mstlo(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: MstloSpecification,
+    input: InputStream<MstloTimedValue>,
+    semantics: Semantics,
+) {
+    let output = Box::new(NullOutputHandler::<MstloTimedValue>::new(
+        executor.clone(),
+        BTreeSet::from([VarName::new("always_x")]),
+    ));
+
+    let semantics = match semantics {
+        Semantics::DelayedQuantitative => MstloSemantics::DelayedQuantitative,
+        Semantics::DelayedQualitative => MstloSemantics::DelayedQualitative,
+        Semantics::EagerQualitative => MstloSemantics::EagerQualitative,
+        Semantics::RobustnessInterval => MstloSemantics::RobustnessInterval,
+        Semantics::Untimed | Semantics::TypedUntimed => MstloSemantics::default(),
+        Semantics::GradualTypedUntimed => MstloSemantics::DelayedQuantitative,
+    };
+    let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
+        .executor(executor)
+        .model(spec)
+        .input(input)
+        .output(output)
+        .semantics(semantics)
+        .build()
+        .await;
+
+    runtime
+        .run()
+        .await
+        .expect("MSTLO typed runtime benchmark failed");
 }
 
 fn mstlo_direct_monitor_builder(formula: FormulaDefinition) -> mstlo::StlMonitorBuilder<f64, f64> {
@@ -380,6 +431,21 @@ fn compare_time_dependent_property(c: &mut Criterion) {
                         benchmark_executor.executor.clone(),
                         mstlo_spec.clone(),
                         mstlo_input(size),
+                        Semantics::DelayedQualitative,
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("mstlo_value_globally_window_qual", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    run_mstlo_value(
+                        benchmark_executor.executor.clone(),
+                        mstlo_spec.clone(),
+                        mstlo_value_input(size),
                         Semantics::DelayedQualitative,
                     )
                 })

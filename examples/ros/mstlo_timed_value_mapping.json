@@ -1,0 +1,6 @@
+{
+    "x": {
+        "topic": "/signals/x",
+        "msg_type": "MstloTimedValue"
+    }
+}

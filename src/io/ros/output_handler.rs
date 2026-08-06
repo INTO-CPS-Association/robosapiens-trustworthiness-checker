@@ -54,7 +54,7 @@ fn create_value_publisher(
     node: &mut r2r::Node,
     topic: &str,
     msg_type: &RosMsgType,
-) -> Result<Box<dyn ValuePublisher>, r2r::Error> {
+) -> anyhow::Result<Box<dyn ValuePublisher>> {
     let qos = r2r::QosProfile::default();
     Ok(match msg_type {
         RosMsgType::Bool => Box::new(TypedValuePublisher {
@@ -179,6 +179,11 @@ fn create_value_publisher(
                 )),
             },
         }),
+        RosMsgType::MstloTimedValue => {
+            return Err(anyhow::anyhow!(
+                "MstloTimedValue ROS output requires a typed MSTLO output handler"
+            ));
+        }
         // For complex types (Int32List, HumanModelPart, etc.), fall back to JSON serialization
         // via r2r::std_msgs::msg::String
         _ => {

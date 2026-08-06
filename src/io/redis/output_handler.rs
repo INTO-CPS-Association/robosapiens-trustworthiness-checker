@@ -1,24 +1,21 @@
 use std::{collections::BTreeMap, mem, rc::Rc};
 
 use anyhow::Context;
-use futures::{
-    FutureExt, StreamExt,
-    future::{LocalBoxFuture, join_all},
-};
+use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 use smol::LocalExecutor;
-use tracing::{debug, info};
+use tracing::info;
 use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 
 use crate::{
     OutputStream, Value, VarName,
-    core::OutputHandler,
+    core::{JsonStreamValue, OutputHandler},
     utils::cancellation_token::{CancellationToken, DropGuard},
 };
 
-async fn publish_stream(
+async fn publish_stream<V: JsonStreamValue>(
     topic_name: String,
-    mut stream: OutputStream<Value>,
+    mut stream: OutputStream<V>,
     mut con: MultiplexedConnection,
     cancellation_token: CancellationToken,
 ) -> anyhow::Result<()> {
@@ -32,11 +29,13 @@ async fn publish_stream(
                 let Some(data) = data else {
                     return Ok(());
                 };
-                if data == Value::NoVal {
+                if data.is_no_val() {
                     continue;
                 }
 
-                let data = serde_json::to_string(&data).unwrap();
+                let data = data
+                    .encode_json()
+                    .with_context(|| format!("failed to encode Redis value for `{topic_name}`"))?;
                 con.publish(topic_name.clone(), data.clone())
                     .await
                     .context("Failed to publish output message")?;
@@ -45,8 +44,8 @@ async fn publish_stream(
     }
 }
 
-async fn drain_stream(
-    mut stream: OutputStream<Value>,
+async fn drain_stream<V: crate::core::StreamData>(
+    mut stream: OutputStream<V>,
     cancellation_token: CancellationToken,
 ) -> anyhow::Result<()> {
     let mut cancelled = cancellation_token.cancelled().fuse();
@@ -64,23 +63,22 @@ async fn drain_stream(
     }
 }
 
-pub struct VarData {
+pub struct VarData<V = Value> {
     pub variable: VarName,
     pub topic_name: String,
-    stream: Option<OutputStream<Value>>,
+    stream: Option<OutputStream<V>>,
 }
 
 // A map between channel names and the Redis topics they
 // correspond to
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
-pub struct RedisOutputHandler {
-    pub var_map: BTreeMap<VarName, VarData>,
+pub struct RedisOutputHandler<V = Value> {
+    pub var_map: BTreeMap<VarName, VarData<V>>,
     pub hostname: String,
     pub port: Option<u16>,
     pub aux_info: Vec<VarName>,
     pub uri: String,
-    executor: Rc<LocalExecutor<'static>>,
     cancellation_drop_guard: DropGuard,
     client_tx: Option<OSSender<redis::Client>>,
 
@@ -88,10 +86,10 @@ pub struct RedisOutputHandler {
     connected: bool,
 }
 
-impl OutputHandler for RedisOutputHandler {
-    type Val = Value;
+impl<V: JsonStreamValue> OutputHandler for RedisOutputHandler<V> {
+    type Val = V;
 
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         for (var, stream) in streams {
             let var_data = self.var_map.get_mut(&var).expect("Variable not found");
             var_data.stream = Some(stream);
@@ -112,7 +110,6 @@ impl OutputHandler for RedisOutputHandler {
         let client_rx = mem::take(&mut self.client_rx)
             .expect("Redis output handler client receiver already taken");
         let aux_info = self.aux_info.clone();
-        let executor = self.executor.clone();
         let cancellation_token = self.cancellation_drop_guard.clone_tok();
         let connected = self.connected;
 
@@ -128,21 +125,14 @@ impl OutputHandler for RedisOutputHandler {
             let client = client_rx.await.ok_or_else(|| {
                 anyhow::anyhow!("Failed to receive Redis client for output handler")
             })?;
-            RedisOutputHandler::inner_handler(
-                client,
-                streams,
-                aux_info,
-                executor,
-                cancellation_token,
-            )
-            .await
+            RedisOutputHandler::inner_handler(client, streams, aux_info, cancellation_token).await
         })
     }
 }
 
-impl RedisOutputHandler {
+impl<V> RedisOutputHandler<V> {
     pub fn new(
-        executor: Rc<LocalExecutor<'static>>,
+        _executor: Rc<LocalExecutor<'static>>,
         hostname: &str,
         port: Option<u16>,
         var_topics: OutputChannelMap,
@@ -176,7 +166,6 @@ impl RedisOutputHandler {
             port,
             aux_info,
             uri,
-            executor,
             cancellation_drop_guard,
             client_tx: Some(client_tx),
 
@@ -199,41 +188,31 @@ impl RedisOutputHandler {
 
     async fn inner_handler(
         client: redis::Client,
-        streams: Vec<(VarName, String, OutputStream<Value>)>,
+        streams: Vec<(VarName, String, OutputStream<V>)>,
         aux_info: Vec<VarName>,
-        executor: Rc<LocalExecutor<'static>>,
         cancellation_token: CancellationToken,
-    ) -> anyhow::Result<()> {
-        join_all(streams.into_iter().map(|(var_name, channel_name, stream)| {
-            let aux_info = aux_info.clone();
+    ) -> anyhow::Result<()>
+    where
+        V: JsonStreamValue,
+    {
+        let tasks = streams.into_iter().map(|(var_name, channel_name, stream)| {
             let client = client.clone();
-            let executor = executor.clone();
-            let cancellation_token = cancellation_token.clone();
+            let stream_cancellation = cancellation_token.clone();
+            let auxiliary = aux_info.contains(&var_name);
             async move {
-                if aux_info.contains(&var_name) {
-                    executor
-                        .spawn(async move {
-                            if let Err(err) = drain_stream(stream, cancellation_token.clone()).await
-                            {
-                                debug!(?err, "Failed to drain Redis auxiliary stream");
-                            }
-                        })
-                        .detach();
-                    return Ok(());
+                if auxiliary {
+                    return drain_stream(stream, stream_cancellation).await;
                 }
 
-                let con = client.get_multiplexed_async_connection().await.unwrap();
-                publish_stream(channel_name, stream, con, cancellation_token).await
+                let con = client
+                    .get_multiplexed_async_connection()
+                    .await
+                    .context("failed to create Redis output connection")?;
+                publish_stream(channel_name, stream, con, stream_cancellation).await
             }
-        }))
-        .await
-        .into_iter()
-        .fold(Ok(()), |acc, res| match res {
-            Ok(_) => acc,
-            Err(e) => Err(e),
-        })?;
-
+        });
+        let result = futures::future::try_join_all(tasks).await.map(|_| ());
         cancellation_token.cancel();
-        Ok(())
+        result
     }
 }

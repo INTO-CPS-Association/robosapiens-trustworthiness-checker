@@ -1,3 +1,5 @@
 fn main() {
-    lalrpop::process_root().unwrap();
+    lalrpop::Configuration::new()
+        .process_dir("src")
+        .expect("failed to generate LALRPOP parsers");
 }

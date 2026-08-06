@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::mem;
 use std::rc::Rc;
 
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use futures::StreamExt;
 use futures::future::{Either, LocalBoxFuture};
 use smol::LocalExecutor;
@@ -12,25 +12,26 @@ use unsync::oneshot::{Receiver as OSReceiver, Sender as OSSender};
 // or does it go away when anyway the receivers of our outputs go away?
 // use crate::utils::cancellation_token::CancellationToken;
 
-use crate::core::OutputHandler;
+use crate::core::{JsonStreamValue, OutputHandler};
 use crate::io::mqtt::{MqttClient, MqttFactory, MqttMessage};
+
 // use crate::stream_utils::drop_guard_stream;
 use crate::{OutputStream, Value, core::VarName};
 
-pub struct VarData {
+pub struct VarData<V = Value> {
     pub variable: VarName,
     pub topic_name: String,
-    stream: Option<OutputStream<Value>>,
+    stream: Option<OutputStream<V>>,
 }
 
 // A map between channel names and the MQTT topics they
 // correspond to
 pub type OutputChannelMap = BTreeMap<VarName, String>;
 
-pub struct MqttOutputHandler {
+pub struct MqttOutputHandler<V = Value> {
     factory: MqttFactory,
     var_names: Vec<VarName>,
-    pub var_map: BTreeMap<VarName, VarData>,
+    pub var_map: BTreeMap<VarName, VarData<V>>,
     pub hostname: String,
     pub port: Option<u16>,
     pub aux_info: Vec<VarName>,
@@ -41,11 +42,11 @@ pub struct MqttOutputHandler {
 }
 
 #[instrument(level = Level::INFO, skip(stream, client))]
-async fn publish_stream(
+async fn publish_stream<V: JsonStreamValue>(
     topic_name: String,
-    mut stream: OutputStream<Value>,
+    mut stream: OutputStream<V>,
     client: Box<dyn MqttClient>,
-) {
+) -> anyhow::Result<()> {
     info!("Starting output stream publisher for topic: {}", topic_name);
     let mut message_count = 0;
 
@@ -56,23 +57,14 @@ async fn publish_stream(
             message_count, topic_name, data
         );
 
-        if data == Value::NoVal {
+        if data.is_no_val() {
             continue;
         }
 
-        let json_str = match serde_json5::to_string(&data) {
-            Ok(s) => {
-                debug!("Successfully serialized value to JSON: {}", s);
-                s
-            }
-            Err(e) => {
-                error!(
-                    "Failed to serialize value to JSON: {:?}, error: {}",
-                    data, e
-                );
-                continue; // Skip this item
-            }
-        };
+        let json_str = data
+            .encode_json()
+            .with_context(|| format!("failed to encode MQTT value for `{topic_name}`"))?;
+        debug!("Successfully serialized value to JSON: {}", json_str);
 
         // Wrap it in e.g., "{value: 42}" because some MQTT clients don't like to receive the
         // raw JSON primitives such as "42"...
@@ -108,11 +100,9 @@ async fn publish_stream(
                     }
 
                     if attempts > 5 {
-                        error!(
-                            "Failed to publish after {} attempts, giving up on this message",
-                            attempts
-                        );
-                        break;
+                        return Err(anyhow!(
+                            "failed to publish MQTT message on `{topic_name}` after {attempts} attempts"
+                        ));
                     }
                 }
             }
@@ -123,9 +113,12 @@ async fn publish_stream(
         "Exiting publish stream for topic {} after processing {} messages",
         topic_name, message_count
     );
+    Ok(())
 }
 
-async fn await_stream(mut stream: OutputStream<Value>) {
+async fn await_stream<V: crate::core::StreamData>(
+    mut stream: OutputStream<V>,
+) -> anyhow::Result<()> {
     debug!("Starting to monitor auxiliary stream");
     let mut count = 0;
     while let Some(value) = stream.next().await {
@@ -134,12 +127,13 @@ async fn await_stream(mut stream: OutputStream<Value>) {
         // Await the streams but do nothing with them
     }
     debug!("Auxiliary stream ended after {} values", count);
+    Ok(())
 }
 
-impl OutputHandler for MqttOutputHandler {
-    type Val = Value;
+impl<V: JsonStreamValue> OutputHandler for MqttOutputHandler<V> {
+    type Val = V;
 
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         debug!("Providing {} streams to output handler", streams.len());
         debug!("Expected var_names: {:?}", self.var_names);
 
@@ -218,7 +212,7 @@ impl OutputHandler for MqttOutputHandler {
     }
 }
 
-impl MqttOutputHandler {
+impl<V> MqttOutputHandler<V> {
     #[instrument(level = Level::INFO)]
     pub fn new(
         _executor: Rc<LocalExecutor<'static>>,
@@ -273,7 +267,7 @@ impl MqttOutputHandler {
         debug!("Variable to topic mappings:");
         for (k, v) in &var_map {
             let var_name: &VarName = k;
-            let var_data: &VarData = v;
+            let var_data: &VarData<V> = v;
             debug!(
                 "  Variable {} will be published to topic {}",
                 var_name, var_data.topic_name
@@ -310,9 +304,12 @@ impl MqttOutputHandler {
 
     async fn inner_handler(
         client: Box<dyn MqttClient>,
-        streams: Vec<(VarName, String, OutputStream<Value>)>,
+        streams: Vec<(VarName, String, OutputStream<V>)>,
         aux_info: Vec<VarName>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        V: JsonStreamValue,
+    {
         debug!("Starting MQTT inner handler for {} streams", streams.len());
 
         let stream_futures = streams
@@ -342,9 +339,7 @@ impl MqttOutputHandler {
             stream_futures.len() - aux_info.len()
         );
 
-        // Join all futures and wait for completion
-        futures::future::join_all(stream_futures).await;
-
+        futures::future::try_join_all(stream_futures).await?;
         debug!("All MQTT output stream processors have completed");
         Ok(())
     }

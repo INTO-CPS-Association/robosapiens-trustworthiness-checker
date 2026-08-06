@@ -154,7 +154,10 @@ where
                 ?self.output_builder,
                 "Building ReconfSemiSyncRuntime output handler"
             );
-            let output = output_builder.build().await;
+            let output = output_builder
+                .build()
+                .await
+                .expect("reconfigurable output handler could not be built");
             let semi_sync_monitor = SemiSyncRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(model)

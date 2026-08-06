@@ -8,7 +8,9 @@ mod integration_tests {
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
     use std::vec;
-    use tc_testutils::mqtt::dummy_stream_mqtt_publisher;
+    use tc_testutils::mqtt::{
+        dummy_stream_mqtt_json_publisher, dummy_stream_mqtt_publisher, get_mqtt_json_outputs,
+    };
     use tc_testutils::streams::{
         TickSender, expect_events_serially, tick_stream, with_timeout, with_timeout_res,
     };
@@ -20,7 +22,9 @@ mod integration_tests {
     use trustworthiness_checker::io::testing::ManualOutputHandler;
     use trustworthiness_checker::lang::mstlo::MstloSpecification;
     use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
-    use trustworthiness_checker::runtime::mstlo::MstloRuntimeBuilder;
+    use trustworthiness_checker::runtime::mstlo::{
+        MstloRuntimeBuilder, MstloTimedValue, MstloValue,
+    };
 
     use approx::assert_abs_diff_eq;
     use std::{collections::BTreeMap, rc::Rc};
@@ -55,29 +59,18 @@ mod integration_tests {
     const Y_TOPIC: &str = "y";
     const Z_TOPIC: &str = "z";
 
-    fn mstlo_mqtt_input(time_ms: i64, value: f64) -> Value {
-        Value::Map(BTreeMap::from([(
-            "value".into(),
-            Value::Map(BTreeMap::from([
-                ("time".into(), Value::Int(time_ms)),
-                ("value".into(), Value::Float(value)),
-            ])),
-        )]))
+    fn mstlo_mqtt_input(time_ms: u64, value: f64) -> MstloTimedValue {
+        MstloTimedValue::new(
+            std::time::Duration::from_millis(time_ms),
+            MstloValue::Float(value),
+        )
     }
 
-    fn mstlo_output_tuple(value: &Value) -> (i64, f64) {
-        let Value::Map(map) = value else {
-            panic!("MSTLO MQTT output should be a map");
+    fn mstlo_output_tuple(value: &MstloTimedValue) -> (u128, f64) {
+        let MstloValue::Float(number) = value.value else {
+            panic!("MSTLO MQTT output should contain a float");
         };
-        let Value::Int(time) = map.get("time").expect("output has time") else {
-            panic!("MSTLO MQTT output time should be int");
-        };
-        let value = match map.get("value").expect("output has value") {
-            Value::Float(value) => *value,
-            Value::Int(value) => *value as f64,
-            other => panic!("MSTLO MQTT output value should be numeric, got {other:?}"),
-        };
-        (*time, value)
+        (value.timestamp.as_millis(), number)
     }
 
     fn generate_test_publisher_tasks(
@@ -318,7 +311,7 @@ mod integration_tests {
     async fn paho_input_reports_malformed_payload() -> anyhow::Result<()> {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
         let mut batches = with_timeout_res(
-            mqtt::input_stream(
+            mqtt::input_stream::<Value>(
                 MqttInputBackend::Paho,
                 "localhost",
                 Some(mqtt_port),
@@ -343,7 +336,7 @@ mod integration_tests {
     async fn rumqttc_input_reports_malformed_payload() -> anyhow::Result<()> {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
         let mut batches = with_timeout_res(
-            mqtt::input_stream(
+            mqtt::input_stream::<Value>(
                 MqttInputBackend::Rumqttc,
                 "localhost",
                 Some(mqtt_port),
@@ -374,7 +367,7 @@ mod integration_tests {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let input_stream = with_timeout_res(
-            mqtt::input_stream(
+            mqtt::input_stream::<MstloTimedValue>(
                 MQTT_INPUT_BACKEND,
                 "localhost",
                 Some(mqtt_port),
@@ -386,7 +379,7 @@ mod integration_tests {
         )
         .await?;
 
-        let mut output_handler = MqttOutputHandler::new(
+        let mut output_handler = MqttOutputHandler::<MstloTimedValue>::new(
             executor.clone(),
             MQTT_FACTORY,
             vec![VarName::new("robustness")],
@@ -398,7 +391,7 @@ mod integration_tests {
         output_handler.connect().await?;
 
         let outputs = with_timeout(
-            get_mqtt_outputs(
+            get_mqtt_json_outputs::<MstloTimedValue>(
                 MSTLO_OUT_TOPIC.to_string(),
                 "mstlo_output_subscriber".to_string(),
                 mqtt_port,
@@ -414,7 +407,7 @@ mod integration_tests {
         );
         let (input_stream, input_controller) =
             trustworthiness_checker::io::controlled(input_stream);
-        let builder = MstloRuntimeBuilder::new()
+        let builder = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
             .input(input_stream);
@@ -424,7 +417,7 @@ mod integration_tests {
         let values = vec![mstlo_mqtt_input(0, 7.0), mstlo_mqtt_input(10, 4.0)];
         let (mut tick, publish_stream) = tick_stream(stream::iter(values.clone()).boxed_local());
         let publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
+            dummy_stream_mqtt_json_publisher(
                 "mstlo_x_publisher".to_string(),
                 MSTLO_IN_TOPIC.to_string(),
                 publish_stream,
@@ -470,7 +463,7 @@ mod integration_tests {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
 
         let input_stream = with_timeout_res(
-            mqtt::input_stream(
+            mqtt::input_stream::<MstloTimedValue>(
                 MQTT_INPUT_BACKEND,
                 "localhost",
                 Some(mqtt_port),
@@ -485,7 +478,7 @@ mod integration_tests {
         )
         .await?;
 
-        let mut output_handler = MqttOutputHandler::new(
+        let mut output_handler = MqttOutputHandler::<MstloTimedValue>::new(
             executor.clone(),
             MQTT_FACTORY,
             vec![VarName::new("gt"), VarName::new("lt")],
@@ -500,7 +493,7 @@ mod integration_tests {
         output_handler.connect().await?;
 
         let mut gt_outputs = with_timeout(
-            get_mqtt_outputs(
+            get_mqtt_json_outputs::<MstloTimedValue>(
                 MSTLO_GT_TOPIC.to_string(),
                 "mstlo_multi_gt_subscriber".to_string(),
                 mqtt_port,
@@ -510,7 +503,7 @@ mod integration_tests {
         )
         .await?;
         let _lt_outputs = with_timeout(
-            get_mqtt_outputs(
+            get_mqtt_json_outputs::<MstloTimedValue>(
                 MSTLO_LT_TOPIC.to_string(),
                 "mstlo_multi_lt_subscriber".to_string(),
                 mqtt_port,
@@ -530,7 +523,7 @@ mod integration_tests {
                 mstlo::FormulaDefinition::LessThan("y", 3.0),
             ),
         ]));
-        let runtime = MstloRuntimeBuilder::new()
+        let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
             .input(input_stream)
@@ -544,7 +537,7 @@ mod integration_tests {
         let (mut x_tick, x_stream) = tick_stream(stream::iter(x_values.clone()).boxed_local());
         let (mut y_tick, y_stream) = tick_stream(stream::iter(y_values.clone()).boxed_local());
         let x_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
+            dummy_stream_mqtt_json_publisher(
                 "mstlo_multi_x_publisher".to_string(),
                 MSTLO_X_TOPIC.to_string(),
                 x_stream,
@@ -555,7 +548,7 @@ mod integration_tests {
             "mstlo multi x publisher task",
         ));
         let y_publisher_task = executor.spawn(with_timeout_res(
-            dummy_stream_mqtt_publisher(
+            dummy_stream_mqtt_json_publisher(
                 "mstlo_multi_y_publisher".to_string(),
                 MSTLO_Y_TOPIC.to_string(),
                 y_stream,

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -7,19 +8,19 @@ use smol::LocalExecutor;
 use tracing::info;
 
 use crate::Value;
-use crate::core::{OutputHandler, OutputStream, VarName};
+use crate::core::{JsonStreamValue, OutputHandler, OutputStream, VarName};
 use crate::io::testing::ManualOutputHandler;
 
 /* Some members are defined as Option<T> as either they are provided after
  * construction by provide_streams or once they are used they are taken and
  * cannot be used again; this allows us to manage the lifetimes of our data
  * without mutexes or arcs. */
-pub struct StdoutOutputHandler {
-    manual_output_handler: ManualOutputHandler<Value>,
+pub struct StdoutOutputHandler<V: crate::core::StreamData = Value> {
+    manual_output_handler: ManualOutputHandler<V>,
     aux_info: Vec<VarName>,
 }
 
-impl StdoutOutputHandler {
+impl<V: crate::core::StreamData> StdoutOutputHandler<V> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: BTreeSet<VarName>,
@@ -34,10 +35,10 @@ impl StdoutOutputHandler {
     }
 }
 
-impl OutputHandler for StdoutOutputHandler {
-    type Val = Value;
+impl<V: JsonStreamValue> OutputHandler for StdoutOutputHandler<V> {
+    type Val = V;
 
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
+    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<V>>) {
         self.manual_output_handler.provide_streams(streams);
     }
 
@@ -61,8 +62,11 @@ impl OutputHandler for StdoutOutputHandler {
                             Some((i, output)) => {
                                 for (var, data) in output {
                                     info!(?var, ?i, ?data, "Handling output");
-                                    if !aux_names.contains(&var) && data != Value::NoVal {
-                                        println!("{}[{}] = {:?}", var, i, data);
+                                    if !aux_names.contains(&var) && !data.is_no_val() {
+                                        let encoded = data.encode_stdout().with_context(|| {
+                                            format!("failed to encode stdout value for `{var}`")
+                                        })?;
+                                        println!("{}[{}] = {}", var, i, encoded);
                                     }
                             }},
                             None => {

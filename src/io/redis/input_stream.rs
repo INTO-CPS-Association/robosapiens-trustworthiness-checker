@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use futures::StreamExt;
 use tracing::info;
 
-use crate::{InputBatch, InputStream, Value, VarName};
+use crate::core::JsonStreamValue;
+use crate::{InputBatch, InputStream, VarName};
 
 /// Connect and subscribe to Redis channels, returning the resulting input stream.
-pub async fn input_stream(
+pub async fn input_stream<V: JsonStreamValue>(
     hostname: &str,
     port: Option<u16>,
     var_topics: BTreeMap<VarName, String>,
-) -> anyhow::Result<InputStream<Value>> {
+) -> anyhow::Result<InputStream<V>> {
     if var_topics.is_empty() {
         return Ok(Box::pin(futures::stream::empty()));
     }
@@ -35,7 +37,13 @@ pub async fn input_stream(
             let Some(var) = topic_vars.get(msg.get_channel_name()).cloned() else {
                 continue;
             };
-            let value = msg.get_payload::<Value>().map_err(anyhow::Error::from)?;
+            let payload = msg
+                .get_payload::<String>()
+                .map_err(anyhow::Error::from)
+                .context("Redis message payload is not valid UTF-8")?;
+            let value = V::decode_json(payload.as_bytes()).with_context(|| {
+                format!("invalid Redis JSON payload for variable `{var}`")
+            })?;
             yield InputBatch::events(vec![crate::InputEvent::new(var, value)]);
         }
     }))

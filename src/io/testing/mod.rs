@@ -13,5 +13,5 @@ pub fn input_factory(
         std::rc::Rc<crate::stream_utils::Fanout<crate::Value>>,
     >,
 ) -> crate::io::InputStreamFactory {
-    crate::io::InputStreamFactory::manual(fanouts)
+    crate::io::InputStreamFactory::<crate::Value>::manual(fanouts)
 }

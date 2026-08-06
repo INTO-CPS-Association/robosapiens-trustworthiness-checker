@@ -4,6 +4,7 @@ use std::rc::Rc;
 use tracing::{debug, info};
 
 use crate::cli::args::{Cli, OutputMode};
+use crate::core::{FileInputValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::io::OutputHandlerSpec;
 use crate::io::config::deserialisation::{json_to_topic_mapping, json_to_topic_msg_type_mapping};
@@ -19,18 +20,21 @@ use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingTyp
 use crate::core::interfaces::RuntimeSpec;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
-pub fn input_factory(
+pub fn input_factory<V>(
     input_mode: InputMode,
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
     mqtt_backend: MqttInputBackend,
-) -> anyhow::Result<InputStreamFactory> {
+) -> anyhow::Result<InputStreamFactory<V>>
+where
+    V: FileInputValue + RosStreamValue,
+{
     Ok(match input_mode {
         InputMode {
             input_file: Some(input_file),
             ..
-        } => InputStreamFactory::file(input_file),
+        } => InputStreamFactory::<V>::file(input_file),
         InputMode {
             input_ros_file: Some(input_ros_file),
             ..
@@ -41,7 +45,7 @@ pub fn input_factory(
             let (ros_topic_mapping, ros_msg_type_mapping) =
                 json_to_topic_msg_type_mapping(json_string.as_str())
                     .context("Invalid input mapping file")?;
-            InputStreamFactory::ros(ros_topic_mapping, ros_msg_type_mapping, executor)
+            InputStreamFactory::<V>::ros(ros_topic_mapping, ros_msg_type_mapping, executor)
         }
         InputMode {
             input_mqtt_file: Some(input_mqtt_file),
@@ -52,7 +56,7 @@ pub fn input_factory(
             })?;
             let topic_mapping = json_to_topic_mapping(&json_string)
                 .context("Input MQTT topic mapping file could not be parsed")?;
-            InputStreamFactory::mqtt_with_backend(Some(topic_mapping), mqtt_port, mqtt_backend)
+            InputStreamFactory::<V>::mqtt_with_backend(Some(topic_mapping), mqtt_port, mqtt_backend)
         }
         InputMode {
             input_redis_file: Some(input_redis_file),
@@ -63,64 +67,71 @@ pub fn input_factory(
             })?;
             let topic_mapping = json_to_topic_mapping(&json_string)
                 .context("Input Redis topic mapping file could not be parsed")?;
-            InputStreamFactory::redis(Some(topic_mapping), redis_port)
+            InputStreamFactory::<V>::redis(Some(topic_mapping), redis_port)
         }
         InputMode {
             mqtt_input: true, ..
-        } => InputStreamFactory::mqtt_with_backend(None, mqtt_port, mqtt_backend),
+        } => InputStreamFactory::<V>::mqtt_with_backend(None, mqtt_port, mqtt_backend),
         InputMode {
             redis_input: true, ..
-        } => InputStreamFactory::redis(None, redis_port),
+        } => InputStreamFactory::<V>::redis(None, redis_port),
         _ => anyhow::bail!("Invalid input stream specification"),
+    })
+}
+
+pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputHandlerSpec<V>> {
+    Ok(match output_mode {
+        OutputMode {
+            output_stdout: true,
+            ..
+        } => OutputHandlerSpec::Stdout,
+        OutputMode {
+            output_ros_file: Some(output_ros_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&output_ros_file).with_context(|| {
+                format!("Output mapping file {output_ros_file:?} could not be read")
+            })?;
+            let (topic_mapping, msg_types) = json_to_topic_msg_type_mapping(&json_string)
+                .context("Output mapping file could not be parsed")?;
+            OutputHandlerSpec::Ros(topic_mapping, msg_types)
+        }
+        OutputMode {
+            output_mqtt_file: Some(output_mqtt_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&output_mqtt_file).with_context(|| {
+                format!("Output MQTT mapping file {output_mqtt_file:?} could not be read")
+            })?;
+            let topic_mapping = json_to_topic_mapping(&json_string)
+                .context("Output MQTT topic mapping file could not be parsed")?;
+            OutputHandlerSpec::Mqtt(Some(topic_mapping))
+        }
+        OutputMode {
+            output_redis_file: Some(output_redis_file),
+            ..
+        } => {
+            let json_string = std::fs::read_to_string(&output_redis_file).with_context(|| {
+                format!("Output Redis mapping file {output_redis_file:?} could not be read")
+            })?;
+            let topic_mapping = json_to_topic_mapping(&json_string)
+                .context("Output Redis topic mapping file could not be parsed")?;
+            OutputHandlerSpec::Redis(Some(topic_mapping))
+        }
+        OutputMode {
+            mqtt_output: true, ..
+        } => OutputHandlerSpec::Mqtt(None),
+        OutputMode {
+            redis_output: true, ..
+        } => OutputHandlerSpec::Redis(None),
+        // Default to stdout if no options provided
+        _ => OutputHandlerSpec::Stdout,
     })
 }
 
 impl From<OutputMode> for OutputHandlerSpec {
     fn from(output_mode: OutputMode) -> Self {
-        match output_mode {
-            OutputMode {
-                output_stdout: true,
-                ..
-            } => OutputHandlerSpec::Stdout,
-            OutputMode {
-                output_ros_file: Some(output_ros_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&output_ros_file)
-                    .expect("Output mapping file could not be read");
-                let (topic_mapping, msg_types) = json_to_topic_msg_type_mapping(&json_string)
-                    .expect("Output mapping file could not be parsed");
-                OutputHandlerSpec::Ros(topic_mapping, msg_types)
-            }
-            OutputMode {
-                output_mqtt_file: Some(output_mqtt_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&output_mqtt_file)
-                    .expect("Output MQTT topic mapping file could not be read");
-                let topic_mapping = json_to_topic_mapping(&json_string)
-                    .expect("Output MQTT topic mapping file could not be parsed");
-                OutputHandlerSpec::Mqtt(Some(topic_mapping))
-            }
-            OutputMode {
-                output_redis_file: Some(output_redis_file),
-                ..
-            } => {
-                let json_string = std::fs::read_to_string(&output_redis_file)
-                    .expect("Output Redis topic mapping file could not be read");
-                let topic_mapping = json_to_topic_mapping(&json_string)
-                    .expect("Output Redis topic mapping file could not be parsed");
-                OutputHandlerSpec::Redis(Some(topic_mapping))
-            }
-            OutputMode {
-                mqtt_output: true, ..
-            } => OutputHandlerSpec::Mqtt(None),
-            OutputMode {
-                redis_output: true, ..
-            } => OutputHandlerSpec::Redis(None),
-            // Default to stdout if no options provided
-            _ => OutputHandlerSpec::Stdout,
-        }
+        output_handler_spec(output_mode).expect("output mode could not be configured")
     }
 }
 

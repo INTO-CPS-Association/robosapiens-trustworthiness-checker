@@ -11,6 +11,7 @@ use testcontainers_modules::{
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
     OutputStream, Value,
+    core::JsonStreamValue,
     io::mqtt::{MqttFactory, MqttMessage},
 };
 
@@ -85,7 +86,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
     .await
 }
 
-/// Publishes all values from an OutputStream<Value>.
+/// Publishes all serializable values from an output stream.
 #[instrument(level = tracing::Level::INFO, skip(values))]
 pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
     client_name: String,
@@ -95,6 +96,55 @@ pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>
     port: u16,
 ) -> Result<(), anyhow::Error> {
     publish_values(&client_name, &topic, values, values_len, port).await
+}
+
+/// Publishes values through their JSON stream codec.
+#[instrument(level = tracing::Level::INFO, skip(values))]
+pub async fn dummy_stream_mqtt_json_publisher<T: Debug + JsonStreamValue + 'static>(
+    _client_name: String,
+    topic: String,
+    values: OutputStream<T>,
+    values_len: usize,
+    port: u16,
+) -> Result<(), anyhow::Error> {
+    let uri = format!("tcp://localhost:{port}");
+    let mqtt_client = MQTT_FACTORY
+        .connect(&uri)
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to create MQTT client: {error}"))?;
+
+    let mut index = 0;
+    let mut values = values;
+    while let Some(value) = values.next().await {
+        let payload = value
+            .encode_json()
+            .map_err(|error| anyhow::anyhow!("Failed to serialize value {value:?}: {error}"))?;
+        mqtt_client
+            .publish(MqttMessage::new(topic.clone(), payload, 1))
+            .await
+            .map_err(|error| anyhow::anyhow!("Lost MQTT connection with error {error:?}"))?;
+        index += 1;
+        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+    }
+    info!("Finished publishing {index}/{values_len} JSON messages on topic {topic}");
+    Ok(())
+}
+
+/// Subscribes to typed JSON stream values.
+pub async fn get_mqtt_json_outputs<V: JsonStreamValue + 'static>(
+    topic: String,
+    _client_name: String,
+    port: u16,
+) -> OutputStream<V> {
+    let (mqtt_client, stream) = MQTT_FACTORY
+        .connect_and_receive(&format!("tcp://localhost:{port}"), 0)
+        .await
+        .expect("Failed to create MQTT client");
+    mqtt_client.subscribe(&topic, 1).await.unwrap();
+
+    Box::pin(stream.map(move |message| {
+        V::decode_mqtt_payload(message.payload.as_bytes()).expect("MQTT typed output should decode")
+    }))
 }
 
 /// Generic logic for the dummy publishers

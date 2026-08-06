@@ -9,7 +9,7 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 use std::fmt;
 
-use super::super::OutputStream;
+use crate::core::{JsonStreamValue, OutputStream};
 
 pub type RuntimeFunctionCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;
@@ -217,6 +217,45 @@ impl StreamData for Value {
         matches!(self, Value::NoVal)
     }
 }
+
+impl JsonStreamValue for Value {
+    fn decode_json(payload: &[u8]) -> anyhow::Result<Self> {
+        match serde_json::from_slice(payload) {
+            Ok(value) => Ok(value),
+            Err(json_error) => {
+                let text = std::str::from_utf8(payload)
+                    .map_err(|error| anyhow::anyhow!(error).context("JSON payload is not UTF-8"))?;
+                serde_json5::from_str(text).map_err(|json5_error| {
+                    anyhow::anyhow!(json5_error).context(format!(
+                        "failed to decode stream value as JSON or JSON5; JSON error: {json_error}"
+                    ))
+                })
+            }
+        }
+    }
+
+    fn encode_json(&self) -> anyhow::Result<String> {
+        serde_json5::to_string(self).map_err(|error| {
+            anyhow::anyhow!(error).context("failed to encode stream value as JSON5")
+        })
+    }
+
+    fn decode_mqtt_payload(payload: &[u8]) -> anyhow::Result<Self> {
+        let value = Self::decode_json(payload)?;
+        match value {
+            Value::Map(mut map) => match map.remove("value") {
+                Some(value) => Ok(value),
+                None => Ok(Value::Map(map)),
+            },
+            value => Ok(value),
+        }
+    }
+
+    fn encode_stdout(&self) -> anyhow::Result<String> {
+        Ok(format!("{self:?}"))
+    }
+}
+
 impl DeferrableStreamData for Value {
     fn is_deferred(&self) -> bool {
         matches!(self, Value::Deferred)

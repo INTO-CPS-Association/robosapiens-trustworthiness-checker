@@ -25,7 +25,7 @@ impl RosMsgType {
         node: &mut r2r::Node,
         topic: &str,
         qos: r2r::QosProfile,
-    ) -> Result<OutputStream<Value>, r2r::Error> {
+    ) -> anyhow::Result<OutputStream<Value>> {
         Ok(match self {
             RosMsgType::Bool => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
@@ -134,6 +134,11 @@ impl RosMsgType {
                             )
                     }),
             ),
+            RosMsgType::MstloTimedValue => {
+                anyhow::bail!(
+                    "MstloTimedValue ROS input requires an MstloTimedValue stream, not Value"
+                )
+            }
         })
     }
 }

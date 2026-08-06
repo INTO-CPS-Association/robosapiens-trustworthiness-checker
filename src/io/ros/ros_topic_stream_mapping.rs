@@ -29,6 +29,8 @@ pub enum RosMsgType {
     Pose2D,
     /// ROS2 `nav_msgs/msg/Odometry`
     Odom,
+    /// Timestamped MSTLO value.
+    MstloTimedValue,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -57,6 +59,7 @@ pub fn string_to_ros_msg_type(typ: &str) -> Result<RosMsgType, anyhow::Error> {
         "RVDataArray" => Ok(RosMsgType::RVDataArray),
         "Pose2D" => Ok(RosMsgType::Pose2D),
         "Odom" => Ok(RosMsgType::Odom),
+        "MstloTimedValue" => Ok(RosMsgType::MstloTimedValue),
         typ => Err(anyhow!("Unsupported type {}", typ)),
     }
 }
@@ -79,6 +82,7 @@ pub fn ros_msg_type_to_string(typ: RosMsgType) -> Result<String, anyhow::Error> 
         RosMsgType::RVDataArray => Ok("RVDataArray".to_string()),
         RosMsgType::Pose2D => Ok("Pose2D".to_string()),
         RosMsgType::Odom => Ok("Odom".to_string()),
+        RosMsgType::MstloTimedValue => Ok("MstloTimedValue".to_string()),
     }
 }
 

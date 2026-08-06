@@ -1,9 +1,27 @@
-use crate::core::{InputBatch, InputStream, Value, VarName};
+use crate::core::{FileInputValue, InputBatch, InputStream, Value, VarName};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 use crate::lang::untimed_input::parser::PackedUntimedInput;
 use std::collections::BTreeSet;
 
 const FILE_INPUT_BATCH_TICKS: usize = 1_024;
+
+impl FileInputValue for Value {
+    fn decode_file_value(payload: &str) -> anyhow::Result<Self> {
+        let mut remaining = payload;
+        let value = crate::lang::core::parser::val_or_container(&mut remaining)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        anyhow::ensure!(
+            remaining.trim().is_empty(),
+            "unexpected trailing input after file value: {:?}",
+            remaining.trim()
+        );
+        Ok(value)
+    }
+
+    fn missing_value() -> Self {
+        Value::NoVal
+    }
+}
 
 /// Stream the selected variables from parsed untimed input data.
 pub fn input_stream(data: UntimedInputFileData, vars: BTreeSet<VarName>) -> InputStream<Value> {
@@ -38,8 +56,10 @@ pub fn input_stream(data: UntimedInputFileData, vars: BTreeSet<VarName>) -> Inpu
     })
 }
 
-/// Stream sparse production-parser rows in bounded, fixed-layout batches.
-pub(crate) fn packed_input_stream(data: PackedUntimedInput) -> InputStream<Value> {
+/// Stream sparse file rows in bounded, fixed-layout batches.
+pub(crate) fn packed_input_stream<V: FileInputValue>(
+    data: PackedUntimedInput<V>,
+) -> InputStream<V> {
     let PackedUntimedInput {
         layout,
         rows,
@@ -61,7 +81,7 @@ pub(crate) fn packed_input_stream(data: PackedUntimedInput) -> InputStream<Value
                     if let Some(row) = rows.get(&time) {
                         values.extend(row.iter().cloned());
                     } else {
-                        values.extend(std::iter::repeat_n(Value::NoVal, tick_width));
+                        values.extend(std::iter::repeat_with(V::missing_value).take(tick_width));
                     }
                 }
                 yield InputBatch::trusted_packed_rows(layout.clone(), values);
@@ -139,6 +159,31 @@ mod tests {
                 .iter()
                 .flatten()
                 .all(|event| event.var == VarName::new("y"))
+        );
+    }
+
+    #[apply(async_test)]
+    async fn timed_file_input_preserves_delivery_ticks_and_signal_time() {
+        use crate::core::StreamData;
+        use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
+        use std::time::Duration;
+
+        let packed = crate::lang::untimed_input::parser::packed_untimed_input::<MstloTimedValue>(
+            "0: x = {\"time\": 0, \"value\": 7.0}\n2: x = {\"time\": 1000, \"value\": 4.0}",
+            BTreeSet::from([VarName::new("x")]),
+        )
+        .unwrap();
+        let mut stream = packed_input_stream(packed);
+        let first = stream.next().await.unwrap().unwrap();
+        let mut ticks = first.ticks();
+        assert_eq!(
+            ticks.next().unwrap().to_events()[0].value,
+            MstloTimedValue::new(Duration::ZERO, MstloValue::Float(7.0))
+        );
+        assert!(ticks.next().unwrap().to_events()[0].value.is_no_val());
+        assert_eq!(
+            ticks.next().unwrap().to_events()[0].value,
+            MstloTimedValue::new(Duration::from_millis(1000), MstloValue::Float(4.0))
         );
     }
 

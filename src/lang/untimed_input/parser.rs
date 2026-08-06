@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::core::FileInputValue;
 use crate::lang::core::parser::*;
 use crate::{Value, VarName};
+use anyhow::Context;
 use winnow::{
     Parser, Result,
     ascii::dec_uint,
@@ -71,23 +73,63 @@ pub fn untimed_input_file(s: &mut &str) -> Result<UntimedInputFileData> {
 /// Missing timestamps are deliberately not materialized here. The file input
 /// stream expands them into bounded transport batches as they are consumed.
 #[derive(Debug)]
-pub(crate) struct PackedUntimedInput {
+pub(crate) struct PackedUntimedInput<V> {
     pub(crate) layout: Box<[VarName]>,
-    pub(crate) rows: BTreeMap<usize, Vec<Value>>,
+    pub(crate) rows: BTreeMap<usize, Vec<V>>,
     pub(crate) end_time: Option<usize>,
+}
+
+fn split_typed_assignment<'a>(
+    assignment: &'a str,
+    line_number: usize,
+) -> anyhow::Result<(&'a str, &'a str)> {
+    let (name, payload) = assignment.split_once('=').ok_or_else(|| {
+        anyhow::anyhow!("invalid assignment at line {line_number}: expected `name = value`")
+    })?;
+    let name = name.trim();
+    anyhow::ensure!(
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+        "invalid variable name `{name}` at line {line_number}"
+    );
+
+    let payload = payload.trim();
+    anyhow::ensure!(
+        !payload.is_empty(),
+        "missing value for `{name}` at line {line_number}"
+    );
+    Ok((name, payload))
+}
+
+fn without_line_comment(payload: &str) -> &str {
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, character) in payload.char_indices() {
+        if character == '"' && !escaped {
+            in_string = !in_string;
+        }
+        if !in_string && payload[index..].starts_with("//") {
+            return payload[..index].trim_end();
+        }
+        escaped = character == '\\' && !escaped;
+        if character != '\\' {
+            escaped = false;
+        }
+    }
+    payload.trim_end()
 }
 
 /// Parse untimed file input directly into sparse, fixed-layout rows.
 ///
-/// This is the production file-input path. The general-purpose public parser
-/// remains available for callers that need the timestamp-indexed representation.
 /// Production input timestamps must be nondecreasing. Repeating a timestamp
 /// extends the same logical row, and the last assignment to a selected variable
 /// at that timestamp wins.
-pub(crate) fn packed_untimed_input(
+pub(crate) fn packed_untimed_input<V: FileInputValue>(
     contents: &str,
     vars: BTreeSet<VarName>,
-) -> anyhow::Result<PackedUntimedInput> {
+) -> anyhow::Result<PackedUntimedInput<V>> {
     if vars.is_empty() {
         return Ok(PackedUntimedInput {
             layout: Box::new([]),
@@ -103,7 +145,7 @@ pub(crate) fn packed_untimed_input(
         .map(|(slot, var)| (var.name(), slot))
         .collect::<BTreeMap<_, _>>();
     let tick_width = vars.len();
-    let mut rows = BTreeMap::new();
+    let mut rows: BTreeMap<usize, Vec<V>> = BTreeMap::new();
     let mut current_time = None;
 
     for (line_index, raw_line) in contents.lines().enumerate() {
@@ -134,25 +176,19 @@ pub(crate) fn packed_untimed_input(
             }
         }
 
-        anyhow::ensure!(
-            current_time.is_some(),
-            "input assignment has no timestamp at line {line_number}"
-        );
-        let mut assignment_source = assignment;
-        let (name, value) = borrowed_value_assignment
-            .parse_next(&mut assignment_source)
-            .map_err(|error| {
-                anyhow::anyhow!("invalid assignment at line {line_number}: {error}")
-            })?;
-        if !assignment_source.is_empty() {
-            line_comment.parse(assignment_source).map_err(|error| {
-                anyhow::anyhow!("invalid trailing input at line {line_number}: {error}")
-            })?;
-        }
-        if let Some(&slot) = slots.get(name) {
-            rows.entry(current_time.expect("timestamp checked above"))
-                .or_insert_with(|| vec![Value::NoVal; tick_width])[slot] = value;
-        }
+        let outer_time = current_time.ok_or_else(|| {
+            anyhow::anyhow!("input assignment has no timestamp at line {line_number}")
+        })?;
+        let (name, payload) = split_typed_assignment(assignment, line_number)?;
+        let Some(&slot) = slots.get(name) else {
+            continue;
+        };
+        let payload = without_line_comment(payload);
+        let value = V::decode_file_value(payload).with_context(|| {
+            format!("invalid value for variable `{name}` at line {line_number}")
+        })?;
+        rows.entry(outer_time)
+            .or_insert_with(|| (0..tick_width).map(|_| V::missing_value()).collect())[slot] = value;
     }
 
     Ok(PackedUntimedInput {
@@ -271,7 +307,7 @@ mod tests {
     #[test]
     fn packed_file_input_preserves_sparse_multi_input_rows() {
         let input = "0: x = 1\n   y = 10\n3: x = 4\n   y = 40";
-        let packed = packed_untimed_input(
+        let packed = packed_untimed_input::<Value>(
             input,
             BTreeSet::from([VarName::new("x"), VarName::new("y")]),
         )
@@ -296,7 +332,8 @@ mod tests {
     #[test]
     fn packed_file_input_accepts_repeated_timestamps_and_filters_variables() {
         let input = "0: ignored = 9\n0: x = 1 // first value\n0: x = 2\n0: x = 3 // last value";
-        let packed = packed_untimed_input(input, BTreeSet::from([VarName::new("x")])).unwrap();
+        let packed =
+            packed_untimed_input::<Value>(input, BTreeSet::from([VarName::new("x")])).unwrap();
         let PackedUntimedInput { rows, end_time, .. } = packed;
 
         assert_eq!(end_time, Some(0));
@@ -306,7 +343,8 @@ mod tests {
     #[test]
     fn packed_file_input_does_not_materialize_large_timestamp_gaps() {
         let input = "0: x = 1\n1000000000: x = 2";
-        let packed = packed_untimed_input(input, BTreeSet::from([VarName::new("x")])).unwrap();
+        let packed =
+            packed_untimed_input::<Value>(input, BTreeSet::from([VarName::new("x")])).unwrap();
         let PackedUntimedInput { rows, end_time, .. } = packed;
 
         assert_eq!(end_time, Some(1_000_000_000));

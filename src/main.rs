@@ -13,12 +13,18 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
-use trustworthiness_checker::cli::adapters::{DistributionModeBuilder, input_factory};
+use trustworthiness_checker::cli::adapters::{
+    DistributionModeBuilder, input_factory, output_handler_spec,
+};
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
-use trustworthiness_checker::io::{AggregationSemantics, InputAggregation, OutputHandlerBuilder};
+use trustworthiness_checker::io::{
+    AggregationSemantics, InputAggregation, InputStreamFactory, OutputHandlerBuilder,
+};
 use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
+use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
+use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
 use trustworthiness_checker::{self as tc, Specification};
@@ -58,6 +64,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .exit()
     });
 
+    if matches!(cli.language, Language::MSTLO) {
+        return run_mstlo(executor, cli, runtime).await;
+    }
+
     let builder = <GeneralRuntimeBuilder<LangSpecification, Value> as RuntimeBuilder<
         LangSpecification,
         Value,
@@ -76,41 +86,26 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.use_context_transfer(!cli.no_context_transfer);
 
-    let builder = builder
-        .mstlo_algorithm(cli.mstlo_algorithm)
-        .mstlo_synchronization_strategy(cli.mstlo_synchronization)
-        .mstlo_variables(parse_mstlo_variables(cli.mstlo_vars.as_deref())?);
-
     let builder = builder.scheduler_mode(cli.scheduler_communication());
 
     debug!("Choosing distribution mode");
     let dist_constraints = cli.distribution_constraints.clone();
-    let distribution_mode = if matches!(cli.language, Language::DSRV) {
-        let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode.clone())
-            .maybe_mqtt_port(mqtt_port)
-            .maybe_local_node(cli.local_node.clone())
-            .runtime(runtime)
-            .maybe_dist_constraints(dist_constraints.clone())
-            .dist_constraint_solver(cli.dist_constraint_solver)
-            .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
-        debug!("Building distribution mode");
-        distribution_mode_builder.build().await?
-    } else {
-        DistributionMode::CentralMonitor
-    };
+    let distribution_mode_builder = DistributionModeBuilder::new(cli.distribution_mode.clone())
+        .maybe_mqtt_port(mqtt_port)
+        .maybe_local_node(cli.local_node.clone())
+        .runtime(runtime)
+        .maybe_dist_constraints(dist_constraints.clone())
+        .dist_constraint_solver(cli.dist_constraint_solver)
+        .ros_dist_graph_topic(cli.ros_dist_graph_topic.clone());
+    debug!("Building distribution mode");
+    let distribution_mode = distribution_mode_builder.build().await?;
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model: LangSpecification = match cli.language {
-        Language::DSRV => lalr_parse_file(cli.model.as_str())
-            .await
-            .map(LangSpecification::from)
-            .context("Model file could not be parsed")?,
-        Language::MSTLO => tc::lang::mstlo::parse_file(cli.model.as_str())
-            .await
-            .map(LangSpecification::from)
-            .context("MSTLO model file could not be parsed")?,
-    };
+    let model = lalr_parse_file(cli.model.as_str())
+        .await
+        .map(LangSpecification::from)
+        .context("Model file could not be parsed")?;
     info!(%model, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)
@@ -164,27 +159,16 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     );
 
     // Configure the input stream factory.
-    let mut input_factory = input_factory(
-        cli.input_mode.clone(),
-        executor.clone(),
-        mqtt_port,
-        redis_port,
-        cli.mqtt_input_backend(),
+    let input_factory = configure_input_aggregation(
+        input_factory(
+            cli.input_mode.clone(),
+            executor.clone(),
+            mqtt_port,
+            redis_port,
+            cli.mqtt_input_backend(),
+        )?,
+        &cli,
     )?;
-    if let Some(delay_ms) = cli.input_aggregation_delay_ms {
-        let semantics = match cli
-            .input_aggregation_mode
-            .unwrap_or(InputAggregationMode::PreserveTicks)
-        {
-            InputAggregationMode::PreserveTicks => AggregationSemantics::PreserveTicks,
-            InputAggregationMode::AtomicStep => AggregationSemantics::CoalesceToAtomicStep,
-        };
-        let mut aggregation = InputAggregation::new(Duration::from_millis(delay_ms), semantics);
-        if let Some(event_limit) = cli.input_aggregation_event_limit {
-            aggregation = aggregation.with_event_limit(event_limit);
-        }
-        input_factory = input_factory.input_aggregation(aggregation)?;
-    }
     let builder = if matches!(runtime, RuntimeSpec::ReconfSemiSync) {
         builder.input_factory(input_factory)?
     } else {
@@ -260,6 +244,87 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let monitor = builder.build().await;
 
     monitor.run().await
+}
+
+async fn run_mstlo(
+    executor: Rc<LocalExecutor<'static>>,
+    cli: Cli,
+    runtime: RuntimeSpec,
+) -> anyhow::Result<()> {
+    let RuntimeSpec::Mstlo(execution_policy) = runtime else {
+        anyhow::bail!("MSTLO CLI configuration requires RuntimeSpec::Mstlo")
+    };
+
+    let model: MstloSpecification = tc::lang::mstlo::parse_file(cli.model.as_str())
+        .await
+        .context("MSTLO model file could not be parsed")?;
+    info!(%model, "Parsed MSTLO model");
+
+    let input_factory = configure_input_aggregation(
+        input_factory::<MstloTimedValue>(
+            cli.input_mode.clone(),
+            executor.clone(),
+            cli.mqtt_port,
+            cli.redis_port,
+            cli.mqtt_input_backend(),
+        )?,
+        &cli,
+    )?;
+
+    let input = input_factory
+        .open(model.input_vars())
+        .await
+        .context("MSTLO input stream could not be built")?;
+    let output_vars = model.output_vars();
+    let aux_info = model.aux_vars().into_iter().collect::<Vec<_>>();
+    let output_spec = output_handler_spec::<MstloTimedValue>(cli.output_mode.clone())?;
+    let output_handler = OutputHandlerBuilder::<MstloTimedValue>::new(output_spec)
+        .executor(executor.clone())
+        .output_var_names(output_vars)
+        .mqtt_port(cli.mqtt_port)
+        .redis_port(cli.redis_port)
+        .aux_info(aux_info)
+        .build()
+        .await
+        .context("MSTLO output handler could not be built")?;
+
+    let builder = <GeneralRuntimeBuilder<MstloSpecification, MstloTimedValue> as RuntimeBuilder<
+        MstloSpecification,
+        MstloTimedValue,
+    >>::new()
+    .executor(executor)
+    .model(model)
+    .input(input)
+    .output(output_handler)
+    .runtime(RuntimeSpec::Mstlo(execution_policy))
+    .semantics(cli.semantics)
+    .mstlo_algorithm(cli.mstlo_algorithm)
+    .mstlo_synchronization_strategy(cli.mstlo_synchronization)
+    .mstlo_variables(parse_mstlo_variables(cli.mstlo_vars.as_deref())?);
+
+    let monitor = builder.build().await;
+    monitor.run().await
+}
+
+fn configure_input_aggregation<V>(
+    input_factory: InputStreamFactory<V>,
+    cli: &Cli,
+) -> anyhow::Result<InputStreamFactory<V>> {
+    let Some(delay_ms) = cli.input_aggregation_delay_ms else {
+        return Ok(input_factory);
+    };
+    let semantics = match cli
+        .input_aggregation_mode
+        .unwrap_or(InputAggregationMode::PreserveTicks)
+    {
+        InputAggregationMode::PreserveTicks => AggregationSemantics::PreserveTicks,
+        InputAggregationMode::AtomicStep => AggregationSemantics::CoalesceToAtomicStep,
+    };
+    let mut aggregation = InputAggregation::new(Duration::from_millis(delay_ms), semantics);
+    if let Some(event_limit) = cli.input_aggregation_event_limit {
+        aggregation = aggregation.with_event_limit(event_limit);
+    }
+    input_factory.input_aggregation(aggregation)
 }
 
 fn parse_mstlo_variables(bindings: Option<&[String]>) -> anyhow::Result<Variables> {

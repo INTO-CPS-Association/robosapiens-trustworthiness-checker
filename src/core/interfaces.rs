@@ -2,8 +2,12 @@ use crate::core::StreamType;
 use async_trait::async_trait;
 use clap::ValueEnum;
 use futures::future::LocalBoxFuture;
+#[cfg(feature = "ros")]
+use smol::LocalExecutor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+#[cfg(feature = "ros")]
+use std::rc::Rc;
 use strum_macros::Display;
 
 use super::{StreamData, VarName};
@@ -46,6 +50,49 @@ pub enum RuntimeSpec {
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
+
+/// A stream value that can be encoded for MQTT, Redis, and stdout.
+pub trait JsonStreamValue: StreamData + Sized {
+    fn decode_json(payload: &[u8]) -> anyhow::Result<Self>;
+    fn encode_json(&self) -> anyhow::Result<String>;
+
+    fn decode_mqtt_payload(payload: &[u8]) -> anyhow::Result<Self>;
+
+    fn encode_stdout(&self) -> anyhow::Result<String> {
+        self.encode_json()
+    }
+}
+
+/// A stream value accepted by file input.
+pub trait FileInputValue: JsonStreamValue {
+    fn decode_file_value(payload: &str) -> anyhow::Result<Self> {
+        Self::decode_json(payload.as_bytes())
+    }
+
+    fn missing_value() -> Self;
+}
+
+#[cfg(feature = "ros")]
+/// A stream value accepted by ROS input and output handlers.
+pub trait RosStreamValue: StreamData + Sized {
+    fn ros_input_stream(
+        executor: Rc<LocalExecutor<'static>>,
+        mapping: BTreeMap<String, (String, String)>,
+    ) -> anyhow::Result<crate::core::InputStream<Self>>;
+
+    fn ros_output_handler(
+        executor: Rc<LocalExecutor<'static>>,
+        node_name: String,
+        mapping: BTreeMap<String, (String, String)>,
+        aux_info: Vec<VarName>,
+    ) -> anyhow::Result<Box<dyn OutputHandler<Val = Self>>>;
+}
+
+#[cfg(not(feature = "ros"))]
+pub trait RosStreamValue: StreamData {}
+
+#[cfg(not(feature = "ros"))]
+impl<T: StreamData> RosStreamValue for T {}
 
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;

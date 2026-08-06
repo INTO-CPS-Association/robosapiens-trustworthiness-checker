@@ -1,9 +1,11 @@
+use anyhow::Context;
 use futures::{FutureExt, StreamExt};
 use std::collections::BTreeMap;
 use tracing::{Level, debug, info, info_span, instrument, warn};
 
 use crate::{
-    InputBatch, InputEvent, InputStream, OutputStream, Value, VarName,
+    InputBatch, InputEvent, InputStream, OutputStream, VarName,
+    core::JsonStreamValue,
     io::mqtt::{MqttFactory, MqttMessage},
     utils::cancellation_token::CancellationToken,
 };
@@ -14,12 +16,12 @@ const QOS: i32 = 1;
 
 /// Connect and subscribe to MQTT topics, returning the resulting input stream.
 #[instrument(level = Level::INFO, skip(var_topics))]
-pub async fn input_stream(
+pub async fn input_stream<V: JsonStreamValue>(
     host: &str,
     port: Option<u16>,
     var_topics: VarTopicMap,
     max_attempts: u32,
-) -> anyhow::Result<InputStream<Value>> {
+) -> anyhow::Result<InputStream<V>> {
     if var_topics.is_empty() {
         return Ok(Box::pin(futures::stream::empty()));
     }
@@ -69,7 +71,7 @@ pub async fn input_stream(
                 debug!("MQTT stream ended");
                 break;
             };
-            match parse_event(msg, &var_topics_inverse) {
+            match parse_event::<V>(msg, &var_topics_inverse) {
                 Ok(Some(event)) => yield InputBatch::events(vec![event]),
                 Ok(None) => {}
                 Err(error) => {
@@ -94,14 +96,15 @@ fn invert_topics(var_topics: VarTopicMap) -> InverseVarTopicMap {
         .collect()
 }
 
-fn parse_event(
+fn parse_event<V: JsonStreamValue>(
     msg: MqttMessage,
     var_topics_inverse: &InverseVarTopicMap,
-) -> anyhow::Result<Option<InputEvent<Value>>> {
+) -> anyhow::Result<Option<InputEvent<V>>> {
     let Some(var) = var_topics_inverse.get(&msg.topic).cloned() else {
         return Ok(None);
     };
-    let value = super::input_backend::parse_value(msg.payload.as_bytes())?;
+    let value = super::input_backend::decode_payload::<V>(msg.payload.as_bytes())
+        .with_context(|| format!("Failed to parse value for MQTT variable `{var}`"))?;
     Ok(Some(InputEvent::new(var, value)))
 }
 
@@ -110,12 +113,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::input_stream;
+    use crate::Value;
 
     #[test]
     fn empty_input_needs_no_connection() {
         smol::block_on(async {
             assert!(
-                input_stream("localhost", None, BTreeMap::new(), 0)
+                input_stream::<Value>("localhost", None, BTreeMap::new(), 0)
                     .await
                     .is_ok()
             );

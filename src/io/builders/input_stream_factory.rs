@@ -10,12 +10,13 @@ use crate::io::InputAggregation;
 use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::mqtt::MqttInputBackend;
 
+use crate::core::{FileInputValue, RosStreamValue};
+
 use crate::stream_utils::Fanout;
-use crate::{self as tc, OutputStream, Value};
-use crate::{InputStream, VarName};
+use crate::{self as tc, InputStream, OutputStream, VarName};
 
 #[derive(Debug, Clone)]
-enum InputFactoryKind {
+enum InputFactoryKind<V = crate::Value> {
     File {
         path: String,
     },
@@ -35,10 +36,10 @@ enum InputFactoryKind {
     },
     /// Manually receives results based on the Fanout channel, and forwards them to any
     /// constructed input streams. Useful for testing.
-    Manual(BTreeMap<VarName, Rc<Fanout<Value>>>),
+    Manual(BTreeMap<VarName, Rc<Fanout<V>>>),
 }
 
-impl InputFactoryKind {
+impl<V> InputFactoryKind<V> {
     fn produces_independent_events(&self) -> bool {
         matches!(
             self,
@@ -51,13 +52,13 @@ impl InputFactoryKind {
 ///
 /// Normal runtimes should receive a constructed [`InputStream`] directly.
 #[derive(Clone, Debug)]
-pub struct InputStreamFactory {
-    kind: InputFactoryKind,
+pub struct InputStreamFactory<V = crate::Value> {
+    kind: InputFactoryKind<V>,
     input_aggregation: Option<InputAggregation>,
 }
 
-impl InputStreamFactory {
-    fn new(kind: InputFactoryKind) -> Self {
+impl<V> InputStreamFactory<V> {
+    fn new(kind: InputFactoryKind<V>) -> Self {
         Self {
             kind,
             input_aggregation: None,
@@ -117,7 +118,7 @@ impl InputStreamFactory {
         Self::new(InputFactoryKind::Redis { topics, port })
     }
 
-    pub(crate) fn manual(fanout: BTreeMap<VarName, Rc<Fanout<Value>>>) -> Self {
+    pub(crate) fn manual(fanout: BTreeMap<VarName, Rc<Fanout<V>>>) -> Self {
         Self::new(InputFactoryKind::Manual(fanout))
     }
 
@@ -303,14 +304,19 @@ impl InputStreamFactory {
     }
 
     /// Open a fresh stream for the selected model variables.
-    pub async fn open(&self, input_vars: BTreeSet<VarName>) -> anyhow::Result<InputStream<Value>> {
+    pub async fn open(&self, input_vars: BTreeSet<VarName>) -> anyhow::Result<InputStream<V>>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
         let _open = debug_span!("open input stream").entered();
         let stream = match &self.kind {
             InputFactoryKind::File { path } => {
                 let packed_input = tc::parse_file(
                     |contents| {
-                        tc::lang::untimed_input::parser::packed_untimed_input(contents, input_vars)
-                            .map_err(|error| error.to_string())
+                        tc::lang::untimed_input::parser::packed_untimed_input::<V>(
+                            contents, input_vars,
+                        )
+                        .map_err(|error| error.to_string())
                     },
                     path,
                 )
@@ -342,8 +348,7 @@ impl InputStreamFactory {
                             .keys()
                             .map(|k| VarName::new(k))
                             .collect::<BTreeSet<_>>();
-                        let missing_keys: Vec<_> =
-                            input_vars.difference(&keys.into()).cloned().collect();
+                        let missing_keys: Vec<_> = input_vars.difference(&keys).cloned().collect();
                         if !missing_keys.is_empty() {
                             return Err(anyhow::anyhow!(
                                 "ROS mapping is missing topics for the following variables: {:?}",
@@ -359,7 +364,7 @@ impl InputStreamFactory {
                                 ignored_mapping.insert(k, v);
                             }
                         }
-                        if ignored_mapping.len() > 0 {
+                        if !ignored_mapping.is_empty() {
                             warn!(
                                 "Some ROS topics from input mapping file are not used in the spec and will be ignored:\nIgnored map vars: {:?}.\nUsing input vars: {:?}",
                                 ignored_mapping.keys(),
@@ -373,10 +378,18 @@ impl InputStreamFactory {
                         _topic_mapping.clone(),
                         _msg_type_mapping.clone(),
                     )?;
-                    let input_mapping: BTreeMap<_, _> =
-                        filter_ros_mapping(input_mapping_raw, &input_vars)?;
+                    let input_mapping = filter_ros_mapping(input_mapping_raw, &input_vars)?
+                        .into_iter()
+                        .map(|(variable, data)| {
+                            let msg_type =
+                                crate::io::ros::ros_topic_stream_mapping::ros_msg_type_to_string(
+                                    data.msg_type,
+                                )?;
+                            Ok((variable, (data.topic, msg_type)))
+                        })
+                        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-                    tc::io::ros::input_stream(_executor.clone(), input_mapping)?
+                    V::ros_input_stream(_executor.clone(), input_mapping)?
                 }
                 #[cfg(not(feature = "ros"))]
                 {
@@ -395,8 +408,14 @@ impl InputStreamFactory {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                tc::io::mqtt::input_stream(*backend, MQTT_HOSTNAME, *port, var_topics, u32::MAX)
-                    .await?
+                tc::io::mqtt::input_stream::<V>(
+                    *backend,
+                    MQTT_HOSTNAME,
+                    *port,
+                    var_topics,
+                    u32::MAX,
+                )
+                .await?
             }
             InputFactoryKind::Redis { topics, port } => {
                 let var_topics: BTreeMap<_, _> = match topics {
@@ -406,7 +425,7 @@ impl InputStreamFactory {
                         .map(|topic| (topic.clone(), format!("{}", topic)))
                         .collect(),
                 };
-                tc::io::redis::input_stream(REDIS_HOSTNAME, *port, var_topics).await?
+                tc::io::redis::input_stream::<V>(REDIS_HOSTNAME, *port, var_topics).await?
             }
             InputFactoryKind::Manual(fanout) => {
                 anyhow::ensure!(
@@ -424,7 +443,7 @@ impl InputStreamFactory {
                     }
                     // Important that this happens outside stream!
                     let mut sub_rx = fanout.subscribe();
-                    let rx: OutputStream<Value> = Box::pin(stream! {
+                    let rx: OutputStream<V> = Box::pin(stream! {
                         while let Some(val) = sub_rx.recv().await {
                             yield val;
                         }
@@ -459,7 +478,7 @@ mod tests {
 
     #[test]
     fn file_input_is_rejected_for_reconfiguration() {
-        let error = InputStreamFactory::file("trace.input".into())
+        let error = InputStreamFactory::<Value>::file("trace.input".into())
             .ensure_reconfigurable()
             .unwrap_err();
         assert_eq!(
@@ -470,7 +489,7 @@ mod tests {
 
     #[test]
     fn atomic_input_is_rejected_for_aggregation() {
-        let error = InputStreamFactory::file("trace.input".into())
+        let error = InputStreamFactory::<Value>::file("trace.input".into())
             .input_aggregation(InputAggregation::new(
                 std::time::Duration::from_millis(1),
                 crate::io::AggregationSemantics::PreserveTicks,
@@ -485,7 +504,7 @@ mod tests {
     #[test]
     fn mqtt_input_uses_rumqttc_by_default() {
         assert!(matches!(
-            InputStreamFactory::mqtt(None, None).kind,
+            InputStreamFactory::<Value>::mqtt(None, None).kind,
             InputFactoryKind::Mqtt {
                 backend: MqttInputBackend::Rumqttc,
                 ..

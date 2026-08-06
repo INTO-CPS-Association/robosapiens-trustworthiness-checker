@@ -14,10 +14,13 @@ use crate::io::config::{MsgTypeMapping, TopicMapping};
 use crate::io::mqtt::{MqttFactory, MqttOutputHandler};
 use crate::io::redis::RedisOutputHandler;
 use crate::io::testing::ManualOutputHandler;
-use crate::{Value, VarName, core::OutputHandler};
+use crate::{
+    Value, VarName,
+    core::{JsonStreamValue, OutputHandler, RosStreamValue},
+};
 
 #[derive(Debug, Clone)]
-pub enum OutputHandlerSpec {
+pub enum OutputHandlerSpec<V = Value> {
     /// Standard output
     Stdout,
     /// ROS output topics
@@ -40,14 +43,14 @@ pub enum OutputHandlerSpec {
     /// Manually sends the results through the provided channel, and forwards them to any
     /// built OutputHandlers. Useful for testing.
     /// NOTE: Building this spawns a detached background task!
-    Manual(MpscSender<BTreeMap<VarName, Value>>),
+    Manual(MpscSender<BTreeMap<VarName, V>>),
 }
 
 #[derive(Debug, Clone)]
-pub struct OutputHandlerBuilder {
+pub struct OutputHandlerBuilder<V = Value> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     output_var_names: Option<BTreeSet<VarName>>,
-    pub spec: OutputHandlerSpec,
+    pub spec: OutputHandlerSpec<V>,
     aux_info: Option<Vec<VarName>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
@@ -56,8 +59,8 @@ pub struct OutputHandlerBuilder {
 #[cfg(feature = "mqtt")]
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
-impl OutputHandlerBuilder {
-    pub fn new(spec: impl Into<OutputHandlerSpec>) -> Self {
+impl<V> OutputHandlerBuilder<V> {
+    pub fn new(spec: impl Into<OutputHandlerSpec<V>>) -> Self {
         Self {
             executor: None,
             output_var_names: None,
@@ -99,11 +102,11 @@ impl OutputHandlerBuilder {
         topics: &BTreeSet<VarName>,
         output_vars: &BTreeSet<VarName>,
     ) -> anyhow::Result<()> {
-        if !(topics == output_vars) {
-            let outputs_diff: BTreeSet<_> = output_vars.difference(&topics).cloned().collect();
-            let topics_diff: BTreeSet<_> = topics.difference(&output_vars).cloned().collect();
+        if topics != output_vars {
+            let outputs_diff: BTreeSet<_> = output_vars.difference(topics).cloned().collect();
+            let topics_diff: BTreeSet<_> = topics.difference(output_vars).cloned().collect();
             return Err(anyhow::anyhow!(
-                "Provided topics do not match ouput variables. Missing topics for variables: {:?}. Extra topics: {:?}",
+                "Provided topics do not match output variables. Missing topics for variables: {:?}. Extra topics: {:?}",
                 outputs_diff,
                 topics_diff
             ));
@@ -111,31 +114,33 @@ impl OutputHandlerBuilder {
         Ok(())
     }
 
-    pub async fn build(self) -> Box<dyn OutputHandler<Val = Value>> {
+    pub async fn build(self) -> anyhow::Result<Box<dyn OutputHandler<Val = V>>>
+    where
+        V: JsonStreamValue + RosStreamValue,
+    {
         let executor = self
             .executor
-            .expect("Cannot build without executor")
+            .ok_or_else(|| anyhow::anyhow!("Cannot build without executor"))?
             .clone();
         let output_vars: BTreeSet<_> = self
             .output_var_names
-            .clone()
-            .expect("Output vars must be provided")
+            .ok_or_else(|| anyhow::anyhow!("Output vars must be provided"))?
             .into_iter()
             .collect();
-        let aux_info = self.aux_info.unwrap_or(vec![]).clone();
+        let aux_info = self.aux_info.unwrap_or_default();
 
         match self.spec {
-            OutputHandlerSpec::Stdout => Box::new(StdoutOutputHandler::new(
+            OutputHandlerSpec::Stdout => Ok(Box::new(StdoutOutputHandler::<V>::new(
                 executor,
                 output_vars.into_iter().collect(),
                 aux_info,
-            )) as Box<dyn OutputHandler<Val = Value>>,
+            )) as Box<dyn OutputHandler<Val = V>>),
             OutputHandlerSpec::Ros(_topic_mapping, _msg_type_mapping) => {
                 #[cfg(feature = "ros")]
                 {
-                    use crate::io::ros::output_handler::RosOutputHandler;
                     use crate::io::ros::ros_topic_stream_mapping::{
-                        VariableMappingData, ros_stream_mapping_from_topic_and_msg_type_mapping,
+                        VariableMappingData, ros_msg_type_to_string,
+                        ros_stream_mapping_from_topic_and_msg_type_mapping,
                     };
                     use std::collections::BTreeMap;
                     use tracing::warn;
@@ -152,7 +157,7 @@ impl OutputHandlerBuilder {
                             .map(|k| VarName::new(k))
                             .collect::<BTreeSet<_>>();
                         let missing_keys: Vec<_> = output_vars
-                            .difference(&keys.into())
+                            .difference(&keys)
                             .filter(|var| !aux_info.contains(*var))
                             .cloned()
                             .collect();
@@ -171,7 +176,7 @@ impl OutputHandlerBuilder {
                                 ignored_mapping.insert(k, v);
                             }
                         }
-                        if ignored_mapping.len() > 0 {
+                        if !ignored_mapping.is_empty() {
                             warn!(
                                 "Some ROS topics from output mapping file are not used in the spec and will be ignored:\nIgnored map vars: {:?}.\nUsing output vars: {:?}",
                                 ignored_mapping.keys(),
@@ -181,31 +186,34 @@ impl OutputHandlerBuilder {
                         Ok(used_mapping)
                     }
 
-                    // json_to_mapping(&_json_string)
                     let output_mapping_raw = ros_stream_mapping_from_topic_and_msg_type_mapping(
                         _topic_mapping,
                         _msg_type_mapping,
-                    )
-                    .expect("Output mapping file could not be parsed");
-                    let output_mapping: BTreeMap<_, _> = filter_ros_mapping(
+                    )?;
+                    let output_mapping = filter_ros_mapping(
                         output_mapping_raw,
                         &output_vars,
                         aux_info.clone().into_iter().collect(),
-                    )
-                    .expect("ROS mapping file does not contain all variables from the spec");
-                    Box::new(
-                        RosOutputHandler::new(
-                            executor,
-                            "tc_ros_output".into(),
-                            output_mapping,
-                            aux_info,
-                        )
-                        .expect("ROS output handler could not be created"),
+                    )?;
+                    let output_mapping = output_mapping
+                        .into_iter()
+                        .map(|(variable, data)| {
+                            Ok((
+                                variable,
+                                (data.topic, ros_msg_type_to_string(data.msg_type)?),
+                            ))
+                        })
+                        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                    V::ros_output_handler(
+                        executor,
+                        "tc_ros_output".into(),
+                        output_mapping,
+                        aux_info,
                     )
                 }
                 #[cfg(not(feature = "ros"))]
                 {
-                    unimplemented!("ROS support not enabled")
+                    anyhow::bail!("ROS support not enabled")
                 }
             }
             OutputHandlerSpec::Mqtt(topics) => {
@@ -229,12 +237,11 @@ impl OutputHandlerBuilder {
                     Self::validate_cli_topics(
                         &topics.keys().cloned().collect::<BTreeSet<_>>(),
                         &output_vars,
-                    )
-                    .expect("Provided MQTT topics do not match output variables");
+                    )?;
 
                     // TODO: OutputHandler should not need both output_vars and
                     // output_mapping, since the mapping already contains the exact variable names.
-                    let mut handler = MqttOutputHandler::new(
+                    let mut handler = MqttOutputHandler::<V>::new(
                         executor.clone(),
                         MQTT_FACTORY,
                         output_vars.into_iter().collect(),
@@ -242,18 +249,14 @@ impl OutputHandlerBuilder {
                         self.mqtt_port,
                         topics,
                         aux_info,
-                    )
-                    .expect("MQTT output handler could not be created");
-                    handler
-                        .connect()
-                        .await
-                        .expect("MQTT output handler failed to connect");
-                    Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+                    )?;
+                    handler.connect().await?;
+                    Ok(Box::new(handler) as Box<dyn OutputHandler<Val = V>>)
                 }
                 #[cfg(not(feature = "mqtt"))]
                 {
                     let _ = topics;
-                    unimplemented!("MQTT support not enabled")
+                    anyhow::bail!("MQTT support not enabled")
                 }
             }
             OutputHandlerSpec::Redis(topics) => {
@@ -275,22 +278,17 @@ impl OutputHandlerBuilder {
                 Self::validate_cli_topics(
                     &topics.keys().cloned().collect::<BTreeSet<_>>(),
                     &output_vars,
-                )
-                .expect("Provided Redis topics do not match output variables");
+                )?;
 
-                let mut handler = RedisOutputHandler::new(
+                let mut handler = RedisOutputHandler::<V>::new(
                     executor.clone(),
                     REDIS_HOSTNAME,
                     self.redis_port,
                     topics,
                     aux_info,
-                )
-                .expect("Redis output handler could not be created");
-                handler
-                    .connect()
-                    .await
-                    .expect("Redis output handler failed to connect");
-                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+                )?;
+                handler.connect().await?;
+                Ok(Box::new(handler) as Box<dyn OutputHandler<Val = V>>)
             }
             OutputHandlerSpec::Manual(tx) => {
                 let mut handler = ManualOutputHandler::new(executor.clone(), output_vars.clone());
@@ -309,7 +307,7 @@ impl OutputHandlerBuilder {
                         }
                     })
                     .detach();
-                Box::new(handler) as Box<dyn OutputHandler<Val = Value>>
+                Ok(Box::new(handler) as Box<dyn OutputHandler<Val = V>>)
             }
         }
     }
@@ -334,7 +332,7 @@ mod tests {
         let builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(sender))
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
-        let mut handler = builder.build().await;
+        let mut handler = builder.build().await.unwrap();
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
@@ -367,7 +365,7 @@ mod tests {
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
         let builder2 = builder1.clone();
-        let mut handler1 = builder1.build().await;
+        let mut handler1 = builder1.build().await.unwrap();
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
@@ -391,7 +389,7 @@ mod tests {
         assert_eq!(results[1].get(&VarName::new("x")).unwrap(), &Value::Int(2));
         assert_eq!(results[1].get(&VarName::new("y")).unwrap(), &Value::Int(4));
 
-        let mut handler2 = builder2.build().await;
+        let mut handler2 = builder2.build().await.unwrap();
 
         let xs: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
         let ys: OutputStream<Value> = Box::pin(stream::iter(vec![7.into(), 8.into()]));
@@ -429,8 +427,8 @@ mod tests {
             .executor(ex.clone())
             .output_var_names(output_var_names.clone());
         let builder2 = builder1.clone();
-        let mut handler1 = builder1.build().await;
-        let mut handler2 = builder2.build().await;
+        let mut handler1 = builder1.build().await.unwrap();
+        let mut handler2 = builder2.build().await.unwrap();
 
         let xs1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let ys1: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));

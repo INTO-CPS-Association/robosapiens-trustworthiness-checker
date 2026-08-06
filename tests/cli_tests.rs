@@ -766,12 +766,12 @@ mod integration_tests {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("always_x[0]") && stdout.contains("Bool(true)"),
+            stdout.contains("always_x[0]") && stdout.contains("\"value\":true"),
             "Expected delayed qualitative MSTLO output not found in: {}",
             stdout
         );
         assert!(
-            stdout.contains("combo[3]") && stdout.contains("Bool(true)"),
+            stdout.contains("combo[3]") && stdout.contains("\"value\":true"),
             "Expected combo MSTLO output not found in: {}",
             stdout
         );
@@ -821,12 +821,12 @@ mod integration_tests {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("thresholded[0]") && stdout.contains("Float(2.0)"),
+            stdout.contains("thresholded[0]") && stdout.contains("\"value\":2"),
             "Expected positive threshold robustness not found in: {}",
             stdout
         );
         assert!(
-            stdout.contains("thresholded[1]") && stdout.contains("Float(-1.0)"),
+            stdout.contains("thresholded[1]") && stdout.contains("\"value\":-1"),
             "Expected negative threshold robustness not found in: {}",
             stdout
         );

@@ -1,26 +1,28 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use anyhow::Context;
 use async_compat::Compat as TokioCompat;
 use futures::FutureExt;
 use rumqttc::{AsyncClient, Event, EventLoop, Incoming, MqttOptions, QoS, SubscribeFilter};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::core::JsonStreamValue;
 use crate::utils::cancellation_token::CancellationToken;
-use crate::{InputBatch, InputEvent, InputStream, Value, VarName};
+use crate::{InputBatch, InputEvent, InputStream, VarName};
 
 type VarTopicMap = BTreeMap<VarName, String>;
 type InverseVarTopicMap = BTreeMap<String, VarName>;
 
 const RUMQTTC_CHANNEL_SIZE: usize = 1024;
 
-async fn poll_next_event(
+async fn poll_next_event<V: JsonStreamValue>(
     eventloop: &mut EventLoop,
     topics: &InverseVarTopicMap,
     max_reconnect_attempts: u32,
     reconnect_attempts: &mut u32,
-) -> anyhow::Result<InputEvent<Value>> {
+) -> anyhow::Result<InputEvent<V>> {
     loop {
         match TokioCompat::new(eventloop.poll()).await {
             Ok(Event::Incoming(Incoming::Publish(publish))) => {
@@ -28,10 +30,9 @@ async fn poll_next_event(
                 let Some(var) = topics.get(&publish.topic).cloned() else {
                     continue;
                 };
-                return Ok(InputEvent::new(
-                    var,
-                    super::input_backend::parse_value(&publish.payload)?,
-                ));
+                let value = super::input_backend::decode_payload::<V>(&publish.payload)
+                    .with_context(|| format!("Failed to parse value for MQTT variable `{var}`"))?;
+                return Ok(InputEvent::new(var, value));
             }
             Ok(_) => *reconnect_attempts = 0,
             Err(error) => {
@@ -52,12 +53,12 @@ async fn poll_next_event(
 }
 
 /// Connect and subscribe using rumqttc, returning an independent-event stream.
-pub(super) async fn input_stream(
+pub(super) async fn input_stream<V: JsonStreamValue>(
     host: &str,
     port: Option<u16>,
     var_topics: VarTopicMap,
     max_reconnect_attempts: u32,
-) -> anyhow::Result<InputStream<Value>> {
+) -> anyhow::Result<InputStream<V>> {
     if var_topics.is_empty() {
         return Ok(Box::pin(futures::stream::empty()));
     }
@@ -100,7 +101,7 @@ pub(super) async fn input_stream(
         let mut terminal_error = None;
         loop {
             let event = futures::select! {
-                event = poll_next_event(
+                event = poll_next_event::<V>(
                     &mut eventloop,
                     &topics,
                     max_reconnect_attempts,
@@ -131,6 +132,7 @@ pub(super) async fn input_stream(
 
 #[cfg(test)]
 mod tests {
+    use crate::Value;
     use futures::StreamExt;
 
     use super::*;
@@ -138,7 +140,7 @@ mod tests {
     #[test]
     fn empty_input_needs_no_connection() {
         smol::block_on(async {
-            let mut input = input_stream("localhost", None, BTreeMap::new(), 0)
+            let mut input = input_stream::<Value>("localhost", None, BTreeMap::new(), 0)
                 .await
                 .unwrap();
             assert!(input.next().await.is_none());

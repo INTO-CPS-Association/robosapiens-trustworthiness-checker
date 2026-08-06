@@ -31,14 +31,14 @@ mod integration_tests {
     use tc_testutils::streams::TickSender;
     use tc_testutils::streams::expect_events_serially;
     use tc_testutils::streams::tick_stream;
-    use tc_testutils::streams::with_timeout_res;
+    use tc_testutils::streams::{with_timeout, with_timeout_res};
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
         OutputStream, Value, VarName,
-        core::OutputHandler,
-        core::REDIS_HOSTNAME,
+        core::{JsonStreamValue, OutputHandler, REDIS_HOSTNAME},
         io::redis::{self as tc_redis, RedisOutputHandler},
+        runtime::mstlo::{MstloTimedValue, MstloValue},
     };
 
     const X_TOPIC: &str = "x";
@@ -135,6 +135,86 @@ mod integration_tests {
 
         // Verify the message was received correctly
         assert_eq!(received, Some(Value::Str("test_message".into())));
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_mstlo_redis_input() -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let port = redis.get_host_port_ipv4(6379).await?;
+        let mut input = tc_redis::input_stream::<MstloTimedValue>(
+            REDIS_HOSTNAME,
+            Some(port),
+            BTreeMap::from([(VarName::new("x"), X_TOPIC.to_string())]),
+        )
+        .await?;
+
+        let client = redis::Client::open(format!("redis://{REDIS_HOSTNAME}:{port}"))?;
+        let mut connection = client.get_multiplexed_async_connection().await?;
+        let sample = MstloTimedValue::new(Duration::from_millis(42), MstloValue::Float(3.5));
+        connection.publish(X_TOPIC, sample.encode_json()?).await?;
+
+        let batch = with_timeout(input.next(), 5, "MSTLO Redis input")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("MSTLO Redis input ended"))?;
+        let batch = batch?;
+        let event = batch
+            .ticks()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("MSTLO Redis batch was empty"))?
+            .to_events()
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("MSTLO Redis tick was empty"))?;
+        assert_eq!(event.value, sample);
+
+        connection.publish(X_TOPIC, "not valid JSON").await?;
+        let result = with_timeout(input.next(), 5, "malformed MSTLO Redis input")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("malformed Redis input ended"))?;
+        let error = result.expect_err("malformed Redis input should be reported");
+        assert!(error.to_string().contains("invalid Redis JSON payload"));
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_mstlo_redis_output(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let port = redis.get_host_port_ipv4(6379).await?;
+        let client = redis::Client::open(format!("redis://{REDIS_HOSTNAME}:{port}"))?;
+        let mut pubsub = client.get_async_pubsub().await?;
+        pubsub.subscribe(X_TOPIC).await?;
+        let mut messages = pubsub.into_on_message();
+
+        let mut handler = RedisOutputHandler::<MstloTimedValue>::new(
+            executor.clone(),
+            REDIS_HOSTNAME,
+            Some(port),
+            BTreeMap::from([(VarName::new("x"), X_TOPIC.to_string())]),
+            vec![],
+        )?;
+        handler.connect().await?;
+        let expected = vec![
+            MstloTimedValue::new(Duration::from_millis(1), MstloValue::Float(2.5)),
+            MstloTimedValue::new(Duration::from_millis(2), MstloValue::Bool(true)),
+            MstloTimedValue::new(
+                Duration::from_millis(3),
+                MstloValue::RobustnessInterval(-1.0, 2.0),
+            ),
+        ];
+        let output: OutputStream<MstloTimedValue> = Box::pin(stream::iter(expected.clone()));
+        handler.provide_streams(BTreeMap::from([(VarName::new("x"), output)]));
+        let task = executor.spawn(handler.run());
+
+        for expected in expected {
+            let message = with_timeout(messages.next(), 5, "MSTLO Redis output")
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("MSTLO Redis output ended"))?;
+            let payload = message.get_payload::<String>()?;
+            let actual = MstloTimedValue::decode_json(payload.as_bytes())?;
+            assert_eq!(actual, expected);
+        }
+        task.await?;
         Ok(())
     }
 
@@ -1325,7 +1405,7 @@ mod integration_tests {
         var_topics.insert(var.clone(), "error_topic".to_string());
 
         // Creating the handler should succeed even with invalid host
-        let result = RedisOutputHandler::new(
+        let result = RedisOutputHandler::<Value>::new(
             executor.clone(),
             "invalid-host",
             Some(9999),
