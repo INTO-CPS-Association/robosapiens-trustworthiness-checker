@@ -7,7 +7,9 @@ pub mod mqtt;
 pub mod ros;
 
 pub mod testing;
-pub use self::builders::{InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec};
+pub use self::builders::{
+    AssignedInputProvider, InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec,
+};
 pub mod config;
 pub use config::{MsgTypeMapping, TopicMapping};
 mod aggregation;

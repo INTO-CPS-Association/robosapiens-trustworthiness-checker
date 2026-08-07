@@ -119,10 +119,9 @@ where
             let subscribed_input_vars = self.configure_reconfiguration_input();
 
             if let Some(input_factory) = &self.input_factory {
-                if let Some((topic_mapping, msg_type_mapping)) = input_factory.ros_mappings() {
-                    self.known_topic_mapping.extend(topic_mapping.clone());
-                    self.known_type_info.extend(msg_type_mapping.clone());
-                }
+                let (topic_mapping, msg_type_mapping) = input_factory.ros_mappings();
+                self.known_topic_mapping.extend(topic_mapping);
+                self.known_type_info.extend(msg_type_mapping);
             }
             if let Some(output_builder) = &self.output_builder {
                 if let OutputHandlerSpec::Ros(topic_mapping, msg_type_mapping) =
