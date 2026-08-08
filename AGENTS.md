@@ -3,6 +3,35 @@
 - Prefer `--profile dev-fast` for routine builds, checks, and tests.
 - Do not use `dev-fast` for debugging or profiling; use the profile appropriate to the debugger or profiling task.
 
+# Testing
+
+- Default features cover everything except ROS and container-backed I/O:
+  - `cargo test --profile dev-fast --lib` for the fast unit tests.
+  - `cargo test --profile dev-fast` also runs `cli_tests`, `runtime_tests`, and `test_distributed`.
+- Check a feature set with `cargo check --profile dev-fast --all-targets [--features ...]` before running its tests. A feature-gated suite reports `0 tests` rather than failing when its feature is off, so a green run proves nothing about the suites you did not enable.
+- `test_mqtt_io`, `test_redis_io`, and `test_distributed_mqtt` need `--features testcontainers` and a Docker-compatible socket. Rootless Podman works unchanged:
+  - `systemctl --user start podman.socket`
+  - `export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock`
+  - `cargo test --profile dev-fast --features testcontainers`
+  - The suites start and remove their own Mosquitto and Redis containers.
+- `test_ros_io` and the ROS-gated unit tests need `--features ros`, which requires a sourced ROS 2 environment plus a `ros_interfaces` overlay containing every message under `ros_interfaces/`:
+  - With a local install, build the overlay once (`cd ros_interfaces && colcon build`), source `/opt/ros/<distro>/setup.bash` and `ros_interfaces/install/setup.bash`, then run `cargo test --profile dev-fast --features ros`.
+  - Otherwise use the project image (`docker/docker-compose.yaml`, target `dev`), which prebuilds the overlay and sources both from its entrypoint:
+
+    ```sh
+    podman run --rm --userns=keep-id --security-opt label=disable \
+        -v "$PWD":/ws/tc -w /ws/tc \
+        -e CARGO_TARGET_DIR=/ws/tc/target/ros-container \
+        -e CARGO_HOME=/ws/tc/target/ros-cargo-home \
+        trustworthiness-checker:dev \
+        bash -c 'export PATH=$HOME/.cargo/bin:$PATH; cargo test --profile dev-fast --features ros'
+    ```
+
+  - Keep a container-specific `CARGO_TARGET_DIR` so the container toolchain does not invalidate the host build cache, and use `--userns=keep-id` so the container user can write to the mounted worktree.
+  - The image fixes the ROS overlay in at build time, so rebuild it after changing `ros_interfaces/`; otherwise ROS builds fail with missing message types. With Podman, build it as `podman build --format docker -f docker/Dockerfile --target dev --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t trustworthiness-checker:dev .` — the default OCI format ignores the Dockerfile's `SHELL` directive, which breaks the `colcon build` layer.
+  - If you are already inside a ROS devcontainer or a system with a functioning local ROS installation, do not launch additional nested ROS containers.
+- Finish with `cargo fmt --all -- --check` and `git diff --check`.
+
 # Git safety
 
 - Never force push to `origin/main`, including with `--force` or `--force-with-lease`.
