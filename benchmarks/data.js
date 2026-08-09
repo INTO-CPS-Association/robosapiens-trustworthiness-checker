@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786021309182,
+  "lastUpdate": 1786277138946,
   "repoUrl": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker",
   "entries": {
     "RoboSAPIENS Criterion benchmarks": [
@@ -61791,6 +61791,264 @@ window.BENCHMARK_DATA = {
             "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
             "value": 2140766,
             "range": "± 10608",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "committer": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "distinct": true,
+          "id": "671e15783b4b4a9860a5a8ff239fe5efe87afbe6",
+          "message": "Add Redis knowledge-state input support",
+          "timestamp": "2026-08-09T13:34:54+02:00",
+          "tree_id": "998285db47834153d2c33f3686b82b6df80ca40d",
+          "url": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/commit/671e15783b4b4a9860a5a8ff239fe5efe87afbe6"
+        },
+        "date": 1786277138247,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "maple_sequence/maple_sequence_untyped_async/25000",
+            "value": 266185271,
+            "range": "± 1143197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_semisync/25000",
+            "value": 174931231,
+            "range": "± 1265166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_dataflow/25000",
+            "value": 41147921,
+            "range": "± 972838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_specialised/25000",
+            "value": 32406149,
+            "range": "± 205220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50/100000",
+            "value": 448535214,
+            "range": "± 3194715",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_semisync/100000",
+            "value": 448964101,
+            "range": "± 2036999",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow/100000",
+            "value": 91361749,
+            "range": "± 1347563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_specialised/100000",
+            "value": 90425799,
+            "range": "± 774335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_async/25000",
+            "value": 109583598,
+            "range": "± 227146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_dataflow/25000",
+            "value": 9027133,
+            "range": "± 67183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_specialised/25000",
+            "value": 9033928,
+            "range": "± 69931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_semisync/25000",
+            "value": 59321894,
+            "range": "± 264716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow/1024",
+            "value": 34223177,
+            "range": "± 205039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_specialised/1024",
+            "value": 33382255,
+            "range": "± 183155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_semisync/1024",
+            "value": 1935367126,
+            "range": "± 20115312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow/1024",
+            "value": 49787403,
+            "range": "± 238345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_specialised/1024",
+            "value": 48129953,
+            "range": "± 425756",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_semisync/1024",
+            "value": 244215467,
+            "range": "± 1138482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow/25000",
+            "value": 129111688,
+            "range": "± 232143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_specialised/25000",
+            "value": 60891011,
+            "range": "± 501047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_untyped/25000",
+            "value": 1610028950,
+            "range": "± 9550891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_typed/25000",
+            "value": 1508928549,
+            "range": "± 9343489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_on_percent_10/100",
+            "value": 1521077,
+            "range": "± 16158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/reconf_ct_off_percent_10/100",
+            "value": 1428327,
+            "range": "± 36821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_small_varied_inputs/parsing_lalrpop/10000",
+            "value": 15682203,
+            "range": "± 53316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_and_validate_specification/1024",
+            "value": 2946248,
+            "range": "± 11617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/strict_type_check/1024",
+            "value": 792692,
+            "range": "± 53418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/typed_dependency_graph/1024",
+            "value": 232671,
+            "range": "± 707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 6992765,
+            "range": "± 81749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_semisync/10000",
+            "value": 12379750,
+            "range": "± 76627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_untyped/10000",
+            "value": 1644060,
+            "range": "± 6600",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_specialised/10000",
+            "value": 1096470,
+            "range": "± 23914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_runtime_qual/10000",
+            "value": 2972074,
+            "range": "± 52463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_direct_qual/10000",
+            "value": 2175470,
+            "range": "± 5722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_semisync/10000",
+            "value": 19866213,
+            "range": "± 192953",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
+            "value": 3870034,
+            "range": "± 7070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_specialised/10000",
+            "value": 3076289,
+            "range": "± 27441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_globally_window_qual/10000",
+            "value": 4381975,
+            "range": "± 14251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+            "value": 3650908,
+            "range": "± 35697",
             "unit": "ns/iter"
           }
         ]
