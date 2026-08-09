@@ -179,5 +179,9 @@ harness = false
 name = "arithmetic_heavy"
 harness = false
 
+[[bench]]
+name = "input_api"
+harness = false
+
 # [dev-dependencies.tc-testutils]
 # path = "libs/tc-testutils"

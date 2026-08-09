@@ -1,22 +1,26 @@
 // Default local Zed settings template.
 {
-  "lsp": {
-    "rust-analyzer": {
-      "initialization_options": {
-        "cargo": {
-          "allTargets": false,
-          "features": [
-            "testcontainers"
-          ]
-        },
-        "check": {
-          "allTargets": false,
-          "features": [
-            "testcontainers"
-          ],
-          "workspace": false
+    "lsp": {
+        "rust-analyzer": {
+            "initialization_options": {
+                "cargo": {
+                    "allTargets": true,
+                    "features": [
+                        "testcontainers"
+                    ]
+                },
+                "check": {
+                    "allTargets": true,
+                    "features": [
+                        "testcontainers"
+                    ],
+                    "workspace": false,
+                    "extraArgs": [
+                        "--profile",
+                        "dev-fast"
+                    ]
+                }
+            }
         }
-      }
     }
-  }
 }

@@ -1,4 +1,4 @@
-use crate::core::{FileInputValue, InputBatch, InputStream, Value, VarName};
+use crate::core::{FileInputValue, InputBatch, InputStream, Value, VarName, empty_input_stream};
 pub use crate::lang::untimed_input::UntimedInputFileData;
 use crate::lang::untimed_input::parser::PackedUntimedInput;
 use std::collections::BTreeSet;
@@ -26,7 +26,7 @@ impl FileInputValue for Value {
 /// Stream the selected variables from parsed untimed input data.
 pub fn input_stream(data: UntimedInputFileData, vars: BTreeSet<VarName>) -> InputStream<Value> {
     if vars.is_empty() {
-        return Box::pin(futures::stream::empty());
+        return empty_input_stream();
     }
 
     let vars = vars.into_iter().collect::<Vec<_>>();
@@ -46,7 +46,8 @@ pub fn input_stream(data: UntimedInputFileData, vars: BTreeSet<VarName>) -> Inpu
                             .unwrap_or(Value::NoVal)
                     }));
                 }
-                yield InputBatch::trusted_packed_rows(vars.clone().into_boxed_slice(), values);
+                let batch = InputBatch::packed_rows(vars.clone().into_boxed_slice(), values)?;
+                yield batch;
                 if end == max_key {
                     break;
                 }
@@ -66,7 +67,7 @@ pub(crate) fn packed_input_stream<V: FileInputValue>(
         end_time,
     } = data;
     if layout.is_empty() {
-        return Box::pin(futures::stream::empty());
+        return empty_input_stream();
     }
 
     let tick_width = layout.len();
@@ -84,7 +85,8 @@ pub(crate) fn packed_input_stream<V: FileInputValue>(
                         values.extend(std::iter::repeat_with(V::missing_value).take(tick_width));
                     }
                 }
-                yield InputBatch::trusted_packed_rows(layout.clone(), values);
+                let batch = InputBatch::packed_rows(layout.clone(), values)?;
+                yield batch;
                 if end == max_key {
                     break;
                 }
@@ -97,12 +99,13 @@ pub(crate) fn packed_input_stream<V: FileInputValue>(
 #[cfg(test)]
 mod tests {
     use crate::async_test;
+    use crate::core::input;
     use futures::StreamExt;
     use macro_rules_attribute::apply;
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::core::{InputEvent, Value};
+    use crate::core::{InputStream, InputUpdate, Value};
 
     fn sample_data() -> UntimedInputFileData {
         let mut data: UntimedInputFileData = BTreeMap::new();
@@ -122,9 +125,39 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn file_input_is_step_shaped_and_packed() {
+        let vars = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+        // File rows are simultaneous steps, so the stream is typed as a
+        // `InputStream` and keeps its packed rows through erasure.
+        let mut batches: InputStream<Value> = input_stream(sample_data(), vars.clone());
+        let batch = batches.next().await.unwrap().unwrap();
+        let (layout, values) = batch
+            .segments()
+            .next()
+            .and_then(|segment| segment.packed_rows())
+            .expect("file input stays packed");
+        assert_eq!(layout.len(), 2);
+        assert_eq!(batch.tick_count(), 2);
+        assert_eq!(
+            values,
+            [Value::Int(1), Value::Int(10), Value::Int(2), Value::Int(11)]
+        );
+
+        let mut erased = input_stream(sample_data(), vars);
+        let batch = erased.next().await.unwrap().unwrap();
+        assert!(
+            batch
+                .segments()
+                .next()
+                .is_some_and(|segment| segment.packed_rows().is_some()),
+            "erasure must not expand packed file rows"
+        );
+    }
+
+    #[apply(async_test)]
     async fn input_batches_preserve_file_rows() {
         let vars = BTreeSet::from(["x".into(), "y".into()]);
-        let ticks = crate::into_tick_stream(input_stream(sample_data(), vars))
+        let ticks = input::into_tick_stream(input_stream(sample_data(), vars))
             .map(Result::unwrap)
             .collect::<Vec<_>>()
             .await;
@@ -133,12 +166,12 @@ mod tests {
             ticks,
             vec![
                 vec![
-                    InputEvent::new("x".into(), Value::Int(1)),
-                    InputEvent::new("y".into(), Value::Int(10))
+                    InputUpdate::new("x".into(), Value::Int(1)),
+                    InputUpdate::new("y".into(), Value::Int(10))
                 ],
                 vec![
-                    InputEvent::new("x".into(), Value::Int(2)),
-                    InputEvent::new("y".into(), Value::Int(11))
+                    InputUpdate::new("x".into(), Value::Int(2)),
+                    InputUpdate::new("y".into(), Value::Int(11))
                 ],
             ]
         );
@@ -146,7 +179,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn selected_input_emits_only_configured_variables() {
-        let ticks = crate::into_tick_stream(input_stream(
+        let ticks = input::into_tick_stream(input_stream(
             sample_data(),
             BTreeSet::from([VarName::new("y")]),
         ))
@@ -158,7 +191,7 @@ mod tests {
             ticks
                 .iter()
                 .flatten()
-                .all(|event| event.var == VarName::new("y"))
+                .all(|event| event.variable == VarName::new("y"))
         );
     }
 
@@ -177,12 +210,12 @@ mod tests {
         let first = stream.next().await.unwrap().unwrap();
         let mut ticks = first.ticks();
         assert_eq!(
-            ticks.next().unwrap().to_events()[0].value,
+            ticks.next().unwrap().to_updates()[0].value,
             MstloTimedValue::new(Duration::ZERO, MstloValue::Float(7.0))
         );
-        assert!(ticks.next().unwrap().to_events()[0].value.is_no_val());
+        assert!(ticks.next().unwrap().to_updates()[0].value.is_no_val());
         assert_eq!(
-            ticks.next().unwrap().to_events()[0].value,
+            ticks.next().unwrap().to_updates()[0].value,
             MstloTimedValue::new(Duration::from_millis(1000), MstloValue::Float(4.0))
         );
     }
@@ -199,8 +232,8 @@ mod tests {
         let mut ticks = first_batch.ticks();
 
         assert_eq!(
-            ticks.next().unwrap().to_events(),
-            [InputEvent::new("x".into(), Value::Int(1))]
+            ticks.next().unwrap().to_updates(),
+            [InputUpdate::new("x".into(), Value::Int(1))]
         );
         assert_eq!(ticks.count(), FILE_INPUT_BATCH_TICKS - 1);
     }

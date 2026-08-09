@@ -1,38 +1,38 @@
 {
-  "R1Odom": {
-    "topic": "/tb1/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R2Odom": {
-    "topic": "/tb2/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R3Odom": {
-    "topic": "/tb3/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R4Odom": {
-    "topic": "/tb4/odomThrot",
-    "msg_type": "Odom"
-  },
-  "ConveyorSystem": {
-    "topic": "/ConveyorSystem",
-    "msg_type": "Int32"
-  },
-  "StackerCrane": {
-    "topic": "/StackerCrane",
-    "msg_type": "Int32"
-  },
-  "VerticalLift": {
-    "topic": "/VerticalLift",
-    "msg_type": "Int32"
-  },
-  "HorizontalCarousel": {
-    "topic": "/HorizontalCarousel",
-    "msg_type": "Int32"
-  },
-  "c": {
-    "topic": "/c",
-    "msg_type": "Bool"
-  }
+  "R1Odom": [
+    "/tb1/odomThrot",
+    "Odom"
+  ],
+  "R2Odom": [
+    "/tb2/odomThrot",
+    "Odom"
+  ],
+  "R3Odom": [
+    "/tb3/odomThrot",
+    "Odom"
+  ],
+  "R4Odom": [
+    "/tb4/odomThrot",
+    "Odom"
+  ],
+  "ConveyorSystem": [
+    "/ConveyorSystem",
+    "Int32"
+  ],
+  "StackerCrane": [
+    "/StackerCrane",
+    "Int32"
+  ],
+  "VerticalLift": [
+    "/VerticalLift",
+    "Int32"
+  ],
+  "HorizontalCarousel": [
+    "/HorizontalCarousel",
+    "Int32"
+  ],
+  "c": [
+    "/c",
+    "Bool"
+  ]
 }

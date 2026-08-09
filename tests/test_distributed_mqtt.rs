@@ -12,6 +12,7 @@ mod integration_tests {
     use tracing::{info, warn};
     use trustworthiness_checker::Value;
     use trustworthiness_checker::core::Runtime;
+
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
     use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
     use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};

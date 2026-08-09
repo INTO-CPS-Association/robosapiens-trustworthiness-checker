@@ -1,5 +1,3 @@
 {
-  "z": {
-    "topic": "z_redis_file"
-  }
+  "z": "z_redis_file"
 }

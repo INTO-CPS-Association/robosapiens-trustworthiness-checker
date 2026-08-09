@@ -8,6 +8,7 @@ use trustworthiness_checker::benches_common::{
     monitor_outputs_typed_dataflow, monitor_outputs_typed_semisync,
     monitor_outputs_untyped_dataflow, monitor_outputs_untyped_little,
 };
+use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
     CheckedDsrvSpecification, DsrvSpecification, InputStream, Value, VarName,
@@ -108,7 +109,7 @@ fn arithmetic_heavy(c: &mut Criterion) {
                         benchmark_executor.executor.clone(),
                         checked.clone(),
                         arithmetic_input(size),
-                        trustworthiness_checker::core::Semantics::TypedUntimed,
+                        Semantics::TypedUntimed,
                     )
                 })
             },

@@ -7,11 +7,12 @@ use crate::cli::args::{Cli, OutputMode};
 use crate::core::{FileInputValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::io::OutputHandlerSpec;
-use crate::io::config::deserialisation::{json_to_topic_mapping, json_to_topic_msg_type_mapping};
+use crate::io::config::deserialisation::json_to_routes;
+use crate::io::config::{MsgTypeMapping, Route, TopicMapping};
 use crate::{
     VarName,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputStreamFactory, mqtt::MqttInputBackend},
+    io::{InputSource, mqtt::MqttInputBackend},
     runtime::distributed::SchedulerCommunication,
 };
 
@@ -20,13 +21,13 @@ use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingTyp
 use crate::core::interfaces::RuntimeSpec;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
 
-pub fn input_factory<V>(
+pub fn input_source<V>(
     input_mode: InputMode,
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
     mqtt_backend: MqttInputBackend,
-) -> anyhow::Result<InputStreamFactory<V>>
+) -> anyhow::Result<InputSource<V>>
 where
     V: FileInputValue + RosStreamValue,
 {
@@ -34,7 +35,7 @@ where
         InputMode {
             input_file: Some(input_file),
             ..
-        } => InputStreamFactory::<V>::file(input_file),
+        } => InputSource::<V>::file(input_file),
         InputMode {
             input_ros_file: Some(input_ros_file),
             ..
@@ -42,10 +43,10 @@ where
             let json_string = std::fs::read_to_string(&input_ros_file).with_context(|| {
                 format!("Input mapping file {input_ros_file:?} could not be read")
             })?;
-            let (ros_topic_mapping, ros_msg_type_mapping) =
-                json_to_topic_msg_type_mapping(json_string.as_str())
-                    .context("Invalid input mapping file")?;
-            InputStreamFactory::<V>::ros(ros_topic_mapping, ros_msg_type_mapping, executor)
+            InputSource::<V>::ros(
+                json_to_routes(&json_string).context("Invalid input mapping file")?,
+                executor,
+            )
         }
         InputMode {
             input_mqtt_file: Some(input_mqtt_file),
@@ -54,9 +55,9 @@ where
             let json_string = std::fs::read_to_string(&input_mqtt_file).with_context(|| {
                 format!("Input MQTT topic mapping file {input_mqtt_file:?} could not be read")
             })?;
-            let topic_mapping = json_to_topic_mapping(&json_string)
-                .context("Input MQTT topic mapping file could not be parsed")?;
-            InputStreamFactory::<V>::mqtt_with_backend(Some(topic_mapping), mqtt_port, mqtt_backend)
+            let routes = json_to_routes(&json_string)
+                .context("Input MQTT route catalog could not be parsed")?;
+            InputSource::<V>::mqtt_with_routes(Some(routes), mqtt_port, mqtt_backend)
         }
         InputMode {
             input_redis_file: Some(input_redis_file),
@@ -65,16 +66,16 @@ where
             let json_string = std::fs::read_to_string(&input_redis_file).with_context(|| {
                 format!("Input Redis topic mapping file {input_redis_file:?} could not be read")
             })?;
-            let topic_mapping = json_to_topic_mapping(&json_string)
-                .context("Input Redis topic mapping file could not be parsed")?;
-            InputStreamFactory::<V>::redis(Some(topic_mapping), redis_port)
+            let routes = json_to_routes(&json_string)
+                .context("Input Redis route catalog could not be parsed")?;
+            InputSource::<V>::redis_with_routes(Some(routes), redis_port)
         }
         InputMode {
             mqtt_input: true, ..
-        } => InputStreamFactory::<V>::mqtt_with_backend(None, mqtt_port, mqtt_backend),
+        } => InputSource::<V>::mqtt_with_routes(None, mqtt_port, mqtt_backend),
         InputMode {
             redis_input: true, ..
-        } => InputStreamFactory::<V>::redis(None, redis_port),
+        } => InputSource::<V>::redis(None, redis_port),
         _ => anyhow::bail!("Invalid input stream specification"),
     })
 }
@@ -92,8 +93,9 @@ pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputH
             let json_string = std::fs::read_to_string(&output_ros_file).with_context(|| {
                 format!("Output mapping file {output_ros_file:?} could not be read")
             })?;
-            let (topic_mapping, msg_types) = json_to_topic_msg_type_mapping(&json_string)
-                .context("Output mapping file could not be parsed")?;
+            let routes =
+                json_to_routes(&json_string).context("Output route catalog could not be parsed")?;
+            let (topic_mapping, msg_types) = route_mappings(routes, true)?;
             OutputHandlerSpec::Ros(topic_mapping, msg_types)
         }
         OutputMode {
@@ -103,8 +105,9 @@ pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputH
             let json_string = std::fs::read_to_string(&output_mqtt_file).with_context(|| {
                 format!("Output MQTT mapping file {output_mqtt_file:?} could not be read")
             })?;
-            let topic_mapping = json_to_topic_mapping(&json_string)
-                .context("Output MQTT topic mapping file could not be parsed")?;
+            let routes = json_to_routes(&json_string)
+                .context("Output MQTT route catalog could not be parsed")?;
+            let (topic_mapping, _) = route_mappings(routes, false)?;
             OutputHandlerSpec::Mqtt(Some(topic_mapping))
         }
         OutputMode {
@@ -114,8 +117,9 @@ pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputH
             let json_string = std::fs::read_to_string(&output_redis_file).with_context(|| {
                 format!("Output Redis mapping file {output_redis_file:?} could not be read")
             })?;
-            let topic_mapping = json_to_topic_mapping(&json_string)
-                .context("Output Redis topic mapping file could not be parsed")?;
+            let routes = json_to_routes(&json_string)
+                .context("Output Redis route catalog could not be parsed")?;
+            let (topic_mapping, _) = route_mappings(routes, false)?;
             OutputHandlerSpec::Redis(Some(topic_mapping))
         }
         OutputMode {
@@ -127,6 +131,23 @@ pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputH
         // Default to stdout if no options provided
         _ => OutputHandlerSpec::Stdout,
     })
+}
+
+pub fn route_mappings(
+    routes: std::collections::BTreeMap<VarName, Route>,
+    require_codec: bool,
+) -> anyhow::Result<(TopicMapping, MsgTypeMapping)> {
+    let mut topics = TopicMapping::new();
+    let mut codecs = MsgTypeMapping::new();
+    for (variable, route) in routes {
+        topics.insert(variable.clone(), route.route.to_string());
+        if let Some(codec) = route.codec {
+            codecs.insert(variable, codec.0.to_string());
+        } else if require_codec {
+            anyhow::bail!("route for `{variable}` requires a codec");
+        }
+    }
+    Ok((topics, codecs))
 }
 
 impl From<OutputMode> for OutputHandlerSpec {
@@ -651,50 +672,62 @@ mod tests {
             "--no-context-transfer",
         ]);
 
-        assert_eq!(cli.reconf_topic, "/reconf");
+        assert_eq!(cli.reconf_topic.as_deref(), Some("/reconf"));
         assert!(cli.no_context_transfer);
     }
 
     #[test]
-    fn parses_input_aggregation() {
+    fn reconf_source_flag_is_no_longer_accepted() {
+        let result = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--mqtt-input",
+            "--output-stdout",
+            "--runtime",
+            "reconf-semi-sync",
+            "--reconf-source",
+            "control",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_input_window_options() {
         let cli = Cli::parse_from([
             "trustworthiness_checker",
             "model.dsrv",
             "--input-file",
             "input.txt",
             "--output-stdout",
-            "--input-aggregation-delay-ms",
+            "--input-window-ms",
             "4",
-            "--input-aggregation-mode",
+            "--input-window-mode",
             "atomic-step",
-            "--input-aggregation-event-limit",
+            "--input-window-update-limit",
             "32",
         ]);
 
-        assert_eq!(cli.input_aggregation_delay_ms, Some(4));
+        assert_eq!(cli.input_window_ms, Some(4));
         assert_eq!(
-            cli.input_aggregation_mode,
-            Some(crate::cli::args::InputAggregationMode::AtomicStep)
+            cli.input_window_mode,
+            Some(crate::cli::args::InputWindowMode::AtomicStep)
         );
-        assert_eq!(cli.input_aggregation_event_limit.unwrap().get(), 32);
+        assert_eq!(cli.input_window_update_limit.unwrap().get(), 32);
     }
 
     #[test]
-    fn input_aggregation_event_limit_requires_a_delay() {
-        let error = Cli::try_parse_from([
+    fn input_window_mode_requires_a_bound() {
+        let cli = Cli::try_parse_from([
             "trustworthiness_checker",
             "model.dsrv",
             "--mqtt-input",
             "--output-stdout",
-            "--input-aggregation-event-limit",
-            "32",
+            "--input-window-mode",
+            "atomic-step",
         ])
-        .unwrap_err();
-
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
+        .unwrap();
+        let error = cli.validate().unwrap_err();
+        assert!(error.to_string().contains("requires --input-window-ms"));
     }
 
     #[cfg(feature = "ros")]

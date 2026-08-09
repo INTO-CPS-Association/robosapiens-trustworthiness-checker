@@ -1,723 +1,596 @@
-use std::{mem, num::NonZeroUsize, time::Duration};
+use std::{
+    collections::BTreeMap, convert::Infallible, mem, num::NonZeroUsize, time::Duration, vec,
+};
 
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 
-use crate::{InputBatch, InputEvent, InputStream};
+use crate::core::{
+    InputBatch, InputSegment, InputStream, InputUpdate, OutputStream, OwnedInputTicks, VarName,
+};
+use crate::io::config::{InputReduction, InputStage};
 
-/// How aggregated event input affects logical time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AggregationSemantics {
-    /// Preserve every event and its arrival order as independent logical ticks.
-    PreserveTicks,
-    /// Produce one simultaneous logical tick, retaining only the last value per variable.
-    CoalesceToAtomicStep,
-}
-
-/// Optional bounded aggregation for event input sources.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InputAggregation {
-    /// Maximum delay measured from the first event placed in an empty aggregator.
-    pub max_delay: Duration,
-    /// Optional raw-arrival limit; reaching it emits the aggregation before its deadline.
-    pub event_limit: Option<NonZeroUsize>,
-    /// Whether aggregated arrivals retain their logical ticks or form one atomic tick.
-    pub semantics: AggregationSemantics,
-}
-
-impl InputAggregation {
-    pub fn new(max_delay: Duration, semantics: AggregationSemantics) -> Self {
-        Self {
-            max_delay,
-            event_limit: None,
-            semantics,
-        }
-    }
-
-    pub fn with_event_limit(mut self, event_limit: NonZeroUsize) -> Self {
-        self.event_limit = Some(event_limit);
-        self
-    }
-
-    pub fn is_passthrough(self) -> bool {
-        self.max_delay.is_zero()
-            && self.event_limit.is_none()
-            && self.semantics == AggregationSemantics::PreserveTicks
-    }
-}
-
-/// Injectable timer used by input aggregation. Implementations may use real or
-/// simulated time; advancing a simulated timer must resolve elapsed sleeps.
-pub(crate) trait InputTimer: 'static {
+/// Injectable timer used by input windows. Tests can provide a simulated timer;
+/// production uses the real smol timer.
+pub(super) trait InputTimer: 'static {
     fn sleep(&self, duration: Duration) -> LocalBoxFuture<'static, ()>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RealTimeInputTimer;
+pub(super) struct RealTimeInputTimer;
 
 impl InputTimer for RealTimeInputTimer {
     fn sleep(&self, duration: Duration) -> LocalBoxFuture<'static, ()> {
         Box::pin(async move {
-            smol::Timer::after(duration).await;
+            let _ = smol::Timer::after(duration).await;
         })
     }
 }
 
-struct EventAggregator<V> {
-    events: Vec<InputEvent<V>>,
-    arrivals: usize,
-    aggregation: InputAggregation,
+pub(crate) fn apply_stage<V: 'static>(
+    input: InputStream<V>,
+    stage: InputStage,
+) -> anyhow::Result<InputStream<V>> {
+    apply_stage_with_timer(input, stage, RealTimeInputTimer)
 }
 
-impl<V> EventAggregator<V> {
-    fn new(aggregation: InputAggregation) -> Self {
+pub(super) fn apply_stage_with_timer<V: 'static, T: InputTimer>(
+    mut input: InputStream<V>,
+    stage: InputStage,
+    timer: T,
+) -> anyhow::Result<InputStream<V>> {
+    let events: WindowEventStream<V, Infallible> = Box::pin(async_stream::try_stream! {
+        while let Some(batch) = input.next().await {
+            yield WindowEvent::Data(batch?);
+        }
+    });
+    let mut output = drive_window(events, stage, timer)?;
+    Ok(Box::pin(async_stream::try_stream! {
+        while let Some(event) = output.next().await {
+            match event? {
+                WindowEvent::Data(batch) => yield batch,
+                WindowEvent::Control(never) => match never {},
+            }
+        }
+    }))
+}
+
+pub(super) enum WindowEvent<V, C> {
+    Data(InputBatch<V>),
+    Control(C),
+}
+
+pub(super) type WindowEventStream<V, C> = OutputStream<anyhow::Result<WindowEvent<V, C>>>;
+
+pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
+    mut source: WindowEventStream<V, C>,
+    stage: InputStage,
+    timer: T,
+) -> anyhow::Result<WindowEventStream<V, C>> {
+    let window = stage.window().clone();
+    anyhow::ensure!(
+        window.is_bounded(),
+        "input window requires max_delay or update_limit"
+    );
+    let mut pending = WindowAccumulator::new(stage);
+
+    Ok(Box::pin(async_stream::try_stream! {
+        loop {
+            while pending.is_empty() {
+                match source.next().await {
+                    None => return,
+                    Some(Err(error)) => Err(error)?,
+                    Some(Ok(WindowEvent::Control(control))) => {
+                        yield WindowEvent::Control(control);
+                        return;
+                    }
+                    Some(Ok(WindowEvent::Data(batch))) => {
+                        for completed in pending.append(batch, window.update_limit) {
+                            yield WindowEvent::Data(completed);
+                        }
+                    }
+                }
+            }
+
+            if let Some(delay) = window.max_delay {
+                let mut deadline = timer.sleep(delay).fuse();
+                let mut source_error = None;
+                loop {
+                    futures::select_biased! {
+                        _ = deadline => {
+                            yield WindowEvent::Data(pending.take()?);
+                            break;
+                        }
+                        item = source.next().fuse() => {
+                            match item {
+                                None => {
+                                    yield WindowEvent::Data(pending.take()?);
+                                    return;
+                                }
+                                Some(Err(error)) => {
+                                    yield WindowEvent::Data(pending.take()?);
+                                    source_error = Some(error);
+                                    break;
+                                }
+                                Some(Ok(WindowEvent::Control(control))) => {
+                                    yield WindowEvent::Data(pending.take()?);
+                                    yield WindowEvent::Control(control);
+                                    return;
+                                }
+                                Some(Ok(WindowEvent::Data(batch))) => {
+                                    let mut flushed = false;
+                                    for completed in pending.append(batch, window.update_limit) {
+                                        flushed = true;
+                                        yield WindowEvent::Data(completed);
+                                    }
+                                    if flushed {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(error) = source_error {
+                    Err(error)?;
+                }
+            } else {
+                loop {
+                    match source.next().await {
+                        None => {
+                            if !pending.is_empty() {
+                                yield WindowEvent::Data(pending.take()?);
+                            }
+                            return;
+                        }
+                        Some(Err(error)) => {
+                            if !pending.is_empty() {
+                                yield WindowEvent::Data(pending.take()?);
+                            }
+                            Err(error)?;
+                        }
+                        Some(Ok(WindowEvent::Control(control))) => {
+                            if !pending.is_empty() {
+                                yield WindowEvent::Data(pending.take()?);
+                            }
+                            yield WindowEvent::Control(control);
+                            return;
+                        }
+                        Some(Ok(WindowEvent::Data(batch))) => {
+                            for completed in pending.append(batch, window.update_limit) {
+                                yield WindowEvent::Data(completed);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }))
+}
+
+struct PendingBatch<V> {
+    segments: Vec<InputSegment<V>>,
+    updates: usize,
+}
+
+impl<V> PendingBatch<V> {
+    fn new() -> Self {
         Self {
-            events: Vec::new(),
-            arrivals: 0,
-            aggregation,
+            segments: Vec::new(),
+            updates: 0,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.events.is_empty()
+        self.updates == 0
     }
 
-    fn push(&mut self, event: InputEvent<V>) -> Option<Vec<InputEvent<V>>> {
-        self.arrivals += 1;
-        match self.aggregation.semantics {
-            AggregationSemantics::PreserveTicks => self.events.push(event),
-            AggregationSemantics::CoalesceToAtomicStep => {
-                if let Some(previous) = self
-                    .events
-                    .iter_mut()
-                    .find(|previous| previous.var == event.var)
-                {
-                    previous.value = event.value;
-                } else {
-                    self.events.push(event);
-                }
-            }
-        }
-        self.aggregation
-            .event_limit
-            .is_some_and(|limit| self.arrivals >= limit.get())
-            .then(|| self.take())
+    fn take(&mut self) -> anyhow::Result<InputBatch<V>> {
+        self.updates = 0;
+        InputBatch::from_segments(mem::take(&mut self.segments))
     }
 
-    fn take(&mut self) -> Vec<InputEvent<V>> {
-        self.arrivals = 0;
-        mem::take(&mut self.events)
+    fn push(&mut self, segment: InputSegment<V>) {
+        self.updates += segment.update_count();
+        self.segments.push(segment);
     }
-}
 
-fn independent_events<V>(batch: InputBatch<V>) -> anyhow::Result<Vec<InputEvent<V>>> {
-    batch.into_independent_events().map_err(|tick_width| {
-        anyhow::anyhow!(
-            "input aggregation requires independent event ticks; received atomic ticks of width {tick_width}"
-        )
-    })
-}
-
-fn input_batch<V>(events: Vec<InputEvent<V>>, semantics: AggregationSemantics) -> InputBatch<V> {
-    debug_assert!(!events.is_empty());
-    match semantics {
-        AggregationSemantics::PreserveTicks => InputBatch::events(events),
-        AggregationSemantics::CoalesceToAtomicStep => {
-            InputBatch::step(events).expect("the aggregator keeps at most one event per variable")
+    fn append(&mut self, batch: InputBatch<V>, limit: Option<NonZeroUsize>) -> BatchAppend<'_, V> {
+        BatchAppend {
+            pending: self,
+            segments: batch.into_segments().into_iter(),
+            current: None,
+            limit: limit.map(NonZeroUsize::get),
         }
     }
 }
 
-fn aggregate_without_delay<V: 'static>(
-    mut source: InputStream<V>,
-    aggregation: InputAggregation,
-) -> InputStream<V> {
-    if aggregation.semantics == AggregationSemantics::PreserveTicks
-        && aggregation.event_limit.is_none()
-    {
-        return source;
-    }
-    Box::pin(async_stream::try_stream! {
-        let mut aggregator = EventAggregator::new(aggregation);
-        while let Some(batch) = source.next().await {
-            for event in independent_events(batch?)? {
-                if let Some(complete) = aggregator.push(event) {
-                    yield input_batch(complete, aggregation.semantics);
-                }
-            }
-            if !aggregator.is_empty() {
-                yield input_batch(aggregator.take(), aggregation.semantics);
-            }
-        }
-    })
+enum SegmentRemainder<V> {
+    Singleton(vec::IntoIter<InputUpdate<V>>),
+    Packed {
+        layout: Box<[VarName]>,
+        values: vec::IntoIter<V>,
+    },
 }
 
-fn aggregate_input<V, T>(
-    source: InputStream<V>,
-    aggregation: InputAggregation,
-    timer: T,
-) -> InputStream<V>
-where
-    V: 'static,
-    T: InputTimer,
-{
-    if aggregation.max_delay.is_zero() {
-        return aggregate_without_delay(source, aggregation);
-    }
+struct BatchAppend<'a, V> {
+    pending: &'a mut PendingBatch<V>,
+    segments: vec::IntoIter<InputSegment<V>>,
+    current: Option<SegmentRemainder<V>>,
+    limit: Option<usize>,
+}
 
-    Box::pin(async_stream::try_stream! {
-        let mut source = source.fuse();
-        let mut aggregator = EventAggregator::new(aggregation);
+impl<V> Iterator for BatchAppend<'_, V> {
+    type Item = InputBatch<V>;
 
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if aggregator.is_empty() {
-                let Some(batch) = source.next().await else {
-                    return;
-                };
-                for event in independent_events(batch?)? {
-                    if let Some(complete) = aggregator.push(event) {
-                        yield input_batch(complete, aggregation.semantics);
+            if let Some(remainder) = &mut self.current {
+                let limit = self.limit.expect("remainders only exist with a limit");
+                let room = limit.saturating_sub(self.pending.updates).max(1);
+                let (segment, exhausted) = match remainder {
+                    SegmentRemainder::Singleton(updates) => {
+                        let take = room.min(updates.len());
+                        let chunk = updates.by_ref().take(take).collect::<Vec<_>>();
+                        (InputSegment::SingletonTicks(chunk), updates.len() == 0)
                     }
+                    SegmentRemainder::Packed { layout, values } => {
+                        let width = layout.len();
+                        let rows = room.saturating_add(width - 1) / width;
+                        let take = (rows.max(1) * width).min(values.len());
+                        let chunk = values.by_ref().take(take).collect::<Vec<_>>();
+                        (
+                            InputSegment::PackedRows {
+                                layout: layout.clone(),
+                                values: chunk,
+                            },
+                            values.len() == 0,
+                        )
+                    }
+                };
+                self.pending.push(segment);
+                if exhausted {
+                    self.current = None;
                 }
-                if aggregator.is_empty() {
-                    continue;
+                if self.pending.updates >= limit {
+                    return Some(self.pending.take().expect("window segments remain valid"));
                 }
+                continue;
             }
 
-            let mut deadline = timer.sleep(aggregation.max_delay).fuse();
-            loop {
-                let next = futures::select! {
-                    batch = source.next().fuse() => Some(batch),
-                    _ = deadline => None,
-                };
-                match next {
-                    Some(batch) => {
-                        let Some(batch) = batch else {
-                            yield input_batch(aggregator.take(), aggregation.semantics);
-                            return;
-                        };
-                        let batch = match batch {
-                            Ok(batch) => batch,
-                            Err(error) => {
-                                yield input_batch(aggregator.take(), aggregation.semantics);
-                                Err(error)?;
-                                unreachable!();
-                            }
-                        };
-                        let batch = match independent_events(batch) {
-                            Ok(batch) => batch,
-                            Err(error) => {
-                                yield input_batch(aggregator.take(), aggregation.semantics);
-                                Err(error)?;
-                                unreachable!();
-                            }
-                        };
-                        let mut completed = false;
-                        for event in batch {
-                            if let Some(batch) = aggregator.push(event) {
-                                yield input_batch(batch, aggregation.semantics);
-                                completed = true;
-                            }
-                        }
-                        if completed {
-                            break;
-                        }
-                    }
-                    None => {
-                        yield input_batch(aggregator.take(), aggregation.semantics);
-                        break;
-                    }
+            let Some(segment) = self.segments.next() else {
+                return None;
+            };
+            let Some(limit) = self.limit else {
+                self.pending.push(segment);
+                continue;
+            };
+            let room = limit.saturating_sub(self.pending.updates);
+            if segment.update_count() <= room {
+                self.pending.push(segment);
+                if self.pending.updates >= limit {
+                    return Some(self.pending.take().expect("window segments remain valid"));
+                }
+                continue;
+            }
+
+            match segment {
+                InputSegment::Tick(updates) => {
+                    self.pending.push(InputSegment::Tick(updates));
+                    return Some(self.pending.take().expect("window segments remain valid"));
+                }
+                InputSegment::SingletonTicks(updates) => {
+                    self.current = Some(SegmentRemainder::Singleton(updates.into_iter()));
+                }
+                InputSegment::PackedRows { layout, values } => {
+                    self.current = Some(SegmentRemainder::Packed {
+                        layout,
+                        values: values.into_iter(),
+                    });
                 }
             }
         }
-    })
+    }
 }
 
-/// Aggregate an independent-event stream using an injectable timer.
-pub(crate) fn aggregate_input_stream_with_timer<V, T>(
-    input: InputStream<V>,
-    aggregation: InputAggregation,
-    timer: T,
-) -> InputStream<V>
-where
-    V: 'static,
-    T: InputTimer,
-{
-    aggregate_input(input, aggregation, timer)
+struct PendingAtomic<V> {
+    values: Vec<InputUpdate<V>>,
+    indices: BTreeMap<VarName, usize>,
+    updates: usize,
 }
 
-/// Aggregate an independent-event stream using the real-time timer.
-pub(crate) fn aggregate_input_stream<V: 'static>(
-    input: InputStream<V>,
-    aggregation: InputAggregation,
-) -> InputStream<V> {
-    aggregate_input_stream_with_timer(input, aggregation, RealTimeInputTimer)
+impl<V> PendingAtomic<V> {
+    fn new() -> Self {
+        Self {
+            values: Vec::new(),
+            indices: BTreeMap::new(),
+            updates: 0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    fn push_tick(&mut self, tick: Vec<InputUpdate<V>>) {
+        self.updates += tick.len();
+        for update in tick {
+            if let Some(index) = self.indices.get(&update.variable).copied() {
+                self.values[index] = update;
+            } else {
+                let index = self.values.len();
+                self.indices.insert(update.variable.clone(), index);
+                self.values.push(update);
+            }
+        }
+    }
+
+    fn take(&mut self) -> anyhow::Result<InputBatch<V>> {
+        self.updates = 0;
+        self.indices.clear();
+        InputBatch::tick(mem::take(&mut self.values))
+    }
+
+    fn append(&mut self, batch: InputBatch<V>, limit: Option<NonZeroUsize>) -> AtomicAppend<'_, V> {
+        AtomicAppend {
+            pending: self,
+            ticks: batch.into_ticks(),
+            limit: limit.map(NonZeroUsize::get),
+        }
+    }
+}
+
+struct AtomicAppend<'a, V> {
+    pending: &'a mut PendingAtomic<V>,
+    ticks: OwnedInputTicks<V>,
+    limit: Option<usize>,
+}
+
+impl<V> Iterator for AtomicAppend<'_, V> {
+    type Item = InputBatch<V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for tick in self.ticks.by_ref() {
+            self.pending.push_tick(tick);
+            if self
+                .limit
+                .is_some_and(|limit| self.pending.updates >= limit)
+            {
+                return Some(self.pending.take().expect("logical ticks remain valid"));
+            }
+        }
+        None
+    }
+}
+
+enum WindowAccumulator<V> {
+    Batch(PendingBatch<V>),
+    Atomic(PendingAtomic<V>),
+}
+
+impl<V> WindowAccumulator<V> {
+    fn new(stage: InputStage) -> Self {
+        match stage {
+            InputStage::Batch(_) => Self::Batch(PendingBatch::new()),
+            InputStage::WindowToStep {
+                reduction: InputReduction::LastUpdateWins,
+                ..
+            } => Self::Atomic(PendingAtomic::new()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Batch(pending) => pending.is_empty(),
+            Self::Atomic(pending) => pending.is_empty(),
+        }
+    }
+
+    fn take(&mut self) -> anyhow::Result<InputBatch<V>> {
+        match self {
+            Self::Batch(pending) => pending.take(),
+            Self::Atomic(pending) => pending.take(),
+        }
+    }
+
+    fn append(&mut self, batch: InputBatch<V>, limit: Option<NonZeroUsize>) -> WindowAppend<'_, V> {
+        match self {
+            Self::Batch(pending) => WindowAppend::Batch(pending.append(batch, limit)),
+            Self::Atomic(pending) => WindowAppend::Atomic(pending.append(batch, limit)),
+        }
+    }
+}
+
+enum WindowAppend<'a, V> {
+    Batch(BatchAppend<'a, V>),
+    Atomic(AtomicAppend<'a, V>),
+}
+
+impl<V> Iterator for WindowAppend<'_, V> {
+    type Item = InputBatch<V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Batch(append) => append.next(),
+            Self::Atomic(append) => append.next(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration};
-
-    use futures::{FutureExt, StreamExt, channel::mpsc, channel::oneshot};
-    use proptest::prelude::*;
-
     use super::*;
-    use crate::{InputEvent, OutputStream, Value, VarName};
+    use crate::io::config::InputWindow;
+    use futures::{StreamExt, future};
 
-    type EventBatchStream<V> = OutputStream<anyhow::Result<Vec<InputEvent<V>>>>;
-
-    #[derive(Clone, Default)]
-    struct ManualTimer {
-        state: Rc<RefCell<ManualTimerState>>,
+    fn update(variable: &str, value: i32) -> InputUpdate<i32> {
+        InputUpdate::new(variable.into(), value)
     }
 
-    #[derive(Default)]
-    struct ManualTimerState {
-        now: Duration,
-        sleepers: Vec<(Duration, oneshot::Sender<()>)>,
+    fn window(limit: usize) -> InputWindow {
+        InputWindow::new(None, NonZeroUsize::new(limit)).unwrap()
     }
 
-    impl ManualTimer {
-        fn advance(&self, duration: Duration) {
-            let mut state = self.state.borrow_mut();
-            state.now += duration;
-            let now = state.now;
-            let sleepers = mem::take(&mut state.sleepers);
-            for (deadline, sender) in sleepers {
-                if deadline <= now {
-                    let _ = sender.send(());
-                } else {
-                    state.sleepers.push((deadline, sender));
-                }
-            }
-        }
+    fn stream(items: Vec<anyhow::Result<InputBatch<i32>>>) -> InputStream<i32> {
+        Box::pin(futures::stream::iter(items))
+    }
 
-        fn sleeper_count(&self) -> usize {
-            self.state.borrow().sleepers.len()
+    #[derive(Clone, Copy)]
+    struct ImmediateTimer;
+
+    impl InputTimer for ImmediateTimer {
+        fn sleep(&self, _duration: Duration) -> LocalBoxFuture<'static, ()> {
+            Box::pin(future::ready(()))
         }
     }
 
-    impl InputTimer for ManualTimer {
-        fn sleep(&self, duration: Duration) -> LocalBoxFuture<'static, ()> {
-            let (sender, receiver) = oneshot::channel();
-            let mut state = self.state.borrow_mut();
-            let deadline = state.now + duration;
-            state.sleepers.push((deadline, sender));
-            Box::pin(async move {
-                let _ = receiver.await;
-            })
+    #[derive(Clone, Copy)]
+    struct NeverTimer;
+
+    impl InputTimer for NeverTimer {
+        fn sleep(&self, _duration: Duration) -> LocalBoxFuture<'static, ()> {
+            Box::pin(future::pending())
         }
     }
 
-    fn sparse_channel<V: 'static>() -> (mpsc::UnboundedSender<Vec<InputEvent<V>>>, InputStream<V>) {
-        let (sender, receiver) = mpsc::unbounded();
-        (
-            sender,
-            Box::pin(receiver.map(|events| Ok(InputBatch::events(events)))),
-        )
+    #[test]
+    fn deadline_flushes_pending_data_without_waiting_for_eof() {
+        smol::block_on(async {
+            let input: InputStream<i32> = Box::pin(
+                futures::stream::iter([Ok(InputBatch::update("x", 1))])
+                    .chain(futures::stream::pending()),
+            );
+            let stage =
+                InputStage::Batch(InputWindow::new(Some(Duration::from_secs(1)), None).unwrap());
+            let mut output = apply_stage_with_timer(input, stage, ImmediateTimer).unwrap();
+
+            let batch = output.next().await.unwrap().unwrap();
+            assert_eq!(batch.update_count(), 1);
+        });
     }
 
-    fn aggregated_stream<V: 'static>(
-        input: InputStream<V>,
-        aggregation: InputAggregation,
-        timer: ManualTimer,
-    ) -> EventBatchStream<V> {
-        Box::pin(
-            aggregate_input(input, aggregation, timer)
-                .map(|batch| batch.map(|batch| batch.into_ticks().flatten().collect())),
-        )
-    }
-
-    fn event(var: &str, value: i64) -> InputEvent<Value> {
-        InputEvent::new(var.into(), Value::Int(value))
-    }
-
-    fn aggregated_source(semantics: AggregationSemantics) -> InputStream<Value> {
-        smol::block_on(async move {
-            let input = Box::pin(futures::stream::iter([Ok(InputBatch::events(vec![
-                event("x", 1),
-                event("y", 2),
-            ]))]));
-            aggregate_input_stream_with_timer(
-                input,
-                InputAggregation::new(Duration::ZERO, semantics),
-                ManualTimer::default(),
+    #[test]
+    fn update_limit_flushes_before_a_pending_deadline() {
+        smol::block_on(async {
+            let stage = InputStage::Batch(
+                InputWindow::new(Some(Duration::from_secs(1)), NonZeroUsize::new(2)).unwrap(),
+            );
+            let mut output = apply_stage_with_timer(
+                stream(vec![
+                    Ok(InputBatch::update("x", 1)),
+                    Ok(InputBatch::update("x", 2)),
+                ]),
+                stage,
+                NeverTimer,
             )
-        })
-    }
-
-    #[test]
-    fn aggregation_semantics_select_event_or_step_delivery() {
-        smol::block_on(async {
-            let mut events = aggregated_source(AggregationSemantics::PreserveTicks);
-            let batch = events.next().await.unwrap().unwrap();
-            assert_eq!(
-                batch
-                    .ticks()
-                    .map(|tick| tick.to_events())
-                    .collect::<Vec<_>>(),
-                [vec![event("x", 1)], vec![event("y", 2)]]
-            );
-
-            let mut steps = aggregated_source(AggregationSemantics::CoalesceToAtomicStep);
-            let batch = steps.next().await.unwrap().unwrap();
-            assert_eq!(
-                batch
-                    .ticks()
-                    .map(|tick| tick.to_events())
-                    .collect::<Vec<_>>(),
-                [vec![event("x", 1), event("y", 2)]]
-            );
-        });
-    }
-
-    #[test]
-    fn aggregation_ignores_empty_event_batches() {
-        smol::block_on(async {
-            let input = Box::pin(futures::stream::iter([Ok(InputBatch::<Value>::events(
-                Vec::new(),
-            ))]));
-            let mut aggregated = aggregate_input_stream_with_timer(
-                input,
-                InputAggregation::new(Duration::ZERO, AggregationSemantics::CoalesceToAtomicStep),
-                ManualTimer::default(),
-            );
-            assert!(aggregated.next().await.is_none());
-        });
-    }
-
-    #[test]
-    fn aggregation_rejects_atomic_input_ticks() {
-        smol::block_on(async {
-            let input = Box::pin(futures::stream::iter([Ok(InputBatch::step(vec![
-                event("x", 1),
-                event("y", 2),
-            ])
-            .unwrap())]));
-            let mut aggregated = aggregate_input_stream_with_timer(
-                input,
-                InputAggregation::new(Duration::ZERO, AggregationSemantics::CoalesceToAtomicStep),
-                ManualTimer::default(),
-            );
-            assert_eq!(
-                aggregated.next().await.unwrap().unwrap_err().to_string(),
-                "input aggregation requires independent event ticks; received atomic ticks of width 2"
-            );
-
-            let input = Box::pin(futures::stream::iter([Ok(InputBatch::step(vec![event(
-                "x", 1,
-            )])
-            .unwrap())]));
-            let mut aggregated = aggregate_input_stream_with_timer(
-                input,
-                InputAggregation::new(Duration::ZERO, AggregationSemantics::CoalesceToAtomicStep),
-                ManualTimer::default(),
-            );
-            assert_eq!(
-                aggregated.next().await.unwrap().unwrap_err().to_string(),
-                "input aggregation requires independent event ticks; received atomic ticks of width 1"
-            );
-        });
-    }
-
-    #[test]
-    fn aggregation_preserves_input_errors() {
-        smol::block_on(async {
-            let source: InputStream<Value> = Box::pin(futures::stream::iter([Err(
-                anyhow::anyhow!("source failed"),
-            )]));
-            let mut aggregated = aggregate_input(
-                source,
-                InputAggregation::new(Duration::ZERO, AggregationSemantics::CoalesceToAtomicStep),
-                ManualTimer::default(),
-            );
-            assert_eq!(
-                aggregated.next().await.unwrap().unwrap_err().to_string(),
-                "source failed"
-            );
-        });
-    }
-
-    #[test]
-    fn aggregation_flushes_buffered_events_before_input_error() {
-        smol::block_on(async {
-            let expected = vec![event("x", 1), event("y", 2)];
-            let source: InputStream<Value> = Box::pin(futures::stream::iter([
-                Ok(InputBatch::events(vec![event("x", 1), event("y", 2)])),
-                Err(anyhow::anyhow!("source failed")),
-            ]));
-            let mut aggregated = aggregate_input(
-                source,
-                InputAggregation::new(Duration::from_secs(1), AggregationSemantics::PreserveTicks),
-                ManualTimer::default(),
-            );
-
-            assert_eq!(
-                aggregated
-                    .next()
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .into_ticks()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-                expected
-            );
-            assert_eq!(
-                aggregated.next().await.unwrap().unwrap_err().to_string(),
-                "source failed"
-            );
-        });
-    }
-
-    #[test]
-    fn sparse_aggregation_uses_simulated_deadline_and_preserves_order() {
-        let timer = ManualTimer::default();
-        let (sender, input) = sparse_channel();
-        let mut batches = aggregated_stream(
-            input,
-            InputAggregation::new(
-                Duration::from_millis(10),
-                AggregationSemantics::PreserveTicks,
-            ),
-            timer.clone(),
-        );
-        sender.unbounded_send(vec![event("x", 1)]).unwrap();
-        assert!(batches.next().now_or_never().is_none());
-        timer.advance(Duration::from_millis(5));
-        sender.unbounded_send(vec![event("y", 2)]).unwrap();
-        assert!(batches.next().now_or_never().is_none());
-        timer.advance(Duration::from_millis(4));
-        assert!(batches.next().now_or_never().is_none());
-        timer.advance(Duration::from_millis(1));
-
-        let batch = batches.next().now_or_never().flatten().unwrap().unwrap();
-        assert_eq!(batch, vec![event("x", 1), event("y", 2)]);
-    }
-
-    #[test]
-    fn atomic_aggregation_is_last_value_wins_per_variable() {
-        let timer = ManualTimer::default();
-        let (sender, input) = sparse_channel();
-        let mut batches = aggregated_stream(
-            input,
-            InputAggregation::new(
-                Duration::from_millis(10),
-                AggregationSemantics::CoalesceToAtomicStep,
-            ),
-            timer.clone(),
-        );
-        sender
-            .unbounded_send(vec![event("x", 1), event("y", 2)])
             .unwrap();
-        assert!(batches.next().now_or_never().is_none());
-        timer.advance(Duration::from_millis(5));
-        sender.unbounded_send(vec![event("x", 3)]).unwrap();
-        assert!(batches.next().now_or_never().is_none());
-        timer.advance(Duration::from_millis(5));
 
-        let batch = batches.next().now_or_never().flatten().unwrap().unwrap();
-        assert_eq!(batch, vec![event("x", 3), event("y", 2)]);
+            let batch = output.next().await.unwrap().unwrap();
+            assert_eq!(batch.update_count(), 2);
+            assert!(output.next().await.is_none());
+        });
     }
 
     #[test]
-    fn event_limit_emits_aggregations_and_end_of_stream_flushes_tail() {
-        let timer = ManualTimer::default();
-        let (sender, input) = sparse_channel();
-        let batches = aggregated_stream(
-            input,
-            InputAggregation::new(Duration::from_secs(1), AggregationSemantics::PreserveTicks)
-                .with_event_limit(NonZeroUsize::new(2).unwrap()),
-            timer,
-        );
-        sender
-            .unbounded_send(vec![
-                event("x", 1),
-                event("x", 2),
-                event("x", 3),
-                event("x", 4),
-                event("x", 5),
+    fn batch_limit_flushes_at_tick_boundaries_and_eof_flushes_the_remainder() {
+        smol::block_on(async {
+            let batch = InputBatch::from_ticks(vec![
+                vec![update("x", 1)],
+                vec![update("x", 2)],
+                vec![update("x", 3)],
             ])
             .unwrap();
-        sender.close_channel();
+            let mut output =
+                apply_stage(stream(vec![Ok(batch)]), InputStage::Batch(window(2))).unwrap();
 
-        let batches = smol::block_on(batches.map(Result::unwrap).collect::<Vec<_>>());
-        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 1]);
-        assert_eq!(
-            batches.into_iter().flatten().collect::<Vec<_>>(),
-            (1..=5).map(|value| event("x", value)).collect::<Vec<_>>()
-        );
+            assert_eq!(output.next().await.unwrap().unwrap().update_count(), 2);
+            assert_eq!(output.next().await.unwrap().unwrap().update_count(), 1);
+            assert!(output.next().await.is_none());
+        });
     }
 
     #[test]
-    fn dropping_aggregation_cancels_simulated_sleep_safely() {
-        let timer = ManualTimer::default();
-        let (sender, input) = sparse_channel();
-        let mut batches = aggregated_stream(
-            input,
-            InputAggregation::new(Duration::from_secs(1), AggregationSemantics::PreserveTicks),
-            timer.clone(),
-        );
-        sender.unbounded_send(vec![event("x", 1)]).unwrap();
-        assert!(batches.next().now_or_never().is_none());
-        assert_eq!(timer.sleeper_count(), 1);
-        drop(batches);
-        timer.advance(Duration::from_secs(1));
-        assert_eq!(timer.sleeper_count(), 0);
+    fn source_error_flushes_pending_data_before_the_error() {
+        smol::block_on(async {
+            let mut output = apply_stage(
+                stream(vec![
+                    Ok(InputBatch::update("x", 1)),
+                    Err(anyhow::anyhow!("boom")),
+                ]),
+                InputStage::Batch(window(2)),
+            )
+            .unwrap();
+
+            assert_eq!(output.next().await.unwrap().unwrap().update_count(), 1);
+            assert_eq!(
+                output.next().await.unwrap().unwrap_err().to_string(),
+                "boom"
+            );
+            assert!(output.next().await.is_none());
+        });
     }
 
-    proptest! {
-        #[test]
-        fn simulated_deadlines_match_sparse_aggregation_model(
-            schedule in prop::collection::vec((0u8..10, 0u8..4, any::<i16>()), 0..40),
-        ) {
-            const AGGREGATION_MS: u64 = 5;
-            let timer = ManualTimer::default();
-            let (sender, input) = sparse_channel();
-            let mut stream = aggregated_stream(
-                input,
-                InputAggregation::new(
-                    Duration::from_millis(AGGREGATION_MS),
-                    AggregationSemantics::PreserveTicks,
-                ),
-                timer.clone(),
-            );
-
-            let mut now = 0u64;
-            let mut deadline = None;
-            let mut expected_aggregation = Vec::new();
-            let mut expected = Vec::new();
-            let mut actual = Vec::new();
-
-            for (gap, var, value) in schedule {
-                now += u64::from(gap);
-                timer.advance(Duration::from_millis(u64::from(gap)));
-                if deadline.is_some_and(|deadline| deadline <= now) {
-                    expected.push(mem::take(&mut expected_aggregation));
-                    deadline = None;
-                    actual.push(stream.next().now_or_never().flatten().unwrap().unwrap());
-                }
-
-                let event = InputEvent::new(VarName::new(&format!("v{var}")), value);
-                if expected_aggregation.is_empty() {
-                    deadline = Some(now + AGGREGATION_MS);
-                }
-                expected_aggregation.push(InputEvent::new(event.var.clone(), event.value));
-                sender.unbounded_send(vec![event]).unwrap();
-                prop_assert!(stream.next().now_or_never().is_none());
-            }
-
-            if !expected_aggregation.is_empty() {
-                expected.push(expected_aggregation);
-                timer.advance(Duration::from_millis(AGGREGATION_MS));
-                actual.push(stream.next().now_or_never().flatten().unwrap().unwrap());
-            }
-            prop_assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn sparse_aggregations_preserve_every_event_and_respect_event_limit(
-            raw in prop::collection::vec((0u8..4, any::<i16>()), 0..100),
-            limit in 1usize..16,
-        ) {
-            let aggregation = InputAggregation::new(
-                Duration::from_secs(1),
-                AggregationSemantics::PreserveTicks,
+    #[test]
+    fn batch_windows_preserve_packed_chunks() {
+        smol::block_on(async {
+            let packed = InputBatch::packed_rows(
+                vec![VarName::new("x"), VarName::new("y")],
+                vec![1, 2, 3, 4, 5, 6],
             )
-            .with_event_limit(NonZeroUsize::new(limit).unwrap());
-            let expected = raw
-                .iter()
-                .map(|(var, value)| (VarName::new(&format!("v{var}")), *value))
-                .collect::<Vec<_>>();
-            let events = expected
-                .iter()
-                .map(|(var, value)| InputEvent::new(var.clone(), *value))
-                .collect::<Vec<_>>();
-            let mut aggregator = EventAggregator::new(aggregation);
-            let mut aggregations = events
-                .into_iter()
-                .filter_map(|event| aggregator.push(event))
-                .collect::<Vec<_>>();
-            if !aggregator.is_empty() {
-                aggregations.push(aggregator.take());
-            }
+            .unwrap();
+            let mut output =
+                apply_stage(stream(vec![Ok(packed)]), InputStage::Batch(window(3))).unwrap();
 
-            prop_assert!(aggregations.iter().all(|batch| batch.len() <= limit));
-            let actual = aggregations
-                .into_iter()
-                .flatten()
-                .map(|event| (event.var, event.value))
-                .collect::<Vec<_>>();
-            prop_assert_eq!(actual, expected);
-        }
-
-        #[test]
-        fn atomic_aggregations_keep_the_last_value_for_each_variable(
-            raw in prop::collection::vec((0u8..8, any::<i16>()), 0..100),
-        ) {
-            let mut expected = BTreeMap::new();
-            let events = raw
-                .into_iter()
-                .map(|(var, value)| {
-                    let var = VarName::new(&format!("v{var}"));
-                    expected.insert(var.clone(), value);
-                    InputEvent::new(var, value)
-                })
-                .collect::<Vec<_>>();
-            let mut aggregator = EventAggregator::new(InputAggregation::new(
-                Duration::from_secs(1),
-                AggregationSemantics::CoalesceToAtomicStep,
+            let first = output.next().await.unwrap().unwrap();
+            assert_eq!(first.update_count(), 4);
+            assert!(matches!(
+                first.segments().next(),
+                Some(InputSegment::PackedRows { .. })
             ));
-            for event in events {
-                prop_assert!(aggregator.push(event).is_none());
-            }
-            let actual = aggregator
-                .take()
-                .into_iter()
-                .map(|event| (event.var, event.value))
-                .collect::<BTreeMap<_, _>>();
-            prop_assert_eq!(actual, expected);
-        }
+            let second = output.next().await.unwrap().unwrap();
+            assert_eq!(second.update_count(), 2);
+            assert!(matches!(
+                second.segments().next(),
+                Some(InputSegment::PackedRows { .. })
+            ));
+            assert!(output.next().await.is_none());
+        });
+    }
 
-        #[test]
-        fn atomic_event_limits_match_independent_raw_arrival_windows(
-            raw in prop::collection::vec((0u8..8, any::<i16>()), 0..100),
-            limit in 1usize..16,
-        ) {
-            let aggregation = InputAggregation::new(
-                Duration::from_secs(1),
-                AggregationSemantics::CoalesceToAtomicStep,
-            )
-            .with_event_limit(NonZeroUsize::new(limit).unwrap());
-            let mut aggregator = EventAggregator::new(aggregation);
-            let mut actual = Vec::new();
-            for (var, value) in &raw {
-                if let Some(batch) = aggregator.push(InputEvent::new(
-                    VarName::new(&format!("v{var}")),
-                    *value,
-                )) {
-                    actual.push(batch);
-                }
-            }
-            if !aggregator.is_empty() {
-                actual.push(aggregator.take());
-            }
+    #[test]
+    fn atomic_windows_apply_last_update_wins_without_splitting_ticks() {
+        smol::block_on(async {
+            let batch = InputBatch::from_ticks(vec![
+                vec![update("x", 1), update("y", 2)],
+                vec![update("x", 3)],
+            ])
+            .unwrap();
+            let stage = InputStage::WindowToStep {
+                window: window(3),
+                reduction: InputReduction::LastUpdateWins,
+            };
+            let mut output = apply_stage(stream(vec![Ok(batch)]), stage).unwrap();
+            let result = output.next().await.unwrap().unwrap();
 
-            let expected = raw
-                .chunks(limit)
-                .map(|window| {
-                    window.iter().fold(BTreeMap::new(), |mut values, (var, value)| {
-                        values.insert(VarName::new(&format!("v{var}")), *value);
-                        values
-                    })
-                })
-                .collect::<Vec<_>>();
-            let actual = actual
-                .into_iter()
-                .map(|batch| {
-                    batch.into_iter().map(|event| (event.var, event.value)).collect()
-                })
-                .collect::<Vec<BTreeMap<_, _>>>();
-            prop_assert_eq!(actual, expected);
-        }
+            assert_eq!(
+                result.ticks().next().unwrap().to_updates(),
+                vec![update("x", 3), update("y", 2)]
+            );
+            assert!(output.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn oversized_tick_is_atomic_and_flushes_as_one_window() {
+        smol::block_on(async {
+            let batch =
+                InputBatch::tick(vec![update("x", 1), update("y", 2), update("z", 3)]).unwrap();
+            let mut output =
+                apply_stage(stream(vec![Ok(batch)]), InputStage::Batch(window(2))).unwrap();
+
+            let result = output.next().await.unwrap().unwrap();
+            assert_eq!(result.tick_count(), 1);
+            assert_eq!(result.update_count(), 3);
+            assert!(output.next().await.is_none());
+        });
     }
 }

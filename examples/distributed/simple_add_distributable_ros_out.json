@@ -1,10 +1,10 @@
 {
-    "v": {
-        "topic": "/v",
-        "msg_type": "Int32"
-    },
-    "w": {
-        "topic": "/w",
-        "msg_type": "Int32"
-    }
+  "v": [
+    "/v",
+    "Int32"
+  ],
+  "w": [
+    "/w",
+    "Int32"
+  ]
 }

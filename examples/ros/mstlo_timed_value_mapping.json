@@ -1,6 +1,6 @@
 {
-    "x": {
-        "topic": "/signals/x",
-        "msg_type": "MstloTimedValue"
-    }
+  "x": [
+    "/signals/x",
+    "MstloTimedValue"
+  ]
 }

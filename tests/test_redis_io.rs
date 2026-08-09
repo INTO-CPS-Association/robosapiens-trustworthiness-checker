@@ -35,7 +35,7 @@ mod integration_tests {
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
-        OutputStream, Value, VarName,
+        InputBatch, OutputStream, Value, VarName,
         core::{JsonStreamValue, OutputHandler, REDIS_HOSTNAME},
         io::redis::{self as tc_redis, RedisOutputHandler},
         runtime::mstlo::{MstloTimedValue, MstloValue},
@@ -157,16 +157,16 @@ mod integration_tests {
         let batch = with_timeout(input.next(), 5, "MSTLO Redis input")
             .await?
             .ok_or_else(|| anyhow::anyhow!("MSTLO Redis input ended"))?;
-        let batch = batch?;
-        let event = batch
+        let batch: InputBatch<MstloTimedValue> = batch?;
+        let update = batch
             .ticks()
             .next()
             .ok_or_else(|| anyhow::anyhow!("MSTLO Redis batch was empty"))?
-            .to_events()
+            .to_updates()
             .into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("MSTLO Redis tick was empty"))?;
-        assert_eq!(event.value, sample);
+        assert_eq!(update.value, sample);
 
         connection.publish(X_TOPIC, "not valid JSON").await?;
         let result = with_timeout(input.next(), 5, "malformed MSTLO Redis input")

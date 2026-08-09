@@ -4,7 +4,7 @@ use async_stream::try_stream;
 use futures::StreamExt;
 use unsync::spsc;
 
-use crate::core::DeferrableStreamData;
+use crate::core::{DeferrableStreamData, input};
 use crate::{InputStream, OutputStream, VarName};
 
 const CHANNEL_SIZE: usize = 10;
@@ -39,14 +39,14 @@ where
     let mut senders = senders;
     let tick_indices = indices.clone();
     let drive = Box::pin(try_stream! {
-        let mut ticks = crate::into_tick_stream(input);
+        let mut ticks = input::into_tick_stream(input);
         while let Some(tick) = ticks.next().await {
             let mut values = vec![V::no_val_value(); width];
             for event in tick? {
-                let index = tick_indices.get(&event.var).copied().ok_or_else(|| {
+                let index = tick_indices.get(&event.variable).copied().ok_or_else(|| {
                     anyhow::anyhow!(
                         "input stream emitted undeclared async variable `{}`",
-                        event.var
+                        event.variable
                     )
                 })?;
                 values[index] = event.value;
@@ -76,7 +76,7 @@ mod tests {
     use futures::StreamExt;
 
     use crate::io::map;
-    use crate::{InputBatch, InputEvent, InputStream, Value, VarName};
+    use crate::{InputBatch, InputStream, Value, VarName};
 
     use super::fan_out_input;
 
@@ -109,10 +109,9 @@ mod tests {
     #[test]
     fn undeclared_event_variable_is_reported_by_driver() {
         smol::block_on(async {
-            let input: InputStream<Value> =
-                Box::pin(futures::stream::iter([Ok(InputBatch::events(vec![
-                    InputEvent::new(VarName::new("unknown"), Value::Int(1)),
-                ]))]));
+            let input: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
+                InputBatch::update(VarName::new("unknown"), Value::Int(1)),
+            )]));
             let mut drive =
                 fan_out_input(input, std::collections::BTreeSet::from([VarName::new("x")])).drive;
 
@@ -126,18 +125,12 @@ mod tests {
     }
 
     #[test]
-    fn malformed_fixed_width_steps_are_reported_by_driver() {
-        smol::block_on(async {
-            let input: InputStream<Value> =
-                Box::pin(futures::stream::iter([InputBatch::packed_steps(
-                    std::num::NonZeroUsize::new(2).unwrap(),
-                    vec![InputEvent::new(VarName::new("x"), Value::Int(1))],
-                )]));
-            let mut drive =
-                fan_out_input(input, std::collections::BTreeSet::from([VarName::new("x")])).drive;
-
-            let error = drive.next().await.unwrap().unwrap_err();
-            assert!(error.to_string().contains("not divisible"));
-        });
+    fn malformed_fixed_width_steps_are_rejected_by_the_batch_constructor() {
+        let error = crate::InputBatch::packed_rows(
+            vec![VarName::new("x"), VarName::new("y")].into_boxed_slice(),
+            vec![Value::Int(1)],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not divisible"));
     }
 }

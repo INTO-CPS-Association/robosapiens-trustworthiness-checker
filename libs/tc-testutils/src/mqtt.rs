@@ -98,6 +98,53 @@ pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>
     publish_values(&client_name, &topic, values, values_len, port).await
 }
 
+/// Publishes already-encoded JSON payloads without serializing the string again.
+///
+/// This is useful for protocol messages whose wire representation is a JSON
+/// object rather than a JSON string containing an object.
+pub async fn dummy_stream_mqtt_payload_publisher(
+    client_name: String,
+    topic: String,
+    mut payloads: OutputStream<String>,
+    payloads_len: usize,
+    port: u16,
+) -> Result<(), anyhow::Error> {
+    info!(
+        "Starting raw payload publisher {} for topic {} with {} payloads",
+        client_name, topic, payloads_len
+    );
+
+    let mqtt_client = MQTT_FACTORY
+        .connect(&format!("tcp://localhost:{port}"))
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to create MQTT client: {error}"))?;
+
+    let mut index = 0;
+    while let Some(payload) = payloads.next().await {
+        let message = MqttMessage::new(topic.clone(), payload.clone(), 1);
+        mqtt_client
+            .publish(message)
+            .await
+            .map_err(|error| anyhow::anyhow!("Lost MQTT connection with error {error:?}"))?;
+        info!(
+            "Published raw payload {}/{} on topic {}: {}",
+            index + 1,
+            payloads_len,
+            topic,
+            payload
+        );
+        index += 1;
+        smol::Timer::after(std::time::Duration::from_millis(50)).await;
+    }
+
+    smol::Timer::after(std::time::Duration::from_millis(100)).await;
+    mqtt_client
+        .disconnect()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to disconnect MQTT client: {error:?}"))?;
+    Ok(())
+}
+
 /// Publishes values through their JSON stream codec.
 #[instrument(level = tracing::Level::INFO, skip(values))]
 pub async fn dummy_stream_mqtt_json_publisher<T: Debug + JsonStreamValue + 'static>(

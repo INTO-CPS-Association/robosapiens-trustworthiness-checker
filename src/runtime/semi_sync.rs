@@ -1,6 +1,6 @@
 use crate::{
-    InputEvent, InputStream, InputTickStream, OutputStream, VarName,
-    core::{DeferrableStreamData, OutputHandler, Runtime, Specification},
+    InputStream, InputUpdate, OutputStream, VarName,
+    core::{DeferrableStreamData, OutputHandler, Runtime, Specification, input},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
@@ -792,7 +792,7 @@ where
             let tick = input_vars
                 .iter()
                 .map(|var| {
-                    InputEvent::new(
+                    InputUpdate::new(
                         var.clone(),
                         starting_history
                             .get(var)
@@ -819,13 +819,13 @@ where
     pub(crate) async fn setup_runtime(
         self,
     ) -> anyhow::Result<(
-        InputTickStream<AC::Val>,
+        input::InputTickStream<AC::Val>,
         Box<dyn OutputHandler<Val = AC::Val>>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
         let (input, output, context, expr_evals) = self.initialize_runtime().await?;
-        Ok((crate::into_tick_stream(input), output, context, expr_evals))
+        Ok((input::into_tick_stream(input), output, context, expr_evals))
     }
 
     pub(crate) async fn setup_runtime_without_input(
@@ -840,7 +840,7 @@ where
     }
 
     async fn process_input_ticks(
-        mut ticks: InputTickStream<AC::Val>,
+        mut ticks: input::InputTickStream<AC::Val>,
         mut context: SemiSyncContext<AC>,
         mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
@@ -849,7 +849,7 @@ where
     }
 
     pub(super) async fn advance_input(
-        ticks: &mut InputTickStream<AC::Val>,
+        ticks: &mut input::InputTickStream<AC::Val>,
         context: &mut SemiSyncContext<AC>,
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<bool> {
@@ -861,7 +861,7 @@ where
     }
 
     pub(super) async fn advance_tick(
-        tick: Vec<InputEvent<AC::Val>>,
+        tick: Vec<InputUpdate<AC::Val>>,
         context: &mut SemiSyncContext<AC>,
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
@@ -1034,7 +1034,7 @@ where
     AC::Spec: DependencyGraphSpec,
     AC::Val: DeferrableStreamData,
 {
-    pub(super) fn set_input_tick(&mut self, tick: Vec<InputEvent<AC::Val>>) -> anyhow::Result<()> {
+    pub(super) fn set_input_tick(&mut self, tick: Vec<InputUpdate<AC::Val>>) -> anyhow::Result<()> {
         let mut variables = self.variables.borrow_mut();
         anyhow::ensure!(
             variables
@@ -1044,19 +1044,19 @@ where
             "external input was not consumed before the next step"
         );
 
-        for InputEvent { var, .. } in &tick {
-            let variable = variables.get(var).ok_or_else(|| {
-                anyhow!("input stream emitted undeclared semi-sync variable `{var}`")
+        for InputUpdate { variable, .. } in &tick {
+            let model_variable = variables.get(variable).ok_or_else(|| {
+                anyhow!("input stream emitted undeclared semi-sync variable `{variable}`")
             })?;
             anyhow::ensure!(
-                variable.is_external(),
-                "input stream emitted undeclared semi-sync variable `{var}`"
+                model_variable.is_external(),
+                "input stream emitted undeclared semi-sync variable `{variable}`"
             );
         }
 
-        for InputEvent { var, value } in tick {
+        for InputUpdate { variable, value } in tick {
             variables
-                .get_mut(&var)
+                .get_mut(&variable)
                 .expect("input variable was validated above")
                 .set_external_value(value);
         }
@@ -1260,6 +1260,7 @@ mod tests {
 
     use crate::async_test;
     use crate::core::Runtime;
+
     use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
     use crate::io::{controlled, map};
 
@@ -1270,7 +1271,7 @@ mod tests {
         AbstractContextBuilder, CheckedUntimedDsrvSemantics, StreamContext, UntimedDsrvSemantics,
     };
     use crate::{
-        CheckedDsrvSpecification, DsrvSpecification, InputBatch, InputEvent, InputStream, Value,
+        CheckedDsrvSpecification, DsrvSpecification, InputBatch, InputStream, InputUpdate, Value,
     };
     use crate::{VarName, dsrv_fixtures::*};
     use futures::{FutureExt, stream::StreamExt};
@@ -1317,7 +1318,7 @@ mod tests {
             .build()
     }
 
-    fn input_tick(events: Vec<InputEvent<Value>>) -> Vec<InputEvent<Value>> {
+    fn input_tick(events: Vec<InputUpdate<Value>>) -> Vec<InputUpdate<Value>> {
         events
     }
 
@@ -1390,11 +1391,17 @@ mod tests {
         smol::block_on(async {
             let mut context = external_input_context();
             context
-                .set_input_tick(input_tick(vec![InputEvent::new("x".into(), Value::Int(1))]))
+                .set_input_tick(input_tick(vec![InputUpdate::new(
+                    "x".into(),
+                    Value::Int(1),
+                )]))
                 .unwrap();
 
             let error = context
-                .set_input_tick(input_tick(vec![InputEvent::new("x".into(), Value::Int(2))]))
+                .set_input_tick(input_tick(vec![InputUpdate::new(
+                    "x".into(),
+                    Value::Int(2),
+                )]))
                 .unwrap_err();
             assert_eq!(
                 error.to_string(),
@@ -1415,7 +1422,7 @@ mod tests {
         let mut context = external_input_context();
 
         let error = context
-            .set_input_tick(input_tick(vec![InputEvent::new(
+            .set_input_tick(input_tick(vec![InputUpdate::new(
                 "unknown".into(),
                 Value::Int(3),
             )]))
@@ -1423,7 +1430,10 @@ mod tests {
         assert!(error.to_string().contains("undeclared semi-sync variable"));
 
         context
-            .set_input_tick(input_tick(vec![InputEvent::new("x".into(), Value::Int(3))]))
+            .set_input_tick(input_tick(vec![InputUpdate::new(
+                "x".into(),
+                Value::Int(3),
+            )]))
             .unwrap();
     }
 
@@ -1440,7 +1450,10 @@ mod tests {
                 .set_history_to_retain(1);
 
             context
-                .set_input_tick(input_tick(vec![InputEvent::new("x".into(), Value::Int(1))]))
+                .set_input_tick(input_tick(vec![InputUpdate::new(
+                    "x".into(),
+                    Value::Int(1),
+                )]))
                 .unwrap();
             assert_eq!(
                 context.forward_values().await.unwrap(),
@@ -1454,7 +1467,10 @@ mod tests {
                 .unwrap()
                 .subscribe(1);
             context
-                .set_input_tick(input_tick(vec![InputEvent::new("x".into(), Value::Int(2))]))
+                .set_input_tick(input_tick(vec![InputUpdate::new(
+                    "x".into(),
+                    Value::Int(2),
+                )]))
                 .unwrap();
             assert_eq!(
                 context.forward_values().await.unwrap(),
@@ -1716,10 +1732,11 @@ mod tests {
         let source = "in x\nin y\nout ox\nout oy\nox = x\noy = y";
         let spec = source.parse::<DsrvSpecification>().unwrap();
         let input: InputStream<Value> =
-            Box::pin(futures::stream::iter([Ok(InputBatch::events(vec![
-                InputEvent::new("x".into(), Value::Int(1)),
-                InputEvent::new("y".into(), Value::Int(10)),
-            ]))]));
+            Box::pin(futures::stream::iter([Ok(InputBatch::from_ticks(vec![
+                vec![InputUpdate::new("x".into(), Value::Int(1))],
+                vec![InputUpdate::new("y".into(), Value::Int(10))],
+            ])
+            .unwrap())]));
         let (input, controller) = controlled(input);
         let mut output_handler = Box::new(ManualOutputHandler::new(
             executor.clone(),
@@ -2322,8 +2339,8 @@ mod tests {
     //             Rc::new(RefCell::new(stream_map)),
     //             spec.clone(),
     //         );
-    //         let x_out = context1.var(&"x".into()).unwrap();
-    //         let z_out = context1.var(&"z".into()).unwrap();
+    //         let x_out = context1.variable(&"x".into()).unwrap();
+    //         let z_out = context1.variable(&"z".into()).unwrap();
     //
     //         for _ in 0..CHANNEL_SIZE {
     //             with_timeout_res(context1.forward_values(), 1, "forward_values")
@@ -2391,8 +2408,8 @@ mod tests {
     //             "Failed at time_index: {}",
     //             time_index
     //         );
-    //         let x_out = context2.var(&"x".into()).unwrap();
-    //         let z_out = context2.var(&"z".into()).unwrap();
+    //         let x_out = context2.variable(&"x".into()).unwrap();
+    //         let z_out = context2.variable(&"z".into()).unwrap();
     //         // Need to forward new values in order to also make VarManagers send history
     //         // (This could be changed if `var` was async)
     //         for _ in 0..CHANNEL_SIZE {

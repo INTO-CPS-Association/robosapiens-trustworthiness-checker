@@ -9,6 +9,7 @@ pub use mstlo::{
     mstlo_value_to_ros,
 };
 mod input_stream;
+pub(crate) use input_stream::control_stream;
 pub use input_stream::input_stream;
 pub mod ros_topic_stream_mapping;
 pub use ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};

@@ -15,6 +15,15 @@ In distributed monitoring:
 3. Nodes communicate via **MQTT** to exchange intermediate results
 4. The specification is split automatically based on the distribution graph
 
+Each node builds its own reusable input pipeline. The node's model inputs are
+resolved against its local source registry, so route catalogs and transport
+configuration stay local to the deployment. Ordinary distributed runtimes
+receive the data-only `InputStream`; input updates remain logical ticks, and
+packed rows remain packed until a runtime needs to evaluate their ticks. The
+common single-source defaults use model variable names as MQTT or Redis routes.
+For custom routes, use the compact variable-to-route files described in
+[Input Architecture](./input-architecture.md).
+
 ```
 ┌─────────────┐         ┌─────────────┐
 │   Node A    │◄───────►│   Node B    │
@@ -58,6 +67,12 @@ This specification:
 - Computes final stream `v = w + z`
 
 We'll split this so Node A computes `w` and Node B computes `v`.
+
+The commands below use one generic MQTT source per node, so `x`, `y`, and `z`
+are also the default MQTT route names. A deployment with several transports
+can replace the generic flag with `--input-config` and assign each input to a
+named source; the distribution graph still controls computed-stream placement,
+not source ownership.
 
 ### Step 2: Create the Distribution Graph
 
@@ -201,7 +216,14 @@ cargo run -- examples/simple_add_distributable.dsrv \
 
 This uses different arguments compared to the static deployment:
  - The `--distributed-work` argument enables distributed work assignment, so the node will wait to be sent a `start_monitors_at_<node name>` message before it starts monitoring.
- 
+
+If a local node is run with `--runtime reconf-semi-sync`, it must use a live,
+control-capable source such as MQTT, Redis, or ROS. `--input-file` is ordinary
+finite replay input and cannot carry runtime reconfiguration; see
+[Reconfiguration](./reconfiguration.md). Compact reconfiguration messages can
+be spec-only when every node already has the required local route catalog, or
+can carry explicit `inputs`/`sources` bindings when ownership changes.
+
 ### Step 5: Central Node
 
 #### Option A: Mock Central Node
@@ -301,7 +323,9 @@ mosquitto_sub -t v
 
 ## Distribution Graph Format
 
-The distribution graph is a JSON file defining the topology.
+The distribution graph is a JSON file defining the topology. It describes
+where computed streams run; it is separate from input route catalogs and the
+named input source configuration.
 
 ### Structure
 

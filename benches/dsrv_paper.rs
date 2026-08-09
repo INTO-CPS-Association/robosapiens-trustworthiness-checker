@@ -6,7 +6,7 @@ use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;
 use trustworthiness_checker::benches_common::RECONF_TOPIC;
-use trustworthiness_checker::benches_common::input_factory_dsrv_paper_bench;
+use trustworthiness_checker::benches_common::input_source_dsrv_paper_bench;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_reconf_limited;
 use trustworthiness_checker::benches_common::output_builder_dsrv_paper_bench;
 use trustworthiness_checker::stream_utils::FanoutSender;
@@ -76,7 +76,7 @@ async fn run_reconf_bench(
         .union(&spec_2.input_vars())
         .cloned()
         .collect();
-    let (input_factory, tx_fans) = input_factory_dsrv_paper_bench(input_vars);
+    let (input_source, tx_fans) = input_source_dsrv_paper_bench(input_vars);
     let (output_builder, mut rx) =
         output_builder_dsrv_paper_bench(spec_1.output_vars().clone(), executor.clone());
     let mut is_spec_1 = true;
@@ -84,7 +84,7 @@ async fn run_reconf_bench(
     let _handle = executor.spawn(monitor_outputs_untyped_reconf_limited(
         executor.clone(),
         spec_1.clone(),
-        input_factory,
+        input_source,
         output_builder,
         ct,
     ));
@@ -106,9 +106,7 @@ async fn run_reconf_bench(
                 spec_1.to_string()
             };
             let reconf_json = serde_json::json!({
-                "spec": spec,
-                "type_info": {},
-                "topic_mapping": {}
+                "spec": spec
             })
             .to_string()
             .into();

@@ -18,6 +18,12 @@ From input file:
 RUST_LOG=INFO cargo run --features ros --   examples/distributed/counter_tri.dsrv   --runtime distributed   --input-file examples/counter_tri.input   --output-stdout   --distribution-graph examples/counter_tri_distribution_graph.json   --distribution-constraints graphConstraintX graphConstraintY   --scheduling-mode ros   --scheduler-ros-node-name tc_scheduler_main   --scheduler-reconf-topic reconfig
 ```
 
+The scheduler's file input is ordinary finite replay input. The adjacent and
+worker nodes below are reconfigurable runtimes, so they use the compact ROS
+route catalog and a live ROS control route instead of `--input-file`. Their
+local `InputSources` set resolves each generation's model inputs; a compact
+spec-only message is sufficient when those routes do not change.
+
 ## Adjacent node command
 
 ```bash

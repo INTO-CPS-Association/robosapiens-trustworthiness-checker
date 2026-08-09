@@ -10,7 +10,7 @@ use smol::LocalExecutor;
 use uuid::Uuid;
 
 use crate::core::{
-    InputBatch, InputEvent, InputStream, OutputHandler, OutputStream, StreamData, VarName,
+    InputBatch, InputStream, OutputHandler, OutputStream, StreamData, VarName, empty_input_stream,
 };
 use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
 use crate::stream_utils::drop_guard_stream;
@@ -115,7 +115,7 @@ pub fn input_stream(
 ) -> anyhow::Result<InputStream<MstloTimedValue>> {
     validate_mapping(&mapping)?;
     if mapping.is_empty() {
-        return Ok(Box::pin(futures::stream::empty()));
+        return Ok(empty_input_stream());
     }
 
     let context = r2r::Context::create()?;
@@ -160,7 +160,7 @@ pub fn input_stream(
         futures::pin_mut!(merged);
         while let Some(event) = merged.next().await {
             let (variable, value) = event?;
-            yield InputBatch::events(vec![InputEvent::new(variable, value)]);
+            yield InputBatch::update(variable, value);
         }
     }))
 }

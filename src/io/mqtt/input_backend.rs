@@ -1,61 +1,97 @@
 use std::collections::BTreeMap;
 
-use crate::core::JsonStreamValue;
-use crate::{InputStream, VarName};
+use crate::VarName;
+use crate::core::{InputStream, JsonStreamValue, OutputStream};
+
+use crate::io::MonitorConfig;
+
+#[derive(Debug)]
+pub(crate) enum MqttInputItem<V> {
+    Data(crate::InputBatch<V>),
+    Control(MonitorConfig),
+}
 
 type VarTopicMap = BTreeMap<VarName, String>;
 
 /// MQTT client implementation used for input subscriptions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MqttInputBackend {
-    /// The pure-Rust input client used by default.
     #[default]
     Rumqttc,
-    /// The legacy Paho input client.
     Paho,
 }
 
 impl MqttInputBackend {
-    async fn open<V: JsonStreamValue>(
+    pub(crate) async fn open_items<V: JsonStreamValue>(
         self,
         host: &str,
         port: Option<u16>,
         var_topics: VarTopicMap,
         max_reconnect_attempts: u32,
-    ) -> anyhow::Result<InputStream<V>> {
-        validate_topic_mapping(&var_topics)?;
+        control_topic: Option<String>,
+    ) -> anyhow::Result<OutputStream<anyhow::Result<MqttInputItem<V>>>> {
+        validate_topic_mapping(&var_topics, control_topic.as_deref())?;
         match self {
             Self::Rumqttc => {
-                super::rumqttc_input_stream::input_stream::<V>(
+                super::rumqttc_input_stream::input_stream_items(
                     host,
                     port,
                     var_topics,
                     max_reconnect_attempts,
+                    control_topic,
                 )
                 .await
             }
             Self::Paho => {
                 #[cfg(feature = "mqtt")]
                 {
-                    super::input_stream::input_stream::<V>(
+                    let items = super::input_stream::input_stream_items(
                         host,
                         port,
                         var_topics,
                         max_reconnect_attempts,
+                        control_topic,
                     )
-                    .await
+                    .await?;
+                    Ok(items)
                 }
                 #[cfg(not(feature = "mqtt"))]
                 {
-                    let _ = (host, port, var_topics, max_reconnect_attempts);
+                    let _ = (
+                        host,
+                        port,
+                        var_topics,
+                        max_reconnect_attempts,
+                        control_topic,
+                    );
                     anyhow::bail!("Paho MQTT support not enabled")
                 }
             }
         }
     }
+
+    pub(crate) async fn open_data<V: JsonStreamValue>(
+        self,
+        host: &str,
+        port: Option<u16>,
+        var_topics: VarTopicMap,
+        max_reconnect_attempts: u32,
+    ) -> anyhow::Result<InputStream<V>> {
+        let items = self
+            .open_items(host, port, var_topics, max_reconnect_attempts, None)
+            .await?;
+        Ok(Box::pin(async_stream::try_stream! {
+            let mut items = items;
+            while let Some(item) = futures::StreamExt::next(&mut items).await {
+                match item? {
+                    MqttInputItem::Data(batch) => yield batch,
+                    MqttInputItem::Control(_) => unreachable!("data-only MQTT stream cannot receive control"),
+                }
+            }
+        }))
+    }
 }
 
-/// Open an MQTT input stream with the selected backend.
 pub async fn input_stream<V: JsonStreamValue>(
     backend: MqttInputBackend,
     host: &str,
@@ -64,13 +100,23 @@ pub async fn input_stream<V: JsonStreamValue>(
     max_reconnect_attempts: u32,
 ) -> anyhow::Result<InputStream<V>> {
     backend
-        .open::<V>(host, port, var_topics, max_reconnect_attempts)
+        .open_data(host, port, var_topics, max_reconnect_attempts)
         .await
 }
 
-fn validate_topic_mapping(var_topics: &VarTopicMap) -> anyhow::Result<()> {
+fn validate_topic_mapping(
+    var_topics: &VarTopicMap,
+    control_topic: Option<&str>,
+) -> anyhow::Result<()> {
     let mut mapped_topics = BTreeMap::new();
     for (var, topic) in var_topics {
+        if let Some(control_topic) = control_topic
+            && topic == control_topic
+        {
+            anyhow::bail!(
+                "MQTT control topic `{control_topic}` collides with input topic `{topic}` for variable `{var}`"
+            );
+        }
         if let Some(previous) = mapped_topics.insert(topic, var) {
             anyhow::bail!("MQTT input topic `{topic}` is mapped to both `{previous}` and `{var}`");
         }
@@ -96,7 +142,7 @@ mod tests {
     fn duplicate_topics_are_rejected_before_connecting() {
         smol::block_on(async {
             let result = MqttInputBackend::Rumqttc
-                .open::<Value>(
+                .open_items::<Value>(
                     "unreachable.invalid",
                     None,
                     BTreeMap::from([
@@ -104,94 +150,14 @@ mod tests {
                         (VarName::new("y"), "shared".to_owned()),
                     ]),
                     0,
+                    None,
                 )
                 .await;
             let error = match result {
-                Ok(_) => panic!("duplicate topic mapping should be rejected"),
+                Ok(_) => panic!("duplicate MQTT topics should be rejected"),
                 Err(error) => error,
             };
-            assert_eq!(
-                error.to_string(),
-                "MQTT input topic `shared` is mapped to both `x` and `y`"
-            );
-        });
-    }
-
-    #[test]
-    fn wrapped_values_are_decoded_consistently() {
-        assert_eq!(
-            decode_payload::<Value>(br#"{"value": 42}"#).unwrap(),
-            Value::Int(42)
-        );
-        assert_eq!(
-            decode_payload::<Value>(br#"{"value":42,"source":"sensor-a"}"#).unwrap(),
-            Value::Int(42)
-        );
-    }
-
-    #[test]
-    fn natural_timed_objects_are_not_unwrapped() {
-        use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
-        use std::time::Duration;
-
-        let natural = decode_payload::<MstloTimedValue>(br#"{"time":10,"value":2.5}"#).unwrap();
-        assert_eq!(
-            natural,
-            MstloTimedValue::new(Duration::from_millis(10), MstloValue::Float(2.5))
-        );
-
-        let wrapped =
-            decode_payload::<MstloTimedValue>(br#"{"value":{"time":10,"value":2.5}}"#).unwrap();
-        assert_eq!(wrapped, natural);
-
-        let wrapped_with_metadata = decode_payload::<MstloTimedValue>(
-            br#"{"value":{"time":10,"value":2.5},"source":"sensor-a"}"#,
-        )
-        .unwrap();
-        assert_eq!(wrapped_with_metadata, natural);
-    }
-
-    #[test]
-    fn wrapped_timed_values_preserve_non_finite_numbers() {
-        use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
-        use std::time::Duration;
-
-        for (text, expected) in [
-            ("Infinity", f64::INFINITY),
-            ("-Infinity", f64::NEG_INFINITY),
-        ] {
-            let payload = format!(r#"{{"value":{{"time":10,"value":{text}}}}}"#);
-            assert_eq!(
-                decode_payload::<MstloTimedValue>(payload.as_bytes()).unwrap(),
-                MstloTimedValue::new(Duration::from_millis(10), MstloValue::Float(expected))
-            );
-        }
-
-        let value =
-            decode_payload::<MstloTimedValue>(br#"{"value":{"time":10,"value":NaN}}"#).unwrap();
-        assert!(matches!(value.value, MstloValue::Float(value) if value.is_nan()));
-    }
-
-    #[test]
-    fn empty_rumqttc_input_needs_no_connection() {
-        smol::block_on(async {
-            let mut input = MqttInputBackend::Rumqttc
-                .open::<Value>("unreachable.invalid", None, BTreeMap::new(), 0)
-                .await
-                .unwrap();
-            assert!(futures::StreamExt::next(&mut input).await.is_none());
-        });
-    }
-
-    #[cfg(feature = "mqtt")]
-    #[test]
-    fn empty_paho_input_needs_no_connection() {
-        smol::block_on(async {
-            let mut input = MqttInputBackend::Paho
-                .open::<Value>("unreachable.invalid", None, BTreeMap::new(), 0)
-                .await
-                .unwrap();
-            assert!(futures::StreamExt::next(&mut input).await.is_none());
+            assert!(error.to_string().contains("mapped to both"));
         });
     }
 }

@@ -4416,7 +4416,7 @@ mod reconf_tests {
     use tc_testutils::streams::with_timeout;
     use tracing::info;
     use trustworthiness_checker::io::{
-        InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec,
+        InputPipeline, InputSource, OutputHandlerBuilder, OutputHandlerSpec,
     };
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
@@ -4428,19 +4428,21 @@ mod reconf_tests {
 
     const RECONF_TOPIC: &str = "RECONF_ME";
 
-    fn manual_input_factory(
+    fn manual_input_source(
         variables: impl IntoIterator<Item = &'static str>,
-    ) -> (InputStreamFactory, BTreeMap<VarName, FanoutSender<Value>>) {
+    ) -> (InputSource, BTreeMap<VarName, FanoutSender<Value>>) {
         let mut senders = BTreeMap::new();
         let mut fanouts = BTreeMap::new();
-        for variable in variables.into_iter().chain([RECONF_TOPIC]) {
+        for variable in variables {
             let (sender, fanout) = Fanout::new();
             let variable = VarName::new(variable);
             senders.insert(variable.clone(), sender);
             fanouts.insert(variable, fanout);
         }
+        let (control_sender, control) = Fanout::new();
+        senders.insert(RECONF_TOPIC.into(), control_sender);
         (
-            trustworthiness_checker::io::testing::input_factory(fanouts),
+            trustworthiness_checker::io::testing::input_source_with_control(fanouts, control),
             senders,
         )
     }
@@ -4458,6 +4460,12 @@ mod reconf_tests {
         var_val: (&str, Value),
         tx_fans: &mut BTreeMap<VarName, FanoutSender<Value>>,
     ) {
+        if var_val.0 == RECONF_TOPIC {
+            if let Some(fan) = tx_fans.get(&VarName::new(RECONF_TOPIC)) {
+                send_value(fan, var_val.1, VarName::new(RECONF_TOPIC)).await;
+            }
+            return;
+        }
         for (var, fan) in tx_fans.iter() {
             let val = if var.name() == var_val.0 {
                 var_val.1.clone()
@@ -4465,65 +4473,6 @@ mod reconf_tests {
                 Value::NoVal
             };
             send_value(fan, val, var.clone()).await;
-        }
-    }
-
-    #[apply(async_test)]
-    async fn test_reconf_simple_add_no_reconf(ex: Rc<LocalExecutor<'static>>) {
-        // Tests the ReconfSemiSyncRuntime with the simple add monitor, without actually sending a
-        // reconfiguration, to check that the basic input/output works as expected.
-        let spec = (spec_simple_add_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
-        let xs = vec![Value::Int(1), Value::Int(3)];
-        let ys = vec![Value::Int(2), Value::Int(4)];
-        let expected = vec![Value::NoVal, Value::Int(3), Value::Int(5), Value::Int(7)];
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
-
-        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
-        let monitor_builder = Box::new(
-            TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
-                .executor(ex.clone())
-                .model(spec.clone())
-                .input_factory(input_factory)
-                .output_builder(output_builder)
-                .reconf_topic(RECONF_TOPIC.into()),
-        );
-        let monitor = monitor_builder.build().await;
-        ex.spawn(monitor.run()).detach();
-
-        let mut z_iter = expected.into_iter();
-
-        for (x_exp, y_exp) in xs.into_iter().zip(ys.into_iter()) {
-            send_value_noval_others(("x", x_exp), &mut tx_fans).await;
-
-            let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
-                .await
-                .expect("failed to get result")
-                .expect("output channel closed");
-            let z_res = out_res
-                .remove(&"z".into())
-                .expect("output did not contain z");
-            let z_exp = z_iter.next().unwrap();
-            assert_eq!(z_res, z_exp);
-
-            send_value_noval_others(("y", y_exp), &mut tx_fans).await;
-
-            let mut out_res = with_timeout(out_rx.recv(), 1, "out_rx.next()")
-                .await
-                .expect("failed to get result")
-                .expect("output channel closed");
-            let z_res = out_res
-                .remove(&"z".into())
-                .expect("output did not contain z");
-            let z_exp = z_iter.next().unwrap();
-            assert_eq!(z_res, z_exp);
         }
     }
 
@@ -4544,7 +4493,7 @@ mod reconf_tests {
             Value::Int(14),
             Value::Int(16),
         ];
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
@@ -4557,7 +4506,7 @@ mod reconf_tests {
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
-            .input_factory(input_factory)
+            .input_pipeline(InputPipeline::new(input_factory))
             .expect("manual input factory should support reconfiguration")
             .output_handler_builder(output_builder)
             .runtime(RuntimeSpec::ReconfSemiSync)
@@ -4591,9 +4540,7 @@ mod reconf_tests {
 
         let typed_plus_one_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + y + 1";
         let reconf_json = serde_json::json!({
-            "spec": typed_plus_one_spec,
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": typed_plus_one_spec
         })
         .to_string();
 
@@ -4636,7 +4583,7 @@ mod reconf_tests {
         let spec = (spec_simple_add_monitor_typed())
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(out_tx))
@@ -4647,7 +4594,7 @@ mod reconf_tests {
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
-            .input_factory(input_factory)
+            .input_pipeline(InputPipeline::new(input_factory))
             .expect("manual input factory should support reconfiguration")
             .output_handler_builder(output_builder)
             .runtime(RuntimeSpec::ReconfSemiSync)
@@ -4665,9 +4612,7 @@ mod reconf_tests {
 
         let invalid_reconf_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + \"not an int\"";
         let reconf_json = serde_json::json!({
-            "spec": invalid_reconf_spec,
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": invalid_reconf_spec
         })
         .to_string();
 
@@ -4682,6 +4627,77 @@ mod reconf_tests {
             err.contains("Reconfigured spec failed type checking"),
             "expected type-checking error, got: {err}"
         );
+    }
+
+    #[apply(async_test)]
+    async fn test_general_builder_propagates_disabled_context_transfer(
+        ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let source = "in x: Int\nout z: Int\nz = x[1]";
+
+        for semantics in [
+            Semantics::Untimed,
+            Semantics::TypedUntimed,
+            Semantics::GradualTypedUntimed,
+        ] {
+            let spec = source
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
+            let (input_source, mut tx_fans) = manual_input_source(["x"]);
+            let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
+            let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(out_tx))
+                .executor(ex.clone())
+                .output_var_names(BTreeSet::from(["z".into()]))
+                .aux_info(vec![]);
+
+            let monitor = GeneralRuntimeBuilder::new()
+                .executor(ex.clone())
+                .model(spec)
+                .input_pipeline(InputPipeline::new(input_source))
+                .expect("manual input source should support reconfiguration")
+                .output_handler_builder(output_builder)
+                .runtime(RuntimeSpec::ReconfSemiSync)
+                .semantics(semantics)
+                .reconf_topic(RECONF_TOPIC.into())
+                .use_context_transfer(false)
+                .build()
+                .await;
+            ex.spawn(monitor.run()).detach();
+
+            send_value_noval_others(("x", Value::Int(7)), &mut tx_fans).await;
+            let mut first = with_timeout(out_rx.recv(), 3, "initial context-transfer output")
+                .await
+                .expect("failed to get initial output")
+                .expect("output channel closed");
+            assert_eq!(first.remove(&"z".into()), Some(Value::Deferred));
+
+            let sub_event_futs: Vec<_> = tx_fans
+                .iter()
+                .map(|(variable, sender)| {
+                    let fanout = sender.fanout();
+                    let seen = fanout.sub_events();
+                    let label = format!("replacement subscription on {variable}");
+                    Box::pin(async move {
+                        with_timeout(fanout.wait_for_sub_event(seen), 3, label.as_str()).await
+                    })
+                })
+                .collect();
+            let request = serde_json::json!({ "spec": source }).to_string();
+            send_value_noval_others((RECONF_TOPIC, Value::Str(request.into())), &mut tx_fans).await;
+            future::join_all(sub_event_futs).await;
+
+            send_value_noval_others(("x", Value::Int(11)), &mut tx_fans).await;
+            let mut replacement =
+                with_timeout(out_rx.recv(), 3, "replacement context-transfer output")
+                    .await
+                    .expect("failed to get replacement output")
+                    .expect("output channel closed");
+            assert_eq!(
+                replacement.remove(&"z".into()),
+                Some(Value::Deferred),
+                "context transfer was not disabled for {semantics:?}",
+            );
+        }
     }
 
     #[apply(async_test)]
@@ -4704,7 +4720,7 @@ mod reconf_tests {
             Value::Int(14),
             Value::Int(16),
         ];
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
@@ -4718,7 +4734,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -4761,9 +4777,7 @@ mod reconf_tests {
         info!("Finished pre-reconf phase, now sending reconf");
         // Reconfigure: send the new spec via RECONF_TOPIC
         let reconf_json = serde_json::json!({
-            "spec": spec_simple_add_monitor_plus_one(),
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": spec_simple_add_monitor_plus_one()
         })
         .to_string();
 
@@ -4836,7 +4850,7 @@ mod reconf_tests {
             Value::Int(12),
         ];
 
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -4849,7 +4863,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -4891,9 +4905,7 @@ mod reconf_tests {
         info!("Finished pre-reconf phase, now sending reconf");
         // Reconfigure: send the new spec via RECONF_TOPIC
         let reconf_json = serde_json::json!({
-            "spec": spec_acc_monitor(),
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": spec_acc_monitor()
         })
         .to_string();
 
@@ -4957,7 +4969,7 @@ mod reconf_tests {
 
         // Note: Defines Fanout for y initially but is not used until after reconf.
         // Needed because we cannot modify the InputStreamFactory after giving it to Runtime
-        let (input_factory, mut tx_fans) = manual_input_factory(["x", "y"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -4970,7 +4982,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -4998,9 +5010,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_simple_add_monitor(),
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": spec_simple_add_monitor()
         })
         .to_string();
 
@@ -5065,7 +5075,7 @@ mod reconf_tests {
         let ws = vec![Value::Int(2), Value::Int(3)];
         let ws_len = ws.len();
 
-        let (input_factory, mut tx_fans) = manual_input_factory(["x"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -5078,7 +5088,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -5112,9 +5122,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_assignment_monitor(),
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": spec_assignment_monitor()
         })
         .to_string();
 
@@ -5172,7 +5180,7 @@ mod reconf_tests {
         let ws = vec![Value::Int(4), Value::Int(5)];
         let ws_len = ws.len();
 
-        let (input_factory, mut tx_fans) = manual_input_factory(["x"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -5185,7 +5193,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -5219,9 +5227,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_assignment2_monitor(),
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": spec_assignment2_monitor()
         })
         .to_string();
 
@@ -5284,7 +5290,7 @@ mod reconf_tests {
             Value::Int(4),
         ];
 
-        let (input_factory, mut tx_fans) = manual_input_factory(["x"]);
+        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
         let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -5297,7 +5303,7 @@ mod reconf_tests {
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
-                .input_factory(input_factory)
+                .input_pipeline(InputPipeline::new(input_factory))
                 .output_builder(output_builder)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
@@ -5324,9 +5330,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": "in x\nout z\nz = x[1] + 1",
-            "type_info": {},
-            "topic_mapping": {}
+            "spec": "in x\nout z\nz = x[1] + 1"
         })
         .to_string();
 
@@ -5405,7 +5409,7 @@ mod reconf_tests {
                 ]
             };
 
-            let (input_factory, mut tx_fans) = manual_input_factory(["x"]);
+            let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
             let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -5418,7 +5422,7 @@ mod reconf_tests {
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
-                    .input_factory(input_factory)
+                    .input_pipeline(InputPipeline::new(input_factory))
                     .output_builder(output_builder)
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
@@ -5451,9 +5455,7 @@ mod reconf_tests {
 
             info!("Finished pre-reconf phase, now sending reconf");
             let reconf_json = serde_json::json!({
-                "spec": second_spec,
-                "type_info": {},
-                "topic_mapping": {}
+                "spec": second_spec
             })
             .to_string();
 
@@ -5529,7 +5531,7 @@ mod reconf_tests {
                 ]
             };
 
-            let (input_factory, mut tx_fans) = manual_input_factory(["x"]);
+            let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
             let output_spec = OutputHandlerSpec::Manual(out_tx);
@@ -5542,7 +5544,7 @@ mod reconf_tests {
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
-                    .input_factory(input_factory)
+                    .input_pipeline(InputPipeline::new(input_factory))
                     .output_builder(output_builder)
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
@@ -5570,9 +5572,7 @@ mod reconf_tests {
 
             info!("Finished pre-reconf phase, now sending reconf");
             let reconf_json = serde_json::json!({
-                "spec": "in x\nout z\nz = default(z[1], 0) + 1 + x - x",
-                "type_info": {},
-                "topic_mapping": {}
+                "spec": "in x\nout z\nz = default(z[1], 0) + 1 + x - x"
             })
             .to_string();
 

@@ -14,8 +14,8 @@ use crate::core::OutputHandler;
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
-use crate::io::InputStreamFactory;
 use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
+use crate::io::{InputPipeline, InputSource};
 use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
@@ -266,7 +266,7 @@ pub async fn monitor_outputs_typed_dataflow(
 pub async fn monitor_outputs_untyped_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
-    input_factory: InputStreamFactory,
+    input_source: InputSource,
     output_handler_builder: OutputHandlerBuilder,
     use_context_transfer: bool,
 ) {
@@ -275,7 +275,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
             .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
             .executor(executor)
             .model(spec)
-            .input_factory(input_factory)
+            .input_pipeline(InputPipeline::new(input_source))
             .output_builder(output_handler_builder)
             .reconf_topic(RECONF_TOPIC.into())
             .use_context_transfer(use_context_transfer);
@@ -337,9 +337,9 @@ pub async fn monitor_outputs_typed_async(
     async_monitor.run().await.expect("Error running monitor");
 }
 
-pub fn input_factory_dsrv_paper_bench(
+pub fn input_source_dsrv_paper_bench(
     var_names: BTreeSet<VarName>,
-) -> (InputStreamFactory, BTreeMap<VarName, FanoutSender<Value>>) {
+) -> (InputSource, BTreeMap<VarName, FanoutSender<Value>>) {
     let mut tx_fans: BTreeMap<VarName, FanoutSender<Value>> = BTreeMap::new();
     let mut fanouts: BTreeMap<VarName, Rc<Fanout<Value>>> = BTreeMap::new();
 
@@ -348,13 +348,12 @@ pub fn input_factory_dsrv_paper_bench(
         fanouts.insert(name.clone(), fan);
         tx_fans.insert(name, tx);
     }
-    let (tx_r, fr) = Fanout::new();
-    fanouts.insert(RECONF_TOPIC.into(), fr);
+    let (tx_r, control) = Fanout::new();
     tx_fans.insert(RECONF_TOPIC.into(), tx_r);
 
-    let input_factory = crate::io::testing::input_factory(fanouts);
+    let input_source = crate::io::testing::input_source_with_control(fanouts, control);
 
-    (input_factory, tx_fans)
+    (input_source, tx_fans)
 }
 
 pub fn output_builder_dsrv_paper_bench(

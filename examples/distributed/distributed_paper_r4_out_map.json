@@ -1,34 +1,34 @@
 {
-  "CS4Alert": {
-    "topic": "/CS4Alert",
-    "msg_type": "Int32"
-  },
-  "SC4Alert": {
-    "topic": "/SC4Alert",
-    "msg_type": "Int32"
-  },
-  "VL4Alert": {
-    "topic": "/VL4Alert",
-    "msg_type": "Int32"
-  },
-  "HC4Alert": {
-    "topic": "/HC4Alert",
-    "msg_type": "Int32"
-  },
-  "aabbR4C": {
-    "topic": "/aabbR4C",
-    "msg_type": "Bool"
-  },
-  "aabbR4S": {
-    "topic": "/aabbR4S",
-    "msg_type": "Bool"
-  },
-  "aabbR4V": {
-    "topic": "/aabbR4V",
-    "msg_type": "Bool"
-  },
-  "aabbR4H": {
-    "topic": "/aabbR4H",
-    "msg_type": "Bool"
-  }
+  "CS4Alert": [
+    "/CS4Alert",
+    "Int32"
+  ],
+  "SC4Alert": [
+    "/SC4Alert",
+    "Int32"
+  ],
+  "VL4Alert": [
+    "/VL4Alert",
+    "Int32"
+  ],
+  "HC4Alert": [
+    "/HC4Alert",
+    "Int32"
+  ],
+  "aabbR4C": [
+    "/aabbR4C",
+    "Bool"
+  ],
+  "aabbR4S": [
+    "/aabbR4S",
+    "Bool"
+  ],
+  "aabbR4V": [
+    "/aabbR4V",
+    "Bool"
+  ],
+  "aabbR4H": [
+    "/aabbR4H",
+    "Bool"
+  ]
 }

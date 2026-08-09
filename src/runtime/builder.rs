@@ -22,7 +22,7 @@ use crate::{
         StreamType,
     },
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputStreamFactory, OutputHandlerBuilder},
+    io::{InputPipeline, OutputHandlerBuilder},
     lang::dsrv::{
         DsrvPipelineError, TypeCheckOptions,
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
@@ -319,6 +319,29 @@ fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecif
     })
 }
 
+fn configure_reconfigurable_builder<AC, MS>(
+    builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
+    input_pipeline: InputPipeline<Value>,
+    output_builder: OutputHandlerBuilder<Value>,
+    reconf_topic: Option<String>,
+    use_context_transfer: bool,
+) -> ReconfSemiSyncRuntimeBuilder<AC, MS>
+where
+    AC: AsyncConfig<Val = Value, Ctx = SemiSyncContext<AC>>,
+    AC::Expr: crate::lang::core::DependencyGraphExpr + PartialEq + Debug,
+    AC::Spec: crate::lang::core::DependencyGraphSpec,
+    MS: crate::semantics::MonitoringSemantics<AC>,
+{
+    let builder = builder
+        .input_pipeline(input_pipeline)
+        .output_builder(output_builder)
+        .use_context_transfer(use_context_transfer);
+    match reconf_topic {
+        Some(topic) => builder.reconf_topic(topic),
+        None => builder,
+    }
+}
+
 impl<
     V: StreamData,
     Mon: Runtime + 'static,
@@ -602,7 +625,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     input: Option<InputStream<V>>,
-    input_factory: Option<InputStreamFactory<V>>,
+    input_pipeline: Option<InputPipeline<V>>,
     pub output: Option<Box<dyn OutputHandler<Val = V>>>,
     pub output_handler_builder: Option<OutputHandlerBuilder<V>>,
     pub runtime: RuntimeSpec,
@@ -610,7 +633,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
     pub scheduler_mode: SchedulerCommunication,
-    pub reconf_topic: String,
+    pub reconf_topic: Option<String>,
     pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
     pub topic_mapping: Option<TopicMapping>,
@@ -696,7 +719,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
 
     pub fn reconf_topic(self, reconf_topic: String) -> Self {
         Self {
-            reconf_topic,
+            reconf_topic: Some(reconf_topic),
             ..self
         }
     }
@@ -734,20 +757,18 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
 }
 
 impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
-    pub fn input_factory(self, builder: InputStreamFactory<Value>) -> anyhow::Result<Self> {
-        builder.ensure_reconfigurable()?;
+    pub fn input_pipeline(self, pipeline: InputPipeline<Value>) -> anyhow::Result<Self> {
         Ok(Self {
-            input_factory: Some(builder),
+            input_pipeline: Some(pipeline),
             ..self
         })
     }
 }
 
 impl GeneralRuntimeBuilder<LangSpecification, Value> {
-    pub fn input_factory(self, builder: InputStreamFactory<Value>) -> anyhow::Result<Self> {
-        builder.ensure_reconfigurable()?;
+    pub fn input_pipeline(self, pipeline: InputPipeline<Value>) -> anyhow::Result<Self> {
         Ok(Self {
-            input_factory: Some(builder),
+            input_pipeline: Some(pipeline),
             ..self
         })
     }
@@ -780,7 +801,7 @@ impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpec
             executor: None,
             model: None,
             input: None,
-            input_factory: None,
+            input_pipeline: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -790,7 +811,7 @@ impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpec
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: "reconf".to_string(),
+            reconf_topic: None,
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
@@ -841,7 +862,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
-                    input_factory: self.input_factory,
+                    input_pipeline: self.input_pipeline,
                     output: self.output,
                     output_handler_builder: self.output_handler_builder,
                     runtime: self.runtime,
@@ -865,7 +886,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
-                    input_factory: self.input_factory,
+                    input_pipeline: self.input_pipeline,
                     output: self.output,
                     output_handler_builder: self.output_handler_builder,
                     runtime: match self.runtime {
@@ -902,7 +923,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             executor: None,
             model: None,
             input: None,
-            input_factory: None,
+            input_pipeline: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -912,7 +933,7 @@ impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpec
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: "reconf".to_string(),
+            reconf_topic: None,
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
@@ -966,7 +987,7 @@ where
             executor: None,
             model: None,
             input: None,
-            input_factory: None,
+            input_pipeline: None,
             output: None,
             output_handler_builder: None,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -976,7 +997,7 @@ where
             var_msg_types: None,
             topic_mapping: None,
             scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: "reconf".to_string(),
+            reconf_topic: None,
             use_context_transfer: true,
             mstlo_algorithm: Algorithm::default(),
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
@@ -1035,8 +1056,8 @@ where
 
     pub async fn build(self) -> Box<dyn Runtime> {
         assert!(
-            self.input_factory.is_none(),
-            "InputStreamFactory is only supported by ReconfigurableSemiSync DSRV runtimes"
+            self.input_pipeline.is_none(),
+            "InputPipeline is only supported by ReconfigurableSemiSync DSRV runtimes"
         );
         let RuntimeSpec::Mstlo(execution_policy) = self.runtime else {
             panic!("MSTLO builder requires RuntimeSpec::Mstlo")
@@ -1080,9 +1101,9 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         model: Option<DsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
-        input_factory: Option<InputStreamFactory>,
+        input_pipeline: Option<InputPipeline>,
         output_handler_builder: Option<OutputHandlerBuilder>,
-        reconf_topic: String,
+        reconf_topic: Option<String>,
         use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
         var_msg_types: Option<MsgTypeMapping>,
@@ -1128,49 +1149,54 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     >::new()))
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::Untimed) => {
-                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                        SemiSyncValueConfig,
-                        UntimedDsrvSemantics,
-                    >::new()
-                    .parse_spec(parse_unchecked_spec);
-                    builder = builder.reconf_topic(reconf_topic);
-                    builder = builder.use_context_transfer(use_context_transfer);
-                    builder = builder.input_factory(input_factory.expect(
-                        "Input stream builder required for ReconfigurableSemiSync runtime",
-                    ));
-                    builder = builder.output_builder(output_handler_builder.expect(
-                        "Output handler builder required for ReconfigurableSemiSync runtime",
-                    ));
+                    let builder = configure_reconfigurable_builder(
+                        ReconfSemiSyncRuntimeBuilder::<
+                            SemiSyncValueConfig,
+                            UntimedDsrvSemantics,
+                        >::new()
+                        .parse_spec(parse_unchecked_spec),
+                        input_pipeline
+                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
+                        output_handler_builder.expect(
+                            "Output handler builder required for ReconfigurableSemiSync runtime",
+                        ),
+                        reconf_topic,
+                        use_context_transfer,
+                    );
                     Box::new(builder)
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::TypedUntimed) => {
-                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                        CheckedSemiSyncValueConfig,
-                        CheckedUntimedDsrvSemantics,
-                    >::new()
-                    .parse_spec(parse_checked_spec);
-                    builder = builder.reconf_topic(reconf_topic);
-                    builder = builder.input_factory(input_factory.expect(
-                        "Input stream builder required for ReconfigurableSemiSync runtime",
-                    ));
-                    builder = builder.output_builder(output_handler_builder.expect(
-                        "Output handler builder required for ReconfigurableSemiSync runtime",
-                    ));
+                    let builder = configure_reconfigurable_builder(
+                        ReconfSemiSyncRuntimeBuilder::<
+                            CheckedSemiSyncValueConfig,
+                            CheckedUntimedDsrvSemantics,
+                        >::new()
+                        .parse_spec(parse_checked_spec),
+                        input_pipeline
+                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
+                        output_handler_builder.expect(
+                            "Output handler builder required for ReconfigurableSemiSync runtime",
+                        ),
+                        reconf_topic,
+                        use_context_transfer,
+                    );
                     Box::new(TypeCheckingBuilder(builder))
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed) => {
-                    let mut builder = ReconfSemiSyncRuntimeBuilder::<
-                        CheckedSemiSyncValueConfig,
-                        CheckedUntimedDsrvSemantics,
-                    >::new()
-                    .parse_spec(parse_gradually_checked_spec);
-                    builder = builder.reconf_topic(reconf_topic);
-                    builder = builder.input_factory(input_factory.expect(
-                        "Input stream builder required for ReconfigurableSemiSync runtime",
-                    ));
-                    builder = builder.output_builder(output_handler_builder.expect(
-                        "Output handler builder required for ReconfigurableSemiSync runtime",
-                    ));
+                    let builder = configure_reconfigurable_builder(
+                        ReconfSemiSyncRuntimeBuilder::<
+                            CheckedSemiSyncValueConfig,
+                            CheckedUntimedDsrvSemantics,
+                        >::new()
+                        .parse_spec(parse_gradually_checked_spec),
+                        input_pipeline
+                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
+                        output_handler_builder.expect(
+                            "Output handler builder required for ReconfigurableSemiSync runtime",
+                        ),
+                        reconf_topic,
+                        use_context_transfer,
+                    );
                     Box::new(GradualTypeCheckingBuilder(builder))
                 }
                 (RuntimeSpec::Async, Semantics::TypedUntimed) => {
@@ -1385,22 +1411,22 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.distribution_mode
             }
         };
-        let (input_factory, input) = if self.runtime == RuntimeSpec::ReconfSemiSync {
+        let (input_pipeline, input) = if self.runtime == RuntimeSpec::ReconfSemiSync {
             assert!(
                 self.input.is_none(),
-                "ReconfigurableSemiSync runtime requires an InputStreamFactory"
+                "ReconfigurableSemiSync runtime requires an InputPipeline"
             );
             (
                 Some(
-                    self.input_factory
-                        .expect("ReconfigurableSemiSync runtime requires an InputStreamFactory"),
+                    self.input_pipeline
+                        .expect("ReconfigurableSemiSync runtime requires an InputPipeline"),
                 ),
                 None,
             )
         } else {
             assert!(
-                self.input_factory.is_none(),
-                "InputStreamFactory is only supported by ReconfigurableSemiSync runtime"
+                self.input_pipeline.is_none(),
+                "InputPipeline is only supported by ReconfigurableSemiSync runtime"
             );
             (None, self.input)
         };
@@ -1412,7 +1438,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.model,
                 distribution_mode,
                 self.scheduler_mode,
-                input_factory,
+                input_pipeline,
                 self.output_handler_builder.clone(),
                 self.reconf_topic.clone(),
                 self.use_context_transfer,

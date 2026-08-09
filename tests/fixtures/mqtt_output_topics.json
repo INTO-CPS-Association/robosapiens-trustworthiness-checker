@@ -1,5 +1,3 @@
 {
-  "z": {
-    "topic": "z_mqtt_file"
-  }
+  "z": "z_mqtt_file"
 }

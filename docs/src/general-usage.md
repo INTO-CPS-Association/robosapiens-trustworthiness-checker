@@ -59,6 +59,71 @@ The result is then published on topic `z` as:
 }
 ```
 
+### Input route catalogs
+
+The generic `--mqtt-input` and `--redis-input` modes are single-source defaults:
+the current specification supplies the input variables and their route names.
+Use a compact route catalog when transport routes differ from model variable
+names:
+
+```json
+{
+  "x": "/robot/input/x",
+  "pose": ["/robot/pose", "Pose2D"]
+}
+```
+
+Pass this form with `--input-mqtt-file`, `--input-redis-file`, or
+`--input-ros-file`. MQTT and Redis normally use string routes with their JSON
+codec; ROS routes include the message codec in the two-element array. The same
+compact object shape is used by the corresponding output route-file options.
+
+For several named sources, put source ownership and route catalogs in one
+`--input-config` file:
+
+```json
+{
+  "default": "robot-mqtt",
+  "sources": {
+    "robot-mqtt": {
+      "kind": "mqtt",
+      "routes": {
+        "alarm": "/robot/alarm"
+      }
+    },
+    "robot-ros": {
+      "kind": "ros",
+      "routes": {
+        "pose": ["/robot/pose", "Pose2D"]
+      }
+    }
+  }
+}
+```
+
+A variable may be owned by only one source in this owned local source set.
+`--input-config` is exclusive with the other input-selection flags. See
+[Reconfiguration](./reconfiguration.md) for the optional control route and
+compact monitor-configuration messages.
+
+### Input windows
+
+Input windows are applied after source composition. Configure a time bound,
+update bound, or both:
+
+```bash
+cargo run -- examples/simple_add.dsrv --mqtt-input --output-stdout \
+  --input-window-ms 25 --input-window-mode batch
+```
+
+`batch` preserves logical tick and simultaneous-step boundaries. `atomic-step`
+reduces all updates in a window to one simultaneous step using last-update-wins
+for each variable. If a window bound is supplied without a mode, `batch` is
+used. The update limit is a flush threshold and soft bound, not a hard maximum:
+the window flushes after accepting a complete logical tick that reaches or
+exceeds the threshold. One atomic logical tick is never split, so a wide
+simultaneous tick can exceed the nominal limit.
+
 ## ROS2 Usage
 
 For ROS2-based monitoring, run the TC with the `ros` feature enabled. I.e., `cargo run --features ros -- <other options>`
@@ -108,10 +173,7 @@ MSTLO uses the generated `robo_sapiens_interfaces/msg/MstloTimedValue` message r
 
 ```json
 {
-  "x": {
-    "topic": "/signals/x",
-    "msg_type": "MstloTimedValue"
-  }
+  "x": ["/signals/x", "MstloTimedValue"]
 }
 ```
 

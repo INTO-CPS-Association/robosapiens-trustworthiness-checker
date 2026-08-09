@@ -11,6 +11,7 @@ use trustworthiness_checker::benches_common::monitor_outputs_typed_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
+use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dsrv_fixtures::simple_add_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
@@ -110,7 +111,7 @@ fn from_elem(c: &mut Criterion) {
                         benchmark_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
-                        trustworthiness_checker::core::Semantics::TypedUntimed,
+                        Semantics::TypedUntimed,
                     )
                 })
             },

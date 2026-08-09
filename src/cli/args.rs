@@ -94,8 +94,8 @@ pub enum MstloSynchronizationStrategy {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
-pub enum InputAggregationMode {
-    PreserveTicks,
+pub enum InputWindowMode {
+    Batch,
     AtomicStep,
 }
 
@@ -127,7 +127,10 @@ pub struct InputMode {
         long,
         help = "ROS topics configuration file for input (requires running with `--features ros`)"
     )]
-    pub input_ros_file: Option<String>,
+    pub input_ros_file: Option<PathBuf>,
+
+    #[clap(long, help = "Named multi-source input configuration file")]
+    pub input_config: Option<PathBuf>,
 }
 
 /// Output handler configuration for monitoring results
@@ -367,33 +370,27 @@ pub struct Cli {
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
 
-    #[arg(
-        long,
-        help = "Maximum aggregation delay for independent-event inputs, in milliseconds"
-    )]
-    pub input_aggregation_delay_ms: Option<u64>,
+    #[arg(long, help = "Maximum input window delay in milliseconds")]
+    pub input_window_ms: Option<u64>,
 
     #[arg(
         long,
         value_enum,
-        requires = "input_aggregation_delay_ms",
-        help = "Whether aggregated events preserve logical ticks or form one atomic tick"
+        help = "Input window semantics: batch preserves ticks; atomic-step applies last-update-wins"
     )]
-    pub input_aggregation_mode: Option<InputAggregationMode>,
+    pub input_window_mode: Option<InputWindowMode>,
 
     #[arg(
         long,
-        requires = "input_aggregation_delay_ms",
-        help = "Optional raw-event limit that emits an input aggregation early"
+        help = "Input-window flush threshold in variable updates; a logical tick is never split"
     )]
-    pub input_aggregation_event_limit: Option<NonZeroUsize>,
+    pub input_window_update_limit: Option<NonZeroUsize>,
 
     #[arg(
         long,
-        help = "Topic name for reconfiguration when using reconfiguration runtime",
-        default_value = "reconfig"
+        help = "Override the selected source's reconfiguration route; otherwise use its configured route or `reconf`"
     )]
-    pub reconf_topic: String,
+    pub reconf_topic: Option<String>,
 
     #[arg(
         long = "no-context-transfer",
@@ -408,6 +405,42 @@ pub struct Cli {
         default_value = "/dist_graph"
     )]
     pub ros_dist_graph_topic: String,
+}
+
+impl Cli {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let reconfigurable = self.runtime == RuntimeKind::ReconfSemiSync;
+        anyhow::ensure!(
+            reconfigurable || (!self.no_context_transfer && self.reconf_topic.is_none()),
+            "monitor reconfiguration flags require --runtime reconf-semi-sync"
+        );
+        if let Some(topic) = &self.reconf_topic {
+            anyhow::ensure!(!topic.trim().is_empty(), "--reconf-topic cannot be empty");
+        }
+        if reconfigurable {
+            anyhow::ensure!(
+                self.input_mode.input_file.is_none(),
+                "--input-file cannot be used with --runtime reconf-semi-sync"
+            );
+        }
+        if self.input_window_mode.is_some()
+            && self.input_window_ms.is_none()
+            && self.input_window_update_limit.is_none()
+        {
+            anyhow::bail!(
+                "--input-window-mode requires --input-window-ms or --input-window-update-limit"
+            );
+        }
+        if matches!(self.input_window_mode, Some(InputWindowMode::AtomicStep))
+            && self.input_mode.input_file.is_some()
+            && self.input_window_update_limit.is_none()
+        {
+            anyhow::bail!(
+                "atomic-step windows for --input-file require --input-window-update-limit"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

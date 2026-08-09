@@ -21,6 +21,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use crate::core::input;
     use crate::{Value, io::file};
 
     use super::*;
@@ -36,7 +37,7 @@ mod tests {
 
     async fn values(data: crate::io::file::UntimedInputFileData, var: &str) -> Vec<Value> {
         let input = file::input_stream(data, std::collections::BTreeSet::from([var.into()]));
-        crate::into_tick_stream(input)
+        input::into_tick_stream(input)
             .map(Result::unwrap)
             .flat_map(futures::stream::iter)
             .map(|event| event.value)
@@ -51,7 +52,7 @@ mod tests {
             parse_file(parse_untimed, file).await.unwrap(),
             std::collections::BTreeSet::from(["x".into()]),
         );
-        let x_vals = crate::into_tick_stream(input)
+        let x_vals = input::into_tick_stream(input)
             .map(|tick| tick.unwrap().into_iter().next().unwrap().value)
             .collect::<Vec<_>>()
             .await;
@@ -65,7 +66,7 @@ mod tests {
             parse_file(parse_untimed, file).await.unwrap(),
             std::collections::BTreeSet::from(["payload".into()]),
         );
-        let payload_vals = crate::into_tick_stream(input)
+        let payload_vals = input::into_tick_stream(input)
             .map(|tick| tick.unwrap().into_iter().next().unwrap().value)
             .collect::<Vec<_>>()
             .await;

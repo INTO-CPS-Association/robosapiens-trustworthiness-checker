@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -14,12 +14,13 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{
-    DistributionModeBuilder, input_factory, output_handler_spec,
+    DistributionModeBuilder, input_source, output_handler_spec, route_mappings,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
-    AggregationSemantics, InputAggregation, InputStreamFactory, OutputHandlerBuilder,
+    InputConfigFile, InputPipeline, InputReduction, InputSources, InputStage, InputWindow,
+    OutputHandlerBuilder,
 };
 use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
@@ -33,7 +34,7 @@ use trustworthiness_checker::{Value, VarName};
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{
-    Cli, InputAggregationMode, Language, OutputMode, resolve_runtime,
+    Cli, InputWindowMode, Language, OutputMode, resolve_runtime,
 };
 
 #[global_allocator]
@@ -46,6 +47,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let cli = Cli::from_arg_matches(&matches)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
         .context("Failed to parse CLI arguments")?;
+    cli.validate().context("Invalid CLI combination")?;
 
     let _log_guard = init_tracing(cli.log_file.as_deref())?;
     debug!("CLI arguments: {:?}", cli);
@@ -82,7 +84,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.runtime(runtime);
 
-    let builder = builder.reconf_topic(cli.reconf_topic.clone());
+    let builder = if let Some(topic) = cli.reconf_topic.clone() {
+        builder.reconf_topic(topic)
+    } else {
+        builder
+    };
 
     let builder = builder.use_context_transfer(!cli.no_context_transfer);
 
@@ -158,23 +164,22 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         "Input variables selected for subscription"
     );
 
-    // Configure the input stream factory.
-    let input_factory = configure_input_aggregation(
-        input_factory(
-            cli.input_mode.clone(),
-            executor.clone(),
-            mqtt_port,
-            redis_port,
-            cli.mqtt_input_backend(),
-        )?,
+    // Configure the reusable input pipeline. Resource acquisition happens in
+    // `build`, after the model's requested variables are known.
+    let input_pipeline = configure_input_pipeline::<Value>(
+        cli.input_mode.clone(),
+        executor.clone(),
+        mqtt_port,
+        redis_port,
+        cli.mqtt_input_backend(),
         &cli,
     )?;
     let builder = if matches!(runtime, RuntimeSpec::ReconfSemiSync) {
-        builder.input_factory(input_factory)?
+        builder.input_pipeline(input_pipeline)?
     } else {
         builder.input(
-            input_factory
-                .open(subscribed_input_vars)
+            input_pipeline
+                .build(subscribed_input_vars)
                 .await
                 .context("Input stream could not be built")?,
         )
@@ -188,50 +193,19 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         .redis_port(redis_port)
         .aux_info(aux_info);
 
-    // Get variable message types mapping and ROS topic mapping
-    let (var_msg_types, topic_mapping): (
-        Option<BTreeMap<VarName, String>>,
-        Option<BTreeMap<VarName, String>>,
-    ) = match &cli.output_mode {
+    // Keep the compact ROS route catalog available to the output/runtime
+    // builder without reparsing the legacy nested format.
+    let (var_msg_types, topic_mapping) = match &cli.output_mode {
         OutputMode {
-            output_ros_file: Some(_output_ros_file),
+            output_ros_file: Some(path),
             ..
         } => {
-            // TODO: use cfg-if feature in next Rust version instead of this
-            // more verbose syntax
-            #[cfg(feature = "ros")]
-            {
-                // TODO: refactor to avoid reading the file twice (not done
-                // currently as this would couple the output handler building
-                // and the runtime building)
-
-                use trustworthiness_checker::io::config::deserialisation::json_to_topic_msg_type_mapping;
-
-                let output_json = std::fs::read_to_string(_output_ros_file)
-                    .expect("Output mapping file could not be read");
-                let (output_topics, output_types) = json_to_topic_msg_type_mapping(&output_json)
-                    .expect("Output mapping file could not be parsed");
-
-                let (input_types, input_topics) = match &cli.input_mode.input_ros_file {
-                    Some(input_ros_file) => {
-                        let input_json = std::fs::read_to_string(input_ros_file)
-                            .expect("Input mapping file could not be read");
-                        let (input_topics, input_types) =
-                            json_to_topic_msg_type_mapping(&input_json)
-                                .expect("Input mapping file could not be parsed");
-                        (input_types, input_topics)
-                    }
-                    None => (BTreeMap::new(), BTreeMap::new()),
-                };
-
-                let merged_types = input_types.into_iter().chain(output_types).collect();
-                let merged_topics = input_topics.into_iter().chain(output_topics).collect();
-                (Some(merged_types), Some(merged_topics))
-            }
-            #[cfg(not(feature = "ros"))]
-            {
-                unimplemented!("Attempted to set a ROS topic mapping when ROS support not enabled")
-            }
+            let contents = std::fs::read_to_string(path)
+                .with_context(|| format!("Output route catalog {path:?} could not be read"))?;
+            let routes =
+                trustworthiness_checker::io::config::deserialisation::json_to_routes(&contents)?;
+            let (topics, codecs) = route_mappings(routes, true)?;
+            (Some(codecs), Some(topics))
         }
         _ => (None, None),
     };
@@ -260,19 +234,17 @@ async fn run_mstlo(
         .context("MSTLO model file could not be parsed")?;
     info!(%model, "Parsed MSTLO model");
 
-    let input_factory = configure_input_aggregation(
-        input_factory::<MstloTimedValue>(
-            cli.input_mode.clone(),
-            executor.clone(),
-            cli.mqtt_port,
-            cli.redis_port,
-            cli.mqtt_input_backend(),
-        )?,
+    let input_pipeline = configure_input_pipeline::<MstloTimedValue>(
+        cli.input_mode.clone(),
+        executor.clone(),
+        cli.mqtt_port,
+        cli.redis_port,
+        cli.mqtt_input_backend(),
         &cli,
     )?;
 
-    let input = input_factory
-        .open(model.input_vars())
+    let input = input_pipeline
+        .build(model.input_vars())
         .await
         .context("MSTLO input stream could not be built")?;
     let output_vars = model.output_vars();
@@ -306,25 +278,64 @@ async fn run_mstlo(
     monitor.run().await
 }
 
-fn configure_input_aggregation<V>(
-    input_factory: InputStreamFactory<V>,
+fn configure_input_pipeline<V>(
+    input_mode: trustworthiness_checker::cli::args::InputMode,
+    executor: Rc<LocalExecutor<'static>>,
+    mqtt_port: Option<u16>,
+    redis_port: Option<u16>,
+    mqtt_backend: trustworthiness_checker::io::mqtt::MqttInputBackend,
     cli: &Cli,
-) -> anyhow::Result<InputStreamFactory<V>> {
-    let Some(delay_ms) = cli.input_aggregation_delay_ms else {
-        return Ok(input_factory);
+) -> anyhow::Result<InputPipeline<V>>
+where
+    V: trustworthiness_checker::core::FileInputValue
+        + trustworthiness_checker::core::RosStreamValue
+        + 'static,
+{
+    let mut pipeline = if let Some(path) = &input_mode.input_config {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("input config {path:?} could not be read"))?;
+        let config: InputConfigFile =
+            serde_json5::from_str(&contents).context("input config could not be parsed")?;
+        let sources =
+            InputSources::<V>::from_config(config, executor, mqtt_port, redis_port, mqtt_backend)?;
+        InputPipeline::from_sources(sources)
+    } else {
+        InputPipeline::new(input_source(
+            input_mode,
+            executor,
+            mqtt_port,
+            redis_port,
+            mqtt_backend,
+        )?)
     };
-    let semantics = match cli
-        .input_aggregation_mode
-        .unwrap_or(InputAggregationMode::PreserveTicks)
-    {
-        InputAggregationMode::PreserveTicks => AggregationSemantics::PreserveTicks,
-        InputAggregationMode::AtomicStep => AggregationSemantics::CoalesceToAtomicStep,
-    };
-    let mut aggregation = InputAggregation::new(Duration::from_millis(delay_ms), semantics);
-    if let Some(event_limit) = cli.input_aggregation_event_limit {
-        aggregation = aggregation.with_event_limit(event_limit);
+
+    if let Some(window_ms) = cli.input_window_ms {
+        let window = InputWindow::new(
+            Some(Duration::from_millis(window_ms)),
+            cli.input_window_update_limit,
+        )?;
+        pipeline = pipeline.with_stage(
+            match cli.input_window_mode.unwrap_or(InputWindowMode::Batch) {
+                InputWindowMode::Batch => InputStage::Batch(window),
+                InputWindowMode::AtomicStep => InputStage::WindowToStep {
+                    window,
+                    reduction: InputReduction::LastUpdateWins,
+                },
+            },
+        )?;
+    } else if cli.input_window_update_limit.is_some() {
+        let window = InputWindow::new(None, cli.input_window_update_limit)?;
+        pipeline = pipeline.with_stage(
+            match cli.input_window_mode.unwrap_or(InputWindowMode::Batch) {
+                InputWindowMode::Batch => InputStage::Batch(window),
+                InputWindowMode::AtomicStep => InputStage::WindowToStep {
+                    window,
+                    reduction: InputReduction::LastUpdateWins,
+                },
+            },
+        )?;
     }
-    input_factory.input_aggregation(aggregation)
+    Ok(pipeline)
 }
 
 fn parse_mstlo_variables(bindings: Option<&[String]>) -> anyhow::Result<Variables> {

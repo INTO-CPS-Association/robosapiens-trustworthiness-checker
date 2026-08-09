@@ -1,90 +1,59 @@
 use std::collections::BTreeMap;
 
-use anyhow::anyhow;
-use serde_json::Value as JValue;
-use tracing::debug;
+use crate::VarName;
 
-use crate::io::config::{MsgTypeMapping, TopicMapping};
+use super::types::{Route, WireRoute};
 
-// Note: These functions are manually implemented instead of using `serde_json::from_str` because
-// mhk dreams of one day supporting the custom ROS types automatically...
-
-// Handle a combined JSON string with both topic names and msg types
-pub fn json_to_topic_msg_type_mapping(
-    json: &str,
-) -> anyhow::Result<(TopicMapping, MsgTypeMapping)> {
-    let jval = match serde_json5::from_str::<JValue>(&json) {
-        Ok(value) => value,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
-    if let Some(jval) = jval.as_object() {
-        debug!("JSON Mapping raw: {:?}", jval);
-        let mut topic_mapping_map = BTreeMap::new();
-        let mut msg_type_map = BTreeMap::new();
-        for (var_name, data) in jval.iter() {
-            let topic_opt = data.get("topic");
-            let typ_opt = data.get("msg_type");
-
-            match (topic_opt, typ_opt) {
-                (Some(topic_v), Some(typ_v)) => match (topic_v.as_str(), typ_v.as_str()) {
-                    (Some(topic), Some(typ)) => {
-                        topic_mapping_map.insert(var_name.clone().into(), topic.to_string());
-                        msg_type_map.insert(var_name.clone().into(), typ.to_string());
-                    }
-                    _ => {
-                        return Err(anyhow!(
-                            "topic and msg_type must be strings for variable '{}'",
-                            var_name
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(anyhow!(
-                        "Missing topic or msg_type for variable '{}'",
-                        var_name
-                    ));
-                }
-            }
-        }
-        Ok((topic_mapping_map, msg_type_map))
-    } else {
-        return Err(anyhow!("Must be specified as a JSON object"));
-    }
+/// Parse a compact route catalog such as `{ "pressure": "/pressure" }` or
+/// `{ "pose": ["/pose", "geometry_msgs/msg/Pose"] }`.
+pub fn json_to_routes(json: &str) -> anyhow::Result<BTreeMap<VarName, Route>> {
+    let routes: BTreeMap<VarName, WireRoute> = serde_json5::from_str(json)
+        .map_err(|error| anyhow::anyhow!("route catalog must be a JSON object: {error}"))?;
+    routes
+        .into_iter()
+        .map(|(variable, route)| {
+            let name = variable.name();
+            route
+                .into_route()
+                .map(|route| (variable, route))
+                .map_err(|error| anyhow::anyhow!("invalid route for `{name}`: {error}"))
+        })
+        .collect()
 }
 
-// Handle a combined JSON string with just topic names
-pub fn json_to_topic_mapping(json: &str) -> anyhow::Result<TopicMapping> {
-    let jval = match serde_json5::from_str::<JValue>(&json) {
-        Ok(value) => value,
-        Err(e) => {
-            return Err(e.into());
-        }
-    };
-    if let Some(jval) = jval.as_object() {
-        debug!("JSON Mapping raw: {:?}", jval);
-        let mut topic_mapping_map = BTreeMap::new();
-        for (var_name, data) in jval.iter() {
-            match data.get("topic") {
-                Some(topic_v) => match topic_v.as_str() {
-                    Some(topic) => {
-                        topic_mapping_map.insert(var_name.clone().into(), topic.to_string());
-                    }
-                    _ => {
-                        return Err(anyhow!(
-                            "topic must be a string for variable '{}'",
-                            var_name
-                        ));
-                    }
-                },
-                _ => {
-                    return Err(anyhow!("Missing topic for variable '{}'", var_name));
-                }
-            }
-        }
-        Ok(topic_mapping_map)
-    } else {
-        return Err(anyhow!("Must be specified as a JSON object"));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_string_and_route_codec_forms() {
+        let routes = json_to_routes(
+            r#"{
+                "pressure": "/robot/sensors/pressure",
+                "pose": ["/robot/pose", "geometry_msgs/msg/Pose"]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            routes[&VarName::new("pressure")].route.as_ref(),
+            "/robot/sensors/pressure"
+        );
+        assert_eq!(
+            routes[&VarName::new("pose")]
+                .codec
+                .as_ref()
+                .unwrap()
+                .0
+                .as_ref(),
+            "geometry_msgs/msg/Pose"
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_route_shapes() {
+        assert!(json_to_routes(r#"{"x": []}"#).is_err());
+        assert!(json_to_routes(r#"{"x": ["/x"]}"#).is_err());
+        assert!(json_to_routes(r#"{"x": ["/x", 3]}"#).is_err());
+        assert!(json_to_routes(r#"{"x": ""}"#).is_err());
     }
 }

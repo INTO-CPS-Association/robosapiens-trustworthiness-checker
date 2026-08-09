@@ -1,3 +1,4 @@
+use anyhow::Context;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::select;
@@ -14,9 +15,11 @@ use super::{
     ros_topic_stream_mapping::{RosMsgType, RosStreamMapping},
 };
 
+use crate::core::empty_input_stream;
+use crate::io::MonitorConfig;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
-use crate::{InputBatch, InputStream, OutputStream, Value, core::VarName};
+use crate::{InputBatch, InputStream, OutputStream, Value, VarName};
 
 impl RosMsgType {
     /* Create a stream of values received on a ROS topic */
@@ -143,6 +146,44 @@ impl RosMsgType {
     }
 }
 
+/// Subscribe to a ROS `std_msgs/String` control topic.
+pub(crate) fn control_stream(
+    executor: Rc<LocalExecutor<'static>>,
+    topic: String,
+) -> anyhow::Result<OutputStream<anyhow::Result<MonitorConfig>>> {
+    let context = r2r::Context::create()?;
+    let node_name = format!("input_control_{}", Uuid::new_v4().simple());
+    let mut node = r2r::Node::create(context, &node_name, "")?;
+    let subscription =
+        node.subscribe::<r2r::std_msgs::msg::String>(&topic, r2r::QosProfile::default())?;
+
+    let cancellation_token = CancellationToken::new();
+    let drop_guard = cancellation_token.clone().drop_guard();
+    let cancellation_for_spin = cancellation_token.clone();
+    executor
+        .spawn(async move {
+            let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
+            loop {
+                select! {
+                    _ = cancellation_for_spin.cancelled().fuse() => return,
+                    _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
+                }
+            }
+        })
+        .detach();
+
+    Ok(Box::pin(async_stream::try_stream! {
+        let _drop_guard = drop_guard;
+        let mut subscription = subscription;
+        while let Some(message) = subscription.next().await {
+            let request = MonitorConfig::from_json(&message.data)
+                .with_context(|| format!("invalid ROS monitor configuration on `{topic}`"))?;
+            yield request;
+            return;
+        }
+    }))
+}
+
 /// Subscribe to ROS topics and return a stream that owns the subscriber lifetime.
 #[instrument(level = Level::INFO, skip(var_topics))]
 pub fn input_stream(
@@ -150,7 +191,7 @@ pub fn input_stream(
     var_topics: RosStreamMapping,
 ) -> anyhow::Result<InputStream<Value>> {
     if var_topics.is_empty() {
-        return Ok(Box::pin(futures::stream::empty()));
+        return Ok(empty_input_stream());
     }
     // Create a ROS node to subscribe to all of the input topics
     let ctx = r2r::Context::create()?;
@@ -206,9 +247,9 @@ pub fn input_stream(
         })
         .detach();
 
-    Ok(Box::pin(merge_ros_streams(ros_streams).map(
-        |(var, value)| Ok(InputBatch::events(vec![crate::InputEvent::new(var, value)])),
-    )))
+    Ok(Box::pin(
+        merge_ros_streams(ros_streams).map(|(var, value)| Ok(InputBatch::update(var, value))),
+    ))
 }
 
 fn merge_ros_streams(

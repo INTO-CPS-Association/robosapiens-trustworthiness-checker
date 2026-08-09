@@ -19,7 +19,7 @@ use smol::LocalExecutor;
 
 use crate::{
     ExecutionPolicy, InputStream, OutputStream, Runtime, Value, VarName,
-    core::{FileInputValue, JsonStreamValue, OutputHandler, StreamData},
+    core::{FileInputValue, JsonStreamValue, OutputHandler, StreamData, input},
     lang::mstlo::MstloSpecification,
     runtime::builder::RuntimeBuilder,
     stream_utils,
@@ -738,12 +738,7 @@ impl TryFrom<Value> for MstloTimedValue {
 
 /// Convert a dynamic input stream to typed MSTLO values without changing tick boundaries.
 pub fn value_input_stream(input: InputStream<Value>) -> InputStream<MstloTimedValue> {
-    Box::pin(async_stream::try_stream! {
-        let mut input = input;
-        while let Some(batch) = input.next().await {
-            yield batch?.try_map_values(MstloTimedValue::try_from)?;
-        }
-    })
+    input::try_map_input_values(input, MstloTimedValue::try_from)
 }
 
 /// Convert typed MSTLO outputs for a dynamic `Value` output handler.
@@ -968,8 +963,8 @@ where
         Ok(())
     }
 
-    fn process_event(&mut self, event: crate::core::InputEventRef<'_, V>) -> anyhow::Result<()> {
-        let Some(step) = V::step_from_input_value(self.signal_names, event.var, event.value)?
+    fn process_event(&mut self, event: crate::core::InputUpdateRef<'_, V>) -> anyhow::Result<()> {
+        let Some(step) = V::step_from_input_value(self.signal_names, event.variable, event.value)?
         else {
             return Ok(());
         };
@@ -979,7 +974,8 @@ where
     fn process_step(&mut self, tick: &crate::core::InputTick<'_, V>) -> anyhow::Result<()> {
         let mut steps = Vec::with_capacity(tick.len());
         for event in tick.iter() {
-            let Some(step) = V::step_from_input_value(self.signal_names, event.var, event.value)?
+            let Some(step) =
+                V::step_from_input_value(self.signal_names, event.variable, event.value)?
             else {
                 continue;
             };
@@ -1171,24 +1167,27 @@ mod tests {
     fn static_input(inputs: BTreeMap<VarName, Vec<Value>>) -> anyhow::Result<InputStream<Value>> {
         let streams = inputs.into_iter().map(|(var, values)| {
             Box::pin(
-                stream::iter(values).map(move |value| crate::InputEvent::new(var.clone(), value)),
-            ) as OutputStream<crate::InputEvent<Value>>
+                stream::iter(values).map(move |value| crate::InputUpdate::new(var.clone(), value)),
+            ) as OutputStream<crate::InputUpdate<Value>>
         });
         let streams = futures::stream::select_all(streams);
         if streams.is_empty() {
             anyhow::bail!("no MSTLO input streams configured");
         }
-        Ok(Box::pin(
-            streams.map(|event| Ok(InputBatch::events(vec![event]))),
-        ))
+        Ok(Box::pin(streams.map(|event| Ok(InputBatch::from(event)))))
     }
 
     fn static_typed_input(values: Vec<MstloTimedValue>) -> InputStream<MstloTimedValue> {
-        let events = values
+        let events: Vec<crate::InputUpdate<MstloTimedValue>> = values
             .into_iter()
-            .map(|value| crate::InputEvent::new(VarName::new("x"), value))
+            .map(|value| crate::InputUpdate::new(VarName::new("x"), value))
             .collect();
-        Box::pin(stream::once(async move { Ok(InputBatch::events(events)) }))
+        Box::pin(stream::once(async move {
+            Ok(
+                InputBatch::from_ticks(events.into_iter().map(|event| vec![event]).collect())
+                    .expect("static typed input ticks are valid"),
+            )
+        }))
     }
 
     fn timed_value(time_ms: i64, value: f64) -> Value {
@@ -1732,10 +1731,10 @@ mod tests {
             );
             let (input_stream, mut input) = crate::io::testing::channel();
             input
-                .send_step(
+                .send_tick(
                     vars.into_iter()
                         .map(|var| {
-                            crate::InputEvent::new(VarName::new(var), compact_timed_value(0, 1.0))
+                            crate::InputUpdate::new(VarName::new(var), compact_timed_value(0, 1.0))
                         })
                         .collect(),
                 )

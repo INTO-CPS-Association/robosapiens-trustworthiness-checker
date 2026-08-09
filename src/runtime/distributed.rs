@@ -10,7 +10,7 @@ use unsync::spsc;
 
 use crate::{
     DsrvSpecification, InputStream, OutputStream, Value, VarName,
-    core::{OutputHandler, Runtime},
+    core::{OutputHandler, Runtime, input},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -403,7 +403,7 @@ pub enum SchedulerCommunication {
 }
 
 struct DirectSchedulerInputRuntime {
-    input_ticks: crate::InputTickStream<Value>,
+    input_ticks: input::InputTickStream<Value>,
     constraint_input_index: ConstraintInputIndex,
     constraint_sender: spsc::Sender<ConstraintInputBatch>,
     planning_context: Option<PlanningContext>,
@@ -415,15 +415,18 @@ impl DirectSchedulerInputRuntime {
             let tick = tick?;
             let mut compact_batch = Vec::new();
             let mut planning_batch = Vec::new();
-            for crate::InputEvent { var, value, .. } in tick {
+            for crate::InputUpdate {
+                variable, value, ..
+            } in tick
+            {
                 if matches!(value, Value::NoVal | Value::Deferred) {
                     continue;
                 }
 
-                if let Some(index) = self.constraint_input_index.index_of(&var) {
+                if let Some(index) = self.constraint_input_index.index_of(&variable) {
                     compact_batch.push((index, value.clone()));
                 }
-                planning_batch.push((var, value));
+                planning_batch.push((variable, value));
             }
 
             if let Some(planning_context) = &self.planning_context {
@@ -1185,7 +1188,7 @@ where
                 let constraint_input_index =
                     ConstraintInputIndex::new(constraint_inputs.iter().cloned());
                 let input = self.input.expect("Input stream not set");
-                let input_ticks = crate::into_tick_stream(input);
+                let input_ticks = input::into_tick_stream(input);
                 let constraint_channel_size =
                     constraint_input_index.len().saturating_mul(4).max(64);
                 let (constraint_sender, constraint_receiver) =
@@ -1385,13 +1388,14 @@ mod input_tests {
     #[test]
     fn scheduler_input_preserves_event_ticks_and_packed_step_boundaries() {
         smol::block_on(async {
-            let events = Box::pin(futures::stream::iter([Ok(crate::InputBatch::events(
+            let events = Box::pin(futures::stream::iter([Ok(crate::InputBatch::from_ticks(
                 vec![
-                    crate::InputEvent::new(VarName::new("x"), Value::Int(1)),
-                    crate::InputEvent::new(VarName::new("x"), Value::Int(2)),
+                    vec![crate::InputUpdate::new(VarName::new("x"), Value::Int(1))],
+                    vec![crate::InputUpdate::new(VarName::new("x"), Value::Int(2))],
                 ],
-            ))]));
-            let event_ticks = crate::into_tick_stream(events)
+            )
+            .unwrap())]));
+            let event_ticks = input::into_tick_stream(events)
                 .map(Result::unwrap)
                 .collect::<Vec<_>>()
                 .await;
@@ -1399,16 +1403,13 @@ mod input_tests {
             assert_eq!(event_ticks[0][0].value, Value::Int(1));
             assert_eq!(event_ticks[1][0].value, Value::Int(2));
 
-            let steps = Box::pin(futures::stream::iter([crate::InputBatch::packed_steps(
-                std::num::NonZeroUsize::new(2).unwrap(),
-                vec![
-                    crate::InputEvent::new(VarName::new("x"), Value::Int(1)),
-                    crate::InputEvent::new(VarName::new("y"), Value::Int(10)),
-                    crate::InputEvent::new(VarName::new("x"), Value::Int(2)),
-                    crate::InputEvent::new(VarName::new("y"), Value::Int(20)),
-                ],
-            )]));
-            let step_ticks = crate::into_tick_stream(steps)
+            let step_batch = crate::InputBatch::packed_rows(
+                vec![VarName::new("x"), VarName::new("y")].into_boxed_slice(),
+                vec![Value::Int(1), Value::Int(10), Value::Int(2), Value::Int(20)],
+            )
+            .unwrap();
+            let steps = Box::pin(futures::stream::iter([Ok(step_batch)]));
+            let step_ticks = input::into_tick_stream(steps)
                 .map(Result::unwrap)
                 .collect::<Vec<_>>()
                 .await;
@@ -1442,7 +1443,7 @@ mod input_tests {
             let planning_context = PlanningContext::new(false);
             let (constraint_sender, constraint_receiver) = spsc::channel(1);
             let runtime = DirectSchedulerInputRuntime {
-                input_ticks: Box::pin(futures::stream::iter([Ok(vec![crate::InputEvent::new(
+                input_ticks: Box::pin(futures::stream::iter([Ok(vec![crate::InputUpdate::new(
                     VarName::new("planning_only"),
                     Value::Int(1),
                 )])])),

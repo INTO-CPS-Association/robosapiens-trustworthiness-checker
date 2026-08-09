@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::anyhow;
-use contracts::requires;
+#[allow(unused_imports)]
+use contracts::ensures;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -113,7 +114,6 @@ pub fn ros_stream_mapping_to_topic_mapping(
         .collect()
 }
 
-#[requires(topic_map.keys().cloned().collect::<BTreeSet<_>>() == msg_type_map.keys().cloned().collect::<BTreeSet<_>>())]
 #[ensures({
     let expected_keys = topic_map
         .keys()
@@ -129,7 +129,11 @@ pub fn ros_stream_mapping_from_topic_and_msg_type_mapping(
 
     for (var_name, topic) in topic_map.iter() {
         let topic = topic.clone();
-        let msg_type = msg_type_map[&var_name].clone();
+        let msg_type = msg_type_map.get(var_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "ROS message type mapping is missing an entry for input variable `{var_name}`"
+            )
+        })?;
         let msg_type = string_to_ros_msg_type(msg_type.as_str())?;
         let var_name: String = var_name.clone().into();
 
@@ -184,6 +188,15 @@ mod tests {
         let result = ros_stream_mapping_from_topic_and_msg_type_mapping(topic_map, msg_type_map);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ros_stream_mapping_from_topic_and_msg_type_mapping_rejects_missing_type() {
+        let topic_map: TopicMapping =
+            BTreeMap::from([(VarName::new("missing_type"), "/topic".to_string())]);
+        let result = ros_stream_mapping_from_topic_and_msg_type_mapping(topic_map, BTreeMap::new());
+        let error = result.expect_err("a missing ROS message type should be reported");
+        assert!(error.to_string().contains("missing_type"));
     }
 
     #[test]

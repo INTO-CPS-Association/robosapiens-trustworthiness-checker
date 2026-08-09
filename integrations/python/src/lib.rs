@@ -9,12 +9,12 @@ use futures::{FutureExt, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use smol::LocalExecutor;
-use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics};
+use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics, input};
 use tc_core::io::InputController;
 use tc_core::io::testing::{ManualInputController, ManualOutputHandler, channel};
 use tc_core::runtime::RuntimeBuilder;
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
-use tc_core::{DsrvSpecification, InputEvent, Value, VarName};
+use tc_core::{DsrvSpecification, InputUpdate, Value, VarName};
 
 type OutputBatch = BTreeMap<VarName, Value>;
 
@@ -121,10 +121,10 @@ impl TcRuntime {
 
         let events = values
             .into_iter()
-            .map(|(var, value)| InputEvent::new(var, value))
+            .map(|(var, value)| InputUpdate::new(var, value))
             .collect();
         smol::block_on(self.executor.run(async {
-            self.input_controller.send_step(events).await?;
+            self.input_controller.send_tick(events).await?;
             self.tick_controller.advance().await
         }))
         .map_err(|error| {

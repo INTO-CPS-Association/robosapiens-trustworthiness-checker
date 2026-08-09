@@ -59,10 +59,9 @@
 //! 7. Flush according to the selected execution policy.
 //!
 //! The input-row and output-row allocations are reused across ticks. Variable layouts are cached as
-//! input-slot indices, so repeated event shapes do not repeat name lookup. Undeclared input names
-//! are runtime errors. `InputBatch::events` represents each event as its own logical tick;
-//! `InputBatch::step` represents its events as one simultaneous tick; internal fixed-width batches
-//! preserve the same row boundaries.
+//! input-slot indices, so repeated update shapes do not repeat name lookup. Undeclared input names
+//! are runtime errors. Width-one updates and simultaneous ticks retain their logical boundaries;
+//! packed segments keep their row boundaries until this evaluator boundary.
 //!
 //! # Output buffering and asynchronous delivery
 //!
@@ -281,32 +280,34 @@ async fn run_dataflow_engine(
 
     while let Some(batch) = input_stream.next().await {
         let batch = batch?;
-        if let Some((layout, values)) = batch.packed_rows() {
-            engine.select_packed_layout(layout)?;
-            for row in values.chunks(layout.len()) {
-                engine.evaluate_packed_row(row)?;
-                pending += 1;
-                let flush = execution_policy == ExecutionPolicy::Synchronous
-                    || pending == DATAFLOW_RUNTIME_BATCH_SIZE;
-                if flush {
-                    if !engine.flush().await {
-                        return Ok(());
+        for segment in batch.segments() {
+            if let Some((layout, values)) = segment.packed_rows() {
+                engine.select_packed_layout(layout)?;
+                for row in values.chunks(layout.len()) {
+                    engine.evaluate_packed_row(row)?;
+                    pending += 1;
+                    let flush = execution_policy == ExecutionPolicy::Synchronous
+                        || pending == DATAFLOW_RUNTIME_BATCH_SIZE;
+                    if flush {
+                        if !engine.flush().await {
+                            return Ok(());
+                        }
+                        pending = 0;
                     }
-                    pending = 0;
                 }
-            }
-            continue;
-        }
-        for tick in batch.ticks() {
-            engine.evaluate_tick(&tick)?;
-            pending += 1;
-            let flush = execution_policy == ExecutionPolicy::Synchronous
-                || pending == DATAFLOW_RUNTIME_BATCH_SIZE;
-            if flush {
-                if !engine.flush().await {
-                    return Ok(());
+            } else {
+                for tick in segment.ticks() {
+                    engine.evaluate_tick(&tick)?;
+                    pending += 1;
+                    let flush = execution_policy == ExecutionPolicy::Synchronous
+                        || pending == DATAFLOW_RUNTIME_BATCH_SIZE;
+                    if flush {
+                        if !engine.flush().await {
+                            return Ok(());
+                        }
+                        pending = 0;
+                    }
                 }
-                pending = 0;
             }
         }
     }
@@ -361,18 +362,18 @@ impl DataflowEngine {
             && tick
                 .iter()
                 .zip(&self.cached_layout_vars)
-                .all(|(event, var)| event.var == var);
+                .all(|(event, var)| event.variable == var);
         if !layout_matches {
             self.cached_layout_vars.clear();
             self.cached_layout_slots.clear();
             for event in tick.iter() {
-                let Some(&slot) = self.input_ids.get(event.var) else {
+                let Some(&slot) = self.input_ids.get(event.variable) else {
                     return Err(anyhow::anyhow!(
                         "input stream emitted undeclared dataflow variable `{}`",
-                        event.var
+                        event.variable
                     ));
                 };
-                self.cached_layout_vars.push(event.var.clone());
+                self.cached_layout_vars.push(event.variable.clone());
                 self.cached_layout_slots.push(slot);
             }
         }
@@ -450,6 +451,7 @@ mod tests {
     use smol::LocalExecutor;
 
     use crate::VarName;
+
     use crate::io::map;
     use crate::io::testing::LimitedNullOutputHandler;
     use crate::io::testing::ManualOutputHandler;
@@ -742,15 +744,17 @@ mod tests {
             spec.output_vars().clone(),
         ));
         let outputs = output_handler.get_output();
-        let simultaneous = crate::InputBatch::step(vec![
-            crate::InputEvent::new("x".into(), Value::Int(1)),
-            crate::InputEvent::new("y".into(), Value::Int(10)),
-        ]);
-        let independent = Ok(crate::InputBatch::events(vec![
-            crate::InputEvent::new("x".into(), Value::Int(2)),
-            crate::InputEvent::new("y".into(), Value::Int(20)),
-        ]));
-        let input = Box::pin(futures::stream::iter([simultaneous, independent]));
+        let simultaneous = crate::InputBatch::tick(vec![
+            crate::InputUpdate::new("x".into(), Value::Int(1)),
+            crate::InputUpdate::new("y".into(), Value::Int(10)),
+        ])
+        .unwrap();
+        let independent = crate::InputBatch::from_ticks(vec![
+            vec![crate::InputUpdate::new("x".into(), Value::Int(2))],
+            vec![crate::InputUpdate::new("y".into(), Value::Int(20))],
+        ])
+        .unwrap();
+        let input = Box::pin(futures::stream::iter([Ok(simultaneous), Ok(independent)]));
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)

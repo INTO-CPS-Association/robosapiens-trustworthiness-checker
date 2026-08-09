@@ -6,7 +6,7 @@ use smol::LocalExecutor;
 use std::{rc::Rc, time::Duration};
 use unsync::spsc::Sender as SpscSender;
 
-use trustworthiness_checker::{InputEvent, InputStream, OutputStream, VarName};
+use trustworthiness_checker::{InputStream, InputUpdate, OutputStream, VarName};
 
 pub type TickSender = SpscSender<()>;
 
@@ -154,17 +154,17 @@ where
     V: std::fmt::Debug + PartialEq,
 {
     with_timeout_res(tick.send(()), 3, "publisher tick").await?;
-    let batch = with_timeout(input.next(), 3, "native input event")
+    let batch = with_timeout(input.next(), 3, "native input batch")
         .await?
-        .ok_or_else(|| anyhow!("native input event stream ended"))??;
-    let expected = [InputEvent::new(var, value)];
+        .ok_or_else(|| anyhow!("native input batch stream ended"))??;
+    let expected = [InputUpdate::new(var, value)];
     let mut ticks = batch.ticks();
     let matches_expected = matches!(
         (ticks.next(), ticks.next()),
         (Some(actual), None)
             if actual.len() == 1
                 && actual.iter().zip(&expected).all(|(actual, expected)| {
-                    actual.var == &expected.var && actual.value == &expected.value
+                    actual.variable == &expected.variable && actual.value == &expected.value
                 })
     );
     if !matches_expected {

@@ -3,10 +3,10 @@
 pub mod benches_common;
 pub mod core;
 pub use core::{
-    ExecutionPolicy, FileInputValue, InputBatch, InputEvent, InputStream, JsonStreamValue,
-    OutputStream, RosStreamValue, Runtime, Specification, Value, VarName,
+    ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick, InputUpdate,
+    InputUpdateRef, JsonStreamValue, OutputStream, RosStreamValue, Runtime, Specification, Value,
+    VarName,
 };
-pub(crate) use core::{InputTickStream, into_tick_stream};
 pub mod cli;
 pub mod dataflow;
 pub mod io;

@@ -14,7 +14,7 @@ use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::UntimedDsrvSemantics;
 use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, async_test};
 use crate::{
-    core::{InputEvent, OutputStream, Runtime},
+    core::{InputUpdate, OutputStream, Runtime},
     semantics::{MonitoringSemantics, StreamContext},
 };
 use futures::{StreamExt, stream};
@@ -476,7 +476,7 @@ fn evaluate(monitor: &mut DataflowMonitor, columns: &[Vec<Value>]) -> Vec<Vec<Va
 
 fn evaluate_events(
     monitor: &mut DataflowMonitor,
-    events: &[crate::core::InputEvent<Value>],
+    events: &[crate::core::InputUpdate<Value>],
 ) -> Vec<Vec<Value>> {
     let input_ids = monitor
         .input_vars()
@@ -488,7 +488,7 @@ fn evaluate_events(
         .map(|_| vec![Value::NoVal; events.len()])
         .collect::<Vec<_>>();
     for (tick, event) in events.iter().enumerate() {
-        columns[input_ids[&event.var]][tick] = event.value.clone();
+        columns[input_ids[&event.variable]][tick] = event.value.clone();
     }
     evaluate(monitor, &columns)
 }
@@ -1071,7 +1071,7 @@ fn dataflow_state_is_shared_between_event_and_row_evaluation() {
     assert_eq!(
         evaluate_events(
             &mut monitor,
-            &[InputEvent::new(VarName::new("x"), Value::Int(1),)]
+            &[InputUpdate::new(VarName::new("x"), Value::Int(1),)]
         ),
         vec![vec![1.into()]]
     );
@@ -1802,10 +1802,10 @@ fn dataflow_event_batch_matches_sparse_rows_for_recursive_sum() {
     let event_outputs = evaluate_events(
         &mut event_monitor,
         &[
-            InputEvent::new(VarName::new("x"), Value::Int(1)),
-            InputEvent::new(VarName::new("y"), Value::Int(10)),
-            InputEvent::new(VarName::new("x"), Value::Int(2)),
-            InputEvent::new(VarName::new("y"), Value::Int(20)),
+            InputUpdate::new(VarName::new("x"), Value::Int(1)),
+            InputUpdate::new(VarName::new("y"), Value::Int(10)),
+            InputUpdate::new(VarName::new("x"), Value::Int(2)),
+            InputUpdate::new(VarName::new("y"), Value::Int(20)),
         ],
     );
 

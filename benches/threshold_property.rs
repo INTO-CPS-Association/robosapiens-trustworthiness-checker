@@ -83,7 +83,7 @@ fn mstlo_input(size: usize) -> InputStream<MstloTimedValue> {
             )
         })
         .collect::<Vec<_>>();
-    map::typed_input_stream(BTreeMap::from([(VarName::new("x"), values)]))
+    map::typed_input_stream(BTreeMap::from([(VarName::new("x"), values)])).unwrap()
 }
 
 fn mstlo_direct_input(size: usize) -> Vec<Step<f64>> {

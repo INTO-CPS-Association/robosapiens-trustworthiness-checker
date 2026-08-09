@@ -671,7 +671,7 @@ mod integration_tests {
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("file input cannot be used by a reconfigurable runtime"),
+            stderr.contains("--input-file cannot be used with --runtime reconf-semi-sync"),
             "Expected an incompatible input error, got: {stderr}"
         );
         assert!(

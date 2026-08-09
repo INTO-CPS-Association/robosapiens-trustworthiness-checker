@@ -8,12 +8,16 @@ pub mod ros;
 
 pub mod testing;
 pub use self::builders::{
-    AssignedInputProvider, InputStreamFactory, OutputHandlerBuilder, OutputHandlerSpec,
+    InputPipeline, InputSource, InputSources, OutputHandlerBuilder, OutputHandlerSpec,
 };
 pub mod config;
-pub use config::{MsgTypeMapping, TopicMapping};
+pub use config::{
+    CodecId, InputConfigFile, InputReduction, InputStage, InputWindow, MonitorConfig,
+    MsgTypeMapping, Route, SourceConfig, SourceId, TopicMapping, WireRoute,
+};
 mod aggregation;
 pub mod redis;
-pub use aggregation::{AggregationSemantics, InputAggregation};
+
+pub(crate) mod reconfigurable_input;
 mod step_controlled;
 pub use step_controlled::{InputController, controlled};

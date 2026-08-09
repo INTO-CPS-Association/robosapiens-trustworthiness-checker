@@ -136,7 +136,7 @@ fn runtime_input(signals: &[&'static str], samples: usize) -> InputStream<MstloT
             (VarName::new(signal), values)
         })
         .collect::<BTreeMap<_, Vec<_>>>();
-    map::typed_input_stream(values)
+    map::typed_input_stream(values).unwrap()
 }
 
 fn direct_monitor(formula: FormulaDefinition) -> StlMonitor<f64, bool> {

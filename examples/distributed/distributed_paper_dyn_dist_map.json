@@ -1,102 +1,102 @@
 {
-  "R1Odom": {
-    "topic": "/tb1/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R2Odom": {
-    "topic": "/tb2/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R3Odom": {
-    "topic": "/tb3/odomThrot",
-    "msg_type": "Odom"
-  },
-  "R4Odom": {
-    "topic": "/tb4/odomThrot",
-    "msg_type": "Odom"
-  },
-  "ConveyorSystem": {
-    "topic": "/ConveyorSystem",
-    "msg_type": "Int32"
-  },
-  "StackerCrane": {
-    "topic": "/StackerCrane",
-    "msg_type": "Int32"
-  },
-  "VerticalLift": {
-    "topic": "/VerticalLift",
-    "msg_type": "Int32"
-  },
-  "HorizontalCarousel": {
-    "topic": "/HorizontalCarousel",
-    "msg_type": "Int32"
-  },
-  "c": {
-    "topic": "/c",
-    "msg_type": "Bool"
-  },
-  "aabbR1C": {
-    "topic": "/aabbR1C",
-    "msg_type": "Bool"
-  },
-  "aabbR2C": {
-    "topic": "/aabbR2C",
-    "msg_type": "Bool"
-  },
-  "aabbR3C": {
-    "topic": "/aabbR3C",
-    "msg_type": "Bool"
-  },
-  "aabbR4C": {
-    "topic": "/aabbR4C",
-    "msg_type": "Bool"
-  },
-  "aabbR1S": {
-    "topic": "/aabbR1S",
-    "msg_type": "Bool"
-  },
-  "aabbR2S": {
-    "topic": "/aabbR2S",
-    "msg_type": "Bool"
-  },
-  "aabbR3S": {
-    "topic": "/aabbR3S",
-    "msg_type": "Bool"
-  },
-  "aabbR4S": {
-    "topic": "/aabbR4S",
-    "msg_type": "Bool"
-  },
-  "aabbR1V": {
-    "topic": "/aabbR1V",
-    "msg_type": "Bool"
-  },
-  "aabbR2V": {
-    "topic": "/aabbR2V",
-    "msg_type": "Bool"
-  },
-  "aabbR3V": {
-    "topic": "/aabbR3V",
-    "msg_type": "Bool"
-  },
-  "aabbR4V": {
-    "topic": "/aabbR4V",
-    "msg_type": "Bool"
-  },
-  "aabbR1H": {
-    "topic": "/aabbR1H",
-    "msg_type": "Bool"
-  },
-  "aabbR2H": {
-    "topic": "/aabbR2H",
-    "msg_type": "Bool"
-  },
-  "aabbR3H": {
-    "topic": "/aabbR3H",
-    "msg_type": "Bool"
-  },
-  "aabbR4H": {
-    "topic": "/aabbR4H",
-    "msg_type": "Bool"
-  }
+  "R1Odom": [
+    "/tb1/odomThrot",
+    "Odom"
+  ],
+  "R2Odom": [
+    "/tb2/odomThrot",
+    "Odom"
+  ],
+  "R3Odom": [
+    "/tb3/odomThrot",
+    "Odom"
+  ],
+  "R4Odom": [
+    "/tb4/odomThrot",
+    "Odom"
+  ],
+  "ConveyorSystem": [
+    "/ConveyorSystem",
+    "Int32"
+  ],
+  "StackerCrane": [
+    "/StackerCrane",
+    "Int32"
+  ],
+  "VerticalLift": [
+    "/VerticalLift",
+    "Int32"
+  ],
+  "HorizontalCarousel": [
+    "/HorizontalCarousel",
+    "Int32"
+  ],
+  "c": [
+    "/c",
+    "Bool"
+  ],
+  "aabbR1C": [
+    "/aabbR1C",
+    "Bool"
+  ],
+  "aabbR2C": [
+    "/aabbR2C",
+    "Bool"
+  ],
+  "aabbR3C": [
+    "/aabbR3C",
+    "Bool"
+  ],
+  "aabbR4C": [
+    "/aabbR4C",
+    "Bool"
+  ],
+  "aabbR1S": [
+    "/aabbR1S",
+    "Bool"
+  ],
+  "aabbR2S": [
+    "/aabbR2S",
+    "Bool"
+  ],
+  "aabbR3S": [
+    "/aabbR3S",
+    "Bool"
+  ],
+  "aabbR4S": [
+    "/aabbR4S",
+    "Bool"
+  ],
+  "aabbR1V": [
+    "/aabbR1V",
+    "Bool"
+  ],
+  "aabbR2V": [
+    "/aabbR2V",
+    "Bool"
+  ],
+  "aabbR3V": [
+    "/aabbR3V",
+    "Bool"
+  ],
+  "aabbR4V": [
+    "/aabbR4V",
+    "Bool"
+  ],
+  "aabbR1H": [
+    "/aabbR1H",
+    "Bool"
+  ],
+  "aabbR2H": [
+    "/aabbR2H",
+    "Bool"
+  ],
+  "aabbR3H": [
+    "/aabbR3H",
+    "Bool"
+  ],
+  "aabbR4H": [
+    "/aabbR4H",
+    "Bool"
+  ]
 }

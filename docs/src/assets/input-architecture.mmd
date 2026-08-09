@@ -1,0 +1,111 @@
+flowchart TD
+    subgraph Resolution[Configuration and generation resolution]
+        Spec[Current model specification]
+        CLI[Input selection and window options]
+        Routes[Compact route catalogs]
+        Config[Named multi-source input config]
+        Request[Compact MonitorConfig request]
+        Sources[InputSources owned local source set]
+        Resolve[Resolve model inputs and MonitorConfig]
+        Resolved[Generation-local immutable ResolvedInput]
+        ControlSelect[Control selection: single source inferred; multiple sources require exactly one reconfiguration_route]
+        RouteOverride[CLI may override the control route only]
+
+        CLI --> Sources
+        Routes --> Sources
+        Config --> Sources
+        Spec --> Resolve
+        Sources --> Resolve
+        Request --> Resolve
+        Resolve --> Resolved
+        Sources --> ControlSelect
+        RouteOverride --> ControlSelect
+    end
+
+    subgraph Generation[One input generation]
+        Open[Open resolved source bindings]
+
+        subgraph Adapters[Reusable source adapters]
+            Live[MQTT Redis and ROS]
+            Replay[File replay]
+            Rows[Map and in-memory rows]
+            Manual[Manual input]
+            Dedicated[Dedicated control-only source supported]
+        end
+
+        Compose[Compose data in observed source order]
+        Batch[Public InputBatch: ordered logical ticks]
+
+        subgraph Public[Public logical API]
+            Update[Public InputUpdate: variable and value]
+            Tick[Logical tick: one or more atomic updates]
+            Stream[Public data-only InputStream]
+        end
+
+        subgraph PrivateStorage[Crate-private physical storage]
+            Storage[InputBatchStorage]
+            Segments[InputSegment runs]
+            Shapes[Singleton ticks, simultaneous tick, or packed rows]
+        end
+
+        OrdinaryEvents[Private data events; control impossible]
+        ReconfigAdapter[Private reconfigurable data/control adapter]
+        ReconfigEvents[Private data or control events]
+
+        subgraph Windowing[Shared private window driver when configured]
+            Driver[One driver for ordinary and reconfigurable input]
+            Threshold[Update limit is a soft flush threshold; never split one logical tick]
+            BatchWindow[Batch mode preserves tick boundaries]
+            AtomicWindow[Atomic-step mode uses last-update-wins]
+            Barrier[Control flushes pending data, emits terminal barrier, then stops]
+        end
+
+        Open --> Live
+        Open --> Replay
+        Open --> Rows
+        Open --> Manual
+        Open --> Dedicated
+        Live --> Compose
+        Replay --> Compose
+        Rows --> Compose
+        Manual --> Compose
+        Compose --> Batch
+        Batch --> Tick
+        Tick --> Update
+        Batch -. implemented by .-> Storage
+        Storage --> Segments
+        Segments --> Shapes
+
+        Batch --> OrdinaryEvents
+        Compose --> ReconfigAdapter
+        ControlSelect --> ReconfigAdapter
+        Dedicated --> ReconfigAdapter
+        ReconfigAdapter --> ReconfigEvents
+        OrdinaryEvents --> Driver
+        ReconfigEvents --> Driver
+        Threshold --> Driver
+        Driver --> BatchWindow
+        Driver --> AtomicWindow
+        Driver -->|control| Barrier
+        BatchWindow --> Stream
+        AtomicWindow --> Stream
+    end
+
+    subgraph Execution[Runtime execution]
+        Ordinary[Ordinary runtime consumes data-only stream]
+        Reconfigurable[Reconfigurable semi-sync runtime]
+        Transfer[Parse replacement and transfer context]
+        End[Generation completion]
+
+        Stream --> Ordinary
+        BatchWindow -->|private data item| Reconfigurable
+        AtomicWindow -->|private data item| Reconfigurable
+        Barrier --> Reconfigurable
+        Reconfigurable --> Transfer
+        Ordinary --> End
+        Transfer --> End
+    end
+
+    Resolved --> Open
+    ControlSelect --> Open
+    Transfer -. replacement generation .-> Request

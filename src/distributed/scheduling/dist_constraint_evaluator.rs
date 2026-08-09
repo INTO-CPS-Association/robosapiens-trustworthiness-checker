@@ -49,8 +49,8 @@ impl PlacementLabelling {
 }
 
 pub type PlacementLabellingStream = OutputStream<Rc<PlacementLabelling>>;
-pub type ConstraintInputEvent = (usize, Value);
-pub type ConstraintInputBatch = Vec<ConstraintInputEvent>;
+pub type ConstraintInputUpdate = (usize, Value);
+pub type ConstraintInputBatch = Vec<ConstraintInputUpdate>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DistConstraintEvaluatorError {
@@ -141,7 +141,7 @@ pub fn dist_constraint_stream(
             let index = input_index
                 .index_of(&var)
                 .expect("input stream variable missing from compact input index");
-            Box::pin(stream.map(move |value| (index, value))) as OutputStream<ConstraintInputEvent>
+            Box::pin(stream.map(move |value| (index, value))) as OutputStream<ConstraintInputUpdate>
         }));
 
     dist_constraint_event_stream(
