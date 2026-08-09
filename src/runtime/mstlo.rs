@@ -100,20 +100,14 @@ impl MstloWireValue {
     }
 }
 
-fn decode_json_or_json5<T: serde::de::DeserializeOwned>(
+fn decode_json5<T: serde::de::DeserializeOwned>(
     payload: &[u8],
     description: &str,
 ) -> anyhow::Result<T> {
     let text = std::str::from_utf8(payload)
         .map_err(|error| anyhow!(error).context(format!("{description} is not UTF-8")))?;
-    match serde_json::from_slice(payload) {
-        Ok(value) => Ok(value),
-        Err(json_error) => serde_json5::from_str(text).map_err(|json5_error| {
-            anyhow!(json5_error).context(format!(
-                "failed to decode {description} as JSON or JSON5; JSON error: {json_error}"
-            ))
-        }),
-    }
+    json5::from_str(text)
+        .map_err(|error| anyhow!(error).context(format!("failed to decode {description} as JSON5")))
 }
 
 impl MstloWire {
@@ -139,7 +133,7 @@ impl StreamData for MstloTimedValue {
 
 impl JsonStreamValue for MstloTimedValue {
     fn decode_json(payload: &[u8]) -> anyhow::Result<Self> {
-        decode_json_or_json5::<MstloWire>(payload, "MstloTimedValue")?.into_timed_value()
+        decode_json5::<MstloWire>(payload, "MstloTimedValue")?.into_timed_value()
     }
 
     fn encode_json(&self) -> anyhow::Result<String> {
@@ -156,12 +150,26 @@ impl JsonStreamValue for MstloTimedValue {
             }
             MstloValue::NoVal => unreachable!("NoVal was checked before encoding"),
         };
-        serde_json5::to_string(&MstloWireObject { time, value })
-            .map_err(|error| anyhow!(error).context("failed to encode MstloTimedValue as JSON5"))
+        let wire = MstloWireObject { time, value };
+        let requires_json5 = match &wire.value {
+            MstloWireValue::Float(value) => !value.is_finite(),
+            MstloWireValue::Bool(_) => false,
+            MstloWireValue::RobustnessInterval { lower, upper } => {
+                !lower.is_finite() || !upper.is_finite()
+            }
+        };
+        if requires_json5 {
+            json5::to_string(&wire).map_err(|error| {
+                anyhow!(error).context("failed to encode MstloTimedValue as JSON5")
+            })
+        } else {
+            serde_json::to_string(&wire)
+                .map_err(|error| anyhow!(error).context("failed to encode MstloTimedValue as JSON"))
+        }
     }
 
     fn decode_mqtt_payload(payload: &[u8]) -> anyhow::Result<Self> {
-        let wire = match decode_json_or_json5::<MstloMqttPayload>(payload, "MSTLO MQTT payload")? {
+        let wire = match decode_json5::<MstloMqttPayload>(payload, "MSTLO MQTT payload")? {
             MstloMqttPayload::Envelope(envelope) => envelope.value,
             MstloMqttPayload::Value(value) => value,
         };
@@ -1545,15 +1553,36 @@ mod tests {
                     MstloValue::RobustnessInterval(-1.0, 2.0),
                 ),
             ),
+            (
+                br#"{/* JSON5 */ time: 1000, value: {lower: -1.0, upper: 2.0,},}"#.as_slice(),
+                MstloTimedValue::new(
+                    Duration::from_secs(1),
+                    MstloValue::RobustnessInterval(-1.0, 2.0),
+                ),
+            ),
         ];
         for &(payload, expected) in samples {
             assert_eq!(MstloTimedValue::decode_json(payload).unwrap(), expected);
             let encoded = expected.encode_json().unwrap();
+            assert!(!encoded.contains('\n'));
+            assert!(serde_json::from_str::<serde_json::Value>(&encoded).is_ok());
             assert_eq!(
                 MstloTimedValue::decode_json(encoded.as_bytes()).unwrap(),
                 expected
             );
         }
+    }
+
+    #[test]
+    fn typed_mqtt_decoder_accepts_json5_envelopes() {
+        let decoded = MstloTimedValue::decode_mqtt_payload(
+            br#"{value: {/* sample */ time: 25, value: true,},}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            decoded,
+            MstloTimedValue::new(Duration::from_millis(25), MstloValue::Bool(true))
+        );
     }
 
     #[test]

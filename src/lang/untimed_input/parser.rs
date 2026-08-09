@@ -103,24 +103,6 @@ fn split_typed_assignment<'a>(
     Ok((name, payload))
 }
 
-fn without_line_comment(payload: &str) -> &str {
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, character) in payload.char_indices() {
-        if character == '"' && !escaped {
-            in_string = !in_string;
-        }
-        if !in_string && payload[index..].starts_with("//") {
-            return payload[..index].trim_end();
-        }
-        escaped = character == '\\' && !escaped;
-        if character != '\\' {
-            escaped = false;
-        }
-    }
-    payload.trim_end()
-}
-
 /// Parse untimed file input directly into sparse, fixed-layout rows.
 ///
 /// Production input timestamps must be nondecreasing. Repeating a timestamp
@@ -183,7 +165,6 @@ pub(crate) fn packed_untimed_input<V: FileInputValue>(
         let Some(&slot) = slots.get(name) else {
             continue;
         };
-        let payload = without_line_comment(payload);
         let value = V::decode_file_value(payload).with_context(|| {
             format!("invalid value for variable `{name}` at line {line_number}")
         })?;
@@ -325,6 +306,39 @@ mod tests {
             BTreeMap::from([
                 (0, vec![Value::Int(1), Value::Int(10)]),
                 (3, vec![Value::Int(4), Value::Int(40)]),
+            ])
+        );
+    }
+
+    #[test]
+    fn packed_file_input_decodes_values_as_json5() {
+        let input = concat!(
+            "0: payload = {mode: \"safe\", url: \"https://robot.example/state\",} // state\n",
+            "1: payload = {/* update */ mode: \"active\",}"
+        );
+        let packed =
+            packed_untimed_input::<Value>(input, BTreeSet::from([VarName::new("payload")]))
+                .unwrap();
+        assert_eq!(
+            packed.rows,
+            BTreeMap::from([
+                (
+                    0,
+                    vec![Value::Map(BTreeMap::from([
+                        ("mode".into(), Value::Str("safe".into())),
+                        (
+                            "url".into(),
+                            Value::Str("https://robot.example/state".into()),
+                        ),
+                    ]))],
+                ),
+                (
+                    1,
+                    vec![Value::Map(BTreeMap::from([(
+                        "mode".into(),
+                        Value::Str("active".into()),
+                    )]))],
+                ),
             ])
         );
     }

@@ -51,7 +51,7 @@ pub enum RuntimeSpec {
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
-/// A stream value that can be encoded for MQTT, Redis, and stdout.
+/// A stream value that can be decoded from JSON5 and encoded for MQTT, Redis, and stdout.
 pub trait JsonStreamValue: StreamData + Sized {
     fn decode_json(payload: &[u8]) -> anyhow::Result<Self>;
     fn encode_json(&self) -> anyhow::Result<String>;

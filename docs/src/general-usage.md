@@ -45,7 +45,10 @@ With these flags, the TC maps stream names in the specification directly to MQTT
 
 ### Message format
 
-Publish MQTT payloads as JSON values that match the expected stream type. On Linux systems, we suggest using MQTT Explorer to publish and inspect messages. For the `simple_add.lola` example, publish the following value to topic `x` and then to topic `y`:
+Publish MQTT payloads as JSON5 values that match the expected stream type.
+Standard JSON is accepted because it is valid JSON5. Finite output values are
+emitted as compact JSON; non-finite floating-point values use JSON5
+`Infinity` and `NaN` literals so they are not silently converted to `null`. On Linux systems, we suggest using MQTT Explorer to publish and inspect messages. For the `simple_add.lola` example, publish the following value to topic `x` and then to topic `y`:
 
 ```json
 42
@@ -58,6 +61,10 @@ The result is then published on topic `z` as:
     "value": 84
 }
 ```
+
+File-input trace values use the same JSON5 decoder. The timestamp and
+`variable = value` framing remains unchanged; the value to the right of `=` is
+JSON5.
 
 ### Input route catalogs
 
@@ -74,7 +81,7 @@ names:
 ```
 
 Pass this form with `--input-mqtt-file`, `--input-redis-file`, or
-`--input-ros-file`. MQTT and Redis normally use string routes with their JSON
+`--input-ros-file`. MQTT and Redis normally use string routes with their JSON5
 codec; ROS routes include the message codec in the two-element array. The same
 compact object shape is used by the corresponding output route-file options.
 

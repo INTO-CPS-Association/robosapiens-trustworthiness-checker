@@ -1248,7 +1248,7 @@ mod resolution_tests {
 
     #[test]
     fn config_route_is_transferred_to_reusable_source() {
-        let config: InputConfigFile = serde_json5::from_str(
+        let config: InputConfigFile = json5::from_str(
             r#"{
                 default: "telemetry",
                 sources: {

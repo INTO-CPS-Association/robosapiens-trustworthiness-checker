@@ -1,2 +1,2 @@
-0: iList = List(0, 1, 2)
-1: iList = List(3, 4)
+0: iList = [0, 1, 2]
+1: iList = [3, 4]

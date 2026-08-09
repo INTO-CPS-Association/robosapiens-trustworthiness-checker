@@ -11,7 +11,7 @@ pub type MsgTypeMapping = BTreeMap<VarName, String>;
 pub type SourceId = String;
 
 /// Codec selected by a route. MQTT and Redis can omit it because their value
-/// codec is the source's normal JSON codec; ROS routes generally specify it.
+/// codec is the source's normal JSON5 codec; ROS routes generally specify it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct CodecId(pub Box<str>);
 
@@ -145,7 +145,7 @@ impl<'de> Deserialize<'de> for MonitorConfig {
 
 impl MonitorConfig {
     pub fn from_json(payload: &str) -> anyhow::Result<Self> {
-        let config: Self = serde_json5::from_str(payload)
+        let config: Self = json5::from_str(payload)
             .map_err(|error| anyhow::anyhow!("invalid monitor configuration: {error}"))?;
         config.validate_structure()?;
         Ok(config)
@@ -468,7 +468,7 @@ mod tests {
     use super::*;
 
     fn input_config(json: &str) -> InputConfigFile {
-        serde_json5::from_str(json).expect("input config should deserialize")
+        json5::from_str(json).expect("input config should deserialize")
     }
 
     #[test]
@@ -507,6 +507,25 @@ mod tests {
     }
 
     #[test]
+    fn monitor_config_accepts_json5_syntax() {
+        let config = MonitorConfig::from_json(
+            r#"{
+                // Reconfiguration messages use the same JSON5 parser as files and streams.
+                spec: "in pressure",
+                inputs: {pressure: "/pressure",},
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config.spec, "in pressure");
+        assert_eq!(
+            config.inputs.unwrap()[&VarName::new("pressure")]
+                .route
+                .as_ref(),
+            "/pressure"
+        );
+    }
+
+    #[test]
     fn monitor_config_omits_absent_optional_fields() {
         let config = MonitorConfig::from_json(r#"{"spec":"in pressure"}"#).unwrap();
         assert_eq!(
@@ -539,7 +558,7 @@ mod tests {
 
         for json in cases {
             assert!(
-                serde_json5::from_str::<InputConfigFile>(json).is_err(),
+                json5::from_str::<InputConfigFile>(json).is_err(),
                 "accepted {json}"
             );
         }
@@ -655,7 +674,7 @@ mod tests {
 
     #[test]
     fn old_top_level_control_configuration_is_not_accepted() {
-        let result = serde_json5::from_str::<InputConfigFile>(
+        let result = json5::from_str::<InputConfigFile>(
             r#"{
                 sources: { telemetry: { kind: "mqtt" } },
                 control: { source: "telemetry", route: "reconf" }

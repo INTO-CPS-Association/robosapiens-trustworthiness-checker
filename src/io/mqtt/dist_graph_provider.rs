@@ -154,7 +154,7 @@ impl MqttDistGraphProvider {
                     let topic = msg.topic;
                     if let Some(index) = topics.iter().position(|t| t == &topic) {
                         if let Ok(Some(Some(pos))) =
-                            serde_json::from_str::<JValue>(&msg.payload).map(|x| {
+                            json5::from_str::<JValue>(&msg.payload).map(|x| {
                                 x.get("source_robot_pose")
                                     .cloned()
                                     .map(|y| y.get("position").cloned())

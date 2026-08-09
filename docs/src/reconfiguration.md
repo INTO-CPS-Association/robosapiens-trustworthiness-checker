@@ -38,6 +38,9 @@ even when its input and output sets have the same shape.
 
 ## Reconfiguration message format
 
+Reconfiguration messages are JSON5. Standard JSON is accepted because it is a
+subset of JSON5.
+
 Each message must contain the new specification in `spec`. Input and output
 routes use the same compact route form as route catalog files: a string route,
 or a two-element array containing `[route, codec]`.
@@ -121,7 +124,7 @@ cargo run -- --runtime reconf-semi-sync \
   --output-stdout
 ```
 
-Publish a compact `MonitorConfig` JSON payload to `my-reconfig`. The same
+Publish a compact `MonitorConfig` JSON5 payload to `my-reconfig`. The same
 pattern works with `--redis-input` and its Redis route.
 
 A named multi-source input configuration keeps source transport settings,

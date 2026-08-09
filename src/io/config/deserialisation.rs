@@ -4,11 +4,11 @@ use crate::VarName;
 
 use super::types::{Route, WireRoute};
 
-/// Parse a compact route catalog such as `{ "pressure": "/pressure" }` or
+/// Parse a compact JSON5 route catalog such as `{ "pressure": "/pressure" }` or
 /// `{ "pose": ["/pose", "geometry_msgs/msg/Pose"] }`.
 pub fn json_to_routes(json: &str) -> anyhow::Result<BTreeMap<VarName, Route>> {
-    let routes: BTreeMap<VarName, WireRoute> = serde_json5::from_str(json)
-        .map_err(|error| anyhow::anyhow!("route catalog must be a JSON object: {error}"))?;
+    let routes: BTreeMap<VarName, WireRoute> = json5::from_str(json)
+        .map_err(|error| anyhow::anyhow!("route catalog must be a JSON5 object: {error}"))?;
     routes
         .into_iter()
         .map(|(variable, route)| {
@@ -29,8 +29,9 @@ mod tests {
     fn parses_string_and_route_codec_forms() {
         let routes = json_to_routes(
             r#"{
-                "pressure": "/robot/sensors/pressure",
-                "pose": ["/robot/pose", "geometry_msgs/msg/Pose"]
+                // JSON is accepted because it is a subset of JSON5.
+                pressure: "/robot/sensors/pressure",
+                pose: ["/robot/pose", "geometry_msgs/msg/Pose"],
             }"#,
         )
         .unwrap();

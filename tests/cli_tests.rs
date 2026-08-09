@@ -983,7 +983,7 @@ mod integration_tests {
             &fixture_path("simple_add.input"),
             "--output-stdout",
             "--distribution-graph",
-            &fixture_path("simple_add_distribution_graph.json"),
+            &fixture_path("simple_add_distribution_graph.json5"),
             "--local-node",
             "A",
         ])

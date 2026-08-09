@@ -1,0 +1,35 @@
+{
+  // Strict JSON remains valid; this fixture also exercises JSON5 syntax.
+  dist_graph: {
+    "central_monitor": 1,
+    "graph": {
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "edge_property": "directed",
+      "edges": [
+        [
+          0,
+          1,
+          0
+        ]
+      ]
+    }
+  },
+  var_names: [
+    "x",
+    "y",
+    "z",
+    "w",
+    "v"
+  ],
+  node_labels: {
+    "0": [
+      "w"
+    ],
+    "1": [
+      "v"
+    ]
+  },
+}

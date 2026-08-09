@@ -10,7 +10,7 @@ use redis::AsyncTypedCommands;
 use smol::LocalExecutor;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
 use tracing::{debug, instrument};
-use trustworthiness_checker::{OutputStream, Value};
+use trustworthiness_checker::{JsonStreamValue, OutputStream, Value};
 
 use crate::testcontainers::ContainerAsync;
 
@@ -42,7 +42,7 @@ pub async fn dummy_redis_sender(
 
     for message in messages.into_iter() {
         debug!(?message, ?channel, "Publishing message");
-        let message = serde_json5::to_string(&message)?;
+        let message = message.encode_json()?;
         con.publish(&channel, message).await?;
     }
 
@@ -67,7 +67,7 @@ pub async fn dummy_redis_stream_sender(
 
     while let Some(message) = stream.next().await {
         debug!(?message, ?channel, "Publishing message");
-        let message = serde_json5::to_string(&message)?;
+        let message = message.encode_json()?;
         con.publish(&channel, message).await?;
     }
 

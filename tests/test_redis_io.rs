@@ -173,7 +173,7 @@ mod integration_tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("malformed Redis input ended"))?;
         let error = result.expect_err("malformed Redis input should be reported");
-        assert!(error.to_string().contains("invalid Redis JSON payload"));
+        assert!(error.to_string().contains("invalid Redis JSON5 payload"));
         Ok(())
     }
 
@@ -578,7 +578,7 @@ mod integration_tests {
             let key = format!("wire_test_{}", uuid::Uuid::new_v4());
 
             // Use Redis SET command to store the value, then GET it back as a raw string
-            let value_json = serde_json5::to_string(&value)?;
+            let value_json = serde_json::to_string(&value)?;
             con.set(&key, value_json).await?;
             let raw_string: String = con.get(&key).await?.unwrap_or_default();
 
@@ -598,7 +598,7 @@ mod integration_tests {
             Value::List(vec![Value::Int(1), Value::Str("hello".into()), Value::Bool(true)].into());
 
         let complex_key = format!("complex_wire_test_{}", uuid::Uuid::new_v4());
-        let complex_value_json = serde_json5::to_string(&complex_value)?;
+        let complex_value_json = serde_json::to_string(&complex_value)?;
         con.set(&complex_key, complex_value_json).await?;
         let complex_raw: String = con.get(&complex_key).await?.unwrap_or_default();
 
@@ -640,7 +640,7 @@ mod integration_tests {
             ("false", Value::Bool(false)),
             ("null", Value::Unit),
             (
-                "[1,\"two\",true,4.5]",
+                "[1, \"two\", true, 4.5,]",
                 Value::List(
                     vec![
                         Value::Int(1),

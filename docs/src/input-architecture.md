@@ -196,9 +196,13 @@ packed row is already one simultaneous tick, but a batch window can contain
 many such rows; an atomic-step window reduces the whole configured window to
 one final simultaneous tick.
 
+Textual stream values from files, MQTT, and Redis are decoded as JSON5. Standard
+JSON is therefore accepted without a separate parser or fallback path.
+
 ## Compact route catalogs and input configuration
 
-A route catalog is a JSON/JSON5 object from model variable to route. A route is
+A route catalog is a JSON5 object from model variable to route. Standard JSON
+remains valid input because it is a subset of JSON5. A route is
 either a string or a compact two-element array containing a route and codec:
 
 ```json
@@ -210,7 +214,7 @@ either a string or a compact two-element array containing a route and codec:
 
 The same compact form is used by `--input-mqtt-file`,
 `--input-redis-file`, `--input-ros-file`, and the corresponding output route
-files. MQTT and Redis normally use their JSON codec and can use string routes;
+files. MQTT and Redis normally use their JSON5 codec and can use string routes;
 ROS routes must carry the message codec. Route catalogs are source-owned
 bindings, not fake model variables or an extra control-plane variable.
 

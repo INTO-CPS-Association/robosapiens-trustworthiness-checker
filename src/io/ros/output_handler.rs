@@ -12,7 +12,7 @@ use super::{
     ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT,
     ros_topic_stream_mapping::{RosMsgType, RosStreamMapping},
 };
-use crate::core::OutputHandler;
+use crate::core::{JsonStreamValue, OutputHandler};
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{OutputStream, Value, core::VarName};
 
@@ -189,18 +189,19 @@ fn create_value_publisher(
         _ => {
             warn!(
                 "Complex ROS msg type {:?} not directly supported for output; \
-                 falling back to JSON-encoded std_msgs/String on topic {}",
+                 falling back to JSON5-encoded std_msgs/String on topic {}",
                 msg_type, topic
             );
             Box::new(TypedValuePublisher {
                 publisher: node.create_publisher::<r2r::std_msgs::msg::String>(topic, qos)?,
                 convert_and_publish: |pub_handle, value| {
-                    let json_str = serde_json::to_string(value)
-                        .map_err(|e| anyhow::anyhow!("Failed to serialize value to JSON: {}", e))?;
+                    let json_str = value.encode_json().map_err(|e| {
+                        anyhow::anyhow!("Failed to serialize value to JSON5: {}", e)
+                    })?;
                     let msg = r2r::std_msgs::msg::String { data: json_str };
                     pub_handle
                         .publish(&msg)
-                        .map_err(|e| anyhow::anyhow!("Failed to publish JSON String: {:?}", e))
+                        .map_err(|e| anyhow::anyhow!("Failed to publish JSON5 String: {:?}", e))
                 },
             })
         }

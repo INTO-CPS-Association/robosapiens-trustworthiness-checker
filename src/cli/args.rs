@@ -179,7 +179,7 @@ pub struct DistributionMode {
 
     #[clap(
         long,
-        help = "Path to distribution graph JSON file for local monitoring"
+        help = "Path to distribution graph JSON5 file for local monitoring"
     )]
     pub distribution_graph: Option<String>,
 

@@ -756,7 +756,7 @@ mod tests {
             "node_labels": {"2": ["a", "b"]}
         }"#;
         assert_eq!(
-            serde_json::from_str::<LabelledDistributionGraph>(dist_graph_serialized).unwrap(),
+            json5::from_str::<LabelledDistributionGraph>(dist_graph_serialized).unwrap(),
             labelled_dist_graph
         );
     }

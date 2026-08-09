@@ -139,6 +139,15 @@ mod tests {
     }
 
     #[test]
+    fn mqtt_payload_decoder_accepts_json5() {
+        let value = decode_payload::<Value>(br#"{value: [1, "two",],}"#).unwrap();
+        assert_eq!(
+            value,
+            Value::List(vec![Value::Int(1), Value::Str("two".into())].into())
+        );
+    }
+
+    #[test]
     fn duplicate_topics_are_rejected_before_connecting() {
         smol::block_on(async {
             let result = MqttInputBackend::Rumqttc

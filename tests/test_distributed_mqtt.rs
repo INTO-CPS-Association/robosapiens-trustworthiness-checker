@@ -440,7 +440,7 @@ mod integration_tests {
 
         let file_content =
             smol::fs::read_to_string("fixtures/simple_add_distribution_graph.json").await?;
-        let dist_graph: LabelledDistributionGraph = serde_json::from_str(&file_content)?;
+        let dist_graph: LabelledDistributionGraph = json5::from_str(&file_content)?;
 
         let xs = vec![Value::Int(1), Value::Int(2)];
         let ys = vec![Value::Int(3), Value::Int(4)];

@@ -289,7 +289,7 @@ impl DistributionModeBuilder {
                     .await
                     .context("Distribution graph file could not be read")?;
                 let distribution_graph: LabelledDistributionGraph =
-                    serde_json::from_str(&f).context("Distribution graph could not be parsed")?;
+                    json5::from_str(&f).context("Distribution graph JSON5 could not be parsed")?;
 
                 if matches!(runtime, Some(RuntimeSpec::Distributed)) {
                     if let Some(dist_constraints) = self.dist_constraints {

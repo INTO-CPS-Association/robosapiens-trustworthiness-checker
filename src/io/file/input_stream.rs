@@ -6,18 +6,6 @@ use std::collections::BTreeSet;
 const FILE_INPUT_BATCH_TICKS: usize = 1_024;
 
 impl FileInputValue for Value {
-    fn decode_file_value(payload: &str) -> anyhow::Result<Self> {
-        let mut remaining = payload;
-        let value = crate::lang::core::parser::val_or_container(&mut remaining)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        anyhow::ensure!(
-            remaining.trim().is_empty(),
-            "unexpected trailing input after file value: {:?}",
-            remaining.trim()
-        );
-        Ok(value)
-    }
-
     fn missing_value() -> Self {
         Value::NoVal
     }

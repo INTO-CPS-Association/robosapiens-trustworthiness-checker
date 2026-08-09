@@ -218,26 +218,34 @@ impl StreamData for Value {
     }
 }
 
+fn requires_json5_encoding(value: &Value) -> bool {
+    match value {
+        Value::Float(value) => !value.is_finite(),
+        Value::List(values) | Value::Tuple(values) => values.iter().any(requires_json5_encoding),
+        Value::Map(values) => values.values().any(requires_json5_encoding),
+        _ => false,
+    }
+}
+
 impl JsonStreamValue for Value {
     fn decode_json(payload: &[u8]) -> anyhow::Result<Self> {
-        match serde_json::from_slice(payload) {
-            Ok(value) => Ok(value),
-            Err(json_error) => {
-                let text = std::str::from_utf8(payload)
-                    .map_err(|error| anyhow::anyhow!(error).context("JSON payload is not UTF-8"))?;
-                serde_json5::from_str(text).map_err(|json5_error| {
-                    anyhow::anyhow!(json5_error).context(format!(
-                        "failed to decode stream value as JSON or JSON5; JSON error: {json_error}"
-                    ))
-                })
-            }
-        }
+        let text = std::str::from_utf8(payload)
+            .map_err(|error| anyhow::anyhow!(error).context("JSON5 payload is not UTF-8"))?;
+        json5::from_str(text).map_err(|error| {
+            anyhow::anyhow!(error).context("failed to decode stream value as JSON5")
+        })
     }
 
     fn encode_json(&self) -> anyhow::Result<String> {
-        serde_json5::to_string(self).map_err(|error| {
-            anyhow::anyhow!(error).context("failed to encode stream value as JSON5")
-        })
+        if requires_json5_encoding(self) {
+            json5::to_string(self).map_err(|error| {
+                anyhow::anyhow!(error).context("failed to encode stream value as JSON5")
+            })
+        } else {
+            serde_json::to_string(self).map_err(|error| {
+                anyhow::anyhow!(error).context("failed to encode stream value as JSON")
+            })
+        }
     }
 
     fn decode_mqtt_payload(payload: &[u8]) -> anyhow::Result<Self> {
@@ -273,7 +281,7 @@ impl ToRedisArgs for Value {
     where
         W: ?Sized + redis::RedisWrite,
     {
-        match serde_json5::to_string(self) {
+        match self.encode_json() {
             Ok(json_str) => json_str.write_redis_args(out),
             Err(_) => "null".write_redis_args(out),
         }
@@ -294,9 +302,9 @@ impl FromRedisValue for Value {
                     redis::ParsingError::from(format!("Invalid UTF-8 in BulkString: {:?}", e))
                 })?;
 
-                serde_json5::from_str(s).map_err(|e| {
+                json5::from_str(s).map_err(|e| {
                     redis::ParsingError::from(format!(
-                        "BulkString not deserializable to Value with serde_json5: {}",
+                        "BulkString not deserializable to Value as JSON5: {}",
                         e
                     ))
                 })
@@ -779,8 +787,68 @@ impl<'de> Deserialize<'de> for Value {
 mod tests {
     use super::*;
     use futures::StreamExt;
-    use serde_json::{json, to_value};
-    use serde_json5::{from_str, to_string};
+    use json5::from_str;
+    use serde_json::{json, to_string, to_value};
+
+    #[test]
+    fn stream_decoder_accepts_strict_json_and_json5() {
+        assert_eq!(
+            Value::decode_json(br#"{"mode":"safe"}"#).unwrap(),
+            Value::Map(BTreeMap::from([("mode".into(), Value::Str("safe".into()))]))
+        );
+        assert_eq!(
+            Value::decode_json(br#"{/* state */ mode: "safe", enabled: true,}"#).unwrap(),
+            Value::Map(BTreeMap::from([
+                ("enabled".into(), Value::Bool(true)),
+                ("mode".into(), Value::Str("safe".into())),
+            ])),
+        );
+    }
+
+    #[test]
+    fn stream_decoder_reports_json5_and_utf8_errors() {
+        assert!(
+            Value::decode_json(br#"{mode:}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("JSON5")
+        );
+        assert!(
+            Value::decode_json(&[0xff])
+                .unwrap_err()
+                .to_string()
+                .contains("UTF-8")
+        );
+    }
+
+    #[test]
+    fn stream_encoder_keeps_finite_values_strict_and_preserves_non_finite_values() {
+        let finite = Value::Map(BTreeMap::from([("value".into(), Value::Float(1.5))]));
+        let encoded = finite.encode_json().unwrap();
+        assert_eq!(encoded, r#"{"value":1.5}"#);
+        assert!(serde_json::from_str::<serde_json::Value>(&encoded).is_ok());
+        assert_eq!(Value::decode_json(encoded.as_bytes()).unwrap(), finite);
+
+        let infinite = Value::Float(f64::INFINITY);
+        let encoded = infinite.encode_json().unwrap();
+        assert!(encoded.contains("Infinity"));
+        assert_eq!(Value::decode_json(encoded.as_bytes()).unwrap(), infinite);
+
+        let aggregate = Value::Map(BTreeMap::from([(
+            "values".into(),
+            Value::List(vec![Value::Float(f64::NEG_INFINITY), Value::Float(f64::NAN)].into()),
+        )]));
+        let encoded = aggregate.encode_json().unwrap();
+        let decoded = Value::decode_json(encoded.as_bytes()).unwrap();
+        let Value::Map(decoded) = decoded else {
+            panic!("expected a decoded map");
+        };
+        let Value::List(values) = &decoded["values"] else {
+            panic!("expected a decoded list");
+        };
+        assert_eq!(values[0], Value::Float(f64::NEG_INFINITY));
+        assert!(matches!(values[1], Value::Float(value) if value.is_nan()));
+    }
 
     #[test]
     fn test_json_try_into_null() {

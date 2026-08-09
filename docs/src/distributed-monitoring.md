@@ -323,7 +323,8 @@ mosquitto_sub -t v
 
 ## Distribution Graph Format
 
-The distribution graph is a JSON file defining the topology. It describes
+The distribution graph is a JSON5 file defining the topology. Standard JSON
+files remain valid because JSON is a subset of JSON5. It describes
 where computed streams run; it is separate from input route catalogs and the
 named input source configuration.
 

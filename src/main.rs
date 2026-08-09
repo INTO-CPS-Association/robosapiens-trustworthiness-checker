@@ -295,7 +295,7 @@ where
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("input config {path:?} could not be read"))?;
         let config: InputConfigFile =
-            serde_json5::from_str(&contents).context("input config could not be parsed")?;
+            json5::from_str(&contents).context("input config JSON5 could not be parsed")?;
         let sources =
             InputSources::<V>::from_config(config, executor, mqtt_port, redis_port, mqtt_backend)?;
         InputPipeline::from_sources(sources)

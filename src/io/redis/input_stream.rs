@@ -52,7 +52,7 @@ pub async fn input_stream_items<V: JsonStreamValue>(
                 .map_err(anyhow::Error::from)
                 .context("Redis message payload is not valid UTF-8")?;
             let value = V::decode_json(payload.as_bytes())
-                .with_context(|| format!("invalid Redis JSON payload for variable `{variable}`"))?;
+                .with_context(|| format!("invalid Redis JSON5 payload for variable `{variable}`"))?;
             yield RedisInputItem::Data(InputBatch::update(variable, value));
         }
     }))
