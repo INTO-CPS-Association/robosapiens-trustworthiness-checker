@@ -1,0 +1,22 @@
+{
+  // These names are representative, not canonical MAPLE-K Redis names.
+  sources: {
+    "maple-events": {
+      kind: "redis",
+      host: "localhost",
+      routes: {
+        analyse_completed: "maple:analyse:completed",
+        legitimate_completed: "maple:legitimate:completed",
+      },
+    },
+    "maple-knowledge": {
+      kind: "redis-knowledge",
+      host: "localhost",
+      database: 2,
+      publish_initial: true,
+      keys: {
+        current_plan: "maple:plan:current",
+      },
+    },
+  },
+}

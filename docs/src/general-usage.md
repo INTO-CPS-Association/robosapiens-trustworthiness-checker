@@ -193,6 +193,12 @@ An MSTLO file sample keeps the outer delivery tick separate from the inner signa
 
 The ROS message carries quantitative, qualitative, and robustness-interval outputs in its tagged fields. `NoVal` is an internal sparse-stream marker and is never published.
 
-## Redis Usage
+## Redis usage
 
-TODO: TW - please write a brief demonstration on how to use Redis. Cant seem to get it working.
+The Trustworthiness Checker supports two Redis input modes:
+
+- Redis Pub/Sub channels for transient events.
+- Redis knowledge-state input for current selected-key values.
+
+See [Redis knowledge-state input](./redis-knowledge-input.md) for a complete
+Docker walkthrough, CLI examples, and a representative MAPLE-K configuration.

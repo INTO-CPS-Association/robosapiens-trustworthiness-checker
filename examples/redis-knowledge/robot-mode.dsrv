@@ -1,0 +1,4 @@
+in robot_mode
+out observed_mode
+
+observed_mode = robot_mode

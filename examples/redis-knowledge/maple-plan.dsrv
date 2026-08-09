@@ -1,0 +1,7 @@
+in analyse_completed: Bool
+in current_plan: Str
+in legitimate_completed: Bool
+
+out legitimate_plan: Str
+
+legitimate_plan = if analyse_completed && legitimate_completed then current_plan else "plan-not-legitimate"

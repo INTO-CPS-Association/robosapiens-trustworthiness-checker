@@ -15,6 +15,9 @@ pub use config::{
     CodecId, InputConfigFile, InputReduction, InputStage, InputWindow, MonitorConfig,
     MsgTypeMapping, Route, SourceConfig, SourceId, TopicMapping, WireRoute,
 };
+pub use redis::{
+    RedisKnowledgeConfig, RedisKnowledgeRetry, decode_redis_knowledge_value, redis_keyspace_channel,
+};
 mod aggregation;
 pub mod redis;
 

@@ -14,13 +14,14 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{
-    DistributionModeBuilder, input_source, output_handler_spec, route_mappings,
+    DistributionModeBuilder, RedisKnowledgeOverrides, apply_redis_knowledge_overrides,
+    input_source, output_handler_spec, redis_knowledge_config_from_cli, route_mappings,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
-    InputConfigFile, InputPipeline, InputReduction, InputSources, InputStage, InputWindow,
-    OutputHandlerBuilder,
+    InputConfigFile, InputPipeline, InputReduction, InputSource, InputSources, InputStage,
+    InputWindow, OutputHandlerBuilder, RedisKnowledgeConfig,
 };
 use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
@@ -172,6 +173,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         mqtt_port,
         redis_port,
         cli.mqtt_input_backend(),
+        Some(InputSource::<Value>::redis_knowledge),
         &cli,
     )?;
     let builder = if matches!(runtime, RuntimeSpec::ReconfSemiSync) {
@@ -240,6 +242,7 @@ async fn run_mstlo(
         cli.mqtt_port,
         cli.redis_port,
         cli.mqtt_input_backend(),
+        None,
         &cli,
     )?;
 
@@ -284,6 +287,7 @@ fn configure_input_pipeline<V>(
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
     mqtt_backend: trustworthiness_checker::io::mqtt::MqttInputBackend,
+    redis_knowledge_builder: Option<fn(RedisKnowledgeConfig) -> InputSource<V>>,
     cli: &Cli,
 ) -> anyhow::Result<InputPipeline<V>>
 where
@@ -291,14 +295,24 @@ where
         + trustworthiness_checker::core::RosStreamValue
         + 'static,
 {
+    let overrides = RedisKnowledgeOverrides::from_cli(cli);
     let mut pipeline = if let Some(path) = &input_mode.input_config {
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("input config {path:?} could not be read"))?;
-        let config: InputConfigFile =
+        let mut config: InputConfigFile =
             json5::from_str(&contents).context("input config JSON5 could not be parsed")?;
+        apply_redis_knowledge_overrides(&mut config, &overrides)?;
         let sources =
             InputSources::<V>::from_config(config, executor, mqtt_port, redis_port, mqtt_backend)?;
         InputPipeline::from_sources(sources)
+    } else if input_mode.redis_knowledge_input {
+        let Some(redis_knowledge_builder) = redis_knowledge_builder else {
+            anyhow::bail!(
+                "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO"
+            );
+        };
+        let config = redis_knowledge_config_from_cli(redis_port, &overrides)?;
+        InputPipeline::new(redis_knowledge_builder(config))
     } else {
         InputPipeline::new(input_source(
             input_mode,

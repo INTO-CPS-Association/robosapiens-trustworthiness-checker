@@ -329,7 +329,8 @@ running monitor can receive a replacement request.
 
 ## Redis status
 
-Redis Pub/Sub input and Redis output remain supported. The selected-key Redis
-knowledge-state provider is **not implemented in this stage**. It can later be
-added as an event-shaped `InputSource` using the same `InputBatch` and
-`InputStream` protocol; no public stream-model change will be required.
+Redis Pub/Sub input and Redis output remain supported. Redis knowledge-state
+input is implemented as a selected-key `InputSource<Value>` using the same
+`InputBatch` and `InputStream` protocol. It reads current state after exact
+keyspace invalidations and leaves semantic aggregation to the post-composition
+input window.

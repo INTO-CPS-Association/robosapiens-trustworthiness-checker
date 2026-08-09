@@ -1,0 +1,5 @@
+flowchart LR
+    Event[MAPLE-K phase event] --> PubSub[Redis Pub/Sub channel]
+    Knowledge[Current Knowledge state] --> Key[Selected Redis key]
+    PubSub --> Checker[Trustworthiness Checker]
+    Key --> Checker

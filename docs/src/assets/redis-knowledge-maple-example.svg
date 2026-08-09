@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 390" role="img" aria-labelledby="title desc">
+  <title id="title">Representative MAPLE-K Redis input example</title>
+  <desc id="desc">Analyse completion and Legitimate completion enter through Redis Pub/Sub events, while the current selected plan enters through a Redis Knowledge key. All three feed the Trustworthiness Checker.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4b5563"/>
+    </marker>
+    <style>
+      .phase { fill: #eef6ff; stroke: #3478b8; }
+      .event { fill: #fff5e8; stroke: #bc6b16; }
+      .knowledge { fill: #eaf8ee; stroke: #39834d; }
+      .checker { fill: #f1ecff; stroke: #7254b3; }
+      .box { stroke-width: 2; rx: 10; }
+      .line { fill: none; stroke: #4b5563; stroke-width: 2.5; marker-end: url(#arrow); }
+      .label { fill: #1f2937; font: 17px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .small { fill: #374151; font: 14px sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect class="box phase" x="25" y="30" width="220" height="72"/>
+  <text class="label" x="135" y="66">Analyse completed</text>
+  <rect class="box knowledge" x="25" y="159" width="220" height="72"/>
+  <text class="label" x="135" y="195">Current selected plan</text>
+  <rect class="box phase" x="25" y="288" width="220" height="72"/>
+  <text class="label" x="135" y="324">Legitimate completed</text>
+  <rect class="box event" x="330" y="30" width="220" height="72"/>
+  <text class="label" x="440" y="57">Redis Pub/Sub</text>
+  <text class="small" x="440" y="82">event</text>
+  <rect class="box knowledge" x="330" y="159" width="220" height="72"/>
+  <text class="label" x="440" y="186">Redis Knowledge</text>
+  <text class="small" x="440" y="211">key</text>
+  <rect class="box event" x="330" y="288" width="220" height="72"/>
+  <text class="label" x="440" y="315">Redis Pub/Sub</text>
+  <text class="small" x="440" y="340">event</text>
+  <rect class="box checker" x="690" y="130" width="220" height="130"/>
+  <text class="label" x="800" y="182">Trustworthiness</text>
+  <text class="label" x="800" y="210">Checker</text>
+  <path class="line" d="M245 66 H330"/>
+  <path class="line" d="M245 195 H330"/>
+  <path class="line" d="M245 324 H330"/>
+  <path class="line" d="M550 66 H610 Q635 66 655 105 L690 159"/>
+  <path class="line" d="M550 195 H690"/>
+  <path class="line" d="M550 324 H610 Q635 324 655 285 L690 231"/>
+</svg>

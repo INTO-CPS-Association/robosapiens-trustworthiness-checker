@@ -1,4 +1,5 @@
 use std::{
+    any::{Any, TypeId},
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
@@ -20,6 +21,7 @@ use crate::io::mqtt::MqttInputBackend;
 use crate::io::reconfigurable_input::{
     ReconfigurableInputItem, ReconfigurableInputStream, ReconfigurationControl,
 };
+use crate::io::redis::RedisKnowledgeConfig;
 use crate::stream_utils::Fanout;
 
 use super::super::config::InputStage;
@@ -50,6 +52,7 @@ enum InputSourceKind<V = Value> {
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
     },
+    RedisKnowledge(RedisKnowledgeConfig),
     Manual {
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
@@ -63,6 +66,46 @@ pub struct InputSource<V = Value> {
     /// Transport-local route carrying monitor reconfiguration messages:
     /// an MQTT topic, Redis Pub/Sub channel, ROS topic, or equivalent.
     reconfiguration_route: Option<Box<str>>,
+}
+
+impl InputSource<Value> {
+    /// Construct a selected-key Redis knowledge source. Redis knowledge
+    /// produces the ordinary project [`Value`] domain; it is intentionally not
+    /// a constructor on arbitrary `InputSource<V>` specializations.
+    pub fn redis_knowledge(config: RedisKnowledgeConfig) -> Self {
+        Self::new(InputSourceKind::RedisKnowledge(config))
+    }
+}
+
+/// Open the Value-specific Redis knowledge provider from the generic source
+/// opener. The type check is deliberately before the provider is opened so an
+/// unsupported value domain cannot establish a Redis connection.
+async fn open_configured_redis_knowledge<V>(
+    config: RedisKnowledgeConfig,
+    bindings: BTreeMap<VarName, String>,
+) -> anyhow::Result<InputStream<V>>
+where
+    V: FileInputValue + RosStreamValue + 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+
+    let mut values = crate::io::redis::open_value_redis_knowledge(config, bindings).await?;
+    Ok(Box::pin(async_stream::try_stream! {
+        while let Some(batch) = values.next().await {
+            let batch = batch?;
+            let batch = batch.try_map_values(|value| {
+                let value: Box<dyn Any> = Box::new(value);
+                value
+                    .downcast::<V>()
+                    .map(|value| *value)
+                    .map_err(|_| anyhow!("Redis knowledge value-domain conversion failed"))
+            })?;
+            yield batch;
+        }
+    }))
 }
 
 /// An owned local source set containing source-owned catalogs and
@@ -263,6 +306,30 @@ impl<V> InputSources<V> {
                         reconfiguration_route,
                     )
                 }
+                crate::io::config::SourceConfig::RedisKnowledge {
+                    host,
+                    port,
+                    database,
+                    publish_initial,
+                    keys,
+                    retry,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::RedisKnowledge(RedisKnowledgeConfig {
+                            host: host.unwrap_or_else(|| REDIS_HOSTNAME.to_owned()),
+                            port: port.or(redis_port),
+                            database,
+                            publish_initial,
+                            keys,
+                            retry,
+                        })),
+                        None,
+                    )
+                }
                 crate::io::config::SourceConfig::Ros {
                     routes,
                     reconfiguration_route,
@@ -311,9 +378,12 @@ impl<V> InputSources<V> {
             source.validate_binding(&binding)?;
             by_source.entry(source_id).or_default().push(binding);
         }
-        Ok(ResolvedInput::new(by_source.into_iter().map(
-            |(source, bindings)| ResolvedSource::new(source, bindings),
-        )))
+        let resolved = ResolvedInput::new(
+            by_source
+                .into_iter()
+                .map(|(source, bindings)| ResolvedSource::new(source, bindings)),
+        );
+        self.validate_resolved(&resolved, variables)
     }
 
     pub(crate) fn resolve_monitor_config(
@@ -414,6 +484,7 @@ impl<V> InputSources<V> {
                     source_plan.source()
                 )
             })?;
+            source.validate_bindings(source_plan.bindings())?;
             for binding in source_plan.bindings() {
                 source.validate_binding(binding)?;
                 anyhow::ensure!(
@@ -474,6 +545,10 @@ impl<V> InputSource<V> {
         anyhow::ensure!(
             !route.trim().is_empty(),
             "reconfiguration route cannot be empty"
+        );
+        anyhow::ensure!(
+            !matches!(&self.kind, InputSourceKind::RedisKnowledge(_)),
+            "Redis knowledge sources cannot carry `reconfiguration_route`; use a control-capable source"
         );
         self.reconfiguration_route = Some(route);
         Ok(self)
@@ -612,6 +687,13 @@ impl<V> InputSource<V> {
                     }
                 }
             }
+            InputSourceKind::RedisKnowledge(config) => {
+                for variable in requested {
+                    if config.keys.contains_key(variable) {
+                        record(variable)?;
+                    }
+                }
+            }
             InputSourceKind::Manual { fanouts, .. } => {
                 for variable in requested {
                     if fanouts.contains_key(variable) {
@@ -637,6 +719,10 @@ impl<V> InputSource<V> {
             InputSourceKind::Mqtt { routes: None, .. }
             | InputSourceKind::Redis { routes: None, .. } => Some(Route {
                 route: variable.to_string().into_boxed_str(),
+                codec: None,
+            }),
+            InputSourceKind::RedisKnowledge(config) => config.keys.get(variable).map(|key| Route {
+                route: key.clone().into_boxed_str(),
                 codec: None,
             }),
             InputSourceKind::File { .. }
@@ -670,6 +756,31 @@ impl<V> InputSource<V> {
             "input codec for `{}` cannot be empty",
             binding.variable()
         );
+        if matches!(&self.kind, InputSourceKind::RedisKnowledge(_)) {
+            anyhow::ensure!(
+                matches!(binding.codec().0.as_ref(), "json" | "json5"),
+                "Redis knowledge input for `{}` supports JSON5 decoding only (`json` is a compatibility alias); codec `{}` is unsupported",
+                binding.variable(),
+                binding.codec()
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_bindings(&self, bindings: &[ResolvedBinding]) -> anyhow::Result<()> {
+        if matches!(self.kind, InputSourceKind::RedisKnowledge(_)) {
+            let mut keys = BTreeMap::<&str, &VarName>::new();
+            for binding in bindings {
+                if let Some(previous) = keys.insert(binding.route(), binding.variable()) {
+                    anyhow::bail!(
+                        "active Redis knowledge key `{}` is mapped to both `{}` and `{}`",
+                        binding.route(),
+                        previous,
+                        binding.variable()
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -785,6 +896,13 @@ impl<V> InputSource<V> {
                     .map(|(variable, route)| (variable, route.route.to_string()))
                     .collect();
                 crate::io::redis::input_stream::<V>(&host, port, topics).await
+            }
+            InputSourceKind::RedisKnowledge(config) => {
+                let keys = routes
+                    .into_iter()
+                    .map(|(variable, route)| (variable, route.route.to_string()))
+                    .collect();
+                open_configured_redis_knowledge::<V>(config, keys).await
             }
             InputSourceKind::Manual { fanouts, .. } => {
                 let streams = fanouts
@@ -913,6 +1031,11 @@ impl<V> InputSource<V> {
                     let _ = (executor, routes, variables, control_route);
                     anyhow::bail!("ROS support not enabled")
                 }
+            }
+            InputSourceKind::RedisKnowledge(_) => {
+                anyhow::bail!(
+                    "Redis knowledge sources do not support reconfiguration control; use a Redis Pub/Sub, MQTT, ROS, or manual control source"
+                )
             }
             InputSourceKind::Manual { fanouts, control } => {
                 let data_streams = fanouts
@@ -1233,6 +1356,53 @@ mod resolution_tests {
             VarName::new("x"),
             Route::new(route.to_owned().into_boxed_str(), None).unwrap(),
         )])
+    }
+
+    #[test]
+    fn non_knowledge_mstlo_pipeline_does_not_need_redis_capabilities() {
+        use crate::runtime::mstlo::{MstloTimedValue, MstloValue, TimedValue};
+
+        let value = TimedValue::new(std::time::Duration::from_millis(1), MstloValue::Float(1.0));
+        let source =
+            InputSource::<MstloTimedValue>::in_memory_ticks([InputBatch::update("x", value)]);
+        let mut stream =
+            smol::block_on(InputPipeline::new(source).build(BTreeSet::from([VarName::new("x")])))
+                .unwrap();
+        let batch = smol::block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(
+            batch.updates().next().unwrap().value.value,
+            MstloValue::Float(1.0)
+        );
+    }
+
+    #[test]
+    fn mstlo_input_config_rejects_redis_knowledge_before_opening() {
+        use crate::runtime::mstlo::MstloTimedValue;
+
+        let config: InputConfigFile = json5::from_str(
+            r#"{
+                sources: {
+                    knowledge: {
+                        kind: "redis-knowledge",
+                        keys: {x: "knowledge:x"}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let error = InputSources::<MstloTimedValue>::from_config(
+            config,
+            Rc::new(LocalExecutor::new()),
+            None,
+            None,
+            MqttInputBackend::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("produces ordinary `Value` input")
+        );
     }
 
     #[test]
@@ -1593,5 +1763,65 @@ mod resolution_tests {
                 .to_string()
                 .contains("2 sources declaring `reconfiguration_route`")
         );
+    }
+
+    #[test]
+    fn redis_knowledge_catalog_is_generation_scoped_and_not_a_control_source() {
+        let source = InputSource::<Value>::redis_knowledge(RedisKnowledgeConfig {
+            host: "redis".to_owned(),
+            port: None,
+            database: 2,
+            publish_initial: true,
+            keys: BTreeMap::from([
+                (VarName::new("current"), "knowledge:current".to_owned()),
+                (VarName::new("future"), "knowledge:future".to_owned()),
+            ]),
+            retry: crate::io::redis::RedisKnowledgeRetry::default(),
+        });
+        let pipeline = InputPipeline::new(source);
+        let resolved = pipeline
+            .resolve(&BTreeSet::from([VarName::new("current")]), None)
+            .unwrap();
+        assert_eq!(
+            resolved.sources()[0].bindings()[0].route(),
+            "knowledge:current"
+        );
+        assert!(
+            pipeline
+                .sources()
+                .resolve_reconfiguration_source(None)
+                .unwrap_err()
+                .to_string()
+                .contains("does not support reconfiguration")
+        );
+    }
+
+    #[test]
+    fn redis_knowledge_active_duplicate_keys_are_rejected_before_opening() {
+        let pipeline = InputPipeline::new(InputSource::<Value>::redis_knowledge(
+            RedisKnowledgeConfig {
+                host: "redis".to_owned(),
+                port: None,
+                database: 2,
+                publish_initial: false,
+                keys: BTreeMap::from([(VarName::new("x"), "catalog:x".to_owned())]),
+                retry: crate::io::redis::RedisKnowledgeRetry::default(),
+            },
+        ));
+        let config = MonitorConfig::from_json(
+            r#"{
+                spec: "in x\nin y",
+                source: "default",
+                inputs: {x: "same:key", y: "same:key"}
+            }"#,
+        )
+        .unwrap();
+        let error = pipeline
+            .resolve(
+                &BTreeSet::from([VarName::new("x"), VarName::new("y")]),
+                Some(&config),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("active Redis knowledge key"));
     }
 }

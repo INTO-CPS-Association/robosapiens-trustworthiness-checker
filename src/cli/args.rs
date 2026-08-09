@@ -1,6 +1,9 @@
-use std::{num::NonZeroUsize, path::PathBuf};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
-use clap::{Args, Parser, ValueEnum, builder::OsStr};
+use clap::{ArgAction, Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
 
 use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
@@ -119,8 +122,14 @@ pub struct InputMode {
     #[clap(long, help = "Redis topics configuration file for input")]
     pub input_redis_file: Option<PathBuf>,
 
-    #[clap(long, help = "Enable generic Redis input mode")]
+    #[clap(long, help = "Enable generic Redis Pub/Sub channel input mode")]
     pub redis_input: bool,
+
+    #[clap(
+        long,
+        help = "Enable Redis knowledge-state input mode (selected keys, not Pub/Sub channels)"
+    )]
+    pub redis_knowledge_input: bool,
 
     // #[cfg(feature = "ros")]
     #[clap(
@@ -370,6 +379,72 @@ pub struct Cli {
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,
 
+    #[arg(
+        long = "redis-knowledge-key",
+        value_name = "INPUT=KEY",
+        action = ArgAction::Append,
+        help = "Map a checker input variable to a Redis knowledge key; repeatable"
+    )]
+    pub redis_knowledge_keys: Vec<String>,
+
+    #[arg(
+        long,
+        help = "Override the targeted Redis knowledge source database (default: 2)"
+    )]
+    pub redis_knowledge_database: Option<u32>,
+
+    #[arg(
+        long = "redis-knowledge-publish-initial",
+        value_name = "BOOL",
+        action = ArgAction::Set,
+        conflicts_with = "redis_knowledge_no_initial",
+        help = "Override whether Redis knowledge emits its initial snapshot into the checker input stream (true or false); this does not publish a Redis Pub/Sub message"
+    )]
+    pub redis_knowledge_publish_initial: Option<bool>,
+
+    #[arg(
+        long = "redis-knowledge-no-initial",
+        conflicts_with = "redis_knowledge_publish_initial",
+        help = "Disable the Redis knowledge initial snapshot"
+    )]
+    pub redis_knowledge_no_initial: bool,
+
+    #[arg(
+        long,
+        value_name = "ATTEMPTS",
+        conflicts_with = "redis_knowledge_retry_forever",
+        help = "Maximum Redis knowledge connection attempts, including the initial attempt"
+    )]
+    pub redis_knowledge_retry_max_attempts: Option<NonZeroU32>,
+
+    #[arg(
+        long = "redis-knowledge-retry-forever",
+        conflicts_with = "redis_knowledge_retry_max_attempts",
+        help = "Retry Redis knowledge transport failures forever"
+    )]
+    pub redis_knowledge_retry_forever: bool,
+
+    #[arg(
+        long,
+        value_name = "MILLISECONDS",
+        help = "Initial Redis knowledge retry backoff delay"
+    )]
+    pub redis_knowledge_retry_initial_delay_ms: Option<u64>,
+
+    #[arg(
+        long,
+        value_name = "MILLISECONDS",
+        help = "Maximum Redis knowledge retry backoff delay"
+    )]
+    pub redis_knowledge_retry_max_delay_ms: Option<u64>,
+
+    #[arg(
+        long,
+        value_name = "SOURCE_ID",
+        help = "Target this Redis knowledge source when --input-config declares more than one"
+    )]
+    pub redis_knowledge_source: Option<String>,
+
     #[arg(long, help = "Maximum input window delay in milliseconds")]
     pub input_window_ms: Option<u64>,
 
@@ -423,6 +498,51 @@ impl Cli {
                 "--input-file cannot be used with --runtime reconf-semi-sync"
             );
         }
+
+        let has_redis_knowledge_override = !self.redis_knowledge_keys.is_empty()
+            || self.redis_knowledge_database.is_some()
+            || self.redis_knowledge_publish_initial.is_some()
+            || self.redis_knowledge_no_initial
+            || self.redis_knowledge_retry_max_attempts.is_some()
+            || self.redis_knowledge_retry_forever
+            || self.redis_knowledge_retry_initial_delay_ms.is_some()
+            || self.redis_knowledge_retry_max_delay_ms.is_some()
+            || self.redis_knowledge_source.is_some();
+        anyhow::ensure!(
+            !has_redis_knowledge_override
+                || self.input_mode.redis_knowledge_input
+                || self.input_mode.input_config.is_some(),
+            "Redis knowledge options require --redis-knowledge-input or --input-config"
+        );
+        anyhow::ensure!(
+            self.redis_knowledge_source.is_none() || self.input_mode.input_config.is_some(),
+            "--redis-knowledge-source requires --input-config"
+        );
+        anyhow::ensure!(
+            !(matches!(self.language, Language::MSTLO) && self.input_mode.redis_knowledge_input),
+            "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO"
+        );
+        anyhow::ensure!(
+            !(self.redis_knowledge_retry_forever
+                && self.redis_knowledge_retry_max_attempts.is_some()),
+            "--redis-knowledge-retry-forever conflicts with --redis-knowledge-retry-max-attempts"
+        );
+        if let (Some(initial), Some(maximum)) = (
+            self.redis_knowledge_retry_initial_delay_ms,
+            self.redis_knowledge_retry_max_delay_ms,
+        ) {
+            anyhow::ensure!(
+                initial > 0 && maximum > 0 && maximum >= initial,
+                "Redis knowledge retry delays must be positive and max delay must be at least initial delay"
+            );
+        }
+        if self.redis_knowledge_no_initial {
+            anyhow::ensure!(
+                self.redis_knowledge_publish_initial.is_none(),
+                "--redis-knowledge-no-initial conflicts with --redis-knowledge-publish-initial"
+            );
+        }
+
         if self.input_window_mode.is_some()
             && self.input_window_ms.is_none()
             && self.input_window_update_limit.is_none()
@@ -477,6 +597,27 @@ mod runtime_tests {
                 false,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn mstlo_rejects_simple_redis_knowledge_before_source_opening() {
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.mstlo",
+            "--language",
+            "mstlo",
+            "--redis-knowledge-input",
+            "--redis-knowledge-key",
+            "signal=robot:signal",
+            "--output-stdout",
+        ])
+        .unwrap();
+        let error = cli.validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("ordinary `Value` input and is unsupported for MSTLO")
         );
     }
 

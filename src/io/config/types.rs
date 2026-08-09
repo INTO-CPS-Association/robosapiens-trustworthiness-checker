@@ -2,7 +2,8 @@ use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::VarName;
+use crate::io::redis::{RedisKnowledgeConfig, RedisKnowledgeRetry};
+use crate::{VarName, core::REDIS_HOSTNAME};
 
 pub type TopicMapping = BTreeMap<VarName, String>;
 pub type MsgTypeMapping = BTreeMap<VarName, String>;
@@ -213,6 +214,14 @@ impl MonitorConfig {
     }
 }
 
+fn default_redis_knowledge_database() -> u32 {
+    2
+}
+
+fn default_redis_knowledge_publish_initial() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceConfig {
@@ -238,6 +247,20 @@ pub enum SourceConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reconfiguration_route: Option<Box<str>>,
     },
+    #[serde(rename = "redis-knowledge")]
+    RedisKnowledge {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default = "default_redis_knowledge_database")]
+        database: u32,
+        #[serde(default = "default_redis_knowledge_publish_initial")]
+        publish_initial: bool,
+        keys: BTreeMap<VarName, String>,
+        #[serde(default)]
+        retry: RedisKnowledgeRetry,
+    },
     Ros {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         routes: BTreeMap<VarName, WireRoute>,
@@ -250,7 +273,9 @@ pub enum SourceConfig {
 impl SourceConfig {
     pub fn host(&self) -> Option<&str> {
         match self {
-            Self::Mqtt { host, .. } | Self::Redis { host, .. } => host.as_deref(),
+            Self::Mqtt { host, .. }
+            | Self::Redis { host, .. }
+            | Self::RedisKnowledge { host, .. } => host.as_deref(),
             Self::Ros { .. } => None,
         }
     }
@@ -259,6 +284,11 @@ impl SourceConfig {
         match self {
             Self::Mqtt { routes, .. } | Self::Redis { routes, .. } | Self::Ros { routes, .. } => {
                 routes
+            }
+            Self::RedisKnowledge { .. } => {
+                static EMPTY_ROUTES: std::sync::OnceLock<BTreeMap<VarName, WireRoute>> =
+                    std::sync::OnceLock::new();
+                EMPTY_ROUTES.get_or_init(BTreeMap::new)
             }
         }
     }
@@ -277,6 +307,7 @@ impl SourceConfig {
                 reconfiguration_route,
                 ..
             } => reconfiguration_route.as_deref(),
+            Self::RedisKnowledge { .. } => None,
         }
     }
 }
@@ -314,16 +345,50 @@ impl InputConfigFile {
                     "input source `{source}` has an empty `reconfiguration_route`"
                 );
             }
-            for (variable, route) in config.routes() {
-                route.validate().map_err(|error| {
-                    anyhow::anyhow!(
-                        "input source `{source}` has an invalid route for `{variable}`: {error}"
-                    )
-                })?;
-                if let Some(previous) = variables.insert(variable.clone(), source) {
-                    anyhow::bail!(
-                        "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
-                    );
+
+            match config {
+                SourceConfig::RedisKnowledge {
+                    host,
+                    port,
+                    database,
+                    publish_initial,
+                    keys,
+                    retry,
+                } => {
+                    let knowledge = RedisKnowledgeConfig {
+                        host: host.clone().unwrap_or_else(|| REDIS_HOSTNAME.to_owned()),
+                        port: *port,
+                        database: *database,
+                        publish_initial: *publish_initial,
+                        keys: keys.clone(),
+                        retry: retry.clone(),
+                    };
+                    knowledge.validate().map_err(|error| {
+                        anyhow::anyhow!(
+                            "input source `{source}` has invalid Redis knowledge configuration: {error}"
+                        )
+                    })?;
+                    for (variable, _) in keys {
+                        if let Some(previous) = variables.insert(variable.clone(), source) {
+                            anyhow::bail!(
+                                "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    for (variable, route) in config.routes() {
+                        route.validate().map_err(|error| {
+                            anyhow::anyhow!(
+                                "input source `{source}` has an invalid route for `{variable}`: {error}"
+                            )
+                        })?;
+                        if let Some(previous) = variables.insert(variable.clone(), source) {
+                            anyhow::bail!(
+                                "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -681,5 +746,72 @@ mod tests {
             }"#,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn redis_knowledge_source_uses_tagged_name_and_defaults() {
+        let config = input_config(
+            r#"{
+                sources: {
+                    knowledge: {
+                        kind: "redis-knowledge",
+                        host: "redis",
+                        keys: {
+                            "knowledge.robot_mode": "robot:mode",
+                            "knowledge.current_plan": "mape:plan:current"
+                        }
+                    }
+                }
+            }"#,
+        );
+        config.validate().unwrap();
+        let SourceConfig::RedisKnowledge {
+            database,
+            publish_initial,
+            retry,
+            ..
+        } = &config.sources["knowledge"]
+        else {
+            panic!("expected redis-knowledge source")
+        };
+        assert_eq!(*database, 2);
+        assert!(*publish_initial);
+        assert_eq!(retry, &RedisKnowledgeRetry::default());
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            serialized["sources"]["knowledge"]["kind"],
+            "redis-knowledge"
+        );
+    }
+
+    #[test]
+    fn redis_knowledge_source_rejects_unknown_control_and_bad_keys() {
+        for json in [
+            r#"{sources:{knowledge:{kind:"redis-knowledge",keys:{x:""}}}}"#,
+            r#"{sources:{knowledge:{kind:"redis-knowledge",keys:{x:"same",y:"same"}}}}"#,
+            r#"{sources:{knowledge:{kind:"redis-knowledge",keys:{x:"key"},reconfiguration_route:"control"}}}"#,
+            r#"{sources:{knowledge:{kind:"redisknowledge",keys:{x:"key"}}}}"#,
+            r#"{sources:{knowledge:{kind:"redis-knowledge",keys:{x:"key"},retry:{initial_delay_ms:0,max_delay_ms:1}}}}"#,
+        ] {
+            let result = json5::from_str::<InputConfigFile>(json);
+            assert!(
+                result.is_err() || result.expect("checked above").validate().is_err(),
+                "accepted {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn redis_knowledge_variables_participate_in_cross_source_ownership() {
+        let config = input_config(
+            r#"{
+                sources: {
+                    knowledge: {kind:"redis-knowledge",keys:{x:"knowledge:x"}},
+                    events: {kind:"redis",routes:{x:"event:x"}}
+                }
+            }"#,
+        );
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("appears in both source"));
     }
 }

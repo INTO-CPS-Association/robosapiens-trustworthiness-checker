@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 280" role="img" aria-labelledby="title desc">
+  <title id="title">Redis event and knowledge inputs</title>
+  <desc id="desc">A MAPLE-K phase event enters the Trustworthiness Checker through a Redis Pub/Sub channel, while current Knowledge state enters through a selected Redis key.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#4b5563"/>
+    </marker>
+    <style>
+      .source { fill: #eef6ff; stroke: #3478b8; }
+      .redis { fill: #fff5e8; stroke: #bc6b16; }
+      .checker { fill: #f1ecff; stroke: #7254b3; }
+      .box { stroke-width: 2; rx: 10; }
+      .line { fill: none; stroke: #4b5563; stroke-width: 2.5; marker-end: url(#arrow); }
+      .label { fill: #1f2937; font: 17px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .small { fill: #374151; font: 14px sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect class="box source" x="30" y="35" width="230" height="72"/>
+  <text class="label" x="145" y="71">MAPLE-K phase event</text>
+  <rect class="box source" x="30" y="173" width="230" height="72"/>
+  <text class="label" x="145" y="209">Current Knowledge state</text>
+  <rect class="box redis" x="340" y="35" width="230" height="72"/>
+  <text class="label" x="455" y="62">Redis Pub/Sub</text>
+  <text class="small" x="455" y="87">channel</text>
+  <rect class="box redis" x="340" y="173" width="230" height="72"/>
+  <text class="label" x="455" y="200">Selected Redis</text>
+  <text class="small" x="455" y="225">key</text>
+  <rect class="box checker" x="670" y="90" width="220" height="100"/>
+  <text class="label" x="780" y="127">Trustworthiness</text>
+  <text class="label" x="780" y="153">Checker</text>
+  <path class="line" d="M260 71 H340"/>
+  <path class="line" d="M260 209 H340"/>
+  <path class="line" d="M570 71 H615 Q635 71 650 95 L670 116"/>
+  <path class="line" d="M570 209 H615 Q635 209 650 185 L670 164"/>
+</svg>

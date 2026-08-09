@@ -1,6 +1,6 @@
 use anyhow::Context;
 use smol::LocalExecutor;
-use std::rc::Rc;
+use std::{collections::BTreeMap, num::NonZeroU32, rc::Rc, time::Duration};
 use tracing::{debug, info};
 
 use crate::cli::args::{Cli, OutputMode};
@@ -8,11 +8,12 @@ use crate::core::{FileInputValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::io::OutputHandlerSpec;
 use crate::io::config::deserialisation::json_to_routes;
-use crate::io::config::{MsgTypeMapping, Route, TopicMapping};
+use crate::io::config::{InputConfigFile, MsgTypeMapping, Route, SourceConfig, TopicMapping};
 use crate::{
     VarName,
+    core::REDIS_HOSTNAME,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputSource, mqtt::MqttInputBackend},
+    io::{InputSource, RedisKnowledgeConfig, RedisKnowledgeRetry, mqtt::MqttInputBackend},
     runtime::distributed::SchedulerCommunication,
 };
 
@@ -20,6 +21,187 @@ use super::args::DistributionMode as CliDistributionMode;
 use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingType};
 use crate::core::interfaces::RuntimeSpec;
 use crate::runtime::builder::DistributionMode as BuilderDistributionMode;
+
+/// Focused command-line overrides for a Redis knowledge source. The durable
+/// named-source topology remains in `InputConfigFile`; these values are only
+/// applied to a simple source or an explicitly selected configured source.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RedisKnowledgeOverrides {
+    pub source: Option<String>,
+    pub database: Option<u32>,
+    pub publish_initial: Option<bool>,
+    pub retry_max_attempts: Option<Option<NonZeroU32>>,
+    pub retry_initial_delay_ms: Option<u64>,
+    pub retry_max_delay_ms: Option<u64>,
+    pub key_mappings: Vec<String>,
+}
+
+impl RedisKnowledgeOverrides {
+    pub fn from_cli(cli: &Cli) -> Self {
+        Self {
+            source: cli.redis_knowledge_source.clone(),
+            database: cli.redis_knowledge_database,
+            publish_initial: if cli.redis_knowledge_no_initial {
+                Some(false)
+            } else {
+                cli.redis_knowledge_publish_initial
+            },
+            retry_max_attempts: if cli.redis_knowledge_retry_forever {
+                Some(None)
+            } else {
+                cli.redis_knowledge_retry_max_attempts.map(Some)
+            },
+            retry_initial_delay_ms: cli.redis_knowledge_retry_initial_delay_ms,
+            retry_max_delay_ms: cli.redis_knowledge_retry_max_delay_ms,
+            key_mappings: cli.redis_knowledge_keys.clone(),
+        }
+    }
+
+    fn changes_source_configuration(&self) -> bool {
+        self.database.is_some()
+            || self.publish_initial.is_some()
+            || self.retry_max_attempts.is_some()
+            || self.retry_initial_delay_ms.is_some()
+            || self.retry_max_delay_ms.is_some()
+            || !self.key_mappings.is_empty()
+    }
+}
+
+pub fn parse_redis_knowledge_mappings(
+    mappings: &[String],
+) -> anyhow::Result<BTreeMap<VarName, String>> {
+    let mut parsed = BTreeMap::new();
+    for mapping in mappings {
+        let (variable, key) = mapping.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("Redis knowledge mapping `{mapping}` must have format INPUT=KEY")
+        })?;
+        let variable = variable.trim();
+        let key = key.trim();
+        anyhow::ensure!(
+            !variable.is_empty(),
+            "Redis knowledge mapping `{mapping}` has an empty input variable"
+        );
+        anyhow::ensure!(
+            !key.is_empty(),
+            "Redis knowledge mapping `{mapping}` has an empty Redis key"
+        );
+        let variable = VarName::new(variable);
+        if let Some(previous) = parsed.insert(variable.clone(), key.to_owned())
+            && previous != key
+        {
+            anyhow::bail!(
+                "Redis knowledge input variable `{variable}` has contradictory CLI mappings `{previous}` and `{key}`"
+            );
+        }
+    }
+    Ok(parsed)
+}
+
+fn apply_retry_overrides(
+    retry: &mut RedisKnowledgeRetry,
+    overrides: &RedisKnowledgeOverrides,
+) -> anyhow::Result<()> {
+    if let Some(max_attempts) = overrides.retry_max_attempts {
+        retry.max_attempts = max_attempts;
+    }
+    if let Some(delay) = overrides.retry_initial_delay_ms {
+        retry.initial_delay = Duration::from_millis(delay);
+    }
+    if let Some(delay) = overrides.retry_max_delay_ms {
+        retry.max_delay = Duration::from_millis(delay);
+    }
+    retry.validate()
+}
+
+pub fn redis_knowledge_config_from_cli(
+    port: Option<u16>,
+    overrides: &RedisKnowledgeOverrides,
+) -> anyhow::Result<RedisKnowledgeConfig> {
+    let keys = parse_redis_knowledge_mappings(&overrides.key_mappings)?;
+    let mut retry = RedisKnowledgeRetry::default();
+    apply_retry_overrides(&mut retry, overrides)?;
+    let config = RedisKnowledgeConfig {
+        host: REDIS_HOSTNAME.to_owned(),
+        port,
+        database: overrides.database.unwrap_or(2),
+        publish_initial: overrides.publish_initial.unwrap_or(true),
+        keys,
+        retry,
+    };
+    config.validate()?;
+    Ok(config)
+}
+
+pub fn apply_redis_knowledge_overrides(
+    config: &mut InputConfigFile,
+    overrides: &RedisKnowledgeOverrides,
+) -> anyhow::Result<()> {
+    let knowledge_ids = config
+        .sources
+        .iter()
+        .filter_map(|(id, source)| {
+            matches!(source, SourceConfig::RedisKnowledge { .. }).then_some(id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let target = match overrides.source.as_deref() {
+        Some(source) => {
+            anyhow::ensure!(
+                config.sources.contains_key(source),
+                "Redis knowledge source `{source}` is not registered"
+            );
+            anyhow::ensure!(
+                matches!(config.sources[source], SourceConfig::RedisKnowledge { .. }),
+                "input source `{source}` is not a `redis-knowledge` source"
+            );
+            Some(source.to_owned())
+        }
+        None if overrides.changes_source_configuration() && knowledge_ids.is_empty() => {
+            anyhow::bail!(
+                "Redis knowledge CLI overrides were provided, but --input-config declares no `redis-knowledge` source"
+            )
+        }
+        None if overrides.changes_source_configuration() && knowledge_ids.len() > 1 => {
+            anyhow::bail!(
+                "Redis knowledge CLI overrides are ambiguous across sources {knowledge_ids:?}; use --redis-knowledge-source"
+            )
+        }
+        None => knowledge_ids.into_iter().next(),
+    };
+
+    if let Some(source_id) = target {
+        let source = config
+            .sources
+            .get_mut(&source_id)
+            .expect("target source was checked above");
+        let SourceConfig::RedisKnowledge {
+            database,
+            publish_initial,
+            keys,
+            retry,
+            ..
+        } = source
+        else {
+            unreachable!("target source was checked as redis-knowledge")
+        };
+
+        if let Some(database_override) = overrides.database {
+            *database = database_override;
+        }
+        if let Some(publish_initial_override) = overrides.publish_initial {
+            *publish_initial = publish_initial_override;
+        }
+        apply_retry_overrides(retry, overrides)?;
+        for (variable, key) in parse_redis_knowledge_mappings(&overrides.key_mappings)? {
+            keys.insert(variable, key);
+        }
+    } else if overrides.source.is_some() {
+        anyhow::bail!("the requested Redis knowledge source could not be selected")
+    }
+
+    config.validate()
+}
 
 pub fn input_source<V>(
     input_mode: InputMode,
@@ -982,5 +1164,268 @@ mod tests {
                 && constraints == vec![VarName::new("c1"), VarName::new("c2")]
                 && topic == "/dist_graph"
         ));
+    }
+
+    fn knowledge_config(json: &str) -> InputConfigFile {
+        json5::from_str(json).expect("knowledge config should parse")
+    }
+
+    #[test]
+    fn redis_knowledge_cli_only_configuration_uses_defaults_and_keys() {
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.dsrv",
+            "--redis-knowledge-input",
+            "--redis-knowledge-key",
+            "knowledge.robot_mode=robot:mode",
+            "--output-stdout",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let config =
+            redis_knowledge_config_from_cli(Some(6380), &RedisKnowledgeOverrides::from_cli(&cli))
+                .unwrap();
+        assert_eq!(config.database, 2);
+        assert!(config.publish_initial);
+        assert_eq!(config.port, Some(6380));
+        assert_eq!(
+            config.keys[&VarName::new("knowledge.robot_mode")],
+            "robot:mode"
+        );
+    }
+
+    #[test]
+    fn redis_knowledge_json5_overrides_database_and_adds_or_replaces_keys() {
+        let mut config = knowledge_config(
+            r#"{
+                sources: {
+                    knowledge: {
+                        kind: "redis-knowledge",
+                        host: "redis",
+                        keys: {mode: "robot:mode"}
+                    }
+                }
+            }"#,
+        );
+        let overrides = RedisKnowledgeOverrides {
+            database: Some(4),
+            key_mappings: vec![
+                "mode=robot:mode:v2".to_owned(),
+                "plan=mape:plan:current".to_owned(),
+            ],
+            ..Default::default()
+        };
+        apply_redis_knowledge_overrides(&mut config, &overrides).unwrap();
+        let SourceConfig::RedisKnowledge { database, keys, .. } = &config.sources["knowledge"]
+        else {
+            panic!("expected Redis knowledge source")
+        };
+        assert_eq!(*database, 4);
+        assert_eq!(keys[&VarName::new("mode")], "robot:mode:v2");
+        assert_eq!(keys[&VarName::new("plan")], "mape:plan:current");
+    }
+
+    #[test]
+    fn redis_knowledge_json5_uses_source_port_fallback_without_overriding_topology() {
+        let config = knowledge_config(
+            r#"{
+                sources: {
+                    knowledge: {
+                        kind: "redis-knowledge",
+                        host: "redis",
+                        keys: {mode: "robot:mode"}
+                    }
+                }
+            }"#,
+        );
+        config.validate().unwrap();
+        let sources = crate::io::InputSources::<crate::Value>::from_config(
+            config,
+            Rc::new(LocalExecutor::new()),
+            None,
+            Some(6381),
+            MqttInputBackend::default(),
+        )
+        .unwrap();
+        let debug = format!("{:?}", sources.source("knowledge").unwrap());
+        assert!(debug.contains("6381"));
+    }
+
+    #[test]
+    fn redis_knowledge_per_source_port_wins_over_global_fallback() {
+        let config = knowledge_config(
+            r#"{
+                sources: {
+                    knowledge: {
+                        kind: "redis-knowledge",
+                        host: "redis",
+                        port: 6382,
+                        keys: {mode: "robot:mode"}
+                    }
+                }
+            }"#,
+        );
+        let sources = crate::io::InputSources::<crate::Value>::from_config(
+            config,
+            Rc::new(LocalExecutor::new()),
+            None,
+            Some(6381),
+            MqttInputBackend::default(),
+        )
+        .unwrap();
+        let debug = format!("{:?}", sources.source("knowledge").unwrap());
+        assert!(debug.contains("6382"));
+        assert!(!debug.contains("6381"));
+    }
+
+    #[test]
+    fn redis_knowledge_targeted_overrides_change_only_the_selected_sibling() {
+        let mut config = knowledge_config(
+            r#"{
+                sources: {
+                    first: {
+                        kind: "redis-knowledge",
+                        database: 2,
+                        keys: {first: "key:first"},
+                        retry: {max_attempts: 3, initial_delay_ms: 10, max_delay_ms: 20}
+                    },
+                    second: {
+                        kind: "redis-knowledge",
+                        database: 4,
+                        publish_initial: false,
+                        keys: {second: "key:second"},
+                        retry: {max_attempts: 4, initial_delay_ms: 15, max_delay_ms: 30}
+                    }
+                }
+            }"#,
+        );
+        apply_redis_knowledge_overrides(
+            &mut config,
+            &RedisKnowledgeOverrides {
+                source: Some("second".to_owned()),
+                database: Some(5),
+                publish_initial: Some(true),
+                retry_max_attempts: Some(None),
+                retry_initial_delay_ms: Some(25),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let SourceConfig::RedisKnowledge {
+            database: first_database,
+            retry: first_retry,
+            ..
+        } = &config.sources["first"]
+        else {
+            panic!("expected first knowledge source")
+        };
+        assert_eq!(*first_database, 2);
+        assert_eq!(first_retry.max_attempts, NonZeroU32::new(3));
+        assert_eq!(first_retry.initial_delay, Duration::from_millis(10));
+
+        let SourceConfig::RedisKnowledge {
+            database,
+            publish_initial,
+            retry,
+            ..
+        } = &config.sources["second"]
+        else {
+            panic!("expected second knowledge source")
+        };
+        assert_eq!(*database, 5);
+        assert!(*publish_initial);
+        assert_eq!(retry.max_attempts, None);
+        assert_eq!(retry.initial_delay, Duration::from_millis(25));
+        assert_eq!(retry.max_delay, Duration::from_millis(30));
+    }
+
+    #[test]
+    fn redis_knowledge_overrides_reject_ambiguous_and_unknown_sources() {
+        let mut config = knowledge_config(
+            r#"{
+                sources: {
+                    first: {kind: "redis-knowledge", keys: {x: "key:first"}},
+                    second: {kind: "redis-knowledge", keys: {y: "key:second"}}
+                }
+            }"#,
+        );
+        let error = apply_redis_knowledge_overrides(
+            &mut config,
+            &RedisKnowledgeOverrides {
+                database: Some(3),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ambiguous"));
+
+        let error = apply_redis_knowledge_overrides(
+            &mut config,
+            &RedisKnowledgeOverrides {
+                source: Some("missing".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not registered"));
+    }
+
+    #[test]
+    fn redis_knowledge_mapping_validation_is_actionable() {
+        for mapping in [
+            "missing-separator",
+            "=key",
+            "input=",
+            "input=first",
+            "input=second",
+        ] {
+            let result = parse_redis_knowledge_mappings(&[mapping.to_owned()]);
+            if mapping == "input=first" || mapping == "input=second" {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err(), "accepted invalid mapping {mapping}");
+            }
+        }
+        let error =
+            parse_redis_knowledge_mappings(&["input=first".to_owned(), "input=second".to_owned()])
+                .unwrap_err();
+        assert!(error.to_string().contains("contradictory"));
+
+        let error = redis_knowledge_config_from_cli(
+            None,
+            &RedisKnowledgeOverrides {
+                key_mappings: vec!["x=one".to_owned(), "y=one".to_owned()],
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("mapped to both"));
+    }
+
+    #[test]
+    fn redis_knowledge_retry_and_initial_overrides_are_explicit() {
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.dsrv",
+            "--input-config",
+            "inputs.json5",
+            "--redis-knowledge-source",
+            "knowledge",
+            "--redis-knowledge-no-initial",
+            "--redis-knowledge-retry-max-attempts",
+            "3",
+            "--redis-knowledge-retry-initial-delay-ms",
+            "10",
+            "--redis-knowledge-retry-max-delay-ms",
+            "50",
+            "--output-stdout",
+        ])
+        .unwrap();
+        cli.validate().unwrap();
+        let overrides = RedisKnowledgeOverrides::from_cli(&cli);
+        assert_eq!(overrides.publish_initial, Some(false));
+        assert_eq!(overrides.retry_max_attempts, Some(NonZeroU32::new(3)));
+        assert_eq!(overrides.retry_initial_delay_ms, Some(10));
     }
 }

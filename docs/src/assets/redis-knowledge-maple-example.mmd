@@ -1,0 +1,7 @@
+flowchart LR
+    Analyse[Analyse completed] --> AnalyseEvent[Pub/Sub event]
+    Plan[Current selected plan] --> PlanKey[Knowledge key]
+    Legitimate[Legitimate completed] --> LegitimateEvent[Pub/Sub event]
+    AnalyseEvent --> Checker[Trustworthiness Checker]
+    PlanKey --> Checker
+    LegitimateEvent --> Checker
