@@ -23,6 +23,7 @@ use crate::io::reconfigurable_input::{
 };
 use crate::io::redis::RedisKnowledgeConfig;
 use crate::stream_utils::Fanout;
+use ::core::cfg_select;
 
 use super::super::config::InputStage;
 
@@ -853,8 +854,8 @@ impl<V> InputSource<V> {
                 }
             })),
             InputSourceKind::Ros { executor, .. } => {
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     let mapping = routes
                         .into_iter()
                         .map(|(variable, route)| {
@@ -871,11 +872,11 @@ impl<V> InputSource<V> {
                         })
                         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
                     Ok(V::ros_input_stream(executor, mapping)?)
-                }
-                #[cfg(not(feature = "ros"))]
-                {
-                    let _ = (executor, routes);
-                    anyhow::bail!("ROS support not enabled")
+                    },
+                    _ => {
+                        let _ = (executor, routes);
+                        anyhow::bail!("ROS support not enabled")
+                    },
                 }
             }
             InputSourceKind::Mqtt {
@@ -1000,8 +1001,8 @@ impl<V> InputSource<V> {
                 })))
             }
             InputSourceKind::Ros { executor, .. } => {
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     let mapping = routes
                         .into_iter()
                         .map(|(variable, route)| {
@@ -1025,11 +1026,11 @@ impl<V> InputSource<V> {
                     let control =
                         crate::io::ros::control_stream(executor, control_route.to_string())?;
                     Ok(controlled_input_stream(data, control))
-                }
-                #[cfg(not(feature = "ros"))]
-                {
-                    let _ = (executor, routes, variables, control_route);
-                    anyhow::bail!("ROS support not enabled")
+                    },
+                    _ => {
+                        let _ = (executor, routes, variables, control_route);
+                        anyhow::bail!("ROS support not enabled")
+                    },
                 }
             }
             InputSourceKind::RedisKnowledge(_) => {

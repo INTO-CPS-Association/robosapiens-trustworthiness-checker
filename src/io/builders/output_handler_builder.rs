@@ -18,6 +18,7 @@ use crate::{
     Value, VarName,
     core::{JsonStreamValue, OutputHandler, RosStreamValue},
 };
+use ::core::cfg_select;
 
 #[derive(Debug, Clone)]
 pub enum OutputHandlerSpec<V = Value> {
@@ -136,8 +137,8 @@ impl<V> OutputHandlerBuilder<V> {
                 aux_info,
             )) as Box<dyn OutputHandler<Val = V>>),
             OutputHandlerSpec::Ros(_topic_mapping, _msg_type_mapping) => {
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     use crate::io::ros::ros_topic_stream_mapping::{
                         VariableMappingData, ros_msg_type_to_string,
                         ros_stream_mapping_from_topic_and_msg_type_mapping,
@@ -210,15 +211,15 @@ impl<V> OutputHandlerBuilder<V> {
                         output_mapping,
                         aux_info,
                     )
-                }
-                #[cfg(not(feature = "ros"))]
-                {
-                    anyhow::bail!("ROS support not enabled")
+                    },
+                    _ => {
+                        anyhow::bail!("ROS support not enabled")
+                    },
                 }
             }
             OutputHandlerSpec::Mqtt(topics) => {
-                #[cfg(feature = "mqtt")]
-                {
+                cfg_select! {
+                    feature = "mqtt" => {
                     let topics: BTreeMap<VarName, String> = if let Some(topics) = topics {
                         // Topics provided by user
                         topics
@@ -252,11 +253,11 @@ impl<V> OutputHandlerBuilder<V> {
                     )?;
                     handler.connect().await?;
                     Ok(Box::new(handler) as Box<dyn OutputHandler<Val = V>>)
-                }
-                #[cfg(not(feature = "mqtt"))]
-                {
-                    let _ = topics;
-                    anyhow::bail!("MQTT support not enabled")
+                    },
+                    _ => {
+                        let _ = topics;
+                        anyhow::bail!("MQTT support not enabled")
+                    },
                 }
             }
             OutputHandlerSpec::Redis(topics) => {

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use crate::io::TopicMapping;
+use ::core::cfg_select;
 
 use async_trait::async_trait;
 use futures::{Future, FutureExt, StreamExt, future::LocalBoxFuture, pin_mut, select};
@@ -819,8 +820,8 @@ where
                         "Creating ROS dist graph provider with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -843,10 +844,10 @@ where
                             ReplanningCondition::Always,
                             None,
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::RosRandom(_locations, _dist_graph_topic) => {
@@ -854,8 +855,8 @@ where
                         "Creating ROS random dist graph stream with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -876,10 +877,10 @@ where
                             ReplanningCondition::Always,
                             None,
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::RosStaticOptimized(
@@ -891,8 +892,8 @@ where
                         "Creating ROS static optimized dist graph provider with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -933,10 +934,10 @@ where
                             ReplanningCondition::Never,
                             None,
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::RosStaticOptimizedSat(
@@ -948,8 +949,8 @@ where
                         "Creating ROS static optimized SAT dist graph provider with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -973,10 +974,10 @@ where
                             ReplanningCondition::Never,
                             Some(localised_dist_spec),
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::RosDynamicOptimized(
@@ -988,8 +989,8 @@ where
                         "Creating ROS dynamic optimized dist graph provider with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -1030,10 +1031,10 @@ where
                             ReplanningCondition::ConstraintsFail,
                             None,
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::RosDynamicOptimizedSat(
@@ -1045,8 +1046,8 @@ where
                         "Creating ROS dynamic optimized SAT dist graph provider with topic: {}",
                         _dist_graph_topic
                     );
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         let location_names: Vec<NodeName> = _locations.keys().cloned().collect();
                         let provider = ros_dist_graph_provider::RosDistGraphProvider::new(
                             executor.clone(),
@@ -1070,10 +1071,10 @@ where
                             ReplanningCondition::ConstraintsFail,
                             Some(localised_dist_spec),
                         )
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!("ROS dist graph mode requires building with feature 'ros'");
+                        },
                     }
                 }
                 DistGraphMode::PredefinedDynamicOptimized(graph, dist_constraints) => {
@@ -1146,8 +1147,8 @@ where
                     #[allow(unused_variables)]
                     reconf_topic,
                 } => {
-                    #[cfg(feature = "ros")]
-                    {
+                    cfg_select! {
+                        feature = "ros" => {
                         Box::new(
                             RosSchedulerCommunicator::new(
                                 executor.clone(),
@@ -1157,12 +1158,12 @@ where
                             )
                             .expect("Failed to create ROS scheduler communicator"),
                         ) as Box<dyn SchedulerCommunicator<AC::Spec>>
-                    }
-                    #[cfg(not(feature = "ros"))]
-                    {
+                        },
+                        _ => {
                         panic!(
                             "Scheduler communication mode 'ros' requires building with feature 'ros'"
                         );
+                        },
                     }
                 }
             };

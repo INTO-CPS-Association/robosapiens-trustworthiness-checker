@@ -16,6 +16,7 @@ use crate::{
     io::{InputSource, RedisKnowledgeConfig, RedisKnowledgeRetry, mqtt::MqttInputBackend},
     runtime::distributed::SchedulerCommunication,
 };
+use ::core::cfg_select;
 
 use super::args::DistributionMode as CliDistributionMode;
 use super::args::{DistributionMode, DistributionSolver, InputMode, SchedulingType};
@@ -602,10 +603,8 @@ impl DistributionModeBuilder {
                 },
                 _,
             ) => {
-                #[cfg(not(feature = "ros"))]
-                panic!("ROS distribution modes require building with feature 'ros'");
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     debug!(
                         "setting up ROS distributed centralised mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
@@ -614,6 +613,10 @@ impl DistributionModeBuilder {
                         _locations,
                         self.ros_dist_graph_topic.clone(),
                     )
+                    },
+                    _ => {
+                        panic!("ROS distribution modes require building with feature 'ros'");
+                    },
                 }
             }
             (
@@ -623,10 +626,8 @@ impl DistributionModeBuilder {
                 },
                 _,
             ) => {
-                #[cfg(not(feature = "ros"))]
-                panic!("ROS distribution modes require building with feature 'ros'");
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     debug!(
                         "setting up ROS distributed random mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
@@ -635,6 +636,10 @@ impl DistributionModeBuilder {
                         _locations,
                         self.ros_dist_graph_topic.clone(),
                     )
+                    },
+                    _ => {
+                        panic!("ROS distribution modes require building with feature 'ros'");
+                    },
                 }
             }
             (
@@ -644,10 +649,8 @@ impl DistributionModeBuilder {
                 },
                 _,
             ) => {
-                #[cfg(not(feature = "ros"))]
-                panic!("ROS distribution modes require building with feature 'ros'");
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     info!(
                         "setting up ROS static optimization mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
@@ -674,6 +677,10 @@ impl DistributionModeBuilder {
                             )
                         }
                     }
+                    },
+                    _ => {
+                        panic!("ROS distribution modes require building with feature 'ros'");
+                    },
                 }
             }
             (
@@ -683,10 +690,8 @@ impl DistributionModeBuilder {
                 },
                 _,
             ) => {
-                #[cfg(not(feature = "ros"))]
-                panic!("ROS distribution modes require building with feature 'ros'");
-                #[cfg(feature = "ros")]
-                {
+                cfg_select! {
+                    feature = "ros" => {
                     info!(
                         "setting up ROS dynamic optimization mode using dist graph topic: {}",
                         self.ros_dist_graph_topic
@@ -713,6 +718,10 @@ impl DistributionModeBuilder {
                             )
                         }
                     }
+                    },
+                    _ => {
+                        panic!("ROS distribution modes require building with feature 'ros'");
+                    },
                 }
             }
 

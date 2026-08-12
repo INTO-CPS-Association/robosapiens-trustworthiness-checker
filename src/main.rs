@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 // #![deny(warnings)]
+use ::core::cfg_select;
 use anyhow::{self, Context};
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind, parser::ValueSource};
 use mstlo::Variables;
@@ -11,7 +12,6 @@ use smol::LocalExecutor;
 use tracing::{debug, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{
     DistributionModeBuilder, RedisKnowledgeOverrides, apply_redis_knowledge_overrides,
@@ -40,6 +40,9 @@ use trustworthiness_checker::cli::args::{
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(feature = "span-tracing")]
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[apply(smol_main)]
 async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -402,17 +405,20 @@ fn init_tracing(log_file: Option<&str>) -> anyhow::Result<WorkerGuard> {
         None => tracing_appender::non_blocking(std::io::stderr()),
     };
 
-    let fmt_layer = if cfg!(feature = "span-tracing") {
-        fmt::layer()
-            .with_writer(writer)
-            .with_span_events(FmtSpan::FULL)
-            .with_file(true)
-            .with_line_number(true)
-    } else {
-        fmt::layer()
-            .with_writer(writer)
-            .with_file(true)
-            .with_line_number(true)
+    let fmt_layer = cfg_select! {
+        feature = "span-tracing" => {
+            fmt::layer()
+                .with_writer(writer)
+                .with_span_events(FmtSpan::FULL)
+                .with_file(true)
+                .with_line_number(true)
+        },
+        _ => {
+            fmt::layer()
+                .with_writer(writer)
+                .with_file(true)
+                .with_line_number(true)
+        },
     };
 
     tracing_subscriber::registry()

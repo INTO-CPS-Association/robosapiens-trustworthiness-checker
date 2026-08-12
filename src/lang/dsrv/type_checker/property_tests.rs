@@ -5,6 +5,7 @@ use crate::dataflow::DataflowMonitor;
 use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::test_support::arb_dsrv_spec;
 use crate::{DsrvSpecification, VarName};
+use ::core::cfg_select;
 use ecow::eco_vec;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -238,10 +239,9 @@ fn sample_value(typ: &StreamType) -> Value {
     }
 }
 
-const TYPECHECK_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
-    10_000
-} else {
-    256
+const TYPECHECK_PROPTEST_CASES: u32 = cfg_select! {
+    feature = "extended-proptests" => 10_000,
+    _ => 256,
 };
 
 proptest! {

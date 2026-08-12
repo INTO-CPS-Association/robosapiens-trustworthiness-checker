@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::VarName;
 use crate::core::{InputStream, JsonStreamValue, OutputStream};
+use ::core::cfg_select;
 
 use crate::io::MonitorConfig;
 
@@ -43,8 +44,8 @@ impl MqttInputBackend {
                 .await
             }
             Self::Paho => {
-                #[cfg(feature = "mqtt")]
-                {
+                cfg_select! {
+                    feature = "mqtt" => {
                     let items = super::input_stream::input_stream_items(
                         host,
                         port,
@@ -54,17 +55,17 @@ impl MqttInputBackend {
                     )
                     .await?;
                     Ok(items)
-                }
-                #[cfg(not(feature = "mqtt"))]
-                {
-                    let _ = (
-                        host,
-                        port,
-                        var_topics,
-                        max_reconnect_attempts,
-                        control_topic,
-                    );
-                    anyhow::bail!("Paho MQTT support not enabled")
+                    },
+                    _ => {
+                        let _ = (
+                            host,
+                            port,
+                            var_topics,
+                            max_reconnect_attempts,
+                            control_topic,
+                        );
+                        anyhow::bail!("Paho MQTT support not enabled")
+                    },
                 }
             }
         }

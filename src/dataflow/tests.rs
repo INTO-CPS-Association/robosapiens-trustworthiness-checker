@@ -6,6 +6,7 @@ use crate::io::testing::ManualOutputHandler;
 use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
 use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
+use ::core::cfg_select;
 
 use crate::runtime::asynchronous::{AsyncRuntimeBuilder, Context};
 use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
@@ -311,16 +312,14 @@ fn evaluate_runtime_compiled_property(spec: DsrvSpecification, rows: &[DynamicIn
     assert_eq!(traces[0], traces[1]);
 }
 
-const DATAFLOW_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
-    10_000
-} else {
-    256
+const DATAFLOW_PROPTEST_CASES: u32 = cfg_select! {
+    feature = "extended-proptests" => 10_000,
+    _ => 256,
 };
 
-const RUNTIME_EQUIVALENCE_PROPTEST_CASES: u32 = if cfg!(feature = "extended-proptests") {
-    1_000
-} else {
-    64
+const RUNTIME_EQUIVALENCE_PROPTEST_CASES: u32 = cfg_select! {
+    feature = "extended-proptests" => 1_000,
+    _ => 64,
 };
 
 proptest! {

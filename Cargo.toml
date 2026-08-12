@@ -2,6 +2,8 @@
 name = "trustworthiness_checker"
 version = "0.1.0"
 edition = "2024"
+# `cfg_select!` is the standard-library replacement for the external `cfg-if` crate.
+rust-version = "1.95"
 license-file = "LICENSE.md"
 default-run = "trustworthiness_checker"
 exclude = ["examples/*", "scripts/*", "log/*", "benches/*"]
