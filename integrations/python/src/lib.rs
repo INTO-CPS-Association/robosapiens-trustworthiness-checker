@@ -9,14 +9,43 @@ use futures::{FutureExt, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use smol::LocalExecutor;
-use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics, input};
+use tc_core::causal::{
+    CausalCauseReport, CausalDomain, CausalResultReport, CausalRole, CausalSet, CausalValue,
+    RoleCausalAntichain, RoleCausalSet, causality_report,
+};
+use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics};
 use tc_core::io::InputController;
 use tc_core::io::testing::{ManualInputController, ManualOutputHandler, channel};
 use tc_core::runtime::RuntimeBuilder;
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
+use tc_core::semantics::CausalRuntimeBuilder;
 use tc_core::{DsrvSpecification, InputUpdate, Value, VarName};
 
 type OutputBatch = BTreeMap<VarName, Value>;
+type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
+type RoleCausalSetOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalSet>>;
+type RoleCausalAntichainOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalAntichain>>;
+
+enum RuntimeMode {
+    Ordinary(Semantics),
+    ReferenceCausalSet,
+    RoleCausalSet,
+    RoleCausalAntichain,
+}
+
+enum RuntimeOutputs {
+    Ordinary(OutputStream<OutputBatch>),
+    ReferenceCausalSet(OutputStream<CausalSetOutputBatch>),
+    RoleCausalSet(OutputStream<RoleCausalSetOutputBatch>),
+    RoleCausalAntichain(OutputStream<RoleCausalAntichainOutputBatch>),
+}
+
+enum RuntimeOutputBatch {
+    Ordinary(OutputBatch),
+    ReferenceCausalSet(CausalSetOutputBatch),
+    RoleCausalSet(RoleCausalSetOutputBatch),
+    RoleCausalAntichain(RoleCausalAntichainOutputBatch),
+}
 
 #[pyclass(module = "trustworthiness_checker", frozen)]
 struct DeferredValue;
@@ -54,7 +83,7 @@ struct TcRuntime {
     input_vars: BTreeSet<VarName>,
     input_controller: ManualInputController<Value>,
     tick_controller: InputController,
-    outputs: OutputStream<OutputBatch>,
+    outputs: RuntimeOutputs,
 }
 
 #[pymethods]
@@ -146,7 +175,14 @@ impl TcRuntime {
         let Some(output) = output else {
             return Ok(None);
         };
-        Ok(Some(output_to_py_dict(py, output)?))
+        Ok(Some(match output {
+            RuntimeOutputBatch::Ordinary(output) => output_to_py_dict(py, output)?,
+            RuntimeOutputBatch::ReferenceCausalSet(output) => causal_output_to_py_dict(py, output)?,
+            RuntimeOutputBatch::RoleCausalSet(output) => causal_output_to_py_dict(py, output)?,
+            RuntimeOutputBatch::RoleCausalAntichain(output) => {
+                causal_output_to_py_dict(py, output)?
+            }
+        }))
     }
 
     fn run(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
@@ -173,19 +209,20 @@ fn read_pathlike(path: &Bound<'_, PyAny>) -> PyResult<String> {
     })
 }
 
-fn parse_semantics(semantics: &str) -> PyResult<Semantics> {
-    match normalize_option(semantics).as_str() {
-        "typed" | "typed-untimed" => Ok(Semantics::TypedUntimed),
-        "untyped" | "untimed" => Ok(Semantics::Untimed),
-        "gradual" | "gradual-typed" | "gradual-typed-untimed" => Ok(Semantics::GradualTypedUntimed),
+fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
+    match semantics {
+        "typed" | "typed-untimed" => Ok(RuntimeMode::Ordinary(Semantics::TypedUntimed)),
+        "untyped" | "untimed" => Ok(RuntimeMode::Ordinary(Semantics::Untimed)),
+        "gradual" | "gradual-typed" | "gradual-typed-untimed" => {
+            Ok(RuntimeMode::Ordinary(Semantics::GradualTypedUntimed))
+        }
+        "causal" | "causal-set" => Ok(RuntimeMode::ReferenceCausalSet),
+        "role-causal-set" => Ok(RuntimeMode::RoleCausalSet),
+        "role-causal-antichain" => Ok(RuntimeMode::RoleCausalAntichain),
         _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unsupported semantics {semantics:?}; expected 'typed-untimed', 'untimed', or 'gradual-typed-untimed'"
+            "unsupported semantics {semantics:?}; expected ordinary untimed semantics or one of 'causal', 'causal-set', 'role-causal-set', 'role-causal-antichain'"
         ))),
     }
-}
-
-fn normalize_option(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 fn collect_input_values(
@@ -209,7 +246,7 @@ fn trustworthiness_checker(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 impl TcRuntime {
-    fn from_model(model: String, semantics: Semantics) -> PyResult<Self> {
+    fn from_model(model: String, semantics: RuntimeMode) -> PyResult<Self> {
         let executor = Rc::new(LocalExecutor::new());
         let (input_vars, input_controller, tick_controller, outputs) =
             build_runtime(executor.clone(), model, semantics).map_err(|err| {
@@ -231,7 +268,7 @@ impl TcRuntime {
         &mut self,
         py: Python<'_>,
         timeout: Option<f64>,
-    ) -> PyResult<Option<OutputBatch>> {
+    ) -> PyResult<Option<RuntimeOutputBatch>> {
         let timeout = match timeout {
             Some(timeout) if timeout < 0.0 || !timeout.is_finite() => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
@@ -244,7 +281,25 @@ impl TcRuntime {
         let started = Instant::now();
 
         loop {
-            if let Some(output) = self.outputs.next().now_or_never() {
+            let output = match &mut self.outputs {
+                RuntimeOutputs::Ordinary(outputs) => outputs
+                    .next()
+                    .now_or_never()
+                    .map(|output| output.map(RuntimeOutputBatch::Ordinary)),
+                RuntimeOutputs::ReferenceCausalSet(outputs) => outputs
+                    .next()
+                    .now_or_never()
+                    .map(|output| output.map(RuntimeOutputBatch::ReferenceCausalSet)),
+                RuntimeOutputs::RoleCausalSet(outputs) => outputs
+                    .next()
+                    .now_or_never()
+                    .map(|output| output.map(RuntimeOutputBatch::RoleCausalSet)),
+                RuntimeOutputs::RoleCausalAntichain(outputs) => outputs
+                    .next()
+                    .now_or_never()
+                    .map(|output| output.map(RuntimeOutputBatch::RoleCausalAntichain)),
+            };
+            if let Some(output) = output {
                 return Ok(output);
             }
 
@@ -263,12 +318,12 @@ impl TcRuntime {
 fn build_runtime(
     executor: Rc<LocalExecutor<'static>>,
     model: String,
-    semantics: Semantics,
+    semantics: RuntimeMode,
 ) -> anyhow::Result<(
     BTreeSet<VarName>,
     ManualInputController<Value>,
     InputController,
-    OutputStream<OutputBatch>,
+    RuntimeOutputs,
 )> {
     let runtime_executor = executor.clone();
 
@@ -280,23 +335,74 @@ fn build_runtime(
         let (input, input_controller) = channel();
         let (input, tick_controller) = tc_core::io::controlled(input);
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            runtime_executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
-
-        let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
-            .executor(runtime_executor.clone())
-            .model(spec)
-            .input(input)
-            .output(output_handler)
-            .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
-            .semantics(semantics)
-            .build()
-            .await;
-
-        runtime_executor.spawn(monitor.run()).detach();
+        let outputs = match semantics {
+            RuntimeMode::Ordinary(semantics) => {
+                let mut output_handler = Box::new(ManualOutputHandler::new(
+                    runtime_executor.clone(),
+                    spec.output_vars().clone(),
+                ));
+                let outputs = output_handler.get_output();
+                let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+                    .executor(runtime_executor.clone())
+                    .model(spec)
+                    .input(input)
+                    .output(output_handler)
+                    .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
+                    .semantics(semantics)
+                    .build()
+                    .await;
+                runtime_executor.spawn(monitor.run()).detach();
+                RuntimeOutputs::Ordinary(outputs)
+            }
+            RuntimeMode::ReferenceCausalSet => {
+                let mut output_handler = Box::new(ManualOutputHandler::new(
+                    runtime_executor.clone(),
+                    spec.output_vars().clone(),
+                ));
+                let outputs = output_handler.get_output();
+                let monitor = CausalRuntimeBuilder::<CausalSet>::new()
+                    .executor(runtime_executor.clone())
+                    .model(spec)
+                    .input(input)
+                    .output(output_handler)
+                    .build()
+                    .await?;
+                runtime_executor.spawn(monitor.run()).detach();
+                RuntimeOutputs::ReferenceCausalSet(outputs)
+            }
+            RuntimeMode::RoleCausalSet => {
+                let mut output_handler = Box::new(ManualOutputHandler::new(
+                    runtime_executor.clone(),
+                    spec.output_vars().clone(),
+                ));
+                let outputs = output_handler.get_output();
+                let monitor = CausalRuntimeBuilder::<RoleCausalSet>::role_new()
+                    .executor(runtime_executor.clone())
+                    .model(spec)
+                    .input(input)
+                    .output(output_handler)
+                    .build()
+                    .await?;
+                runtime_executor.spawn(monitor.run()).detach();
+                RuntimeOutputs::RoleCausalSet(outputs)
+            }
+            RuntimeMode::RoleCausalAntichain => {
+                let mut output_handler = Box::new(ManualOutputHandler::new(
+                    runtime_executor.clone(),
+                    spec.output_vars().clone(),
+                ));
+                let outputs = output_handler.get_output();
+                let monitor = CausalRuntimeBuilder::<RoleCausalAntichain>::role_new()
+                    .executor(runtime_executor.clone())
+                    .model(spec)
+                    .input(input)
+                    .output(output_handler)
+                    .build()
+                    .await?;
+                runtime_executor.spawn(monitor.run()).detach();
+                RuntimeOutputs::RoleCausalAntichain(outputs)
+            }
+        };
 
         Ok((input_vars, input_controller, tick_controller, outputs))
     }))
@@ -345,6 +451,68 @@ fn output_to_py_dict(py: Python<'_>, output: OutputBatch) -> PyResult<Py<PyDict>
         dict.set_item(name.to_string(), value_to_py(py, value)?)?;
     }
     Ok(dict.unbind())
+}
+
+fn causal_output_to_py_dict<D: CausalDomain>(
+    py: Python<'_>,
+    output: BTreeMap<VarName, CausalValue<D>>,
+) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    let values = PyDict::new(py);
+    let causality = PyDict::new(py);
+    for (name, value) in output {
+        let CausalValue { value, explanation } = value;
+        let name = name.to_string();
+        values.set_item(&name, value_to_py(py, value)?)?;
+        causality.set_item(name, causality_to_py(py, causality_report(&explanation))?)?;
+    }
+    dict.set_item("values", values)?;
+    dict.set_item("causality", causality)?;
+    Ok(dict.unbind())
+}
+
+fn causality_to_py(py: Python<'_>, report: CausalResultReport) -> PyResult<Py<PyDict>> {
+    let alternatives = PyList::empty(py);
+    for report_explanation in report.alternatives {
+        let explanation = PyDict::new(py);
+        explanation.set_item("causes", causes_to_py(py, report_explanation.causes)?)?;
+        alternatives.append(explanation)?;
+    }
+    let result = PyDict::new(py);
+    result.set_item("alternatives", alternatives)?;
+    Ok(result.unbind())
+}
+
+fn causes_to_py<'py>(
+    py: Python<'py>,
+    causes: impl IntoIterator<Item = CausalCauseReport>,
+) -> PyResult<Py<PyList>> {
+    let result = PyList::empty(py);
+    for cause in causes {
+        let item = PyDict::new(py);
+        item.set_item("input", cause.input)?;
+        item.set_item("logical_tick", cause.logical_tick)?;
+        item.set_item(
+            "roles",
+            cause
+                .roles
+                .into_iter()
+                .map(role_to_py_name)
+                .collect::<Vec<_>>(),
+        )?;
+        result.append(item)?;
+    }
+    Ok(result.unbind())
+}
+
+fn role_to_py_name(role: CausalRole) -> &'static str {
+    match role {
+        CausalRole::Direct => "direct",
+        CausalRole::Selection => "selection",
+        CausalRole::Retention => "retention",
+        CausalRole::Initialization => "initialization",
+        CausalRole::Activation => "activation",
+    }
 }
 
 fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {

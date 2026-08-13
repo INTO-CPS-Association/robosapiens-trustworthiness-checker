@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod benches_common;
+pub mod causal;
 pub mod core;
 pub use core::{
     ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick, InputUpdate,

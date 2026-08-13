@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 
 import pytest
@@ -56,6 +57,35 @@ out ticks: Int
 
 difference = left - right
 ticks = default(ticks[1], 0) + 1
+"""
+
+
+CAUSAL_MONITOR = """
+in velocity: Int
+
+out verdict: Bool
+
+verdict = velocity <= 5
+"""
+
+
+CAUSAL_RESERVED_OUTPUT_NAMES_MONITOR = """
+in x: Int
+
+out values: Int
+out causality: Int
+
+values = x
+causality = x + 1
+"""
+
+
+CAUSAL_FLOAT_MONITOR = """
+in measurement: Float
+
+out result: Float
+
+result = measurement
 """
 
 
@@ -168,3 +198,72 @@ def test_checker_rejects_non_finite_output_timeouts(timeout: float) -> None:
 def test_checker_rejects_invalid_monitor_specification() -> None:
     with pytest.raises(RuntimeError, match="failed to initialise"):
         tc.TcRuntime.from_text("this is not a monitor specification")
+
+
+@pytest.mark.parametrize(
+    ("selector", "roles"),
+    [
+        ("causal", []),
+        ("causal-set", []),
+        ("role-causal-set", ["direct"]),
+        ("role-causal-antichain", ["direct"]),
+    ],
+)
+def test_canonical_causal_selectors_use_structured_role_aware_output(
+    selector: str, roles: list[str]
+) -> None:
+    runtime = tc.TcRuntime.from_text(CAUSAL_MONITOR, semantics=selector)
+    runtime.provide_inputs({"velocity": 8})
+
+    output = runtime.next_output(timeout=1.0)
+
+    assert output is not None
+    assert output["values"] == {"verdict": False}
+    assert output["causality"]["verdict"] == {
+        "alternatives": [
+            {
+                "causes": [
+                    {"input": "velocity", "logical_tick": 0, "roles": roles}
+                ],
+            }
+        ]
+    }
+
+
+def test_causal_result_does_not_reserve_model_output_names() -> None:
+    runtime = tc.TcRuntime.from_text(
+        CAUSAL_RESERVED_OUTPUT_NAMES_MONITOR,
+        semantics="role-causal-antichain",
+    )
+    runtime.provide_inputs({"x": 4})
+
+    output = runtime.next_output(timeout=1.0)
+
+    assert output is not None
+    assert output["values"] == {"values": 4, "causality": 5}
+    assert set(output["causality"]) == {"values", "causality"}
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_causal_outputs_preserve_non_finite_python_floats(value: float) -> None:
+    runtime = tc.TcRuntime.from_text(CAUSAL_FLOAT_MONITOR, semantics="causal")
+    runtime.provide_inputs({"measurement": value})
+
+    output = runtime.next_output(timeout=1.0)
+
+    assert output is not None
+    result = output["values"]["result"]
+    assert isinstance(result, float)
+    if math.isnan(value):
+        assert math.isnan(result)
+    else:
+        assert result == value
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [" causal-set ", "CAUSAL-SET", "role_causal_set"],
+)
+def test_causal_selectors_require_canonical_spelling(selector: str) -> None:
+    with pytest.raises(ValueError, match="unsupported semantics"):
+        tc.TcRuntime.from_text(CAUSAL_MONITOR, semantics=selector)

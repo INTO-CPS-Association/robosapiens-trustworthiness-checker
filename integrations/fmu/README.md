@@ -2,8 +2,9 @@
 
 The FMU packages a selected typed DSRV checker specification behind an FMI 2.0
 Co-Simulation interface. The DSRV specification is authoritative for variable
-names, causality, and types. An optional `fmi.toml` adds FMI-only metadata such
-as units, descriptions, start values, and stable value references.
+names, causality, types, and any declaration-local FMI annotations. An optional
+`fmi.toml` provides an alternative source of variable metadata and can add
+model metadata.
 
 ## Setup
 
@@ -73,13 +74,65 @@ examples/velocity-safety/
 The provided `velocity-safety` example monitors a system's velocity and
 emergency-stop output and produces a Boolean safety verdict.
 
+The adapter selects `causal-set` semantics by default. Set
+`TC_CAUSAL_SEMANTICS=role-causal-set` or
+`TC_CAUSAL_SEMANTICS=role-causal-antichain` to select a role-aware causal mode.
+Causal Python outputs use the structured
+`{"values": ..., "causality": ...}` contract; ordinary flat outputs remain
+unchanged. If `TC_CAUSAL_LOG` is set, the adapter writes one deterministic
+JSONL record per causal failure, including FMI time, communication point,
+phase, logical tick, output values, and normalized cause occurrences with
+optional role lists.
+The causal schema is documented in `docs/causal-semisync.md`.
+
+FMI variable metadata can be declared natively in `spec.dsrv`. Place one or
+more consecutive `// @fmi key=value ...` lines immediately before the related
+`in` or `out` declaration. A compact annotation can put several fields on one
+line:
+
+```dsrv
+// @fmi start=0.0 unit="m/s" description="Observed velocity" variability="continuous" value-reference=0
+in velocity: Float
+```
+
+The same metadata can be split across multiple consecutive lines:
+
+```dsrv
+// @fmi start=false
+// @fmi description="True when the observed behaviour is safe"
+// @fmi variability="discrete"
+// @fmi value-reference=2
+out verdict: Bool
+```
+
+The supported fields are:
+
+- `start`
+- `unit`
+- `description`
+- `variability`
+- `value-reference`
+
+When `start` is omitted, its default depends on the DSRV type: `Float` is
+`0.0`, `Int` is `0`, `Bool` is `false`, and `Str` is `""`.
+
+`fmi.toml` remains optional. It can be used instead of inline annotations for
+variable metadata and can provide model metadata such as the model name, GUID,
+and description. When inline and TOML variable metadata overlap, identical
+values are accepted, complementary fields are merged, and conflicting values
+are rejected. Unknown fields, duplicate fields, and `// @fmi` directives that
+are not attached to an `in` or `out` declaration are errors.
+
 ## Input initialisation
 
 Input `start` values are FMI initialisation defaults; they must not be assumed
-to represent behaviour observed from the system under test. The importing
-simulator should set every checker input after initialisation and before the
-first `fmi2DoStep`. Otherwise, the checker evaluates the configured start values
-and may produce a verdict for observations the system never supplied.
+to represent behaviour observed from the system under test. After
+initialisation, the importing runtime master can override checker inputs with
+the type-appropriate `fmi2SetReal`, `fmi2SetInteger`, `fmi2SetBoolean`, or
+`fmi2SetString` call before `fmi2DoStep`. Otherwise, the checker evaluates the
+configured start values and may produce a verdict for observations the system
+never supplied. Once set, an input holds its most recently supplied value
+across subsequent steps until the master sets it again.
 
 ## Build
 
@@ -95,9 +148,10 @@ integrations/fmu/scripts/build.sh --spec-dir path/to/specification-directory
 ```
 
 During the build, `generate_fmu_interface` parses and strictly type-checks
-`spec.dsrv`, merges `fmi.toml`, and generates both `modelDescription.xml` and
-`resources/interface.json`. The adapter consumes the JSON mapping, so its value
-references and types cannot drift from the generated FMI description.
+`spec.dsrv`, merges any inline and `fmi.toml` metadata, and generates both
+`modelDescription.xml` and `resources/interface.json`. The adapter consumes the
+JSON mapping, so its value references and types cannot drift from the generated
+FMI description.
 UniFMU supplies the FMI binary, protocol schemas, Python entry point, and command
 dispatcher unchanged; the build replaces only the generated example model with
 the checker adapter and packages its runtime dependencies alongside it.

@@ -218,12 +218,16 @@ impl StreamData for Value {
     }
 }
 
-fn requires_json5_encoding(value: &Value) -> bool {
-    match value {
-        Value::Float(value) => !value.is_finite(),
-        Value::List(values) | Value::Tuple(values) => values.iter().any(requires_json5_encoding),
-        Value::Map(values) => values.values().any(requires_json5_encoding),
-        _ => false,
+impl Value {
+    pub(crate) fn requires_json5_encoding(&self) -> bool {
+        match self {
+            Value::Float(value) => !value.is_finite(),
+            Value::List(values) | Value::Tuple(values) => {
+                values.iter().any(Value::requires_json5_encoding)
+            }
+            Value::Map(values) => values.values().any(Value::requires_json5_encoding),
+            _ => false,
+        }
     }
 }
 
@@ -237,15 +241,7 @@ impl JsonStreamValue for Value {
     }
 
     fn encode_json(&self) -> anyhow::Result<String> {
-        if requires_json5_encoding(self) {
-            json5::to_string(self).map_err(|error| {
-                anyhow::anyhow!(error).context("failed to encode stream value as JSON5")
-            })
-        } else {
-            serde_json::to_string(self).map_err(|error| {
-                anyhow::anyhow!(error).context("failed to encode stream value as JSON")
-            })
-        }
+        crate::core::json::encode_json_or_json5(self, self.requires_json5_encoding())
     }
 
     fn decode_mqtt_payload(payload: &[u8]) -> anyhow::Result<Self> {

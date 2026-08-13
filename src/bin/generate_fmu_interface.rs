@@ -21,7 +21,8 @@ struct Args {
     interface: PathBuf,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FmiAnnotations {
     #[serde(default)]
     model: ModelAnnotations,
@@ -29,15 +30,16 @@ struct FmiAnnotations {
     variables: BTreeMap<String, VariableAnnotations>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ModelAnnotations {
     name: Option<String>,
     guid: Option<String>,
     description: Option<String>,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct VariableAnnotations {
     value_reference: Option<u32>,
     start: Option<toml::Value>,
@@ -77,7 +79,7 @@ fn main() -> Result<()> {
         .type_check(TypeCheckOptions::STRICT)
         .map_err(|error| anyhow!("failed to type-check {}: {error:?}", args.spec.display()))?;
 
-    let annotations = match args.annotations.as_deref() {
+    let mut annotations = match args.annotations.as_deref() {
         Some(path) => toml::from_str(
             &fs::read_to_string(path)
                 .with_context(|| format!("failed to read {}", path.display()))?,
@@ -85,6 +87,12 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to parse {}", path.display()))?,
         None => FmiAnnotations::default(),
     };
+    merge_inline_annotations(
+        &mut annotations,
+        parse_inline_annotations(&spec_source).with_context(|| {
+            format!("failed to parse FMI annotations in {}", args.spec.display())
+        })?,
+    )?;
     let model_name = annotations.model.name.clone().unwrap_or_else(|| {
         args.spec
             .file_stem()
@@ -187,6 +195,250 @@ fn main() -> Result<()> {
             &variables,
         ),
     )?;
+    Ok(())
+}
+
+fn parse_inline_annotations(source: &str) -> Result<BTreeMap<String, VariableAnnotations>> {
+    let mut variables = BTreeMap::new();
+    let mut pending: Option<(usize, VariableAnnotations)> = None;
+
+    for (line_index, raw_line) in source.lines().enumerate() {
+        let line_number = line_index + 1;
+        let line = raw_line.trim();
+        if let Some(annotation) = line.strip_prefix("// @fmi").filter(|annotation| {
+            annotation.is_empty() || annotation.starts_with(char::is_whitespace)
+        }) {
+            let (_, metadata) =
+                pending.get_or_insert_with(|| (line_number, VariableAnnotations::default()));
+            parse_inline_annotation_fields(annotation.trim(), metadata, line_number)?;
+            continue;
+        }
+
+        if let Some((annotation_line, metadata)) = pending.take() {
+            let Some(name) = declaration_name(line) else {
+                bail!(
+                    "FMI annotation starting on line {annotation_line} must be followed immediately by an input or output declaration"
+                );
+            };
+            if variables.insert(name.to_owned(), metadata).is_some() {
+                bail!("multiple FMI annotation groups target variable {name}");
+            }
+        }
+    }
+
+    if let Some((annotation_line, _)) = pending {
+        bail!(
+            "FMI annotation starting on line {annotation_line} is not followed by an input or output declaration"
+        );
+    }
+
+    Ok(variables)
+}
+
+fn declaration_name(line: &str) -> Option<&str> {
+    let declaration = ["in", "out"].into_iter().find_map(|keyword| {
+        line.strip_prefix(keyword)
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+    })?;
+    let (name, _) = declaration.trim_start().split_once(':')?;
+    let name = name.trim();
+    let mut characters = name.chars();
+    if !characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+        || !characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return None;
+    }
+    Some(name)
+}
+
+fn parse_inline_annotation_fields(
+    annotation: &str,
+    metadata: &mut VariableAnnotations,
+    line_number: usize,
+) -> Result<()> {
+    let fields = tokenize_annotation_fields(annotation)
+        .with_context(|| format!("invalid @fmi annotation on line {line_number}"))?;
+    if fields.is_empty() {
+        bail!("@fmi annotation on line {line_number} does not define any fields");
+    }
+
+    for (key, raw_value) in fields {
+        match key.as_str() {
+            "value-reference" => set_inline_field(
+                &mut metadata.value_reference,
+                raw_value.parse::<u32>().with_context(|| {
+                    format!("invalid value-reference in @fmi annotation on line {line_number}")
+                })?,
+                &key,
+                line_number,
+            )?,
+            "start" => set_inline_field(
+                &mut metadata.start,
+                parse_toml_value(&raw_value).with_context(|| {
+                    format!("invalid start value in @fmi annotation on line {line_number}")
+                })?,
+                &key,
+                line_number,
+            )?,
+            "unit" => set_inline_field(
+                &mut metadata.unit,
+                parse_annotation_string(&raw_value).with_context(|| {
+                    format!("invalid unit in @fmi annotation on line {line_number}")
+                })?,
+                &key,
+                line_number,
+            )?,
+            "description" => set_inline_field(
+                &mut metadata.description,
+                parse_annotation_string(&raw_value).with_context(|| {
+                    format!("invalid description in @fmi annotation on line {line_number}")
+                })?,
+                &key,
+                line_number,
+            )?,
+            "variability" => set_inline_field(
+                &mut metadata.variability,
+                parse_annotation_string(&raw_value).with_context(|| {
+                    format!("invalid variability in @fmi annotation on line {line_number}")
+                })?,
+                &key,
+                line_number,
+            )?,
+            unknown => bail!("unknown @fmi field '{unknown}' on line {line_number}"),
+        }
+    }
+    Ok(())
+}
+
+fn tokenize_annotation_fields(mut annotation: &str) -> Result<Vec<(String, String)>> {
+    let mut fields = Vec::new();
+    while !annotation.trim_start().is_empty() {
+        annotation = annotation.trim_start();
+        let key_length = annotation
+            .chars()
+            .take_while(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if key_length == 0 {
+            bail!("expected a field name near '{annotation}'");
+        }
+        let key = &annotation[..key_length];
+        annotation = annotation[key_length..].trim_start();
+        annotation = annotation
+            .strip_prefix('=')
+            .ok_or_else(|| anyhow!("expected '=' after @fmi field '{key}'"))?
+            .trim_start();
+        if annotation.is_empty() {
+            bail!("missing value for @fmi field '{key}'");
+        }
+
+        let value_length = if annotation.starts_with('"') {
+            quoted_value_length(annotation)?
+        } else {
+            annotation
+                .find(char::is_whitespace)
+                .unwrap_or(annotation.len())
+        };
+        let value = &annotation[..value_length];
+        annotation = &annotation[value_length..];
+        if !annotation.is_empty() && !annotation.starts_with(char::is_whitespace) {
+            bail!("expected whitespace after value for @fmi field '{key}'");
+        }
+        fields.push((key.to_owned(), value.to_owned()));
+    }
+    Ok(fields)
+}
+
+fn quoted_value_length(value: &str) -> Result<usize> {
+    let mut escaped = false;
+    for (offset, character) in value[1..].char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            return Ok(offset + 2);
+        }
+    }
+    bail!("unterminated quoted value")
+}
+
+fn parse_toml_value(raw_value: &str) -> Result<toml::Value> {
+    let mut table = toml::from_str::<toml::Table>(&format!("value = {raw_value}"))?;
+    table
+        .remove("value")
+        .ok_or_else(|| anyhow!("annotation value did not produce a TOML value"))
+}
+
+fn parse_annotation_string(raw_value: &str) -> Result<String> {
+    if raw_value.starts_with('"') {
+        return parse_toml_value(raw_value)?
+            .as_str()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("expected a string value"));
+    }
+    Ok(raw_value.to_owned())
+}
+
+fn set_inline_field<T>(
+    target: &mut Option<T>,
+    value: T,
+    field: &str,
+    line_number: usize,
+) -> Result<()> {
+    if target.replace(value).is_some() {
+        bail!("duplicate @fmi field '{field}' on line {line_number}");
+    }
+    Ok(())
+}
+
+fn merge_inline_annotations(
+    annotations: &mut FmiAnnotations,
+    inline_variables: BTreeMap<String, VariableAnnotations>,
+) -> Result<()> {
+    for (name, inline) in inline_variables {
+        let sidecar = annotations.variables.entry(name.clone()).or_default();
+        merge_annotation_field(
+            &name,
+            "value-reference",
+            &mut sidecar.value_reference,
+            inline.value_reference,
+        )?;
+        merge_annotation_field(&name, "start", &mut sidecar.start, inline.start)?;
+        merge_annotation_field(&name, "unit", &mut sidecar.unit, inline.unit)?;
+        merge_annotation_field(
+            &name,
+            "description",
+            &mut sidecar.description,
+            inline.description,
+        )?;
+        merge_annotation_field(
+            &name,
+            "variability",
+            &mut sidecar.variability,
+            inline.variability,
+        )?;
+    }
+    Ok(())
+}
+
+fn merge_annotation_field<T: PartialEq + std::fmt::Debug>(
+    variable: &str,
+    field: &str,
+    sidecar: &mut Option<T>,
+    inline: Option<T>,
+) -> Result<()> {
+    match (sidecar.as_ref(), inline) {
+        (Some(sidecar_value), Some(inline_value)) if sidecar_value != &inline_value => bail!(
+            "conflicting FMI {field} for variable {variable}: fmi.toml has {sidecar_value:?}, spec.dsrv has {inline_value:?}"
+        ),
+        (None, Some(inline_value)) => *sidecar = Some(inline_value),
+        _ => {}
+    }
     Ok(())
 }
 
@@ -360,4 +612,159 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_compact_and_multiline_inline_annotations() {
+        let annotations = parse_inline_annotations(
+            r#"
+// @fmi start=1.5 unit=m/s description="Observed velocity"
+in velocity: Float
+// @fmi start=false
+// @fmi description="Emergency stop state"
+in emergency_stop: Bool
+out verdict: Bool
+verdict = velocity <= 5.0 || emergency_stop
+"#,
+        )
+        .unwrap();
+
+        let velocity = &annotations["velocity"];
+        assert_eq!(velocity.start, Some(toml::Value::Float(1.5)));
+        assert_eq!(velocity.unit.as_deref(), Some("m/s"));
+        assert_eq!(velocity.description.as_deref(), Some("Observed velocity"));
+
+        let emergency_stop = &annotations["emergency_stop"];
+        assert_eq!(emergency_stop.start, Some(toml::Value::Boolean(false)));
+        assert_eq!(
+            emergency_stop.description.as_deref(),
+            Some("Emergency stop state")
+        );
+        assert!(!annotations.contains_key("verdict"));
+    }
+
+    #[test]
+    fn parses_all_supported_inline_fields() {
+        let annotations = parse_inline_annotations(
+            r#"
+// @fmi value-reference=42 start="idle" unit=state variability=discrete
+// @fmi description="State with an escaped quote: \"idle\""
+in state: Str
+out verdict: Bool
+verdict = true
+"#,
+        )
+        .unwrap();
+        let state = &annotations["state"];
+
+        assert_eq!(state.value_reference, Some(42));
+        assert_eq!(state.start, Some(toml::Value::String("idle".to_owned())));
+        assert_eq!(state.unit.as_deref(), Some("state"));
+        assert_eq!(state.variability.as_deref(), Some("discrete"));
+        assert_eq!(
+            state.description.as_deref(),
+            Some("State with an escaped quote: \"idle\"")
+        );
+    }
+
+    #[test]
+    fn ignores_comments_without_the_exact_fmi_marker() {
+        let annotations = parse_inline_annotations(
+            "// @fmish this is prose\nin velocity: Float\nout verdict: Bool\nverdict = true\n",
+        )
+        .unwrap();
+        assert!(annotations.is_empty());
+    }
+
+    #[test]
+    fn rejects_duplicate_inline_fields_across_lines() {
+        let error =
+            parse_inline_annotations("// @fmi start=0.0\n// @fmi start=1.0\nin velocity: Float\n")
+                .unwrap_err();
+        assert!(error.to_string().contains("duplicate @fmi field 'start'"));
+    }
+
+    #[test]
+    fn rejects_unknown_and_unattached_inline_annotations() {
+        let unknown =
+            parse_inline_annotations("// @fmi unknown=value\nin velocity: Float\n").unwrap_err();
+        assert!(unknown.to_string().contains("unknown @fmi field 'unknown'"));
+
+        let unattached =
+            parse_inline_annotations("// @fmi start=0.0\n\nin velocity: Float\n").unwrap_err();
+        assert!(
+            unattached
+                .to_string()
+                .contains("must be followed immediately")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_inline_values() {
+        let error =
+            parse_inline_annotations("// @fmi description=\"unterminated\nin velocity: Float\n")
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid @fmi annotation on line 1")
+        );
+    }
+
+    #[test]
+    fn merges_complementary_and_identical_sidecar_metadata() {
+        let mut annotations: FmiAnnotations = toml::from_str(
+            r#"
+[variables.velocity]
+start = 0.0
+unit = "m/s"
+"#,
+        )
+        .unwrap();
+        let inline = parse_inline_annotations(
+            "// @fmi unit=m/s description=\"Observed velocity\"\nin velocity: Float\n",
+        )
+        .unwrap();
+
+        merge_inline_annotations(&mut annotations, inline).unwrap();
+        let velocity = &annotations.variables["velocity"];
+        assert_eq!(velocity.start, Some(toml::Value::Float(0.0)));
+        assert_eq!(velocity.unit.as_deref(), Some("m/s"));
+        assert_eq!(velocity.description.as_deref(), Some("Observed velocity"));
+    }
+
+    #[test]
+    fn rejects_conflicting_sidecar_and_inline_metadata() {
+        let mut annotations: FmiAnnotations = toml::from_str(
+            r#"
+[variables.velocity]
+unit = "km/h"
+"#,
+        )
+        .unwrap();
+        let inline = parse_inline_annotations("// @fmi unit=m/s\nin velocity: Float\n").unwrap();
+
+        let error = merge_inline_annotations(&mut annotations, inline).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting FMI unit for variable velocity")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_sidecar_fields() {
+        let error = toml::from_str::<FmiAnnotations>(
+            r#"
+[variables.velocity]
+unknown = "value"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
 }

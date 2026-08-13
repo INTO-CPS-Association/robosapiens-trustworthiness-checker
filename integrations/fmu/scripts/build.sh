@@ -82,7 +82,10 @@ fi
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/trustworthiness-checker-uv-cache}"
 
-rm -rf "$BUILD_DIR" "$DIST_DIR"
+# Keep prebuilt Python wheels in BUILD_DIR. Docker images can prepare the
+# native extension once; regenerating a monitor then only replaces its UniFMU
+# skeleton and specification-specific interface.
+rm -rf "$SKELETON_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
 
 "$UNIFMU" generate python "$SKELETON_DIR" fmi2
@@ -114,7 +117,9 @@ build_wheel() {
         --out "$WHEELS_DIR"
 }
 
-build_wheel
+if ! compgen -G "$WHEELS_DIR/trustworthiness_checker-*.whl" >/dev/null; then
+    build_wheel
+fi
 
 WHEEL_PATH=("$WHEELS_DIR"/trustworthiness_checker-*.whl)
 uv pip install \
