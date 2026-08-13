@@ -19,7 +19,15 @@ pub enum ConstraintProfile {
 #[derive(Debug, Clone)]
 pub struct ConstraintExpr {
     pub kind: ConstraintExprKind,
+    #[allow(
+        dead_code,
+        reason = "source metadata is retained for constraint planner diagnostics"
+    )]
     pub span: Span,
+    #[allow(
+        dead_code,
+        reason = "source metadata is retained for constraint planner diagnostics"
+    )]
     pub display: String,
 }
 
@@ -56,6 +64,10 @@ pub struct DistributionConstraintPlan {
     roots: Vec<VarName>,
     definitions: BTreeMap<VarName, ConstraintExpr>,
     input_dependencies: BTreeSet<VarName>,
+    #[allow(
+        dead_code,
+        reason = "monitored stream dependencies are retained for constraint planners"
+    )]
     monitored_streams: BTreeSet<VarName>,
 }
 
@@ -147,10 +159,18 @@ impl DistributionConstraintPlan {
         &self.roots
     }
 
+    #[allow(
+        dead_code,
+        reason = "generic plan inspection API retained for constraint planners"
+    )]
     pub fn expression(&self, variable: &VarName) -> Option<&ConstraintExpr> {
         self.definitions.get(variable)
     }
 
+    #[allow(
+        dead_code,
+        reason = "generic plan inspection API retained for constraint planners"
+    )]
     pub fn definitions(&self) -> &BTreeMap<VarName, ConstraintExpr> {
         &self.definitions
     }
@@ -159,6 +179,10 @@ impl DistributionConstraintPlan {
         &self.input_dependencies
     }
 
+    #[allow(
+        dead_code,
+        reason = "generic dependency analysis API retained for constraint planners"
+    )]
     pub fn monitored_streams(&self) -> &BTreeSet<VarName> {
         &self.monitored_streams
     }
@@ -173,6 +197,10 @@ impl DistributionConstraintPlan {
         self.evaluate_variable(variable, bindings, monitored_at, &mut stack)
     }
 
+    #[allow(
+        dead_code,
+        reason = "generic partial evaluation API retained for constraint planners"
+    )]
     pub fn evaluate_expr(
         &self,
         expression: &ConstraintExpr,
