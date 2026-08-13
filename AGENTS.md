@@ -36,6 +36,11 @@
 
 - Never force push to `origin/main`, including with `--force` or `--force-with-lease`.
 
+## Delta worktree safety
+
+- When operating through Delta, do not use `git stash --include-untracked`: removing and recreating untracked files can cause Delta to misidentify renames and corrupt file paths. Prefer a Delta-provided checkpoint/apply workflow when available; otherwise use a temporary checkpoint commit and squash it afterward.
+- When operating through Delta, after a `HEAD`-moving operation, stop and inspect any Delta external-change report that infers unexpected renames before making further changes.
+
 # Benchmarking
 
 - Once benchmarking has started, consistently use `--profile bench-fast` for subsequent builds, checks, and benchmark runs so the benchmark cache stays warm.
