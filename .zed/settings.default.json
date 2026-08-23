@@ -14,11 +14,7 @@
                     "features": [
                         "testcontainers"
                     ],
-                    "workspace": false,
-                    "extraArgs": [
-                        "--profile",
-                        "dev-fast"
-                    ]
+                    "workspace": false
                 }
             }
         }

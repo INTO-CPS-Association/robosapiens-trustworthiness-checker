@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+set -eu
+
+# A new worktree has no ignored Zed settings file. Ordinary branch checkouts in
+# an initialized worktree leave the user's selected profile unchanged.
+if [ "$3" = "1" ] &&
+    [ ! -e .zed/settings.json ] &&
+    [ -x ./scripts/use_zed_settings.sh ]; then
+    ./scripts/use_zed_settings.sh --lean default
+fi

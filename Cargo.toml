@@ -94,13 +94,20 @@ cranelift-jit = { version = "0.134.2", optional = true }
 cranelift-module = { version = "0.134.2", optional = true }
 cranelift-native = { version = "0.134.2", optional = true }
 
-[profile.dev-fast]
-# Optimize build times for debug builds
-# Note that this affects the information carried in the debug symbols,
-# notably for RUST_BACKTRACE=1
-inherits = "dev"
+[profile.dev]
+# Optimize routine development builds. Use `--profile debugger` when full
+# debug information is needed by a debugger or profiler.
 debug = 0
 strip = "debuginfo"
+
+# Compatibility profile for existing scripts and external workflows.
+[profile.dev-fast]
+inherits = "dev"
+
+[profile.debugger]
+inherits = "dev"
+debug = 2
+strip = "none"
 
 [profile.release]
 lto = "fat"
