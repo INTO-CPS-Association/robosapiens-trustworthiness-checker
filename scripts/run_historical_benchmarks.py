@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportAny=false, reportExplicitAny=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownLambdaType=false, reportUnusedCallResult=false
 """Build, pin, run and collect injected historical Criterion benchmarks."""
 
 from __future__ import annotations

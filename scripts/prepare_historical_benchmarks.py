@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportAny=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnusedCallResult=false
 """Inject selected dashboard benchmarks into a historical checkout."""
 
 from __future__ import annotations
@@ -203,7 +204,8 @@ def ensure_pipeline(repo: Path) -> None:
             clone = clone.replace(
                 compile_call,
                 "black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));\n"
-                "                    " + compile_call,
+                + "                    "
+                + compile_call,
                 1,
             )
             source = source[:end] + "\n" + clone + source[end:]
