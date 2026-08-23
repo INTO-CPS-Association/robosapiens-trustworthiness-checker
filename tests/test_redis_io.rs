@@ -34,14 +34,14 @@ mod integration_tests {
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
-        InputBatch, OutputBatch, OutputWriter, Value, VarName,
+        InputBatch, OutputBatch, OutputWriter, RosStreamValue, Value, VarName,
         core::{JsonStreamValue, REDIS_HOSTNAME},
         io::redis::{self as tc_redis},
         io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
         runtime::mstlo::{MstloTimedValue, MstloValue},
     };
 
-    async fn open_redis_output<V: JsonStreamValue>(
+    async fn open_redis_output<V: JsonStreamValue + RosStreamValue>(
         port: u16,
         routes: BTreeMap<VarName, String>,
         outputs: Vec<VarName>,
