@@ -804,6 +804,62 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    async fn test_unsupported_dsrv_runtime_semantics_is_rejected_cleanly() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "dataflow",
+            "--semantics",
+            "delayed-quantitative",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--runtime dataflow"), "{stderr}");
+        assert!(
+            stderr.contains("--semantics delayed-quantitative"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("supports only"), "{stderr}");
+        assert!(!stderr.contains("panicked at"), "{stderr}");
+    }
+
+    #[apply(async_test)]
+    async fn test_invalid_typed_models_fail_without_panicking() {
+        for semantics in ["typed-untimed", "gradual-typed-untimed"] {
+            let output = run_cli(&[
+                &fixture_path("invalid_typed_model.dsrv"),
+                "--input-file",
+                &fixture_path("debug_simple.input"),
+                "--output-stdout",
+                "--semantics",
+                semantics,
+            ])
+            .await
+            .expect("Failed to run CLI");
+
+            assert!(
+                !output.status.success(),
+                "invalid {semantics} model unexpectedly succeeded"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("type check"),
+                "expected a type-checking error for {semantics}: {stderr}"
+            );
+            assert!(
+                !stderr.contains("panicked at"),
+                "invalid {semantics} model panicked: {stderr}"
+            );
+        }
+    }
+
+    #[apply(async_test)]
     async fn test_file_input_is_rejected_cleanly_for_reconfiguration() {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),

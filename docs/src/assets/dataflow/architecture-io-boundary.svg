@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 760" role="img" aria-labelledby="architecture-io-boundary-title architecture-io-boundary-desc" style="width:100%;max-width:760px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="architecture-io-boundary-title">Input generations, typed control, and writer drain</title>
+<desc id="architecture-io-boundary-desc">A reusable input pipeline plus a validated control binding opens one input generation, which must resolve to a single source carrying both data and control. The generation yields typed items: data batches and one terminal reconfigure item. An optional window stage flushes pending data before forwarding control. The owner loop consumes those items, while OutputBackendBuilder resolves a generation-specific output interface and opens one OutputWriter for packed batches; writer flush and close drain the old generation before acknowledgement.</desc>
+<defs>
+  <marker id="architecture-io-boundary-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+  <marker id="architecture-io-boundary-ack" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#8055a3"/>
+  </marker>
+</defs>
+<text x="24" y="29" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Input generations in, drain proof out</text>
+
+<rect x="40" y="52" width="316" height="86" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.6"/>
+<text x="198" y="76" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">InputPipeline</text>
+<text x="198" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">registered sources, route catalogs, codecs, stages</text>
+<text x="198" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#2563a6">reusable configuration — opens nothing</text>
+<text x="198" y="131" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">survives every replacement</text>
+
+<rect x="404" y="52" width="316" height="86" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.6"/>
+<text x="562" y="76" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ReconfigurationControl</text>
+<text x="562" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">{ source, route }</text>
+<text x="562" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#2563a6">resolved and validated at construction</text>
+<text x="562" y="131" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">a bad control route fails at build time</text>
+
+<line x1="198" y1="138" x2="330" y2="172" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+<line x1="562" y1="138" x2="430" y2="172" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+
+<rect x="150" y="180" width="460" height="90" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.6"/>
+<text x="380" y="204" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">open one generation</text>
+<text x="380" y="224" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">resolve model inputs against the active MonitorConfig</text>
+<text x="380" y="244" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#b54708">single-source contract validated before any transport opens</text>
+<text x="380" y="262" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">data and control must share one source, or the generation is rejected</text>
+
+<line x1="380" y1="270" x2="380" y2="302" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-io-boundary-arrow)"/>
+
+<rect x="150" y="310" width="460" height="88" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.6"/>
+<text x="380" y="334" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">window barrier stage (optional)</text>
+<text x="380" y="356" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">1. flush pending data</text>
+<text x="380" y="374" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">2. forward the control item</text>
+<text x="380" y="392" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#8055a3">3. end the stream — control is terminal for this generation</text>
+
+<line x1="290" y1="398" x2="250" y2="430" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+<line x1="470" y1="398" x2="510" y2="430" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+
+<rect x="110" y="436" width="240" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="230" y="458" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">Data(InputBatch)</text>
+<text x="230" y="477" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">packed rows and tick boundaries intact</text>
+
+<rect x="410" y="436" width="240" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="530" y="458" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">Reconfigure(MonitorConfig)</text>
+<text x="530" y="477" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">already parsed by the adapter</text>
+
+<line x1="230" y1="490" x2="330" y2="524" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+<line x1="530" y1="490" x2="430" y2="524" stroke="#65758b" stroke-width="1.6" marker-end="url(#architecture-io-boundary-arrow)"/>
+
+<rect x="212" y="532" width="336" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.6"/>
+<text x="380" y="556" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">owner loop</text>
+<text x="380" y="578" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">no decoding happens here</text>
+
+<line x1="380" y1="594" x2="380" y2="626" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-io-boundary-arrow)"/>
+
+<rect x="110" y="634" width="540" height="96" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.6"/>
+<text x="380" y="658" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">OutputBackendBuilder → ResolvedOutput / OutputInterface</text>
+<text x="380" y="678" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">open one fresh OutputWriter for the generation's packed batches</text>
+<text x="380" y="700" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#2563a6">flush + close = old-generation output handoff</text>
+<text x="380" y="720" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">ack follows cutover/open; future transport publishes may still fail</text>
+
+<path d="M 650 682 L 706 682 L 706 563 L 552 563" fill="none" stroke="#8055a3" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#architecture-io-boundary-ack)"/>
+<text x="734" y="622" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#8055a3" transform="rotate(90 734 622)">writer drain gates the ack</text>
+</svg>

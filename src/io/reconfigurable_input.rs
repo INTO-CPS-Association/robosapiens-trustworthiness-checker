@@ -7,8 +7,9 @@ use crate::io::aggregation::{
 use crate::io::builders::InputPipeline;
 use crate::io::config::{InputStage, MonitorConfig, ResolvedInput, SourceId};
 
-/// A terminal control item is private to the reconfigurable orchestration
-/// boundary. Ordinary input streams contain only `InputBatch` values.
+/// A typed item at the reconfigurable orchestration boundary. Ordinary input
+/// streams contain only `InputBatch` values; reconfigurable streams also carry
+/// one terminal `Reconfigure(MonitorConfig)` item.
 #[derive(Debug)]
 pub(crate) enum ReconfigurableInputItem<V> {
     Data(InputBatch<V>),
@@ -40,9 +41,10 @@ impl ReconfigurationControl {
     }
 }
 
-/// Input generation adapter used only by the reconfigurable semi-sync runtime.
+/// Input generation adapter shared by the reconfigurable runtimes.
 /// It owns the reusable pipeline and validated control binding, but opens no
-/// source handles until [`Self::open_resolved`] is called.
+/// source resources until [`Self::open_resolved`] is called. Each opened stream
+/// yields typed data batches or a parsed `MonitorConfig` control item.
 #[derive(Clone, Debug)]
 pub(crate) struct ReconfigurableInput<V = crate::Value> {
     pipeline: InputPipeline<V>,

@@ -42,6 +42,12 @@ impl EnvironmentLayout {
         self.slots.get(variable).copied()
     }
 
+    pub(super) fn variable(&self, slot: EnvironmentSlot) -> Option<&VarName> {
+        self.slots
+            .iter()
+            .find_map(|(variable, &candidate)| (candidate == slot).then_some(variable))
+    }
+
     pub(super) fn variables(&self) -> impl Iterator<Item = &VarName> {
         self.slots.keys()
     }

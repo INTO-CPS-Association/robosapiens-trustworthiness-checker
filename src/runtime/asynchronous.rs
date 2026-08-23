@@ -1,7 +1,7 @@
 use core::panic;
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::future::ready;
 use std::iter::once;
@@ -706,6 +706,9 @@ pub struct Context<AC: AsyncConfig> {
     clock: usize,
     /// Variable manangers
     var_managers: Rc<RefCell<BTreeMap<VarName, VarManager<AC::Val>>>>,
+    /// Variables driven directly by the parent input boundary. Automatic DUP subcontexts use
+    /// these as their default scope so sibling computed streams cannot form an ownership cycle.
+    external_var_names: BTreeSet<VarName>,
     /// Cancellation token to stop all var managers when output streams are dropped
     cancellation_token: CancellationToken,
     /// Identifier - used for log messages
@@ -813,6 +816,20 @@ where
         let nested = self.nested;
         assert_eq!(var_names.len(), input_streams.len());
 
+        // The top-level builder marks input variables with the drain policy. Contexts created
+        // directly in tests have no such policy and therefore treat every supplied variable as an
+        // external source. Preserve this distinction in subcontexts without changing explicit
+        // runtime scopes.
+        let external_var_names = if self.drain_when_unsubscribed.is_empty() {
+            var_names.iter().cloned().collect()
+        } else {
+            var_names
+                .iter()
+                .filter(|var| self.drain_when_unsubscribed.contains_key(*var))
+                .cloned()
+                .collect()
+        };
+
         let clock: usize = 0;
         // TODO: push the mutability to the API of contexts
         let var_managers = Rc::new(RefCell::new(BTreeMap::new()));
@@ -873,6 +890,7 @@ where
             history_length,
             clock,
             var_managers,
+            external_var_names,
             cancellation_token,
             nested,
             builder,
@@ -1034,8 +1052,12 @@ where
     }
 
     fn subcontext_excluding(&self, excluded: &VarName, history_length: usize) -> Self {
+        // An automatic DUP scope is an authorization boundary, not a reason to subscribe to every
+        // computed stream in the parent. Only external streams are safe to advance independently;
+        // an unused sibling output can otherwise wait on this owner while this context waits on the
+        // sibling. Explicit scopes still go through restricted_subcontext unchanged.
         self.restricted_subcontext(
-            self.var_names
+            self.external_var_names
                 .iter()
                 .filter(|var| *var != excluded)
                 .cloned()

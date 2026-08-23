@@ -13,7 +13,9 @@ use mstlo::{
 use smol::LocalExecutor;
 #[cfg(feature = "jit")]
 use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
-use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow;
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
+};
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
 use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
@@ -413,7 +415,22 @@ fn compare_time_dependent_property(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("dsrv_default_window_dataflow_specialised", size),
+            BenchmarkId::new("dsrv_default_window_dataflow", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_dataflow(
+                        benchmark_executor.executor.clone(),
+                        checked_dsrv_spec.clone(),
+                        dsrv_input(size),
+                    )
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("dsrv_default_window_dataflow_quickened", size),
             &size,
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();

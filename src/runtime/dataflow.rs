@@ -94,30 +94,78 @@
 //! Values accumulated since the previous completed flush may be lost on an error. EOF does not
 //! synthesize extra ticks, so delayed monitor values are not drained after the final input row.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::core::{
-    ExecutionPolicy, InputStream, OutputBatch, OutputError, OutputWriter, Runtime, Value,
+    ExecutionPolicy, InputBatch, InputStream, OutputBatch, OutputError, OutputWriter, Runtime,
+    Specification, Value,
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::JitConfig;
-use crate::dataflow::{DataflowCompilationError, DataflowMonitor};
+use crate::dataflow::{ContextTransferPolicy, DataflowCompilationError, DataflowMonitor};
+use crate::io::reconfigurable_input::{
+    ReconfigurableInput, ReconfigurableInputItem, ReconfigurableInputStream,
+};
+use crate::io::{InputPipeline, MonitorConfig, OutputBackendBuilder};
 use crate::runtime::builder::RuntimeBuilder;
+use anyhow::Context as _;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
+use tracing::info;
 
 const DATAFLOW_RUNTIME_BATCH_SIZE: usize = 256;
 
+/// Acknowledgement published after a root reconfiguration has reached its new
+/// input/output cutover boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReconfigurationAck {
+    pub revision: crate::dataflow::RevisionId,
+    pub interface_epoch: crate::dataflow::InterfaceEpoch,
+    pub applied: bool,
+}
+
+/// Releases producers waiting at the global reconfiguration command barrier.
+pub type ReconfigurationAckSink = async_unsync::bounded::Sender<ReconfigurationAck>;
+
+type ReconfigurationCompiler = Rc<dyn Fn(&str) -> anyhow::Result<CompiledReconfiguration>>;
+
+struct CompiledReconfiguration {
+    monitor: DataflowMonitor,
+    input_vars: BTreeSet<crate::VarName>,
+    output_vars: BTreeSet<crate::VarName>,
+    auxiliary_vars: BTreeSet<crate::VarName>,
+}
+
+struct ReconfigurationRuntimeState {
+    input: ReconfigurableInput<Value>,
+    active_input: crate::io::config::ResolvedInput,
+    active_input_config: Option<MonitorConfig>,
+    output_builder: OutputBackendBuilder<Value>,
+    active_output: crate::io::output::ResolvedOutput,
+    compiler: ReconfigurationCompiler,
+    transfer_policy: ContextTransferPolicy,
+    revision: crate::dataflow::RevisionId,
+    interface_epoch: crate::dataflow::InterfaceEpoch,
+    acknowledgements: Option<ReconfigurationAckSink>,
+}
+
+enum DataflowInput {
+    Standard(InputStream<Value>),
+    Reconfigurable(ReconfigurableInputStream<Value>),
+}
+
 /// Owns and asynchronously drives one compiled dataflow monitor.
 pub struct DataflowRuntime {
-    input_stream: InputStream<Value>,
-    output_writer: OutputWriter<Value>,
-    monitor: Result<DataflowMonitor, DataflowCompilationError>,
+    input_stream: DataflowInput,
+    output_writer: Option<OutputWriter<Value>>,
+    monitor: Result<DataflowMonitor, anyhow::Error>,
     execution_policy: ExecutionPolicy,
+    reconfiguration: Option<ReconfigurationRuntimeState>,
+    startup_error: Option<anyhow::Error>,
 }
 
 /// Configures the model, input stream, output writer, and flush policy for a
@@ -131,6 +179,7 @@ where
     input: Option<InputStream<Value>>,
     output_writer: Option<OutputWriter<Value>>,
     execution_policy: ExecutionPolicy,
+    quickening: bool,
     #[cfg(feature = "jit")]
     jit_config: Option<JitConfig>,
 }
@@ -144,6 +193,14 @@ where
     pub fn execution_policy(self, execution_policy: ExecutionPolicy) -> Self {
         Self {
             execution_policy,
+            ..self
+        }
+    }
+
+    /// Enable or disable scheduler-plan quickening. Quickening is enabled by default.
+    pub fn quickening(self, enabled: bool) -> Self {
+        Self {
+            quickening: enabled,
             ..self
         }
     }
@@ -180,6 +237,256 @@ where
     }
 }
 
+/// Configures a dataflow runtime whose input and output sessions are replaced at
+/// validated root-command boundaries.
+pub struct ReconfigurableDataflowRuntimeBuilder<S>
+where
+    S: 'static,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
+{
+    executor: Option<Rc<LocalExecutor<'static>>>,
+    model: Option<S>,
+    input_pipeline: Option<InputPipeline<Value>>,
+    output_builder: Option<OutputBackendBuilder<Value>>,
+    reconf_topic: Option<String>,
+    parse_spec: Option<fn(&str) -> anyhow::Result<S>>,
+    execution_policy: ExecutionPolicy,
+    quickening: bool,
+    transfer_policy: ContextTransferPolicy,
+    acknowledgements: Option<ReconfigurationAckSink>,
+    setup_error: Option<String>,
+    #[cfg(feature = "jit")]
+    jit_config: Option<JitConfig>,
+}
+
+impl<S> ReconfigurableDataflowRuntimeBuilder<S>
+where
+    S: Specification + 'static,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
+{
+    pub fn parse_spec(mut self, parse_spec: fn(&str) -> anyhow::Result<S>) -> Self {
+        self.parse_spec = Some(parse_spec);
+        self
+    }
+
+    pub fn input_pipeline(mut self, input_pipeline: InputPipeline<Value>) -> Self {
+        self.input_pipeline = Some(input_pipeline);
+        self
+    }
+
+    pub fn output_builder(mut self, output_builder: OutputBackendBuilder<Value>) -> Self {
+        self.output_builder = Some(output_builder);
+        self
+    }
+
+    pub fn reconf_topic(mut self, reconf_topic: impl Into<String>) -> Self {
+        self.reconf_topic = Some(reconf_topic.into());
+        self
+    }
+
+    pub(crate) fn setup_error(mut self, error: impl Into<String>) -> Self {
+        self.setup_error = Some(error.into());
+        self
+    }
+
+    pub fn context_transfer(mut self, policy: ContextTransferPolicy) -> Self {
+        self.transfer_policy = policy;
+        self
+    }
+
+    pub fn execution_policy(mut self, policy: ExecutionPolicy) -> Self {
+        self.execution_policy = policy;
+        self
+    }
+
+    /// Enable or disable scheduler-plan quickening. Quickening is enabled by default.
+    pub fn quickening(mut self, enabled: bool) -> Self {
+        self.quickening = enabled;
+        self
+    }
+
+    pub fn acknowledgements(mut self, sink: ReconfigurationAckSink) -> Self {
+        self.acknowledgements = Some(sink);
+        self
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit(mut self, config: JitConfig) -> Self {
+        self.jit_config = Some(config);
+        self
+    }
+}
+
+impl<S> RuntimeBuilder<S, Value> for ReconfigurableDataflowRuntimeBuilder<S>
+where
+    S: Specification + 'static,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
+{
+    type Runtime = DataflowRuntime;
+
+    fn new() -> Self {
+        Self {
+            executor: None,
+            model: None,
+            input_pipeline: None,
+            output_builder: None,
+            reconf_topic: None,
+            parse_spec: None,
+            execution_policy: ExecutionPolicy::Synchronous,
+            quickening: true,
+            transfer_policy: ContextTransferPolicy::Compatible,
+            acknowledgements: None,
+            setup_error: None,
+            #[cfg(feature = "jit")]
+            jit_config: None,
+        }
+    }
+
+    fn executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    fn model(mut self, model: S) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    fn input(self, _input: InputStream<Value>) -> Self {
+        self.setup_error(
+            "reconfigurable dataflow runtime requires an InputPipeline, not a direct InputStream",
+        )
+    }
+
+    fn output_writer(self, _writer: OutputWriter<Value>) -> Self {
+        self.setup_error(
+            "reconfigurable dataflow runtime requires an OutputBackendBuilder, not a direct OutputWriter",
+        )
+    }
+
+    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+        Box::pin(async move {
+            let policy = self.execution_policy;
+            if let Some(error) = self.setup_error {
+                return failed_dataflow_runtime(policy, anyhow::anyhow!(error));
+            }
+            let Some(executor) = self.executor else {
+                return failed_dataflow_runtime(
+                    policy,
+                    anyhow::anyhow!("reconfigurable dataflow runtime executor is not configured"),
+                );
+            };
+            let Some(model) = self.model else {
+                return failed_dataflow_runtime(
+                    policy,
+                    anyhow::anyhow!("reconfigurable dataflow runtime model is not configured"),
+                );
+            };
+            let Some(parse_spec) = self.parse_spec else {
+                return failed_dataflow_runtime(
+                    policy,
+                    anyhow::anyhow!("reconfigurable dataflow runtime parser is not configured"),
+                );
+            };
+            let Some(input_pipeline) = self.input_pipeline else {
+                return failed_dataflow_runtime(
+                    policy,
+                    anyhow::anyhow!("reconfigurable dataflow runtime requires an InputPipeline"),
+                );
+            };
+            let Some(output_builder) = self.output_builder else {
+                return failed_dataflow_runtime(
+                    policy,
+                    anyhow::anyhow!(
+                        "reconfigurable dataflow runtime requires an OutputBackendBuilder"
+                    ),
+                );
+            };
+
+            let input = match ReconfigurableInput::new(input_pipeline, self.reconf_topic) {
+                Ok(input) => input,
+                Err(error) => return failed_dataflow_runtime(policy, error),
+            };
+            let input_vars = model.input_vars();
+            let output_vars = model.output_vars();
+            let auxiliary_vars = model.aux_vars();
+            let resolved_input = match input.pipeline().resolve(&input_vars, None) {
+                Ok(resolved) => resolved,
+                Err(error) => return failed_dataflow_runtime(policy, error),
+            };
+            let output_builder = output_builder.executor(executor.clone());
+            let resolved_output = match output_builder.resolve(&output_vars, &auxiliary_vars, None)
+            {
+                Ok(resolved) => resolved,
+                Err(error) => return failed_dataflow_runtime(policy, error),
+            };
+
+            let mut compiled = match compile_model(model) {
+                Ok(compiled) => compiled,
+                Err(error) => return failed_dataflow_runtime(policy, error.into()),
+            };
+            compiled.monitor.set_quickening(self.quickening);
+            #[cfg(feature = "jit")]
+            apply_jit_config(&mut compiled, self.jit_config);
+            compiled
+                .monitor
+                .set_reconfiguration_transfer_policy(self.transfer_policy);
+
+            let input_stream = match input.open_resolved(resolved_input.clone()).await {
+                Ok(stream) => stream,
+                Err(error) => return failed_dataflow_runtime(policy, error),
+            };
+            let output_writer = match output_builder.open(resolved_output.clone()).await {
+                Ok(writer) => writer,
+                Err(error) => {
+                    return failed_dataflow_runtime(
+                        policy,
+                        anyhow::anyhow!(
+                            "reconfigurable output pipeline could not be opened: {error}"
+                        ),
+                    );
+                }
+            };
+
+            #[cfg(feature = "jit")]
+            let jit_config = self.jit_config;
+            let transfer_policy = self.transfer_policy;
+            let quickening = self.quickening;
+            let compiler: ReconfigurationCompiler = Rc::new(move |source| {
+                let model = parse_spec(source)?;
+                let mut compiled = compile_model(model).map_err(anyhow::Error::from)?;
+                compiled.monitor.set_quickening(quickening);
+                #[cfg(feature = "jit")]
+                apply_jit_config(&mut compiled, jit_config);
+                compiled
+                    .monitor
+                    .set_reconfiguration_transfer_policy(transfer_policy);
+                Ok(compiled)
+            });
+
+            DataflowRuntime {
+                input_stream: DataflowInput::Reconfigurable(input_stream),
+                output_writer: Some(output_writer),
+                monitor: Ok(compiled.monitor),
+                execution_policy: policy,
+                reconfiguration: Some(ReconfigurationRuntimeState {
+                    input,
+                    active_input: resolved_input,
+                    active_input_config: None,
+                    output_builder,
+                    active_output: resolved_output,
+                    compiler,
+                    transfer_policy: self.transfer_policy,
+                    revision: crate::dataflow::RevisionId::INITIAL,
+                    interface_epoch: crate::dataflow::InterfaceEpoch::INITIAL,
+                    acknowledgements: self.acknowledgements,
+                }),
+                startup_error: None,
+            }
+        })
+    }
+}
+
 impl<S> RuntimeBuilder<S, Value> for DataflowRuntimeBuilder<S>
 where
     S: 'static,
@@ -193,6 +500,7 @@ where
             input: None,
             output_writer: None,
             execution_policy: ExecutionPolicy::Buffered,
+            quickening: true,
             #[cfg(feature = "jit")]
             jit_config: None,
         }
@@ -222,8 +530,15 @@ where
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
-            let model = self.model.expect("Model not supplied");
-            let monitor = DataflowMonitor::try_from(model);
+            let execution_policy = self.execution_policy;
+            let mut startup_error = None;
+            let mut monitor = match self.model {
+                Some(model) => DataflowMonitor::try_from(model).map_err(anyhow::Error::from),
+                None => Err(anyhow::anyhow!("dataflow runtime model is not configured")),
+            };
+            if let Ok(monitor) = &mut monitor {
+                monitor.set_quickening(self.quickening);
+            }
             #[cfg(feature = "jit")]
             let monitor = {
                 let mut monitor = monitor;
@@ -232,13 +547,28 @@ where
                 }
                 monitor
             };
-            let input_stream = self.input.expect("Input stream not supplied");
-            let output_writer = self.output_writer.expect("Output writer not supplied");
+            let input_stream = match self.input {
+                Some(input) => DataflowInput::Standard(input),
+                None => {
+                    startup_error = Some(anyhow::anyhow!(
+                        "dataflow runtime input stream is not configured"
+                    ));
+                    DataflowInput::Standard(Box::pin(futures::stream::empty()))
+                }
+            };
+            let output_writer = self.output_writer;
+            if output_writer.is_none() {
+                startup_error = Some(anyhow::anyhow!(
+                    "dataflow runtime output writer is not configured"
+                ));
+            }
             DataflowRuntime {
                 input_stream,
                 output_writer,
                 monitor,
-                execution_policy: self.execution_policy,
+                execution_policy,
+                reconfiguration: None,
+                startup_error,
             }
         })
     }
@@ -247,14 +577,50 @@ where
 #[async_trait(?Send)]
 impl Runtime for DataflowRuntime {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
-        let monitor = self.monitor?;
-        run_direct_dataflow_engine(
-            self.input_stream,
+        let DataflowRuntime {
+            input_stream,
+            mut output_writer,
             monitor,
-            self.output_writer,
-            self.execution_policy,
-        )
-        .await
+            execution_policy,
+            reconfiguration,
+            startup_error,
+        } = *self;
+
+        if let Some(error) = startup_error {
+            return match output_writer.as_mut() {
+                Some(writer) => finish_direct_output(writer, Some(error)).await,
+                None => Err(error),
+            };
+        }
+        let Some(mut output_writer) = output_writer else {
+            return Err(anyhow::anyhow!(
+                "dataflow runtime output writer is not configured"
+            ));
+        };
+        let monitor = match monitor {
+            Ok(monitor) => monitor,
+            Err(error) => return finish_direct_output(&mut output_writer, Some(error)).await,
+        };
+
+        match reconfiguration {
+            Some(state) => {
+                let DataflowInput::Reconfigurable(input) = input_stream else {
+                    return Err(anyhow::anyhow!(
+                        "reconfigurable dataflow runtime did not receive its control input"
+                    ));
+                };
+                run_reconfigurable_dataflow(input, monitor, output_writer, execution_policy, state)
+                    .await
+            }
+            None => {
+                let DataflowInput::Standard(input) = input_stream else {
+                    return Err(anyhow::anyhow!(
+                        "ordinary dataflow runtime received a reconfigurable input"
+                    ));
+                };
+                run_direct_dataflow_engine(input, monitor, output_writer, execution_policy).await
+            }
+        }
     }
 }
 
@@ -266,7 +632,6 @@ async fn run_direct_dataflow_engine(
 ) -> anyhow::Result<()> {
     let mut engine = DirectDataflowEngine::new(monitor, output_writer);
     let mut error = None;
-    let mut closed = false;
 
     'input: while let Some(batch) = input_stream.next().await {
         let batch = match batch {
@@ -290,16 +655,9 @@ async fn run_direct_dataflow_engine(
                 if execution_policy == ExecutionPolicy::Synchronous
                     || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
                 {
-                    match engine.flush().await {
-                        Ok(()) => {}
-                        Err(sink_error) if sink_error.is_closed() => {
-                            closed = true;
-                            break 'input;
-                        }
-                        Err(sink_error) => {
-                            error = Some(sink_error.into());
-                            break 'input;
-                        }
+                    if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
+                        error = Some(output_error);
+                        break 'input;
                     }
                 }
             }
@@ -314,16 +672,9 @@ async fn run_direct_dataflow_engine(
             if execution_policy == ExecutionPolicy::Synchronous
                 || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
             {
-                match engine.flush().await {
-                    Ok(()) => {}
-                    Err(sink_error) if sink_error.is_closed() => {
-                        closed = true;
-                        break 'input;
-                    }
-                    Err(sink_error) => {
-                        error = Some(sink_error.into());
-                        break 'input;
-                    }
+                if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
+                    error = Some(output_error);
+                    break 'input;
                 }
             }
         }
@@ -331,18 +682,15 @@ async fn run_direct_dataflow_engine(
 
     // Do not send rows accumulated before a monitor or input error. In
     // particular, a failed evaluation must never turn its incomplete row into
-    // an output batch. The writer itself still gets its final flush and close.
-    if error.is_none() && !closed && engine.pending_rows != 0 {
-        match engine.flush().await {
-            Ok(()) => {}
-            Err(sink_error) if sink_error.is_closed() => {}
-            Err(sink_error) => error = Some(sink_error.into()),
+    // an output batch. The writer still receives its cleanup flush and close.
+    if error.is_none() && engine.pending_rows != 0 {
+        if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
+            error = Some(output_error);
         }
     }
 
     finish_direct_output(&mut engine.output_writer, error).await
 }
-
 async fn finish_direct_output(
     output_writer: &mut OutputWriter<Value>,
     primary: Option<anyhow::Error>,
@@ -365,6 +713,326 @@ fn combine_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::
     } else {
         anyhow::anyhow!("{primary_message}; additionally: {additional_message}")
     }
+}
+
+fn failed_dataflow_runtime(
+    execution_policy: ExecutionPolicy,
+    error: anyhow::Error,
+) -> DataflowRuntime {
+    DataflowRuntime {
+        input_stream: DataflowInput::Standard(Box::pin(futures::stream::empty())),
+        output_writer: None,
+        monitor: Err(anyhow::anyhow!("dataflow runtime startup failed")),
+        execution_policy,
+        reconfiguration: None,
+        startup_error: Some(error),
+    }
+}
+
+fn compile_model<S>(model: S) -> Result<CompiledReconfiguration, DataflowCompilationError>
+where
+    S: Specification + 'static,
+    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
+{
+    let input_vars = model.input_vars();
+    let output_vars = model.output_vars();
+    let auxiliary_vars = model.aux_vars();
+    let monitor = DataflowMonitor::try_from(model)?;
+    Ok(CompiledReconfiguration {
+        monitor,
+        input_vars,
+        output_vars,
+        auxiliary_vars,
+    })
+}
+
+#[cfg(feature = "jit")]
+fn apply_jit_config(result: &mut CompiledReconfiguration, config: Option<JitConfig>) {
+    if let Some(config) = config {
+        result.monitor.enable_jit(config);
+    }
+}
+
+#[derive(Debug)]
+struct ReconfigurationRequest {
+    spec: String,
+    input_config: MonitorConfig,
+}
+
+fn request_from_monitor_config(config: MonitorConfig) -> ReconfigurationRequest {
+    ReconfigurationRequest {
+        spec: config.spec.clone(),
+        input_config: config,
+    }
+}
+
+async fn acknowledge_reconfiguration(
+    state: &ReconfigurationRuntimeState,
+    applied: bool,
+) -> anyhow::Result<()> {
+    let acknowledgement = ReconfigurationAck {
+        revision: state.revision,
+        interface_epoch: state.interface_epoch,
+        applied,
+    };
+    info!(
+        revision = %acknowledgement.revision,
+        interface_epoch = %acknowledgement.interface_epoch,
+        applied,
+        "acknowledging dataflow reconfiguration"
+    );
+    if let Some(sink) = &state.acknowledgements {
+        sink.send(acknowledgement).await.map_err(|_| {
+            anyhow::anyhow!(
+                "reconfiguration acknowledgement channel is closed, so the producer barrier cannot be honoured"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn writer_is_closed(writer: &OutputWriter<Value>) -> bool {
+    writer.error().is_some_and(OutputError::is_closed)
+}
+
+async fn flush_reconfigurable_output(engine: &mut DirectDataflowEngine) -> anyhow::Result<()> {
+    match engine.flush().await {
+        Ok(()) if writer_is_closed(&engine.output_writer) => Err(anyhow::anyhow!(
+            "dataflow output writer closed while flushing"
+        )),
+        Ok(()) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Drain all rows already committed by a generation before releasing its monitor
+/// and writer. A writer close is the external cutover barrier for the unified
+/// output pipeline.
+async fn drain_previous_output(
+    mut engine: DirectDataflowEngine,
+) -> anyhow::Result<DataflowMonitor> {
+    let mut primary = None;
+    if engine.pending_rows != 0 {
+        if let Err(error) = flush_reconfigurable_output(&mut engine).await {
+            primary = Some(error);
+        }
+    }
+
+    let DirectDataflowEngine {
+        monitor,
+        mut output_writer,
+        ..
+    } = engine;
+    let cleanup = crate::runtime::output::finish_writer(&mut output_writer).await;
+    match (primary, cleanup) {
+        (None, Ok(())) => Ok(monitor),
+        (Some(primary), Ok(())) => Err(primary),
+        (None, Err(cleanup)) => Err(cleanup),
+        (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
+    }
+}
+
+/// Preserve committed rows on an evaluation/input failure, then close the
+/// generation's writer. The original failure remains the primary error.
+async fn terminate_after_output_drain(
+    mut engine: DirectDataflowEngine,
+    primary: anyhow::Error,
+) -> anyhow::Result<()> {
+    let mut error = primary;
+    if engine.pending_rows != 0 {
+        if let Err(flush_error) = flush_reconfigurable_output(&mut engine).await {
+            error = combine_errors(error, flush_error);
+        }
+    }
+    let cleanup = crate::runtime::output::finish_writer(&mut engine.output_writer).await;
+    if let Err(cleanup) = cleanup {
+        error = combine_errors(error, cleanup);
+    }
+    Err(error)
+}
+
+async fn run_reconfigurable_dataflow(
+    mut input: ReconfigurableInputStream<Value>,
+    monitor: DataflowMonitor,
+    output_writer: OutputWriter<Value>,
+    execution_policy: ExecutionPolicy,
+    mut state: ReconfigurationRuntimeState,
+) -> anyhow::Result<()> {
+    let mut engine = DirectDataflowEngine::new(monitor, output_writer);
+
+    loop {
+        let Some(item) = input.next().await else {
+            drain_previous_output(engine).await.map(|_| ())?;
+            return Ok(());
+        };
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => return terminate_after_output_drain(engine, error).await,
+        };
+
+        match item {
+            ReconfigurableInputItem::Data(batch) => {
+                if let Err(error) =
+                    evaluate_reconfigurable_batch(&mut engine, &batch, execution_policy).await
+                {
+                    return terminate_after_output_drain(engine, error).await;
+                }
+                state.revision = engine.monitor.revision();
+            }
+            ReconfigurableInputItem::Reconfigure(config) => {
+                let (next_engine, next_input) =
+                    replace_root(engine, &mut input, &mut state, config).await?;
+                engine = next_engine;
+                input = next_input;
+            }
+        }
+    }
+}
+
+async fn replace_root(
+    engine: DirectDataflowEngine,
+    input: &mut ReconfigurableInputStream<Value>,
+    state: &mut ReconfigurationRuntimeState,
+    config: MonitorConfig,
+) -> anyhow::Result<(DirectDataflowEngine, ReconfigurableInputStream<Value>)> {
+    let active_monitor = drain_previous_output(engine).await?;
+    config.validate_structure()?;
+    let request = request_from_monitor_config(config);
+
+    crate::dataflow::validate_replacement(
+        &crate::dataflow::ReplacementTarget::Root,
+        &crate::dataflow::DefinitionSource::text(request.spec.clone()),
+        &crate::dataflow::ActivationFrontier::EmptyEvaluation {
+            revision: active_monitor.revision(),
+            interface_epoch: active_monitor.interface_epoch(),
+        },
+        state.revision,
+    )?;
+
+    let mut compiled = (state.compiler)(&request.spec)?;
+    let candidate_input = state
+        .input
+        .pipeline()
+        .resolve(&compiled.input_vars, Some(&request.input_config))?;
+    let candidate_output = state.output_builder.resolve(
+        &compiled.output_vars,
+        &compiled.auxiliary_vars,
+        Some(&request.input_config),
+    )?;
+
+    let active_inputs = active_monitor
+        .input_vars()
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let active_outputs = active_monitor
+        .output_vars()
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let semantic_changed = compiled.monitor.definition_key() != active_monitor.definition_key();
+    let input_interface_changed =
+        compiled.input_vars != active_inputs || candidate_input != state.active_input;
+    let output_interface_changed =
+        compiled.output_vars != active_outputs || candidate_output != state.active_output;
+    let interface_changed = input_interface_changed || output_interface_changed;
+
+    let next_revision = if semantic_changed {
+        state
+            .revision
+            .checked_next()
+            .ok_or_else(|| anyhow::anyhow!("dataflow semantic revision overflow"))?
+    } else {
+        state.revision
+    };
+    let next_interface_epoch = if interface_changed {
+        state
+            .interface_epoch
+            .checked_next()
+            .ok_or_else(|| anyhow::anyhow!("dataflow interface epoch overflow"))?
+    } else {
+        state.interface_epoch
+    };
+
+    let mut next_monitor = if semantic_changed {
+        if state.transfer_policy != ContextTransferPolicy::None {
+            let context = active_monitor.export_context()?;
+            compiled
+                .monitor
+                .import_context(&context, state.transfer_policy)?;
+        }
+        compiled.monitor
+    } else {
+        active_monitor
+    };
+    next_monitor.install_revision(next_revision, next_interface_epoch);
+
+    let old_input = std::mem::replace(
+        input,
+        Box::pin(futures::stream::empty()) as ReconfigurableInputStream<Value>,
+    );
+    drop(old_input);
+    let next_input = state
+        .input
+        .open_resolved(candidate_input.clone())
+        .await
+        .context("reconfigurable replacement input could not be opened")?;
+    let next_writer = match state.output_builder.open(candidate_output.clone()).await {
+        Ok(writer) => writer,
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "reconfigurable replacement output could not be opened: {error}"
+            ));
+        }
+    };
+
+    state.active_input = candidate_input;
+    state.active_input_config = Some(request.input_config);
+    state.active_output = candidate_output;
+    state.revision = next_revision;
+    state.interface_epoch = next_interface_epoch;
+
+    let mut next_engine = DirectDataflowEngine::new(next_monitor, next_writer);
+    if let Err(error) =
+        acknowledge_reconfiguration(state, semantic_changed || interface_changed).await
+    {
+        let acknowledgement_error =
+            match finish_direct_output(&mut next_engine.output_writer, Some(error)).await {
+                Ok(()) => anyhow::anyhow!("reconfiguration acknowledgement failed"),
+                Err(error) => error,
+            };
+        return Err(acknowledgement_error);
+    }
+    Ok((next_engine, next_input))
+}
+
+async fn evaluate_reconfigurable_batch(
+    engine: &mut DirectDataflowEngine,
+    batch: &InputBatch<Value>,
+    execution_policy: ExecutionPolicy,
+) -> anyhow::Result<()> {
+    if let Some((layout, values)) = batch.packed_rows_segment() {
+        engine.select_packed_layout(layout)?;
+        for row in values.chunks(layout.len()) {
+            engine.evaluate_packed_row(row)?;
+            if execution_policy == ExecutionPolicy::Synchronous
+                || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
+            {
+                flush_reconfigurable_output(engine).await?;
+            }
+        }
+        return Ok(());
+    }
+
+    for tick in batch.ticks() {
+        engine.evaluate_tick(&tick)?;
+        if execution_policy == ExecutionPolicy::Synchronous
+            || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
+        {
+            flush_reconfigurable_output(engine).await?;
+        }
+    }
+    Ok(())
 }
 
 struct DirectDataflowEngine {
@@ -493,11 +1161,26 @@ impl DirectDataflowEngine {
         }
 
         let values = std::mem::take(&mut self.output_values);
-        let rows = OutputBatch::packed_rows(Arc::clone(&self.output_layout), values)?;
-        self.output_writer.send(rows).await?;
-        self.output_values = Vec::with_capacity(self.output_value_capacity);
-        self.pending_rows = 0;
-        Ok(())
+        let rows = match OutputBatch::packed_rows(Arc::clone(&self.output_layout), values) {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.output_values = Vec::with_capacity(self.output_value_capacity);
+                self.pending_rows = 0;
+                return Err(error);
+            }
+        };
+        match self.output_writer.send(rows).await {
+            Ok(()) => {
+                self.output_values = Vec::with_capacity(self.output_value_capacity);
+                self.pending_rows = 0;
+                Ok(())
+            }
+            Err(error) => {
+                self.output_values = Vec::with_capacity(self.output_value_capacity);
+                self.pending_rows = 0;
+                Err(error)
+            }
+        }
     }
 }
 
@@ -510,6 +1193,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use async_trait::async_trait;
+    use async_unsync::bounded;
     use futures::Sink;
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
@@ -517,8 +1201,10 @@ mod tests {
     use crate::VarName;
     use crate::core::{OutputBackend, OutputBatch};
 
-    use crate::io::map;
-    use crate::io::testing::{limited_null_output, manual_output};
+    use crate::io::output::ManualOutputBackend;
+    use crate::io::testing::{input_source_with_control, limited_null_output, manual_output};
+    use crate::io::{InputPipeline, OutputBackendBuilder, OutputBackendConfig, map};
+    use crate::stream_utils::Fanout;
     use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, Value, async_test};
 
     use super::*;
@@ -657,6 +1343,40 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn reconfigurable_dataflow_replacement_inherits_quickening_setting(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let model = "in x: Int\nout z: Int\nz = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let (_x_sender, x_fanout) = Fanout::<Value>::new();
+        let (_control_sender, control_fanout) = Fanout::<Value>::new();
+        let input_source = input_source_with_control(
+            BTreeMap::from([(VarName::new("x"), x_fanout)]),
+            control_fanout,
+        )
+        .with_reconfiguration_route("control")
+        .unwrap();
+        let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
+            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .executor(executor)
+            .model(model)
+            .input_pipeline(InputPipeline::new(input_source))
+            .output_builder(OutputBackendBuilder::new(OutputBackendConfig::null()))
+            .reconf_topic("control")
+            .quickening(false)
+            .build()
+            .await;
+
+        assert!(!runtime.monitor.as_ref().unwrap().quickening_enabled());
+        let replacement = (runtime.reconfiguration.as_ref().unwrap().compiler)(
+            "in x: Int\nout z: Int\nz = x + 2",
+        )
+        .unwrap();
+        assert!(!replacement.monitor.quickening_enabled());
+    }
+
+    #[apply(async_test)]
     async fn dataflow_synchronous_controller_acknowledges_processed_ticks(
         executor: Rc<LocalExecutor<'static>>,
     ) {
@@ -684,6 +1404,88 @@ mod tests {
         let (result, ()) = futures::join!(runtime.run(), control);
         result.unwrap();
     }
+    #[apply(async_test)]
+    async fn reconfigurable_dataflow_strict_transfer_rejects_incompatible_nested_dynamic_body(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let old_spec = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
+        let new_spec = "in a: Int\nin x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
+        let model = old_spec.parse::<DsrvSpecification>().unwrap();
+
+        let (a_sender, a_fanout) = Fanout::<Value>::new();
+        let (x_sender, x_fanout) = Fanout::<Value>::new();
+        let (source_sender, source_fanout) = Fanout::<Value>::new();
+        let (control_sender, control_fanout) = Fanout::<Value>::new();
+        let input_source = input_source_with_control(
+            BTreeMap::from([
+                (VarName::new("a"), a_fanout),
+                (VarName::new("x"), x_fanout),
+                (VarName::new("source"), source_fanout),
+            ]),
+            control_fanout,
+        )
+        .with_reconfiguration_route("control")
+        .unwrap();
+        let input_pipeline = InputPipeline::new(input_source);
+
+        let (output_backend, mut outputs) = ManualOutputBackend::<Value>::channel(4);
+        let output_builder =
+            OutputBackendBuilder::new(OutputBackendConfig::manual(output_backend.sender().clone()));
+        drop(output_backend);
+        let (ack_sender, mut acknowledgements) =
+            bounded::channel::<ReconfigurationAck>(1).into_split();
+
+        let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
+            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .executor(executor.clone())
+            .model(model)
+            .input_pipeline(input_pipeline)
+            .output_builder(output_builder)
+            .reconf_topic("control")
+            .context_transfer(ContextTransferPolicy::Strict)
+            .acknowledgements(ack_sender)
+            .build()
+            .await;
+        let task = executor.spawn(runtime.run());
+
+        x_sender.send(Value::Int(1)).await;
+        source_sender.send(Value::Str("x[1]".into())).await;
+        assert_eq!(
+            outputs.recv().await,
+            Some(BTreeMap::from([(VarName::new("z"), Value::Deferred)]))
+        );
+
+        control_sender
+            .send(Value::Str(
+                serde_json::json!({"spec": new_spec}).to_string().into(),
+            ))
+            .await;
+        let acknowledgement = acknowledgements
+            .recv()
+            .await
+            .expect("root reconfiguration acknowledgement should arrive");
+        assert!(acknowledgement.applied);
+
+        x_sender.send(Value::Int(2)).await;
+        source_sender.send(Value::Str("x + 1".into())).await;
+        a_sender.send(Value::NoVal).await;
+        drop(a_sender);
+        drop(x_sender);
+        drop(source_sender);
+        drop(control_sender);
+
+        let error =
+            tc_testutils::streams::with_timeout(task, 5, "strict nested dynamic transfer runtime")
+                .await
+                .expect("strict nested dynamic transfer runtime should terminate")
+                .expect_err("incompatible nested dynamic transfer should fail the runtime");
+        assert!(matches!(
+            error.downcast_ref::<crate::dataflow::DataflowEvaluationError>(),
+            Some(crate::dataflow::DataflowEvaluationError::IncompatibleRegionTransfer(_))
+        ));
+        assert_eq!(outputs.recv().await, None);
+    }
+
     #[apply(async_test)]
     async fn dataflow_runtime_evaluates_recursive_accumulator(
         executor: Rc<LocalExecutor<'static>>,

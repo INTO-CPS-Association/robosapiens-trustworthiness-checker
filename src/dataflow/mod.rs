@@ -1121,6 +1121,7 @@ use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};
+use thiserror::Error;
 
 use self::environment::{EnvironmentLayout, EnvironmentSlot};
 
@@ -1131,12 +1132,65 @@ mod execution;
 mod execution_plan;
 mod ir;
 mod monitor;
+mod reconfiguration;
 mod scheduler;
 #[cfg(test)]
 mod tests;
 
 pub use error::{DataflowCompilationError, DataflowEvaluationError, StreamProgramError};
-pub use monitor::DataflowMonitor;
+pub use monitor::{DataflowContext, DataflowMonitor};
+pub(crate) use reconfiguration::{
+    ActivationFrontier, DefinitionSource, ReplacementTarget, validate_replacement,
+};
+pub use reconfiguration::{
+    DefinitionKey, InterfaceEpoch, ReconfigurationError, RegionAddress, RevisionId, StateKey,
+    TransferDecision, TransferReportEntry,
+};
+
+/// Controls how much canonical evaluator state is carried into a replacement monitor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContextTransferPolicy {
+    /// Do not carry any state into the replacement monitor.
+    None,
+    /// Carry state for streams whose bound program and environment layout are unchanged.
+    #[default]
+    Compatible,
+    /// Reject a replacement when an existing stream cannot be transferred exactly.
+    Strict,
+}
+
+/// Result of importing a context into a replacement monitor.
+///
+/// The counters preserve the original lightweight API. `entries` carries the portable region and
+/// state addresses needed to explain resets and strict-policy rejection on the cold path.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContextTransferReport {
+    pub transferred_streams: usize,
+    pub reset_streams: usize,
+    pub rejected_streams: usize,
+    pub entries: Vec<TransferReportEntry>,
+}
+
+impl ContextTransferReport {
+    pub fn entries(&self) -> &[TransferReportEntry] {
+        &self.entries
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transferred_streams == 0 && self.reset_streams == 0 && self.rejected_streams == 0
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum DataflowStateError {
+    #[error("cannot transfer dataflow context while a tick is in progress")]
+    TickInProgress,
+    #[error("stream `{0}` has incompatible state in the replacement monitor")]
+    IncompatibleStream(VarName),
+    #[error("active dynamic dependency graph is invalid in the replacement monitor: {0}")]
+    IncompatibleDependencies(String),
+}
+
 /// Activation policy for the integrated JIT. All configurations use the same optimizer and
 /// generated-code path; only the point at which native compilation occurs differs.
 #[cfg(feature = "jit")]

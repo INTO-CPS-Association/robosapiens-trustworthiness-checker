@@ -593,4 +593,34 @@ mod tests {
             assert!(output.next().await.is_none());
         });
     }
+
+    #[test]
+    fn control_barrier_flushes_coalesced_data_before_terminating_the_window() {
+        smol::block_on(async {
+            let stage = InputStage::WindowToStep {
+                window: InputWindow::new(None, NonZeroUsize::new(10)).unwrap(),
+                reduction: InputReduction::LastUpdateWins,
+            };
+            let control = "control";
+            let events = Box::pin(futures::stream::iter([
+                Ok(WindowEvent::Data(InputBatch::update("x", 1))),
+                Ok(WindowEvent::Control(control)),
+                Ok(WindowEvent::Data(InputBatch::update("x", 2))),
+            ]));
+            let mut output = drive_window(events, stage, NeverTimer).unwrap();
+
+            let Some(Ok(WindowEvent::Data(batch))) = output.next().await else {
+                panic!("pending data must be flushed before control");
+            };
+            assert_eq!(
+                batch.ticks().next().unwrap().to_updates(),
+                vec![update("x", 1)]
+            );
+            assert!(matches!(
+                output.next().await,
+                Some(Ok(WindowEvent::Control("control")))
+            ));
+            assert!(output.next().await.is_none());
+        });
+    }
 }

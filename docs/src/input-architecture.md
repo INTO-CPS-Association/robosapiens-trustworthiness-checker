@@ -89,6 +89,29 @@ pub(crate) enum ReconfigurableInputItem<V> {
 }
 ```
 
+### Generations
+
+A **generation** is one opened set of input transports: the concrete
+subscriptions, sockets, files, and decoders that serve one specification's
+inputs under one binding configuration. An `InputPipeline` is reusable
+configuration and outlives every generation; a generation is the live
+connection made from it.
+
+A generation ends when a control message arrives, and the replacement
+specification opens the next one:
+
+```text
+generation 1    spec: in x, in y        subscribes: robot/x, robot/y
+                data … data … Reconfigure{ spec: "in y, in z" }   ← ends here
+
+generation 2    spec: in y, in z        subscribes: robot/y, robot/z
+                data … data …
+```
+
+Even though `y` is bound to the same route in both, generation 1's
+subscription is dropped and generation 2 opens its own. Generations never
+overlap: exactly one is open at a time.
+
 `ReconfigurableInput` owns a reusable `InputPipeline` and one validated control
 binding. It opens the data sources and the control route for one generation,
 then translates one control message into the private `Reconfigure` item. The
@@ -140,15 +163,45 @@ Resolution follows these rules:
 The private `ReconfigurableInput` adapter selects and validates the fixed control
 source separately. A single source needs no marker; with multiple sources,
 exactly one source must declare `reconfiguration_route`. `--reconf-topic` may
-override the route but not the selected source. The selected source is opened
-for every generation, with its active model-data bindings when present or an
-empty binding list for a dedicated control-only source. Each other selected
-data source is opened with only its bindings. Source streams are composed in
-observed stream order. Completion of one source does not terminate its siblings,
-and no synchronization policy is invented merely because sources were composed.
-A live update remains an independent tick; a packed file or map source remains
-packed; a mixed batch may contain several segment kinds without merging an event
-into an existing simultaneous row.
+override the route but not the selected source.
+
+Reconfigurable generations have a stronger ownership invariant than ordinary
+input composition: all active model bindings and the control route must belong
+to one `InputSource`/source ID. If resolution produces bindings on more than one
+source, or produces data bindings on a source other than the selected control
+source, `InputPipeline::open_reconfigurable` rejects the generation before it
+opens any source. It never uses `select_all` to guess an order between
+independent source streams. Additional configured sources may remain in the
+owned catalog, but they are inactive for that generation. A generation with no
+model bindings may still open the selected source as a control-only stream.
+
+The selected source is opened once per generation with its active model-data
+bindings and control route. The one-source invariant is an ownership check; it is
+not, by itself, an ordering guarantee. Backend behavior is different:
+
+- **MQTT and Redis** expose one backend item stream containing the subscribed data
+  and control routes. The adapter preserves the order observed by that transport
+  client, which is a transport-local observation rather than an intrinsic order
+  between independently published routes or topics.
+- **ROS** creates independent subscriptions for the model-data topics and the
+  control topic, then combines their streams. ROS does not provide a data/control
+  order at this adapter boundary; a control topic that collides with an active
+  data topic is rejected before ROS resources are opened.
+- **Manual** input creates independent fanouts for model data and control. Their
+  receivers likewise have no shared sequence or ordering edge.
+
+For ROS and manual sources, an external controller must quiesce the data
+producers and obtain an application/runtime acknowledgement that preceding data
+has crossed the required boundary before publishing control. It must wait for
+the reconfiguration acknowledgement, where provided, before publishing rows
+for the replacement generation. A quiet stream, `Poll::Pending`, a sleep or
+yield, or control-poll priority is not an ordering proof. Library callers can
+install the in-process dataflow acknowledgement sink; CLI deployments must use
+source/backend-specific external controller coordination. No new network
+acknowledgement protocol is defined here. A live update remains an independent
+tick; a packed file or map source remains packed; a mixed batch may contain
+several segment kinds without merging an event into an existing simultaneous
+row.
 
 A simple single-source library pipeline looks like this:
 
@@ -276,45 +329,45 @@ fields use the same compact route form as route catalogs:
 ```
 
 With `inputs`, `source` may identify the named source for all of those input
-bindings. With a multi-source local source set, `sources` assigns bindings by
-source:
+bindings. With a multi-source local source set, a reconfigurable generation
+must assign every active binding to the selected control source; other source
+catalogs remain inactive for that generation:
 
 ```json
 {
   "spec": "in alarm: Bool\nin pose\nout safe: Bool\nsafe = alarm",
-  "sources": {
-    "robot-mqtt": {
-      "alarm": "/robot/alarm"
-    },
-    "robot-ros": {
-      "pose": ["/robot/pose", "Pose2D"]
-    }
+  "source": "robot-mqtt",
+  "inputs": {
+    "alarm": "/robot/alarm",
+    "pose": "/robot/pose"
   }
 }
 ```
 
-`inputs` and `sources` are alternatives. If neither is present, the next
-specification is resolved from the local source catalogs and default, so a
-single-source reconfiguration can be spec-only. This is useful for compact
-messages and keeps transport details in local configuration. `outputs` is
-optional and updates output routes for the new generation. The message is
-validated before any replacement is opened.
+The `inputs` and `sources` forms are alternatives. A `sources` object with
+active bindings for two source IDs is valid as a general monitor configuration,
+but is rejected before opening when used for reconfiguration because it cannot
+prove command order. If neither `inputs` nor `sources` is present, the next
+specification is resolved from the local source catalogs and default; this is
+safe only when all resolved variables belong to the selected control source.
+`outputs` is optional and updates output routes for the new generation. The
+message is validated before any replacement is opened.
 
 ## Context transfer and unsupported file reconfiguration
 
-Context transfer is enabled by default for `reconf-semi-sync`. When a new
-model is prepared, retained history is kept by variable identity for variables
-that still exist in the new model. Histories are aligned to the longest
-retained history with `NoVal` on the left, so the replacement can continue with
-as much compatible trace context as possible. Use `--no-context-transfer` to
-start the replacement without that history.
+Context transfer is enabled by default for both reconfigurable runtimes. When
+a new model is prepared, retained history is kept by variable identity for
+variables that still exist in the new model. Histories are aligned to the
+longest retained history with `NoVal` on the left, so the replacement can
+continue with as much compatible trace context as possible. Use
+`--no-context-transfer` to start the replacement without that history.
 
 Reconfiguration requires a control-capable live source: MQTT, Redis, ROS, or a
 manual library source with a control channel. File and in-memory row/tick
 sources can provide ordinary data, but file-backed reconfiguration is
-unsupported. In particular, `--input-file` cannot be combined with
-`--runtime reconf-semi-sync`; there is no file control route from which a
-running monitor can receive a replacement request.
+unsupported. In particular, `--input-file` cannot be combined with either
+`--runtime reconf-semi-sync` or `--runtime reconf-dataflow`; there is no file
+control route from which a running monitor can receive a replacement request.
 
 ## Runtime consumption
 

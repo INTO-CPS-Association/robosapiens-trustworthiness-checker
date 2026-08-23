@@ -48,7 +48,10 @@ pub enum RuntimeSpec {
     Mstlo(ExecutionPolicy),
     Distributed,
     SemiSync,
+    /// Independent reference runtime with semisynchronous reconfiguration.
     ReconfSemiSync,
+    /// Region-based reconfigurable dataflow runtime with the selected input policy.
+    ReconfDataflow(ExecutionPolicy),
 }
 
 pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;

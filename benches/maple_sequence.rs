@@ -8,11 +8,13 @@ use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
 #[cfg(feature = "jit")]
 use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
-use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
+};
 
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
@@ -89,7 +91,7 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("maple_sequence_untyped_dataflow", size),
+            BenchmarkId::new("maple_sequence_dataflow_untyped", size),
             &(&spec),
             |b, &spec| {
                 let benchmark_executor = LocalSmolExecutor::new();
@@ -117,7 +119,21 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("maple_sequence_dataflow_specialised", size),
+            BenchmarkId::new("maple_sequence_dataflow", size),
+            &(&spec_typed),
+            |b, &spec_typed| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_dataflow(
+                        benchmark_executor.executor.clone(),
+                        spec_typed.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("maple_sequence_dataflow_quickened", size),
             &(&spec_typed),
             |b, &spec_typed| {
                 let benchmark_executor = LocalSmolExecutor::new();

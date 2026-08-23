@@ -41,7 +41,10 @@ pub enum RuntimeKind {
     Dataflow,
     Distributed,
     SemiSync,
+    /// Independent semisynchronous reconfiguration reference runtime.
     ReconfSemiSync,
+    /// Region-based reconfigurable dataflow runtime.
+    ReconfDataflow,
 }
 
 impl RuntimeKind {
@@ -52,8 +55,44 @@ impl RuntimeKind {
             Self::Distributed => RuntimeSpec::Distributed,
             Self::SemiSync => RuntimeSpec::SemiSync,
             Self::ReconfSemiSync => RuntimeSpec::ReconfSemiSync,
+            Self::ReconfDataflow => RuntimeSpec::ReconfDataflow(policy),
         }
     }
+}
+
+const DSRV_TYPED_SEMANTICS: &[Semantics] = &[
+    Semantics::Untimed,
+    Semantics::TypedUntimed,
+    Semantics::GradualTypedUntimed,
+];
+const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::Untimed];
+
+fn supported_dsrv_semantics(runtime: RuntimeKind) -> &'static [Semantics] {
+    match runtime {
+        RuntimeKind::Distributed => DSRV_DISTRIBUTED_SEMANTICS,
+        RuntimeKind::Async
+        | RuntimeKind::Dataflow
+        | RuntimeKind::SemiSync
+        | RuntimeKind::ReconfSemiSync
+        | RuntimeKind::ReconfDataflow => DSRV_TYPED_SEMANTICS,
+    }
+}
+
+fn validate_dsrv_runtime_semantics(
+    runtime: RuntimeKind,
+    semantics: Semantics,
+) -> anyhow::Result<()> {
+    let supported = supported_dsrv_semantics(runtime);
+    anyhow::ensure!(
+        supported.contains(&semantics),
+        "--runtime {runtime} does not support --semantics {semantics} for DSRV specifications; supports only: {}",
+        supported
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(())
 }
 
 pub fn resolve_runtime(
@@ -64,7 +103,9 @@ pub fn resolve_runtime(
 ) -> anyhow::Result<RuntimeSpec> {
     match language {
         Language::DSRV => {
-            if policy == ExecutionPolicy::Synchronous && runtime != RuntimeKind::Dataflow {
+            if policy == ExecutionPolicy::Synchronous
+                && !matches!(runtime, RuntimeKind::Dataflow | RuntimeKind::ReconfDataflow)
+            {
                 anyhow::bail!(
                     "--execution-policy synchronous requires --runtime dataflow for DSRV specifications"
                 );
@@ -481,18 +522,25 @@ pub struct Cli {
 
 impl Cli {
     pub fn validate(&self) -> anyhow::Result<()> {
-        let reconfigurable = self.runtime == RuntimeKind::ReconfSemiSync;
+        let reconfigurable = matches!(
+            self.runtime,
+            RuntimeKind::ReconfSemiSync | RuntimeKind::ReconfDataflow
+        );
         anyhow::ensure!(
             reconfigurable || (!self.no_context_transfer && self.reconf_topic.is_none()),
-            "monitor reconfiguration flags require --runtime reconf-semi-sync"
+            "monitor reconfiguration flags require --runtime reconf-semi-sync or --runtime reconf-dataflow"
         );
         if let Some(topic) = &self.reconf_topic {
             anyhow::ensure!(!topic.trim().is_empty(), "--reconf-topic cannot be empty");
         }
+        if matches!(self.language, Language::DSRV) {
+            validate_dsrv_runtime_semantics(self.runtime, self.semantics)?;
+        }
         if reconfigurable {
             anyhow::ensure!(
                 self.input_mode.input_file.is_none(),
-                "--input-file cannot be used with --runtime reconf-semi-sync"
+                "--input-file cannot be used with --runtime {}",
+                self.runtime
             );
         }
 
@@ -570,6 +618,143 @@ mod runtime_tests {
             RuntimeKind::Dataflow.with_policy(ExecutionPolicy::Synchronous),
             RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
         );
+    }
+
+    #[test]
+    fn reconfigurable_runtime_names_select_independent_implementations() {
+        assert_eq!(
+            RuntimeKind::ReconfSemiSync.with_policy(ExecutionPolicy::Buffered),
+            RuntimeSpec::ReconfSemiSync,
+        );
+        assert_eq!(
+            RuntimeKind::ReconfDataflow.with_policy(ExecutionPolicy::Synchronous),
+            RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous),
+        );
+    }
+
+    #[test]
+    fn reconfigurable_flags_are_accepted_by_both_runtimes() {
+        for runtime in ["reconf-semi-sync", "reconf-dataflow"] {
+            let cli = Cli::try_parse_from([
+                "trustworthiness_checker",
+                "model.dsrv",
+                "--mqtt-input",
+                "--output-stdout",
+                "--runtime",
+                runtime,
+                "--reconf-topic",
+                "control",
+                "--no-context-transfer",
+            ])
+            .unwrap();
+            cli.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn every_dsrv_runtime_semantics_pair_matches_the_builder_matrix() {
+        const ALL_SEMANTICS: [Semantics; 7] = [
+            Semantics::Untimed,
+            Semantics::TypedUntimed,
+            Semantics::GradualTypedUntimed,
+            Semantics::DelayedQuantitative,
+            Semantics::DelayedQualitative,
+            Semantics::EagerQualitative,
+            Semantics::RobustnessInterval,
+        ];
+        let cases = [
+            (
+                RuntimeKind::Async,
+                [true, true, true, false, false, false, false],
+            ),
+            (
+                RuntimeKind::Dataflow,
+                [true, true, true, false, false, false, false],
+            ),
+            (
+                RuntimeKind::Distributed,
+                [true, false, false, false, false, false, false],
+            ),
+            (
+                RuntimeKind::SemiSync,
+                [true, true, true, false, false, false, false],
+            ),
+            (
+                RuntimeKind::ReconfSemiSync,
+                [true, true, true, false, false, false, false],
+            ),
+            (
+                RuntimeKind::ReconfDataflow,
+                [true, true, true, false, false, false, false],
+            ),
+        ];
+
+        for (runtime, expected) in cases {
+            for (semantics, should_accept) in ALL_SEMANTICS.iter().copied().zip(expected) {
+                let cli = Cli::try_parse_from([
+                    "trustworthiness_checker".to_owned(),
+                    "model.dsrv".to_owned(),
+                    "--mqtt-input".to_owned(),
+                    "--output-stdout".to_owned(),
+                    "--runtime".to_owned(),
+                    runtime.to_string(),
+                    "--semantics".to_owned(),
+                    semantics.to_string(),
+                ])
+                .unwrap();
+                assert_eq!(
+                    cli.validate().is_ok(),
+                    should_accept,
+                    "unexpected DSRV validation result for {runtime:?} + {semantics:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mstlo_keeps_all_semantics_available() {
+        const ALL_SEMANTICS: [Semantics; 7] = [
+            Semantics::Untimed,
+            Semantics::TypedUntimed,
+            Semantics::GradualTypedUntimed,
+            Semantics::DelayedQuantitative,
+            Semantics::DelayedQualitative,
+            Semantics::EagerQualitative,
+            Semantics::RobustnessInterval,
+        ];
+
+        for semantics in ALL_SEMANTICS {
+            let cli = Cli::try_parse_from([
+                "trustworthiness_checker",
+                "model.mstlo",
+                "--mqtt-input",
+                "--output-stdout",
+                "--language",
+                "mstlo",
+                "--semantics",
+                semantics.to_string().as_str(),
+            ])
+            .unwrap();
+            cli.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn both_reconfigurable_runtimes_reject_file_input_without_panicking() {
+        for runtime in ["reconf-semi-sync", "reconf-dataflow"] {
+            let cli = Cli::try_parse_from([
+                "trustworthiness_checker",
+                "model.dsrv",
+                "--input-file",
+                "trace.input",
+                "--output-stdout",
+                "--runtime",
+                runtime,
+            ])
+            .unwrap();
+            let error = cli.validate().unwrap_err();
+            assert!(error.to_string().contains("--input-file cannot be used"));
+        }
     }
 
     #[test]

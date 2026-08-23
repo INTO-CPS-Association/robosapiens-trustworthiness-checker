@@ -444,8 +444,6 @@ impl<V> OutputPipeline<V> {
         )?;
 
         let ordered = self.destinations.ordered();
-        let explicit_monitor_bindings = monitor_config
-            .is_some_and(|config| config.outputs.is_some() || config.destinations.is_some());
         let (deliveries, primary) = resolve_deliveries(
             &ordered,
             self.destinations.default(),
@@ -478,11 +476,9 @@ impl<V> OutputPipeline<V> {
             )?;
             let bindings = resolve_destination_bindings(
                 destination,
-                &output_variables,
                 &destination_auxiliary,
                 &variables,
                 monitor_routes,
-                explicit_monitor_bindings,
             )?;
             validate_backend_routes(destination, &bindings)?;
             let interface = OutputInterface::from_routes(bindings.iter().map(|binding| {
@@ -662,12 +658,17 @@ impl<V> OutputPipeline<V> {
         }
 
         if opened.len() == 1 {
-            let writer = opened
-                .pop()
-                .expect("single opened destination exists")
-                .writer;
-            return apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref())
-                .await;
+            let Some(opened) = opened.pop() else {
+                return Err(OutputError::invalid(
+                    "output pipeline opened no destinations",
+                ));
+            };
+            return apply_stages_in_order(
+                opened.writer,
+                &resolved.shared_stages,
+                self.executor.as_ref(),
+            )
+            .await;
         }
 
         let router = OutputRouter::new(opened);
@@ -1054,50 +1055,24 @@ fn ensure_subset(
 
 fn resolve_destination_bindings<V>(
     destination: &OutputDestination<V>,
-    output_variables: &BTreeSet<VarName>,
     auxiliary: &BTreeSet<VarName>,
     variables: &BTreeSet<VarName>,
     monitor_routes: Option<&BTreeMap<VarName, Route>>,
-    explicit_monitor_bindings: bool,
 ) -> anyhow::Result<Vec<ResolvedOutputBinding>> {
-    if !explicit_monitor_bindings {
-        if let Some(routes) = &destination.routes {
-            let extra = routes
-                .keys()
-                .filter(|variable| !variables.contains(*variable))
-                .cloned()
-                .collect::<Vec<_>>();
-            anyhow::ensure!(
-                extra.is_empty(),
-                "destination `{}` has routes for variables outside its selection: {extra:?}",
-                destination.id
-            );
-            let missing = output_variables
-                .difference(&routes.keys().cloned().collect())
-                .cloned()
-                .collect::<Vec<_>>();
-            anyhow::ensure!(
-                missing.is_empty(),
-                "destination `{}` is missing routes for model outputs: {missing:?}",
-                destination.id
-            );
-        }
-    }
-
     let mut bindings = Vec::with_capacity(variables.len());
     for variable in variables {
-        let requested = if explicit_monitor_bindings {
-            monitor_routes.and_then(|routes| routes.get(variable))
-        } else {
-            monitor_routes
-                .and_then(|routes| routes.get(variable))
-                .or_else(|| {
-                    destination
-                        .routes
-                        .as_ref()
-                        .and_then(|routes| routes.get(variable))
-                })
-        };
+        // A generation-specific route is an override, not a replacement for
+        // the durable catalog. The latter may contain routes for a previous
+        // model generation; entries outside this generation are ignored, while
+        // newly added variables continue to the backend's default route.
+        let requested = monitor_routes
+            .and_then(|routes| routes.get(variable))
+            .or_else(|| {
+                destination
+                    .routes
+                    .as_ref()
+                    .and_then(|routes| routes.get(variable))
+            });
         let route = match requested {
             Some(route) => normalize_route(&destination.backend, variable, route)?,
             None if auxiliary.contains(variable) => None,
@@ -1843,6 +1818,35 @@ mod tests {
         destinations: Vec<OutputDestination<crate::Value>>,
     ) -> OutputPipeline<crate::Value> {
         OutputPipeline::new(OutputDestinations::new(destinations).unwrap())
+    }
+
+    #[test]
+    fn durable_routes_fallback_for_changed_output_interfaces() {
+        let destination = OutputDestination::new("out", OutputBackendConfig::null())
+            .with_routes([(VarName::new("x"), route("/configured/x"))]);
+        let resolved = pipeline(vec![destination])
+            .resolve(
+                [VarName::new("x"), VarName::new("y")],
+                std::iter::empty::<VarName>(),
+                None,
+            )
+            .unwrap();
+        let bindings = resolved.destinations()[0].bindings();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].variable(), &VarName::new("x"));
+        assert_eq!(bindings[0].route().unwrap().route.as_ref(), "/configured/x");
+        assert_eq!(bindings[1].variable(), &VarName::new("y"));
+        assert!(bindings[1].route().is_none());
+        assert_eq!(resolved.destinations()[0].interface().len(), 2);
+        assert_eq!(
+            resolved.destinations()[0]
+                .interface()
+                .route(&VarName::new("x"))
+                .unwrap()
+                .topic
+                .as_deref(),
+            Some("/configured/x")
+        );
     }
 
     #[test]

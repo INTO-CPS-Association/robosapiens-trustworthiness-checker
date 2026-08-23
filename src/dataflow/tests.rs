@@ -981,6 +981,43 @@ fn dynamic_source_replacement_uses_retained_value_for_new_no_val_dependency() {
 }
 
 #[test]
+fn defer_retains_a_noval_active_body_result() {
+    let spec = "in x: Int\nin y: Int\nin source: Str\nout z: Int\n\
+        z = defer(source: Int)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let typed = spec.clone().type_check(TypeCheckOptions::STRICT).unwrap();
+
+    for mut monitor in [
+        DataflowMonitor::compile_untyped(spec.clone()).unwrap(),
+        DataflowMonitor::compile_checked(typed).unwrap(),
+    ] {
+        let mut output = [Value::NoVal];
+        let first = runtime_input_row(
+            &monitor,
+            &[
+                ("x", Value::NoVal),
+                ("y", Value::Int(0)),
+                ("source", Value::Str("default(y[0], x)".into())),
+            ],
+        );
+        monitor.evaluate(&first, &mut output).unwrap();
+        assert_eq!(output, [Value::Int(0)]);
+
+        let second = runtime_input_row(
+            &monitor,
+            &[
+                ("x", Value::NoVal),
+                ("y", Value::Deferred),
+                ("source", Value::NoVal),
+            ],
+        );
+        monitor.evaluate(&second, &mut output).unwrap();
+        assert_eq!(output, [Value::Int(0)]);
+    }
+}
+
+#[test]
 fn dynamic_environment_slots_include_delayed_free_variables() {
     let spec = "in x: Int\nin source: Str\nout z: Int\
                 \nz = dynamic(source: Int)"
@@ -1550,7 +1587,7 @@ fn dataflow_dependency_reordering_advances_temporal_state_once() {
 }
 
 #[test]
-fn dataflow_runtime_dependency_cycles_are_terminal_errors() {
+fn dataflow_runtime_dependency_cycles_poison_the_monitor() {
     let spec = "in x: Int\nin a_source: Str\nin b_source: Str\nout a: Int\nout b: Int\n\
                         a = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
         .parse::<DsrvSpecification>()
@@ -1566,6 +1603,7 @@ fn dataflow_runtime_dependency_cycles_are_terminal_errors() {
         ],
     );
     monitor.evaluate(&valid, &mut output).unwrap();
+    let previous_output = output.clone();
 
     let cycle = runtime_input_row(
         &monitor,
@@ -1575,13 +1613,18 @@ fn dataflow_runtime_dependency_cycles_are_terminal_errors() {
             ("b_source", Value::Str("a".into())),
         ],
     );
+    let error = monitor.evaluate(&cycle, &mut output).unwrap_err();
     assert!(matches!(
-        monitor.evaluate(&cycle, &mut output),
-        Err(DataflowEvaluationError::DynamicDependencyCycle(_))
+        error,
+        crate::dataflow::DataflowEvaluationError::DynamicDependencyCycle(_)
     ));
+    assert_eq!(
+        output, previous_output,
+        "failed ticks publish no output row"
+    );
     assert!(matches!(
         monitor.evaluate(&cycle, &mut output),
-        Err(DataflowEvaluationError::MonitorFailed)
+        Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
     ));
 }
 
@@ -1618,7 +1661,7 @@ fn dataflow_defer_reorders_once_and_ignores_later_definitions() {
 }
 
 #[test]
-fn dataflow_rejects_nested_reconfiguration_before_installation() {
+fn dataflow_nested_reconfiguration_failure_poisons_before_installation() {
     let spec_src = "in source: Str\nin secret: Int\nout z: Int\nz = dynamic(source: Int, {source})";
     let spec = spec_src.parse::<DsrvSpecification>().unwrap();
     let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
@@ -1640,9 +1683,15 @@ fn dataflow_rejects_nested_reconfiguration_before_installation() {
         .collect::<Vec<_>>();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
+    let error = monitor.evaluate(&input, &mut output).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::dataflow::DataflowEvaluationError::UnsupportedNestedReconfiguration
+    ));
+    assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
+        Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
     ));
 }
 
@@ -1670,41 +1719,50 @@ fn dataflow_automatic_scope_does_not_add_unused_computed_dependencies() {
 }
 
 #[test]
-fn dataflow_evaluation_failures_are_returned() {
+fn dataflow_evaluation_failures_poison_the_monitor() {
     let spec = "in source: Str\nout z: Int\nz = dynamic(source: Int)"
         .parse::<DsrvSpecification>()
         .unwrap();
     let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
-    let input = [Value::Str("not valid dsrv syntax (".into())];
+    let invalid = [Value::Str("not valid dsrv syntax (".into())];
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
+    let error = monitor.evaluate(&invalid, &mut output).unwrap_err();
     assert!(matches!(
-        monitor.evaluate(&input, &mut output),
-        Err(DataflowEvaluationError::DynamicExpressionParse { .. })
+        error,
+        crate::dataflow::DataflowEvaluationError::DynamicExpressionParse { .. }
     ));
+    assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
     assert!(matches!(
-        monitor.evaluate(&input, &mut output),
-        Err(DataflowEvaluationError::MonitorFailed)
+        monitor.evaluate(&[Value::Str("1".into())], &mut output),
+        Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
     ));
 }
 
 #[test]
-fn checked_dataflow_rejects_dynamic_expressions_with_the_wrong_type() {
+fn checked_dataflow_dynamic_type_failures_poison_the_monitor() {
     let spec = "in source: Str\nout z: Int\nz = dynamic(source: Int)"
         .parse::<CheckedDsrvSpecification>()
         .unwrap();
     let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
-    let input = [Value::Str("true".into())];
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
+    let error = monitor
+        .evaluate(&[Value::Str("true".into())], &mut output)
+        .unwrap_err();
     assert!(matches!(
-        monitor.evaluate(&input, &mut output),
-        Err(DataflowEvaluationError::DynamicExpressionType { .. })
+        error,
+        crate::dataflow::DataflowEvaluationError::DynamicExpressionType { .. }
+    ));
+    assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
+    assert!(matches!(
+        monitor.evaluate(&[Value::Str("1".into())], &mut output),
+        Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
     ));
 }
 
 #[test]
-fn checked_dataflow_rejects_nested_dynamic_expressions() {
+fn checked_dataflow_nested_reconfiguration_poisons_the_monitor() {
     let spec = "in inner: Str\nin outer: Str\nout z: Int\nz = dynamic(outer: Int)"
         .parse::<CheckedDsrvSpecification>()
         .unwrap();
@@ -1723,9 +1781,15 @@ fn checked_dataflow_rejects_nested_dynamic_expressions() {
         .collect::<Vec<_>>();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
 
+    let error = monitor.evaluate(&input, &mut output).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::dataflow::DataflowEvaluationError::UnsupportedNestedReconfiguration
+    ));
+    assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
     assert!(matches!(
         monitor.evaluate(&input, &mut output),
-        Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
+        Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
     ));
 }
 
@@ -2025,7 +2089,7 @@ async fn dataflow_matches_defer(executor: Rc<LocalExecutor<'static>>) {
 }
 
 #[test]
-fn typed_and_untyped_dataflow_preserve_explicit_defer_scopes() {
+fn typed_and_untyped_dataflow_defer_scope_failures_poison_the_monitor() {
     let spec = "in x: Int\nin y: Int\nin s: Str\nout z: Int\nz = defer(s: Int, {x})"
         .parse::<DsrvSpecification>()
         .unwrap();
@@ -2049,10 +2113,16 @@ fn typed_and_untyped_dataflow_preserve_explicit_defer_scopes() {
             .map(|var| values[var].clone())
             .collect::<Vec<_>>();
         let mut output = vec![Value::NoVal; monitor.output_vars().len()];
-        assert!(
-            monitor.evaluate(&input, &mut output).is_err(),
-            "a deferred property must not access a variable outside its explicit scope"
-        );
+        let error = monitor.evaluate(&input, &mut output).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::dataflow::DataflowEvaluationError::DynamicExpressionContext(_)
+        ));
+        assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
+        assert!(matches!(
+            monitor.evaluate(&input, &mut output),
+            Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
+        ));
     }
 }
 
@@ -2791,7 +2861,7 @@ async fn dataflow_semisync_dynamic_switch_away_and_back_parity(
 }
 
 #[test]
-fn dataflow_rejects_nested_runtime_reconfiguration() {
+fn dataflow_nested_runtime_reconfiguration_poisons_the_monitor() {
     for outer in ["dynamic", "defer"] {
         let spec =
             format!("in x: Int\nin inner: Str\nin outer: Str\nout z: Int\nz = {outer}(outer: Int)")
@@ -2808,9 +2878,15 @@ fn dataflow_rejects_nested_runtime_reconfiguration() {
         );
         let mut output = vec![Value::NoVal; 1];
 
+        let error = monitor.evaluate(&input, &mut output).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::dataflow::DataflowEvaluationError::UnsupportedNestedReconfiguration
+        ));
+        assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
         assert!(matches!(
             monitor.evaluate(&input, &mut output),
-            Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
+            Err(crate::dataflow::DataflowEvaluationError::MonitorFailed)
         ));
     }
 }
@@ -3532,5 +3608,82 @@ fn dataflow_lifting_does_not_depend_on_recursive_plan_shape() {
             Value::Int(42),
             Value::Int(4),
         ]]
+    );
+}
+
+/// `dynamic` emits the currently installed expression evaluated at the current
+/// tick.  When a new expression is installed and evaluates to `NoVal`, the node
+/// must not republish the previous expression's result: DynSRV defines
+/// `dynamic(psi)` at index `i` as the installed body `psi_k` evaluated at `i`,
+/// with no reference to the node's own earlier output.  Retention is available
+/// to specifications explicitly via `default(dynamic(e), z[-1])`.
+#[apply(async_test)]
+async fn dynamic_does_not_republish_a_superseded_expression_result(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let spec_src = "in x: Int\nin y: Int\nin source: Str\n\
+                    out z: Int\naux sum: Int\n\
+                    z = dynamic(source: Int, {x, y, source, sum})\n\
+                    sum = x + y";
+    // `x` is never present, so the body `x` is absent on every tick it is installed.
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::NoVal, Value::NoVal, Value::Int(7)],
+        ),
+        (VarName::new("y"), vec![0.into(), 0.into(), 0.into()]),
+        (
+            VarName::new("source"),
+            vec![
+                // Yields the distinctive value 3.
+                Value::Str("default(x[4], 3) + y".into()),
+                Value::Str("x".into()),
+                Value::Str("x".into()),
+            ],
+        ),
+    ]);
+
+    let rows = assert_dataflow_semisync_runtime_parity(executor.clone(), spec_src, inputs).await;
+
+    assert_eq!(
+        output_trace(&rows, "z"),
+        vec![Value::Int(3), Value::NoVal, Value::Int(7)],
+        "installing `x` while `x` is absent must yield NoVal, not the superseded `3`"
+    );
+}
+
+/// A `NoVal` source reuses the last retained property text, matching
+/// `last(i, psi, C)`.  This is retention of the *source*, which is unaffected by
+/// the node-result rule above.
+#[apply(async_test)]
+async fn dynamic_absent_source_reuses_the_retained_property_text(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let spec_src = "in x: Int\nin y: Int\nin source: Str\n\
+                    out z: Int\naux sum: Int\n\
+                    z = dynamic(source: Int, {x, y, source, sum})\n\
+                    sum = x + y";
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::NoVal, Value::NoVal, Value::NoVal],
+        ),
+        (VarName::new("y"), vec![0.into(), 0.into(), 0.into()]),
+        (
+            VarName::new("source"),
+            vec![
+                Value::Str("default(x[4], 3) + y".into()),
+                // Absent source keeps the previous body installed.
+                Value::NoVal,
+                Value::Str("x".into()),
+            ],
+        ),
+    ]);
+
+    let rows = assert_dataflow_semisync_runtime_parity(executor.clone(), spec_src, inputs).await;
+
+    assert_eq!(
+        output_trace(&rows, "z"),
+        vec![Value::Int(3), Value::Int(3), Value::NoVal]
     );
 }

@@ -15,12 +15,13 @@ use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_li
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_semisync_limited;
 
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_dataflow, monitor_outputs_dataflow_limited, monitor_outputs_quickened_dataflow,
+    monitor_outputs_quickened_dataflow_limited,
+};
 #[cfg(feature = "jit")]
 use trustworthiness_checker::benches_common::{
     monitor_outputs_jit_dataflow, monitor_outputs_jit_dataflow_limited,
-};
-use trustworthiness_checker::benches_common::{
-    monitor_outputs_quickened_dataflow, monitor_outputs_quickened_dataflow_limited,
 };
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
@@ -105,7 +106,7 @@ fn from_elem(c: &mut Criterion) {
         );
         let dynamic_dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
-            BenchmarkId::new("dynamic_untyped_dataflow", size),
+            BenchmarkId::new("dynamic_dataflow_untyped", size),
             &(&dynamic_spec),
             |b, &spec| {
                 b.to_async(dynamic_dataflow_executor.clone()).iter(|| {
@@ -133,7 +134,7 @@ fn from_elem(c: &mut Criterion) {
         );
         let dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
-            BenchmarkId::new("dup_defer_untyped_dataflow", size),
+            BenchmarkId::new("dup_defer_dataflow_untyped", size),
             &(&spec),
             |b, &spec| {
                 b.to_async(dataflow_executor.clone()).iter(|| {
@@ -147,12 +148,26 @@ fn from_elem(c: &mut Criterion) {
         );
         let specialized_dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
-            BenchmarkId::new("dup_defer_dataflow_specialised", size),
+            BenchmarkId::new("dup_defer_dataflow", size),
             &(&checked_spec),
             |b, &spec| {
                 b.to_async(specialized_dataflow_executor.clone()).iter(|| {
-                    monitor_outputs_quickened_dataflow(
+                    monitor_outputs_dataflow(
                         specialized_dataflow_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                    )
+                })
+            },
+        );
+        let quickened_dataflow_executor = LocalSmolExecutor::new();
+        group.bench_with_input(
+            BenchmarkId::new("dup_defer_dataflow_quickened", size),
+            &(&checked_spec),
+            |b, &spec| {
+                b.to_async(quickened_dataflow_executor.clone()).iter(|| {
+                    monitor_outputs_quickened_dataflow(
+                        quickened_dataflow_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
                     )
@@ -379,7 +394,7 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 
             let dataflow_executor = LocalSmolExecutor::new();
             group.bench_with_input(
-                BenchmarkId::new(format!("{}_dataflow", variant.name()), size),
+                BenchmarkId::new(format!("{}_dataflow_untyped", variant.name()), size),
                 &size,
                 |b, &size| {
                     b.to_async(dataflow_executor.clone()).iter(|| {
@@ -395,12 +410,28 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 
             let specialized_dataflow_executor = LocalSmolExecutor::new();
             group.bench_with_input(
-                BenchmarkId::new(format!("{}_dataflow_specialised", variant.name()), size),
+                BenchmarkId::new(format!("{}_dataflow", variant.name()), size),
                 &size,
                 |b, &size| {
                     b.to_async(specialized_dataflow_executor.clone()).iter(|| {
-                        monitor_outputs_quickened_dataflow_limited(
+                        monitor_outputs_dataflow_limited(
                             specialized_dataflow_executor.executor.clone(),
+                            checked_spec.clone(),
+                            hard_dynamic_defer_input_stream(size, variant),
+                            size,
+                        )
+                    })
+                },
+            );
+
+            let quickened_dataflow_executor = LocalSmolExecutor::new();
+            group.bench_with_input(
+                BenchmarkId::new(format!("{}_dataflow_quickened", variant.name()), size),
+                &size,
+                |b, &size| {
+                    b.to_async(quickened_dataflow_executor.clone()).iter(|| {
+                        monitor_outputs_quickened_dataflow_limited(
+                            quickened_dataflow_executor.executor.clone(),
                             checked_spec.clone(),
                             hard_dynamic_defer_input_stream(size, variant),
                             size,

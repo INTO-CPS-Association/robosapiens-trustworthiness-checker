@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 680" role="img" aria-labelledby="architecture-root-cutover-title architecture-root-cutover-desc" style="width:100%;max-width:760px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="architecture-root-cutover-title">Root cutover sequence and the point of no return</title>
+<desc id="architecture-root-cutover-desc">On receiving a typed reconfiguration item the owner loop submits pending rows as a packed OutputBatch, flushes and closes the old OutputWriter, and reaches the point of no return. Only afterwards does the owner validate the frontier and resolved interfaces, compile the replacement, transfer context, install candidate identities, close and reopen the input generation, open a fresh writer from the resolved output interface, install active state, and send the acknowledgement. Any failure after the old writer closes terminates the owner loop because the old external interface no longer exists.</desc>
+<defs>
+  <marker id="architecture-root-cutover-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="29" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Root cutover: drain first, then everything that can fail</text>
+
+<rect x="60" y="52" width="560" height="196" rx="6" fill="#e6f5f0" stroke="#147d64" stroke-width="1.6"/>
+<text x="80" y="78" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="#147d64">Committed old output is still reachable</text>
+<text x="80" y="110" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">1  receive typed Reconfigure(MonitorConfig)</text>
+<text x="102" y="128" text-anchor="start" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">already parsed by the transport adapter; no decoding here</text>
+<text x="80" y="156" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">2  flush pending engine rows</text>
+<text x="80" y="184" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">3  flush and close the old OutputWriter</text>
+<text x="102" y="212" text-anchor="start" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">writer completion is the old-generation handoff barrier</text>
+
+<line x1="380" y1="248" x2="380" y2="272" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-root-cutover-arrow)"/>
+
+<line x1="40" y1="288" x2="720" y2="288" stroke="#b54708" stroke-width="3" stroke-dasharray="9 5"/>
+<text x="380" y="308" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#b54708">point of no return — the old writer is closed</text>
+
+<rect x="60" y="326" width="560" height="280" rx="6" fill="#fff1e6" stroke="#b54708" stroke-width="1.6"/>
+<text x="80" y="352" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="#b54708">No rollback — any failure below terminates the owner loop</text>
+<text x="80" y="382" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">5  validate frontier and resolved interfaces</text>
+<text x="80" y="408" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">6  compile the replacement specification</text>
+<text x="80" y="434" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">7  transfer context, if requested</text>
+<text x="80" y="460" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">8  install candidate monitor identities</text>
+<text x="80" y="486" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">9  close old input, open replacement input</text>
+<text x="80" y="512" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">10 open fresh OutputWriter from resolved interface</text>
+<text x="80" y="538" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="400" fill="#17212b">11 install active I/O state and replacement engine</text>
+<text x="80" y="572" text-anchor="start" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">12 send ReconfigurationAck</text>
+<text x="102" y="590" text-anchor="start" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">last: cutover/open complete, not future publish success</text>
+
+<text x="24" y="632" text-anchor="start" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">Steps 1–3 run for every recognized command, including one whose replacement later proves invalid, so accepted rows</text>
+<text x="24" y="650" text-anchor="start" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">reach the writer handoff where possible. A failure before step 3 is still terminal; it simply has not yet discarded the old interface.</text>
+</svg>

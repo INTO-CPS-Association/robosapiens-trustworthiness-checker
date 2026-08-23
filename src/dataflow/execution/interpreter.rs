@@ -507,8 +507,7 @@ pub(in crate::dataflow) fn try_evaluate_nodes(
                     unreachable!("dynamic node has incompatible runtime state")
                 };
                 let current = retain_last_value(current, &mut dynamic.last_source_value);
-                let result = evaluate_dynamic_expression(current, spec, dynamic, context)?;
-                retain_last_value(result, &mut dynamic.last_result)
+                evaluate_dynamic_expression(current, spec, dynamic, context)?
             }
             StreamOp::If { .. } => try_evaluate_lazy_if(node_id, op, state, context)?,
             _ => evaluate_node(node_id, op, state, context),

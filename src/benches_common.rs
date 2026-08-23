@@ -10,6 +10,7 @@ use crate::InputStream;
 use crate::Value;
 use crate::VarName;
 use crate::core::ExecutionPolicy;
+use crate::dataflow::ContextTransferPolicy;
 
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
@@ -22,7 +23,7 @@ use crate::runtime::builder::RuntimeBuilder;
 use crate::runtime::builder::{
     CheckedSemiSyncValueConfig, CheckedValueConfig, SemiSyncValueConfig,
 };
-use crate::runtime::dataflow::DataflowRuntimeBuilder;
+use crate::runtime::dataflow::{DataflowRuntimeBuilder, ReconfigurableDataflowRuntimeBuilder};
 use crate::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
 use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::{CheckedUntimedDsrvSemantics, UntimedDsrvSemantics};
@@ -247,6 +248,53 @@ pub async fn monitor_outputs_typed_dataflow(
     monitor_outputs_quickened_dataflow(executor, spec, input_stream).await;
 }
 
+/// Run the checked dataflow runtime without quickening or native compilation.
+pub async fn monitor_outputs_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+) {
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .quickening(false)
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream)
+        .build()
+        .await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run a fixed number of checked dataflow outputs without quickening or native compilation.
+pub async fn monitor_outputs_dataflow_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+    limit: usize,
+) {
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("limited dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .quickening(false)
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream)
+        .build()
+        .await;
+    runtime.run().await.expect("Error running monitor");
+}
+
 /// Run the checked dataflow interpreter through its scheduler-plan quickening tier.
 pub async fn monitor_outputs_quickened_dataflow(
     executor: Rc<LocalExecutor<'static>>,
@@ -367,6 +415,124 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     monitor.run().await.expect("Error running monitor");
 }
 
+/// Run the untyped reconfigurable dataflow runtime through the benchmark input harness.
+pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_pipeline: InputPipeline,
+    output_backend_builder: OutputBackendBuilder,
+    use_context_transfer: bool,
+) {
+    let transfer_policy = if use_context_transfer {
+        ContextTransferPolicy::Compatible
+    } else {
+        ContextTransferPolicy::None
+    };
+    let builder = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
+        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .executor(executor)
+        .model(spec)
+        .input_pipeline(input_pipeline)
+        .output_builder(output_backend_builder)
+        .reconf_topic(RECONF_TOPIC)
+        .context_transfer(transfer_policy)
+        .quickening(false);
+    let runtime = Box::new(builder).build().await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run the checked reconfigurable dataflow runtime without quickening or native compilation.
+pub async fn monitor_outputs_dataflow_reconf_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_pipeline: InputPipeline,
+    output_backend_builder: OutputBackendBuilder,
+    use_context_transfer: bool,
+) {
+    let transfer_policy = if use_context_transfer {
+        ContextTransferPolicy::Compatible
+    } else {
+        ContextTransferPolicy::None
+    };
+    let checked = spec
+        .to_string()
+        .parse::<CheckedDsrvSpecification>()
+        .expect("reconfiguration benchmark specification should type check");
+    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .executor(executor)
+        .model(checked)
+        .input_pipeline(input_pipeline)
+        .output_builder(output_backend_builder)
+        .reconf_topic(RECONF_TOPIC)
+        .context_transfer(transfer_policy)
+        .quickening(false);
+    let runtime = Box::new(builder).build().await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run the checked reconfigurable dataflow runtime through its quickened tier.
+pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_pipeline: InputPipeline,
+    output_backend_builder: OutputBackendBuilder,
+    use_context_transfer: bool,
+) {
+    let transfer_policy = if use_context_transfer {
+        ContextTransferPolicy::Compatible
+    } else {
+        ContextTransferPolicy::None
+    };
+    let checked = spec
+        .to_string()
+        .parse::<CheckedDsrvSpecification>()
+        .expect("reconfiguration benchmark specification should type check");
+    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .executor(executor)
+        .model(checked)
+        .input_pipeline(input_pipeline)
+        .output_builder(output_backend_builder)
+        .reconf_topic(RECONF_TOPIC)
+        .context_transfer(transfer_policy);
+    let runtime = Box::new(builder).build().await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run the checked reconfigurable dataflow runtime with native compilation.
+#[cfg(feature = "jit")]
+pub async fn monitor_outputs_jit_dataflow_reconf_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input_pipeline: InputPipeline,
+    output_backend_builder: OutputBackendBuilder,
+    use_context_transfer: bool,
+) {
+    let transfer_policy = if use_context_transfer {
+        ContextTransferPolicy::Compatible
+    } else {
+        ContextTransferPolicy::None
+    };
+    let checked = spec
+        .to_string()
+        .parse::<CheckedDsrvSpecification>()
+        .expect("reconfiguration benchmark specification should type check");
+    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .executor(executor)
+        .model(checked)
+        .input_pipeline(input_pipeline)
+        .output_builder(output_backend_builder)
+        .reconf_topic(RECONF_TOPIC)
+        .context_transfer(transfer_policy)
+        .jit(crate::dataflow::JitConfig::after_events(
+            KEY_BENCHMARK_JIT_HOTNESS_EVENTS,
+        ));
+    let runtime = Box::new(builder).build().await;
+    runtime.run().await.expect("Error running monitor");
+}
+
 pub async fn monitor_outputs_untyped_async(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
@@ -440,6 +606,13 @@ pub fn input_source_dsrv_paper_bench(
     let input_source = crate::io::testing::input_source_with_control(fanouts, control);
 
     (input_source, tx_fans)
+}
+
+pub fn input_factory_dsrv_paper_bench(
+    var_names: BTreeSet<VarName>,
+) -> (InputPipeline, BTreeMap<VarName, FanoutSender<Value>>) {
+    let (input_source, tx_fans) = input_source_dsrv_paper_bench(var_names);
+    (InputPipeline::new(input_source), tx_fans)
 }
 
 pub fn output_builder_dsrv_paper_bench(

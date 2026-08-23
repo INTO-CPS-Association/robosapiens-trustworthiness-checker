@@ -7,7 +7,7 @@ use smol::LocalExecutor;
 #[cfg(feature = "jit")]
 use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
 use trustworthiness_checker::benches_common::{
-    monitor_outputs_quickened_dataflow, monitor_outputs_typed_semisync,
+    monitor_outputs_dataflow, monitor_outputs_quickened_dataflow, monitor_outputs_typed_semisync,
     monitor_outputs_untyped_dataflow, monitor_outputs_untyped_little,
 };
 
@@ -91,18 +91,32 @@ fn arithmetic_heavy(c: &mut Criterion) {
     group.measurement_time(std::time::Duration::from_secs(5));
 
     for size in sizes {
+        group.bench_with_input(
+            BenchmarkId::new("dataflow_untyped", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_untyped_dataflow(
+                        benchmark_executor.executor.clone(),
+                        untyped.clone(),
+                        arithmetic_input(size),
+                    )
+                })
+            },
+        );
         group.bench_with_input(BenchmarkId::new("dataflow", size), &size, |b, &size| {
             let benchmark_executor = LocalSmolExecutor::new();
             b.to_async(benchmark_executor.clone()).iter(|| {
-                monitor_outputs_untyped_dataflow(
+                monitor_outputs_dataflow(
                     benchmark_executor.executor.clone(),
-                    untyped.clone(),
+                    checked.clone(),
                     arithmetic_input(size),
                 )
             })
         });
         group.bench_with_input(
-            BenchmarkId::new("dataflow_specialised", size),
+            BenchmarkId::new("dataflow_quickened", size),
             &size,
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();

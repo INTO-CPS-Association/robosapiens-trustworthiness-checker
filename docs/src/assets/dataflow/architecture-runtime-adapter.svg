@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 800" role="img" aria-labelledby="architecture-runtime-adapter-title architecture-runtime-adapter-desc" style="width:100%;max-width:760px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="architecture-runtime-adapter-title">The dataflow runtime adapter around a synchronous monitor</title>
+<desc id="architecture-runtime-adapter-desc">An asynchronous input stream supplies transport batches to a private DirectDataflowEngine, which resolves variable names to input slots and calls the synchronous monitor once per logical tick. The monitor returns a row, which the engine appends to a contiguous row-major buffer and emits as a packed OutputBatch. The batch reaches one OutputWriter opened from a resolved output interface; writer backpressure, flush, and close control delivery and generation handoff.</desc>
+<defs>
+  <marker id="architecture-runtime-adapter-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+  <marker id="architecture-runtime-adapter-back" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#b54708"/>
+  </marker>
+</defs>
+<text x="24" y="29" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Runtime adapter: asynchronous transport around a synchronous row function</text>
+
+<rect x="150" y="55" width="460" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="380" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">InputStream&lt;Value&gt;</text>
+<text x="380" y="102" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">transport batches of one or more logical ticks</text>
+<line x1="380" y1="119" x2="380" y2="150" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="150" width="460" height="76" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="380" y="176" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DirectDataflowEngine — input row</text>
+<text x="380" y="196" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">cached layout resolves variable names to input slots</text>
+<text x="380" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">omitted inputs stay NoVal; written slots reset after the tick</text>
+<line x1="380" y1="226" x2="380" y2="257" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="257" width="460" height="82" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="380" y="284" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DataflowMonitor::evaluate</text>
+<text x="380" y="304" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#147d64">one row in, one row out — never suspends</text>
+<text x="380" y="324" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">all language and temporal state retained between ticks</text>
+<line x1="380" y1="339" x2="380" y2="370" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="370" width="460" height="76" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="380" y="396" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DirectDataflowEngine — packed output</text>
+<text x="380" y="416" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">complete output rows append to one row-major buffer</text>
+<text x="380" y="434" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">a flush creates one OutputBatch::packed_rows</text>
+<line x1="380" y1="446" x2="380" y2="477" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="477" width="460" height="72" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="380" y="503" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">flush — ExecutionPolicy</text>
+<text x="380" y="523" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Buffered: submit after 256 ticks + final partial</text>
+<text x="380" y="541" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Synchronous: submit after every tick</text>
+<line x1="380" y1="549" x2="380" y2="580" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="580" width="460" height="76" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="380" y="606" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">OutputBatch — packed rows</text>
+<text x="380" y="626" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">one stable packed layout; one writer path</text>
+<text x="380" y="644" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">complete rows preserve logical order</text>
+<line x1="380" y1="656" x2="380" y2="687" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-runtime-adapter-arrow)"/>
+
+<rect x="150" y="687" width="460" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="380" y="714" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">OutputWriter — resolved output interface</text>
+<text x="380" y="734" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">opened by OutputBackendBuilder; flush + close complete the handoff</text>
+
+<path d="M 610 618 L 668 618 L 668 87 L 610 87" fill="none" stroke="#b54708" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#architecture-runtime-adapter-back)"/>
+<text x="700" y="345" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#b54708" transform="rotate(90 700 345)">backpressure suspends input polling</text>
+
+<rect x="24" y="257" width="104" height="82" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.2"/>
+<text x="76" y="288" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#17212b">synchronous</text>
+<text x="76" y="305" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">core</text>
+<text x="76" y="324" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="400" fill="#52606d">src/dataflow</text>
+</svg>

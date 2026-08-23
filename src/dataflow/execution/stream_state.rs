@@ -1,9 +1,10 @@
 use super::super::ir::*;
 use super::super::*;
+use super::dynamic_expressions::update_active_expression_with_change;
 use super::quickening::ScalarValue;
 use super::stream_evaluator::StreamEvaluator;
 use crate::core::{RuntimeFunction, RuntimeFunctionValueCallable};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct StreamState {
@@ -89,15 +90,47 @@ impl LazyIfState {
     }
 }
 
+pub(in crate::dataflow) const DYNAMIC_EXPRESSION_CACHE_CAPACITY: usize = 4;
+
 #[derive(Clone, Default)]
 pub(in crate::dataflow) struct DynamicExpressionState {
     pub(in crate::dataflow) active_expression: Option<ActiveExpression>,
+    /// Immutable program templates in most-recently-used order.
+    pub(in crate::dataflow) template_cache: Vec<Rc<DynamicExpressionTemplate>>,
     pub(in crate::dataflow) last_source_value: Option<Value>,
-    pub(in crate::dataflow) last_result: Option<Value>,
+    /// `defer`'s retained published result: the last non-`NoVal` body result (`Deferred` counts as
+    /// a value). This is independent of retained source input, outer-environment retention, and
+    /// the evaluator's temporal state.
+    pub(in crate::dataflow) last_defer_result: Option<Value>,
     pub(in crate::dataflow) environment_values: Vec<Value>,
 }
 
 impl DynamicExpressionState {
+    pub(in crate::dataflow) fn cached_template(
+        &mut self,
+        source_text: &EcoString,
+    ) -> Option<Rc<DynamicExpressionTemplate>> {
+        let index = self
+            .template_cache
+            .iter()
+            .position(|template| &template.source_text == source_text)?;
+        let template = self.template_cache.remove(index);
+        self.template_cache.insert(0, Rc::clone(&template));
+        Some(template)
+    }
+
+    pub(in crate::dataflow) fn cache_template(&mut self, template: Rc<DynamicExpressionTemplate>) {
+        debug_assert!(
+            self.template_cache
+                .iter()
+                .all(|cached| cached.source_text != template.source_text),
+            "dynamic expression template cache contains duplicate source text"
+        );
+        self.template_cache.insert(0, template);
+        self.template_cache
+            .truncate(DYNAMIC_EXPRESSION_CACHE_CAPACITY);
+    }
+
     pub(in crate::dataflow) fn update_environment(
         &mut self,
         environment_values: &[Value],
@@ -130,11 +163,25 @@ impl DynamicExpressionState {
 }
 
 #[derive(Clone)]
-pub(in crate::dataflow) struct ActiveExpression {
+pub(in crate::dataflow) struct DynamicExpressionTemplate {
     pub(in crate::dataflow) source_text: EcoString,
-    pub(in crate::dataflow) evaluator: StreamEvaluator,
+    pub(in crate::dataflow) program: Rc<StreamProgram>,
     pub(in crate::dataflow) dependency_slots: Vec<EnvironmentSlot>,
     pub(in crate::dataflow) environment_slots: Vec<EnvironmentSlot>,
+}
+
+#[derive(Clone)]
+pub(in crate::dataflow) struct ActiveExpression {
+    pub(in crate::dataflow) template: Rc<DynamicExpressionTemplate>,
+    pub(in crate::dataflow) evaluator: StreamEvaluator,
+}
+
+impl Deref for ActiveExpression {
+    type Target = DynamicExpressionTemplate;
+
+    fn deref(&self) -> &Self::Target {
+        &self.template
+    }
 }
 
 #[derive(Clone)]
@@ -392,6 +439,57 @@ impl StreamState {
         Self::new_for_nodes(&body.nodes)
     }
 
+    /// Copy state after the caller has established semantic program compatibility.
+    ///
+    /// The recursive walk is deliberately aware of the corresponding bound programs.  This lets
+    /// nested evaluators and capture/environment vectors can be remapped by variable name instead of
+    /// by replacement-local slot position.
+    pub(in crate::dataflow) fn transfer_from(
+        &mut self,
+        source: &Self,
+        target_body: &BoundEvaluationGraph,
+        source_body: &BoundEvaluationGraph,
+        target_layout: &Rc<EnvironmentLayout>,
+        source_layout: &Rc<EnvironmentLayout>,
+    ) -> bool {
+        let mut candidate = self.clone();
+        if !transfer_stream_state(
+            &mut candidate,
+            source,
+            target_body,
+            source_body,
+            target_layout,
+            source_layout,
+        ) {
+            return false;
+        }
+        *self = candidate;
+        true
+    }
+
+    pub(in crate::dataflow) fn transfer_compatible_from(
+        &mut self,
+        source: &Self,
+        target_body: &BoundEvaluationGraph,
+        source_body: &BoundEvaluationGraph,
+        target_layout: &Rc<EnvironmentLayout>,
+        source_layout: &Rc<EnvironmentLayout>,
+    ) -> bool {
+        let mut candidate = self.clone();
+        if !transfer_compatible_state(
+            &mut candidate,
+            source,
+            target_body,
+            source_body,
+            target_layout,
+            source_layout,
+        ) {
+            return false;
+        }
+        *self = candidate;
+        true
+    }
+
     fn new_for_nodes(nodes: &[BoundOp]) -> Self {
         Self {
             node_values: vec![Value::NoVal; nodes.len()],
@@ -407,6 +505,442 @@ impl StreamState {
             state.reset();
         }
     }
+}
+
+fn transfer_stream_state(
+    target: &mut StreamState,
+    source: &StreamState,
+    target_body: &BoundEvaluationGraph,
+    source_body: &BoundEvaluationGraph,
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    if target.node_values.len() != source.node_values.len()
+        || target.node_states.len() != source.node_states.len()
+        || target_body.nodes.len() != source_body.nodes.len()
+    {
+        return false;
+    }
+
+    for index in 0..target.node_states.len() {
+        if !transfer_node_state(
+            &mut target.node_states[index],
+            &source.node_states[index],
+            &target_body.nodes[index],
+            &source_body.nodes[index],
+            target_layout,
+            source_layout,
+        ) {
+            return false;
+        }
+    }
+    target.node_values.clone_from(&source.node_values);
+    true
+}
+
+fn transfer_compatible_state(
+    target: &mut StreamState,
+    source: &StreamState,
+    target_body: &BoundEvaluationGraph,
+    source_body: &BoundEvaluationGraph,
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    if target.node_states.len() != target_body.nodes.len()
+        || source.node_states.len() != source_body.nodes.len()
+    {
+        return false;
+    }
+    let source_descriptors = source_body
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            node_semantic_descriptor(source_body, NodeId::new(index), source_layout.as_ref())
+        })
+        .collect::<Vec<_>>();
+    let mut used_source = vec![false; source_body.nodes.len()];
+    let mut transferred_any = false;
+    for (target_index, target_op) in target_body.nodes.iter().enumerate() {
+        let target_descriptor = node_semantic_descriptor(
+            target_body,
+            NodeId::new(target_index),
+            target_layout.as_ref(),
+        );
+        let mut candidates = source_descriptors
+            .iter()
+            .enumerate()
+            .filter(|(_, source_descriptor)| **source_descriptor == target_descriptor)
+            .map(|(source_index, _)| source_index);
+        let Some(source_index) = candidates.next() else {
+            continue;
+        };
+        if candidates.next().is_some() || used_source[source_index] {
+            continue;
+        }
+        if transfer_node_state(
+            &mut target.node_states[target_index],
+            &source.node_states[source_index],
+            target_op,
+            &source_body.nodes[source_index],
+            target_layout,
+            source_layout,
+        ) {
+            used_source[source_index] = true;
+            transferred_any = true;
+        }
+    }
+    transferred_any || target_body.nodes.is_empty()
+}
+
+fn transfer_node_state(
+    target: &mut NodeState,
+    source: &NodeState,
+    target_op: &BoundOp,
+    source_op: &BoundOp,
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    match (target, source) {
+        (
+            NodeState::UnaryLift { last_input: target },
+            NodeState::UnaryLift { last_input: source },
+        )
+        | (NodeState::Default { last_input: target }, NodeState::Default { last_input: source })
+        | (
+            NodeState::IsDefined { last_input: target },
+            NodeState::IsDefined { last_input: source },
+        ) => {
+            *target = source.clone();
+            true
+        }
+        (
+            NodeState::BinaryLift {
+                last_left: target_left,
+                last_right: target_right,
+            },
+            NodeState::BinaryLift {
+                last_left: source_left,
+                last_right: source_right,
+            },
+        ) => {
+            *target_left = source_left.clone();
+            *target_right = source_right.clone();
+            true
+        }
+        (
+            NodeState::OperandLift {
+                last_operands: target,
+            },
+            NodeState::OperandLift {
+                last_operands: source,
+            },
+        ) if target.len() == source.len() => {
+            target.clone_from(source);
+            true
+        }
+        (NodeState::Delay(target), NodeState::Delay(source))
+            if target.values.len() == source.values.len() =>
+        {
+            *target = source.clone();
+            true
+        }
+        (NodeState::ScalarDelay(target), NodeState::ScalarDelay(source))
+            if target.values.len() == source.values.len() =>
+        {
+            *target = source.clone();
+            true
+        }
+        (NodeState::Init { started: target }, NodeState::Init { started: source }) => {
+            *target = *source;
+            true
+        }
+        (
+            NodeState::When {
+                last_input: target_input,
+                started: target_started,
+            },
+            NodeState::When {
+                last_input: source_input,
+                started: source_started,
+            },
+        ) => {
+            *target_input = source_input.clone();
+            *target_started = *source_started;
+            true
+        }
+        (
+            NodeState::Update {
+                switched: target_switched,
+                last_base: target_base,
+                last_update: target_update,
+            },
+            NodeState::Update {
+                switched: source_switched,
+                last_base: source_base,
+                last_update: source_update,
+            },
+        ) => {
+            *target_switched = *source_switched;
+            *target_base = source_base.clone();
+            *target_update = source_update.clone();
+            true
+        }
+        (NodeState::Latch { last_value: target }, NodeState::Latch { last_value: source }) => {
+            *target = source.clone();
+            true
+        }
+        (
+            NodeState::CallLift {
+                last_function: target_function,
+                last_arguments: target_arguments,
+                active_function: target_active,
+                callable: target_callable,
+            },
+            NodeState::CallLift {
+                last_function: source_function,
+                last_arguments: source_arguments,
+                active_function: source_active,
+                callable: source_callable,
+            },
+        ) if target_arguments.len() == source_arguments.len() => {
+            *target_function = source_function.clone();
+            target_arguments.clone_from(source_arguments);
+            *target_active = source_active.clone();
+            *target_callable = source_callable.clone();
+            true
+        }
+        (
+            NodeState::Function {
+                function: target_function,
+                captures: target_captures,
+            },
+            NodeState::Function {
+                function: source_function,
+                captures: source_captures,
+            },
+        ) => {
+            let (
+                StreamOp::Function { func: target_func },
+                StreamOp::Function { func: source_func },
+            ) = (target_op, source_op)
+            else {
+                return false;
+            };
+            let mut captures = target_captures.borrow_mut();
+            if !remap_slots(
+                &mut captures,
+                &source_captures.borrow(),
+                &target_func.capture_slots,
+                &source_func.capture_slots,
+                target_layout,
+                source_layout,
+            ) {
+                return false;
+            }
+            *target_function = source_function.clone();
+            true
+        }
+        (
+            NodeState::PersistentCall {
+                evaluator: target_evaluator,
+                environment_values: target_environment,
+                last_arguments: target_arguments,
+            },
+            NodeState::PersistentCall {
+                evaluator: source_evaluator,
+                environment_values: source_environment,
+                last_arguments: source_arguments,
+            },
+        ) if target_environment.len() == source_environment.len()
+            && target_arguments.len() == source_arguments.len() =>
+        {
+            if !target_evaluator.transfer_from(source_evaluator) {
+                return false;
+            }
+            if !remap_environment_values(
+                target_environment,
+                source_environment,
+                &target_evaluator.program.environment_layout,
+                &source_evaluator.program.environment_layout,
+            ) {
+                return false;
+            }
+            target_arguments.clone_from(source_arguments);
+            true
+        }
+        (NodeState::Dynamic(target), NodeState::Dynamic(source)) => {
+            let (StreamOp::Dynamic(target_spec), StreamOp::Dynamic(source_spec)) =
+                (target_op, source_op)
+            else {
+                return false;
+            };
+            transfer_dynamic_state(
+                target,
+                source,
+                target_spec,
+                source_spec,
+                target_layout,
+                source_layout,
+            )
+        }
+        (NodeState::LazyIf(target), NodeState::LazyIf(source)) => {
+            let (
+                StreamOp::If {
+                    then_branch: target_then,
+                    else_branch: target_else,
+                    ..
+                },
+                StreamOp::If {
+                    then_branch: source_then,
+                    else_branch: source_else,
+                    ..
+                },
+            ) = (target_op, source_op)
+            else {
+                return false;
+            };
+            if !transfer_stream_state(
+                &mut target.then_state,
+                &source.then_state,
+                target_then,
+                source_then,
+                target_layout,
+                source_layout,
+            ) || !transfer_stream_state(
+                &mut target.else_state,
+                &source.else_state,
+                target_else,
+                source_else,
+                target_layout,
+                source_layout,
+            ) {
+                return false;
+            }
+            target.last_condition = source.last_condition.clone();
+            target.last_then_value = source.last_then_value.clone();
+            target.last_else_value = source.last_else_value.clone();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn remap_environment_values(
+    target: &mut Vec<Value>,
+    source: &[Value],
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    target.resize(target_layout.len(), Value::NoVal);
+    for target_slot in 0..target_layout.len() {
+        let target_slot = EnvironmentSlot::new(target_slot);
+        let Some(variable) = target_layout.variable(target_slot) else {
+            return false;
+        };
+        let Some(source_slot) = source_layout.slot(variable) else {
+            continue;
+        };
+        let Some(value) = source.get(source_slot.index()) else {
+            return false;
+        };
+        target[target_slot.index()] = value.clone();
+    }
+    true
+}
+
+fn remap_slots(
+    target: &mut Vec<Value>,
+    source: &[Value],
+    target_slots: &[EnvironmentSlot],
+    source_slots: &[EnvironmentSlot],
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    if target_slots.len() != source_slots.len() || target.len() != target_slots.len() {
+        return false;
+    }
+    let mut remapped = vec![Value::NoVal; target.len()];
+    for (index, target_slot) in target_slots.iter().copied().enumerate() {
+        let Some(variable) = target_layout.variable(target_slot) else {
+            return false;
+        };
+        let Some(source_slot) = source_slots
+            .iter()
+            .copied()
+            .find(|slot| source_layout.variable(*slot) == Some(variable))
+        else {
+            return false;
+        };
+        let Some(source_index) = source_slots.iter().position(|slot| *slot == source_slot) else {
+            return false;
+        };
+        remapped[index] = source.get(source_index).cloned().unwrap_or(Value::NoVal);
+    }
+    target.clone_from(&remapped);
+    true
+}
+
+fn transfer_dynamic_state(
+    target: &mut DynamicExpressionState,
+    source: &DynamicExpressionState,
+    target_spec: &BoundDynamicExpressionSpec,
+    source_spec: &BoundDynamicExpressionSpec,
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    if target_spec.mode != source_spec.mode {
+        return false;
+    }
+    let Some(source_active) = source.active_expression.as_ref() else {
+        return true;
+    };
+
+    let mut candidate = DynamicExpressionState::default();
+    if update_active_expression_with_change(
+        source_active.source_text.clone(),
+        target_spec,
+        &mut candidate,
+        target_layout,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let Some(target_active) = candidate.active_expression.as_mut() else {
+        return false;
+    };
+    if !graphs_semantically_equal(
+        &target_active.template.program.graph,
+        &target_active.template.program.environment_layout,
+        &source_active.template.program.graph,
+        &source_active.template.program.environment_layout,
+    ) || !target_active
+        .evaluator
+        .transfer_from(&source_active.evaluator)
+    {
+        return false;
+    }
+
+    candidate
+        .environment_values
+        .resize(target_layout.len(), Value::NoVal);
+    for target_slot in target_active.environment_slots.iter().copied() {
+        let Some(variable) = target_layout.variable(target_slot) else {
+            return false;
+        };
+        let Some(source_slot) = source_layout.slot(variable) else {
+            return false;
+        };
+        let Some(value) = source.environment_values.get(source_slot.index()) else {
+            return false;
+        };
+        candidate.environment_values[target_slot.index()] = value.clone();
+    }
+    candidate.last_source_value = source.last_source_value.clone();
+    candidate.last_defer_result = source.last_defer_result.clone();
+    *target = candidate;
+    true
 }
 
 impl NodeState {

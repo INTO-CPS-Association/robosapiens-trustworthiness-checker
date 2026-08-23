@@ -4,41 +4,73 @@ use super::error::DataflowEvaluationError;
 use super::execution_plan::{
     DependencyGraph, ReconfigurationPlan, StreamId, StreamSet, StreamSlots,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub(super) struct DynamicDependencyCollector {
-    streams: StreamSet,
+    active_streams: StreamSet,
+    pending_streams: StreamSet,
     stream_slots: StreamSlots,
+    consumer: StreamId,
+    positions_by_stream: Rc<[Cell<usize>]>,
+    order_dirty: Rc<Cell<bool>>,
 }
 
 impl DynamicDependencyCollector {
-    fn new(stream_slots: StreamSlots) -> Self {
+    fn new(
+        stream_slots: StreamSlots,
+        consumer: StreamId,
+        positions_by_stream: Rc<[Cell<usize>]>,
+        order_dirty: Rc<Cell<bool>>,
+    ) -> Self {
         Self {
-            streams: StreamSet::empty(),
+            active_streams: StreamSet::empty(),
+            pending_streams: StreamSet::empty(),
             stream_slots,
+            consumer,
+            positions_by_stream,
+            order_dirty,
         }
     }
 
-    fn clear(&mut self) {
-        self.streams.streams.clear();
+    fn begin_update(&mut self) {
+        self.pending_streams.streams.clear();
     }
 
     #[inline]
     pub(super) fn extend(&mut self, dependency_slots: &[EnvironmentSlot]) {
-        self.streams.streams.extend(
+        self.pending_streams.streams.extend(
             dependency_slots
                 .iter()
                 .filter_map(|slot| self.stream_slots.stream(*slot)),
         );
     }
 
-    #[inline]
-    pub(super) fn finish(&mut self) {
-        self.streams.streams.sort_unstable();
-        self.streams.streams.dedup();
+    pub(super) fn finish(&mut self) -> bool {
+        self.pending_streams.streams.sort_unstable();
+        self.pending_streams.streams.dedup();
+        if self.pending_streams == self.active_streams {
+            return false;
+        }
+
+        if !self.order_dirty.get() {
+            let consumer_position = self.positions_by_stream[self.consumer.index()].get();
+            let has_violating_addition = self
+                .pending_streams
+                .as_slice()
+                .iter()
+                .filter(|producer| !self.active_streams.contains(**producer))
+                .any(|producer| {
+                    self.positions_by_stream[producer.index()].get() >= consumer_position
+                });
+            self.order_dirty.set(has_violating_addition);
+        }
+        std::mem::swap(&mut self.active_streams, &mut self.pending_streams);
+        true
     }
 
     fn as_slice(&self) -> &[StreamId] {
-        self.streams.as_slice()
+        self.active_streams.as_slice()
     }
 }
 
@@ -69,11 +101,28 @@ struct DfsFrame {
     next_dynamic_dependency: usize,
 }
 
+pub(super) trait ActiveSourceStreams {
+    fn active_source_streams(&self) -> &StreamSet;
+}
+
+impl ActiveSourceStreams for StreamSet {
+    fn active_source_streams(&self) -> &StreamSet {
+        self
+    }
+}
+
+impl ActiveSourceStreams for ReconfigurationPlan {
+    fn active_source_streams(&self) -> &StreamSet {
+        self.initial_source_streams()
+    }
+}
+
 /// Maintains a dependency-valid stream order and reusable iterative-repair workspace.
 pub(super) struct Scheduler {
     dynamic_dependencies: Vec<DynamicDependencyCollector>,
     scheduled_order: Vec<StreamId>,
-    positions_by_stream: Vec<usize>,
+    positions_by_stream: Rc<[Cell<usize>]>,
+    order_dirty: Rc<Cell<bool>>,
     visit_states: Vec<VisitState>,
     dfs_stack: Vec<DfsFrame>,
     repaired_order: Vec<StreamId>,
@@ -84,15 +133,27 @@ impl Scheduler {
     pub(super) fn new(
         stream_slots: StreamSlots,
         dependencies: &DependencyGraph,
-        reconfiguration: &ReconfigurationPlan,
+        source_streams: &impl ActiveSourceStreams,
     ) -> Self {
         let stream_count = dependencies.stream_count();
+        let positions_by_stream = (0..stream_count)
+            .map(Cell::new)
+            .collect::<Rc<[Cell<usize>]>>();
+        let order_dirty = Rc::new(Cell::new(false));
         let mut scheduler = Self {
             dynamic_dependencies: (0..stream_count)
-                .map(|_| DynamicDependencyCollector::new(stream_slots))
+                .map(|index| {
+                    DynamicDependencyCollector::new(
+                        stream_slots,
+                        StreamId::new(index),
+                        Rc::clone(&positions_by_stream),
+                        Rc::clone(&order_dirty),
+                    )
+                })
                 .collect(),
             scheduled_order: (0..stream_count).map(StreamId::new).collect(),
-            positions_by_stream: vec![0; stream_count],
+            positions_by_stream,
+            order_dirty,
             visit_states: vec![VisitState::Unvisited; stream_count],
             dfs_stack: Vec::with_capacity(stream_count),
             repaired_order: Vec::with_capacity(stream_count),
@@ -101,7 +162,10 @@ impl Scheduler {
                 uses_static_order: false,
             },
         };
-        scheduler.build_execution_schedule(reconfiguration);
+        for (position, stream) in scheduler.scheduled_order.iter().copied().enumerate() {
+            scheduler.positions_by_stream[stream.index()].set(position);
+        }
+        scheduler.build_execution_schedule(source_streams.active_source_streams());
         scheduler
     }
 
@@ -111,23 +175,39 @@ impl Scheduler {
         stream: StreamId,
     ) -> &mut DynamicDependencyCollector {
         let collector = &mut self.dynamic_dependencies[stream.index()];
-        collector.clear();
+        collector.begin_update();
         collector
+    }
+
+    /// Rebuild one collector from portable environment bindings.  This is used only while
+    /// importing a root context; stable evaluation continues to use compact stream sets.
+    pub(super) fn restore_dynamic_dependencies(
+        &mut self,
+        stream: StreamId,
+        dependency_slots: &[EnvironmentSlot],
+    ) {
+        let dependencies = self.begin_dynamic_dependency_update(stream);
+        dependencies.extend(dependency_slots);
+        dependencies.finish();
     }
 
     pub(super) fn update_schedule(
         &mut self,
         dependencies: &DependencyGraph,
-        reconfiguration: &ReconfigurationPlan,
+        source_streams: &impl ActiveSourceStreams,
         stream_vars: &[VarName],
     ) -> Result<bool, DataflowEvaluationError> {
-        if self.scheduled_order_is_valid(dependencies) {
+        if !self.order_dirty.get() {
             return Ok(false);
         }
         self.repair_scheduled_order(dependencies, stream_vars)?;
         std::mem::swap(&mut self.scheduled_order, &mut self.repaired_order);
         self.repaired_order.clear();
-        self.build_execution_schedule(reconfiguration);
+        for (position, stream) in self.scheduled_order.iter().copied().enumerate() {
+            self.positions_by_stream[stream.index()].set(position);
+        }
+        self.order_dirty.set(false);
+        self.build_execution_schedule(source_streams.active_source_streams());
         Ok(true)
     }
 
@@ -136,21 +216,10 @@ impl Scheduler {
         &self.execution_schedule
     }
 
-    fn scheduled_order_is_valid(&mut self, dependencies: &DependencyGraph) -> bool {
-        for (position, &stream) in self.scheduled_order.iter().enumerate() {
-            self.positions_by_stream[stream.index()] = position;
-        }
-        for consumer in dependencies.reconfigurable_streams().iter() {
-            let consumer_position = self.positions_by_stream[consumer.index()];
-            if self.dynamic_dependencies[consumer.index()]
-                .as_slice()
-                .iter()
-                .any(|producer| self.positions_by_stream[producer.index()] >= consumer_position)
-            {
-                return false;
-            }
-        }
-        true
+    pub(super) fn refresh_main_execution_schedule(&mut self, source_streams: &StreamSet) -> bool {
+        let previous_order = self.execution_schedule.evaluation_order.clone();
+        self.build_execution_schedule(source_streams);
+        self.execution_schedule.evaluation_order != previous_order
     }
 
     fn repair_scheduled_order(
@@ -221,16 +290,16 @@ impl Scheduler {
         Ok(())
     }
 
-    fn build_execution_schedule(&mut self, reconfiguration: &ReconfigurationPlan) {
+    fn build_execution_schedule(&mut self, source_streams: &StreamSet) {
         let schedule = &mut self.execution_schedule;
         schedule.evaluation_order.clear();
         schedule.evaluation_order.extend(
             self.scheduled_order
                 .iter()
                 .copied()
-                .filter(|stream| !reconfiguration.contains_evaluation_stream(*stream)),
+                .filter(|stream| !source_streams.contains(*stream)),
         );
-        schedule.uses_static_order = reconfiguration.evaluation_order().is_empty()
+        schedule.uses_static_order = source_streams.as_slice().is_empty()
             && schedule.evaluation_order.len() == self.scheduled_order.len()
             && schedule
                 .evaluation_order
@@ -247,7 +316,11 @@ mod tests {
         dependency_graph_without_static_dependencies, empty_reconfiguration_plan,
     };
 
-    fn set_dynamic_dependencies(scheduler: &mut Scheduler, consumer: usize, producers: &[usize]) {
+    fn set_dynamic_dependencies(
+        scheduler: &mut Scheduler,
+        consumer: usize,
+        producers: &[usize],
+    ) -> bool {
         let dependencies = scheduler.begin_dynamic_dependency_update(StreamId::new(consumer));
         let slots = producers
             .iter()
@@ -255,7 +328,7 @@ mod tests {
             .map(EnvironmentSlot::new)
             .collect::<Vec<_>>();
         dependencies.extend(&slots);
-        dependencies.finish();
+        dependencies.finish()
     }
 
     #[test]
@@ -267,7 +340,7 @@ mod tests {
             &graph,
             &reconfiguration,
         );
-        set_dynamic_dependencies(&mut scheduler, 2, &[0, 1]);
+        assert!(set_dynamic_dependencies(&mut scheduler, 2, &[0, 1]));
 
         assert!(
             !scheduler
@@ -289,6 +362,77 @@ mod tests {
             [0, 1, 2]
         );
         assert!(scheduler.execution_schedule.uses_static_order);
+    }
+
+    #[test]
+    fn unchanged_dynamic_dependencies_do_not_dirty_the_order() {
+        let graph = dependency_graph_without_static_dependencies(3);
+        let reconfiguration = empty_reconfiguration_plan(3);
+        let mut scheduler = Scheduler::new(
+            StreamSlots::new(EnvironmentSlot::new(0), 3),
+            &graph,
+            &reconfiguration,
+        );
+        assert!(set_dynamic_dependencies(&mut scheduler, 0, &[2]));
+        assert!(
+            scheduler
+                .update_schedule(
+                    &graph,
+                    &reconfiguration,
+                    &["a".into(), "b".into(), "c".into()],
+                )
+                .unwrap()
+        );
+
+        assert!(!set_dynamic_dependencies(&mut scheduler, 0, &[2]));
+        assert!(
+            !scheduler
+                .update_schedule(
+                    &graph,
+                    &reconfiguration,
+                    &["a".into(), "b".into(), "c".into()],
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn removing_dynamic_dependencies_does_not_dirty_the_order() {
+        let graph = dependency_graph_without_static_dependencies(3);
+        let reconfiguration = empty_reconfiguration_plan(3);
+        let mut scheduler = Scheduler::new(
+            StreamSlots::new(EnvironmentSlot::new(0), 3),
+            &graph,
+            &reconfiguration,
+        );
+        set_dynamic_dependencies(&mut scheduler, 0, &[2]);
+        scheduler
+            .update_schedule(
+                &graph,
+                &reconfiguration,
+                &["a".into(), "b".into(), "c".into()],
+            )
+            .unwrap();
+
+        assert!(set_dynamic_dependencies(&mut scheduler, 0, &[]));
+        assert!(
+            !scheduler
+                .update_schedule(
+                    &graph,
+                    &reconfiguration,
+                    &["a".into(), "b".into(), "c".into()],
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            scheduler
+                .execution_schedule()
+                .evaluation_order()
+                .iter()
+                .map(|stream| stream.index())
+                .collect::<Vec<_>>(),
+            [2, 0, 1]
+        );
     }
 
     #[test]
@@ -317,6 +461,38 @@ mod tests {
         let consumer = order.iter().position(|stream| stream.index() == 0).unwrap();
         assert!(producer < consumer);
         assert!(!scheduler.execution_schedule.uses_static_order);
+    }
+
+    #[test]
+    fn refreshing_source_streams_rebuilds_only_the_main_schedule() {
+        let graph = dependency_graph_without_static_dependencies(3);
+        let initial_sources = StreamSet::from_streams([StreamId::new(1)]);
+        let mut scheduler = Scheduler::new(
+            StreamSlots::new(EnvironmentSlot::new(0), 3),
+            &graph,
+            &initial_sources,
+        );
+        assert_eq!(
+            scheduler
+                .execution_schedule()
+                .evaluation_order()
+                .iter()
+                .map(|stream| stream.index())
+                .collect::<Vec<_>>(),
+            [0, 2]
+        );
+
+        assert!(scheduler.refresh_main_execution_schedule(&StreamSet::empty()));
+        assert_eq!(
+            scheduler
+                .execution_schedule()
+                .evaluation_order()
+                .iter()
+                .map(|stream| stream.index())
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert!(!scheduler.refresh_main_execution_schedule(&StreamSet::empty()));
     }
 
     #[test]

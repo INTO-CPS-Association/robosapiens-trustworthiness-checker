@@ -199,7 +199,7 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 
         let dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
-            BenchmarkId::new(format!("{}_dataflow", variant.name()), size),
+            BenchmarkId::new(format!("{}_dataflow_untyped", variant.name()), size),
             &size,
             |b, &size| {
                 b.to_async(dataflow_executor.clone()).iter(|| {

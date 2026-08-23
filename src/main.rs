@@ -162,7 +162,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         Some(InputSource::<Value>::redis_knowledge),
         &cli,
     )?;
-    let builder = if matches!(runtime, RuntimeSpec::ReconfSemiSync) {
+    let builder = if matches!(
+        runtime,
+        RuntimeSpec::ReconfSemiSync | RuntimeSpec::ReconfDataflow(_)
+    ) {
         builder.input_pipeline(input_pipeline)?
     } else {
         builder.input(

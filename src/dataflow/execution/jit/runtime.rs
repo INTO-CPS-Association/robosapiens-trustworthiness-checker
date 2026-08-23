@@ -33,6 +33,7 @@ pub(in crate::dataflow) struct JittedRunEvaluator {
     environment_scratch: Vec<i64>,
     previous_environment: Vec<i64>,
     has_previous: bool,
+    last_tick_native: bool,
     disabled: bool,
 }
 
@@ -40,6 +41,9 @@ impl JittedRunEvaluator {
     pub(in crate::dataflow) fn compile(
         plan: &ScheduledExecutionPlan,
     ) -> Result<Option<Self>, String> {
+        if plan.has_source_barrier() {
+            return Ok(None);
+        }
         let graphs = plan
             .streams
             .iter()
@@ -60,8 +64,27 @@ impl JittedRunEvaluator {
             environment_scratch: vec![0; environment_len],
             previous_environment: vec![0; environment_len],
             has_previous: false,
+            last_tick_native: false,
             disabled: false,
         }))
+    }
+
+    pub(in crate::dataflow) fn reset_after_context_transfer(&mut self) {
+        self.environment_scratch.fill(0);
+        self.previous_environment.fill(0);
+        self.has_previous = false;
+        self.last_tick_native = false;
+        self.disabled = false;
+    }
+
+    pub(in crate::dataflow) fn snapshot_replay_environment(&self) -> Option<Vec<Value>> {
+        self.last_tick_native.then(|| {
+            replay_environment(
+                &self.compiled.external_inputs,
+                &self.previous_environment,
+                self.compiled.environment_len,
+            )
+        })
     }
 
     #[inline(always)]
@@ -70,6 +93,7 @@ impl JittedRunEvaluator {
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
     ) -> JittedRunOutcome {
+        self.last_tick_native = false;
         if self.disabled {
             return JittedRunOutcome::Fallback {
                 replay_environment: None,
@@ -103,10 +127,12 @@ impl JittedRunEvaluator {
             &mut self.environment_scratch,
         );
         self.has_previous = true;
+        self.last_tick_native = true;
         JittedRunOutcome::Success
     }
 
     fn fallback(&mut self, permanent: bool) -> JittedRunOutcome {
+        self.last_tick_native = false;
         self.disabled |= permanent;
         let replay_environment = self.has_previous.then(|| {
             let mut values = vec![Value::NoVal; self.compiled.environment_len];
@@ -130,6 +156,7 @@ pub(in crate::dataflow) struct JittedTemporalRunEvaluator {
     temporal_plans: Box<[Option<ScheduledTemporalPlan>]>,
     state_ready: bool,
     has_previous: bool,
+    last_tick_native: bool,
     disabled: bool,
 }
 
@@ -137,6 +164,9 @@ impl JittedTemporalRunEvaluator {
     pub(in crate::dataflow) fn compile(
         plan: &ScheduledExecutionPlan,
     ) -> Result<Option<Self>, String> {
+        if plan.has_source_barrier() {
+            return Ok(None);
+        }
         let Some(compiled) = compile_temporal_run(plan)? else {
             return Ok(None);
         };
@@ -161,8 +191,29 @@ impl JittedTemporalRunEvaluator {
             compiled,
             state_ready: false,
             has_previous: false,
+            last_tick_native: false,
             disabled: false,
         }))
+    }
+
+    pub(in crate::dataflow) fn reset_after_context_transfer(&mut self) {
+        self.environment_scratch.fill(0);
+        self.previous_environment.fill(0);
+        self.temporal_state.fill(0);
+        self.state_ready = false;
+        self.has_previous = false;
+        self.last_tick_native = false;
+        self.disabled = false;
+    }
+
+    pub(in crate::dataflow) fn snapshot_replay_environment(&self) -> Option<Vec<Value>> {
+        self.last_tick_native.then(|| {
+            replay_environment(
+                &self.compiled.external_inputs,
+                &self.previous_environment,
+                self.compiled.environment_len,
+            )
+        })
     }
 
     #[inline(always)]
@@ -172,6 +223,7 @@ impl JittedTemporalRunEvaluator {
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
     ) -> JittedRunOutcome {
+        self.last_tick_native = false;
         if self.disabled {
             return JittedRunOutcome::Fallback {
                 replay_environment: None,
@@ -216,6 +268,7 @@ impl JittedTemporalRunEvaluator {
             &mut self.environment_scratch,
         );
         self.has_previous = true;
+        self.last_tick_native = true;
         JittedRunOutcome::SuccessCommitted
     }
 
@@ -248,7 +301,28 @@ impl JittedTemporalRunEvaluator {
         }
     }
 
+    /// Materialize the packed temporal state into a snapshot evaluator arena without disabling
+    /// the active native artifact.
+    pub(in crate::dataflow) fn snapshot_into(&self, evaluators: &mut [StreamEvaluator]) {
+        if !self.state_ready {
+            return;
+        }
+        for layout in self.compiled.states.iter() {
+            let end = layout.offset + layout.layout.len;
+            let native = NativeTemporalState {
+                cells: self.temporal_state[layout.offset..end].to_vec(),
+            };
+            let state = &mut evaluators[layout.stream].state;
+            native.materialize(&layout.layout, state);
+            self.temporal_plans[layout.stream]
+                .as_ref()
+                .unwrap()
+                .deopt(state);
+        }
+    }
+
     fn fallback(&mut self, evaluators: &mut [StreamEvaluator]) -> JittedRunOutcome {
+        self.last_tick_native = false;
         for layout in self.compiled.states.iter() {
             let end = layout.offset + layout.layout.len;
             let native = NativeTemporalState {
@@ -277,6 +351,21 @@ impl JittedTemporalRunEvaluator {
     }
 }
 
+fn replay_environment(
+    inputs: &[InputSpec],
+    previous_environment: &[i64],
+    environment_len: usize,
+) -> Vec<Value> {
+    let mut values = vec![Value::NoVal; environment_len];
+    for input in inputs {
+        let InputSource::External(slot) = input.source else {
+            continue;
+        };
+        values[slot.index()] = decode(previous_environment[slot.index()], input.kind);
+    }
+    values
+}
+
 #[derive(Clone)]
 pub(in crate::dataflow) struct JittedGraphEvaluator {
     compiled: Rc<CompiledGraph>,
@@ -284,6 +373,7 @@ pub(in crate::dataflow) struct JittedGraphEvaluator {
     previous_inputs: Vec<i64>,
     output_scratch: i64,
     has_previous_inputs: bool,
+    last_tick_native: bool,
     disabled: bool,
     temporal_plan: ScheduledTemporalPlan,
     scheduled_scalars: Vec<Option<ScalarValue>>,
@@ -482,7 +572,8 @@ fn encode_temporal_external_inputs(
 
 impl JittedGraphEvaluator {
     /// Compile every eligible graph in one Cranelift module and finalize executable memory once.
-    /// The returned vector preserves the input order and contains `None` for unsupported graphs.
+    /// The returned vector is indexed by global `StreamId` and contains `None` for unsupported
+    /// graphs, independent of the combined source/main schedule order.
     pub(in crate::dataflow) fn compile_many(
         plan: &ScheduledExecutionPlan,
     ) -> Result<Vec<Option<Self>>, String> {
@@ -514,6 +605,7 @@ impl JittedGraphEvaluator {
             previous_inputs: vec![0; input_count],
             output_scratch: 0,
             has_previous_inputs: false,
+            last_tick_native: false,
             disabled: false,
             temporal_plan,
             scheduled_scalars: vec![None; graph.nodes.len()],
@@ -545,14 +637,19 @@ impl JittedGraphEvaluator {
         environment_layout: &Rc<EnvironmentLayout>,
         published_scalars: &[Option<ScalarValue>],
         stream_slots: StreamSlots,
+        allow_complete_temporal_kernel: bool,
     ) -> Option<Value> {
         self.handled_current_tick = false;
         self.temporal_kernel_completed_tick = false;
+        self.last_tick_native = false;
         if self.disabled {
             return None;
         }
 
         if self.compiled.temporal_function.is_some() {
+            if !allow_complete_temporal_kernel {
+                return None;
+            }
             return self.evaluate_temporal_kernel(
                 graph,
                 state,
@@ -716,6 +813,7 @@ impl JittedGraphEvaluator {
         // later deoptimization without copying it on every successful native tick.
         std::mem::swap(&mut self.previous_inputs, &mut self.input_scratch);
         self.has_previous_inputs = true;
+        self.last_tick_native = true;
         Some(decode(self.output_scratch, self.compiled.output_kind))
     }
 
@@ -759,6 +857,7 @@ impl JittedGraphEvaluator {
             if status == STATUS_OK {
                 std::mem::swap(&mut self.previous_inputs, &mut self.input_scratch);
                 self.has_previous_inputs = true;
+                self.last_tick_native = true;
                 self.handled_current_tick = true;
                 self.temporal_kernel_completed_tick = true;
                 return Some(decode(self.output_scratch, self.compiled.output_kind));
@@ -811,6 +910,53 @@ impl JittedGraphEvaluator {
         committed
     }
 
+    pub(in crate::dataflow) fn reset_after_context_transfer(&mut self) {
+        self.input_scratch.fill(0);
+        self.previous_inputs.fill(0);
+        self.output_scratch = 0;
+        self.has_previous_inputs = false;
+        self.last_tick_native = false;
+        self.disabled = false;
+        self.scheduled_scalars.fill(None);
+        self.handled_current_tick = false;
+        self.scalar_state_ready = false;
+        self.temporal_kernel_state = None;
+        self.temporal_kernel_completed_tick = false;
+    }
+
+    /// Materialize native state into a temporary snapshot without changing this active artifact.
+    pub(in crate::dataflow) fn snapshot_into(&self, evaluator: &mut StreamEvaluator) {
+        {
+            let state = &mut evaluator.state;
+            if let Some(native_state) = &self.temporal_kernel_state {
+                let layout = self.compiled.temporal_state.as_ref().unwrap();
+                native_state.clone().materialize(layout, state);
+                self.temporal_plan.deopt(state);
+            } else if self.scalar_state_ready {
+                self.temporal_plan
+                    .materialize(state, &self.scheduled_scalars);
+                self.temporal_plan.deopt(state);
+            }
+        }
+        if self.last_tick_native && self.has_previous_inputs {
+            self.replay_previous_canonical(evaluator);
+        }
+    }
+
+    fn replay_previous_canonical(&self, evaluator: &mut StreamEvaluator) {
+        let mut environment = vec![Value::NoVal; evaluator.program.environment_layout.len()];
+        for (index, input) in self.compiled.inputs.iter().enumerate() {
+            let value = decode(self.previous_inputs[index], input.kind);
+            match input.source {
+                InputSource::External(slot) => environment[slot.index()] = value,
+                InputSource::Node(node) => evaluator.state.node_values[node.index()] = value,
+            }
+        }
+        evaluator.evaluate_canonical_infallible(&environment);
+        // This is a replay of the already committed native row, not another logical tick.
+        evaluator.discard_staged_temporal_state();
+    }
+
     fn fallback_current(
         &mut self,
         graph: &BoundEvaluationGraph,
@@ -819,6 +965,7 @@ impl JittedGraphEvaluator {
         environment_layout: &Rc<EnvironmentLayout>,
         permanent: bool,
     ) -> Value {
+        self.last_tick_native = false;
         self.disabled |= permanent;
         if self.scalar_state_ready {
             self.temporal_plan

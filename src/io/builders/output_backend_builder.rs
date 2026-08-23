@@ -135,6 +135,24 @@ impl<V> OutputBackendBuilder<V> {
             .await
     }
 
+    /// Fallible replacement-construction alias for callers that do not need
+    /// to retain the resolved generation separately.
+    pub async fn try_build<I, A>(
+        &self,
+        model_outputs: I,
+        auxiliary: A,
+        monitor_config: Option<&MonitorConfig>,
+    ) -> Result<OutputWriter<V>, OutputError>
+    where
+        I: IntoIterator,
+        I::Item: Borrow<VarName>,
+        A: IntoIterator,
+        A::Item: Borrow<VarName>,
+        V: JsonStreamValue + RosStreamValue,
+    {
+        self.build(model_outputs, auxiliary, monitor_config).await
+    }
+
     pub async fn open(&self, resolved: ResolvedOutput) -> Result<OutputWriter<V>, OutputError>
     where
         V: JsonStreamValue + RosStreamValue,

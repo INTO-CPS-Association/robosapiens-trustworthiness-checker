@@ -43,6 +43,7 @@ pub(in crate::dataflow) struct ScheduledExecutionPlan {
     pub(in crate::dataflow) id: PlanId,
     pub(in crate::dataflow) stream_slots: StreamSlots,
     pub(in crate::dataflow) streams: Box<[PlannedStream]>,
+    pub(in crate::dataflow) source_stream_count: usize,
     pub(in crate::dataflow) commit_streams: Box<[StreamId]>,
     pub(in crate::dataflow) environment_len: usize,
 }
@@ -96,11 +97,27 @@ impl ScheduledExecutionPlan {
         id: PlanId,
         programs: &[Rc<StreamProgram>],
         stream_slots: StreamSlots,
-        order: &[StreamId],
+        source_order: &[StreamId],
+        main_order: &[StreamId],
         commit_streams: &[StreamId],
     ) -> Self {
-        let streams = order
+        assert_eq!(
+            source_order.len() + main_order.len(),
+            programs.len(),
+            "a scheduled plan must contain every logical stream exactly once"
+        );
+        let mut seen = vec![false; programs.len()];
+        for stream in source_order.iter().chain(main_order) {
+            assert!(
+                stream.index() < programs.len()
+                    && !std::mem::replace(&mut seen[stream.index()], true),
+                "a scheduled plan must contain every logical stream exactly once"
+            );
+        }
+
+        let streams = source_order
             .iter()
+            .chain(main_order)
             .copied()
             .map(|stream| {
                 let program = Rc::clone(&programs[stream.index()]);
@@ -131,13 +148,35 @@ impl ScheduledExecutionPlan {
             id,
             stream_slots,
             streams,
+            source_stream_count: source_order.len(),
             commit_streams: commit_streams.to_vec().into_boxed_slice(),
             environment_len,
         }
     }
 
+    #[cfg(test)]
     pub(in crate::dataflow) fn order(&self) -> impl Iterator<Item = StreamId> + '_ {
         self.streams.iter().map(|step| step.stream)
+    }
+
+    pub(in crate::dataflow) fn source_streams(&self) -> &[PlannedStream] {
+        &self.streams[..self.source_stream_count]
+    }
+
+    pub(in crate::dataflow) fn main_streams(&self) -> &[PlannedStream] {
+        &self.streams[self.source_stream_count..]
+    }
+
+    pub(in crate::dataflow) fn source_order(&self) -> impl Iterator<Item = StreamId> + '_ {
+        self.source_streams().iter().map(|step| step.stream)
+    }
+
+    pub(in crate::dataflow) fn main_order(&self) -> impl Iterator<Item = StreamId> + '_ {
+        self.main_streams().iter().map(|step| step.stream)
+    }
+
+    pub(in crate::dataflow) fn has_source_barrier(&self) -> bool {
+        self.source_stream_count != 0
     }
 
     pub(in crate::dataflow) fn is_infallible(&self) -> bool {

@@ -26,10 +26,11 @@ use super::jit::{
 };
 use super::quickening::{self, ScalarValue};
 use super::scheduled_plan::{PlanId, ScheduledExecutionPlan};
-use super::stream_evaluator::StreamEvaluator;
+use super::stream_evaluator::{RegionReplacement, StreamEvaluator};
 
 const EXECUTION_LAYOUT_CACHE_SIZE: usize = 4;
 
+#[derive(Clone)]
 struct EvaluatorArena {
     evaluators: Box<[StreamEvaluator]>,
     published_scalars: Box<[Option<ScalarValue>]>,
@@ -40,6 +41,7 @@ pub(in crate::dataflow) struct MonitorExecution {
     stream_slots: StreamSlots,
     temporal_streams: Box<[StreamId]>,
     engine: ExecutionEngine,
+    tick_in_progress: bool,
 }
 
 /// The single tier-selection and plan-cache boundary for a monitor.
@@ -47,24 +49,27 @@ struct ExecutionEngine {
     active_plan: PlanBundle,
     cached_plans: Vec<PlanBundle>,
     next_plan_id: u64,
+    quickening: bool,
     jit: Jit,
 }
 
 impl MonitorExecution {
-    pub(in crate::dataflow) fn new(
+    pub(in crate::dataflow) fn new_with_source_prelude(
         programs: Vec<Rc<StreamProgram>>,
         stream_slots: StreamSlots,
-        initial_order: &[StreamId],
+        source_order: &[StreamId],
+        main_order: &[StreamId],
         temporal_streams: &[StreamId],
     ) -> Self {
         let semantic = ScheduledExecutionPlan::new(
             PlanId(0),
             &programs,
             stream_slots,
-            initial_order,
+            source_order,
+            main_order,
             temporal_streams,
         );
-        let active_plan = PlanBundle::new(semantic);
+        let active_plan = PlanBundle::new(semantic, true);
         let mut evaluators = EvaluatorArena::new(programs);
         evaluators.detach_top_level_quick_plans();
         Self {
@@ -75,9 +80,26 @@ impl MonitorExecution {
                 active_plan,
                 cached_plans: Vec::new(),
                 next_plan_id: 1,
+                quickening: true,
                 jit: Jit::disabled(),
             },
+            tick_in_progress: false,
         }
+    }
+
+    pub(in crate::dataflow) fn set_quickening(&mut self, enabled: bool) {
+        if self.engine.quickening == enabled {
+            return;
+        }
+        self.engine.quickening = enabled;
+        self.engine.active_plan =
+            PlanBundle::new((*self.engine.active_plan.semantic).clone(), enabled);
+        self.engine.cached_plans.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn quickening_enabled(&self) -> bool {
+        self.engine.quickening
     }
 
     #[cfg(feature = "jit")]
@@ -92,25 +114,82 @@ impl MonitorExecution {
         self.engine.jit.report()
     }
 
-    #[inline]
-    pub(in crate::dataflow) fn evaluate_infallible_stream(
-        &mut self,
-        stream: StreamId,
-        environment_values: &[Value],
-    ) -> Value {
-        self.evaluator(stream)
-            .evaluate_infallible_and_stage_with_plan(environment_values, None, &[])
+    pub(in crate::dataflow) fn tick_in_progress(&self) -> bool {
+        self.tick_in_progress
     }
 
+    pub(in crate::dataflow) fn snapshot_evaluators(&self) -> Vec<StreamEvaluator> {
+        self.engine.jit.snapshot_evaluators(
+            &self.evaluators.evaluators,
+            &self.engine.active_plan.semantic,
+        )
+    }
+
+    pub(in crate::dataflow) fn reset_after_context_transfer(&mut self) {
+        self.evaluators.published_scalars.fill(None);
+        for evaluator in &mut self.evaluators.evaluators {
+            evaluator.invalidate_derived_state();
+        }
+        self.engine.jit.reset_after_context_transfer();
+    }
+
+    pub(in crate::dataflow) fn transfer_evaluator(
+        &mut self,
+        stream: StreamId,
+        source: &StreamEvaluator,
+    ) -> bool {
+        self.evaluators.evaluators[stream.index()].transfer_from(source)
+    }
+
+    pub(in crate::dataflow) fn transfer_compatible_evaluator(
+        &mut self,
+        stream: StreamId,
+        source: &StreamEvaluator,
+    ) -> bool {
+        self.evaluators.evaluators[stream.index()].transfer_compatible_from(source)
+    }
+
+    /// Install a nested replacement body directly into the owning evaluator.
     #[inline]
-    pub(in crate::dataflow) fn resolve_reconfiguration_point(
+    pub(in crate::dataflow) fn replace_reconfiguration_point(
         &mut self,
         stream: StreamId,
         node: NodeId,
         source_value: Value,
-    ) -> Result<&[EnvironmentSlot], DataflowEvaluationError> {
-        self.evaluator(stream)
-            .resolve_reconfiguration_point(node, source_value)
+        transfer: ContextTransferPolicy,
+    ) -> Result<RegionReplacement, DataflowEvaluationError> {
+        self.evaluators.evaluators[stream.index()].replace_reconfiguration_point(
+            node,
+            source_value,
+            transfer,
+        )
+    }
+
+    pub(in crate::dataflow) fn install_reconfiguration_point(
+        &mut self,
+        stream: StreamId,
+        node: NodeId,
+        replacement: RegionReplacement,
+    ) -> Result<(), DataflowEvaluationError> {
+        self.evaluators.evaluators[stream.index()].install_reconfiguration_point(node, replacement)
+    }
+
+    pub(in crate::dataflow) fn reconfiguration_point_dependency_slots(
+        &self,
+        stream: StreamId,
+        node: NodeId,
+    ) -> &[EnvironmentSlot] {
+        self.evaluators.evaluators[stream.index()].reconfiguration_point_dependency_slots(node)
+    }
+
+    pub(in crate::dataflow) fn reconfiguration_point_requires_update(
+        &self,
+        stream: StreamId,
+        node: NodeId,
+        source_value: &Value,
+    ) -> bool {
+        self.evaluators.evaluators[stream.index()]
+            .reconfiguration_point_requires_update(node, source_value)
     }
 
     #[inline]
@@ -138,26 +217,24 @@ impl MonitorExecution {
         );
     }
 
-    pub(in crate::dataflow) fn select_schedule(
+    pub(in crate::dataflow) fn select_schedule_ranges(
         &mut self,
-        order: &[StreamId],
+        source_order: &[StreamId],
+        main_order: &[StreamId],
         stream_slots: StreamSlots,
     ) {
-        if self
-            .engine
-            .active_plan
-            .semantic
-            .order()
-            .eq(order.iter().copied())
-        {
+        let matches = |plan: &PlanBundle| {
+            plan.semantic.source_stream_count == source_order.len()
+                && plan
+                    .semantic
+                    .source_order()
+                    .eq(source_order.iter().copied())
+                && plan.semantic.main_order().eq(main_order.iter().copied())
+        };
+        if matches(&self.engine.active_plan) {
             return;
         }
-        if let Some(cached) = self
-            .engine
-            .cached_plans
-            .iter()
-            .position(|plan| plan.semantic.order().eq(order.iter().copied()))
-        {
+        if let Some(cached) = self.engine.cached_plans.iter().position(matches) {
             std::mem::swap(
                 &mut self.engine.active_plan,
                 &mut self.engine.cached_plans[cached],
@@ -168,11 +245,12 @@ impl MonitorExecution {
                 PlanId(self.engine.next_plan_id),
                 &programs,
                 stream_slots,
-                order,
+                source_order,
+                main_order,
                 &self.temporal_streams,
             );
             self.engine.next_plan_id += 1;
-            let new_plan = PlanBundle::new(semantic);
+            let new_plan = PlanBundle::new(semantic, self.engine.quickening);
             let previous = std::mem::replace(&mut self.engine.active_plan, new_plan);
             if self.engine.cached_plans.len() == EXECUTION_LAYOUT_CACHE_SIZE {
                 self.engine.cached_plans.remove(0);
@@ -185,17 +263,82 @@ impl MonitorExecution {
     }
 
     #[inline]
+    pub(in crate::dataflow) fn evaluate_source_prelude(
+        &mut self,
+        environment_values: &mut [Value],
+        mut retained_environment_values: Option<&mut [Value]>,
+    ) -> Result<(), DataflowEvaluationError> {
+        self.begin_tick();
+        let result = self.evaluators.evaluate_quick_steps::<true>(
+            &mut self.engine.jit,
+            &self.engine.active_plan.quick.source_steps,
+            environment_values,
+            retained_environment_values.as_deref_mut(),
+            self.stream_slots,
+            false,
+        );
+        if result.is_err() {
+            self.tick_in_progress = false;
+        }
+        result
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn evaluate_main_and_commit(
+        &mut self,
+        environment_values: &mut [Value],
+        mut retained_environment_values: Option<&mut [Value]>,
+    ) -> Result<(), DataflowEvaluationError> {
+        if !self.tick_in_progress {
+            self.begin_tick();
+        }
+        let result = self.evaluators.evaluate_quick_steps::<true>(
+            &mut self.engine.jit,
+            &self.engine.active_plan.quick.main_steps,
+            environment_values,
+            retained_environment_values.as_deref_mut(),
+            self.stream_slots,
+            true,
+        );
+        if result.is_ok() {
+            self.commit_active_plan(environment_values, retained_environment_values.as_deref());
+        }
+        self.tick_in_progress = false;
+        result
+    }
+
+    #[inline]
     pub(in crate::dataflow) fn evaluate(
         &mut self,
         environment_values: &mut [Value],
-        retained_environment_values: Option<&[Value]>,
+        _retained_environment_values: Option<&mut [Value]>,
     ) -> Result<(), DataflowEvaluationError> {
+        debug_assert!(!self.engine.active_plan.semantic.has_source_barrier());
+        self.begin_tick();
+        let result = self.evaluate_no_source_tick(environment_values);
+        self.tick_in_progress = false;
+        result
+    }
+
+    fn begin_tick(&mut self) {
+        assert!(
+            !self.tick_in_progress,
+            "source prelude executed twice in one logical tick"
+        );
+        self.tick_in_progress = true;
         if self.engine.jit.activation_due() {
             #[cfg(feature = "jit")]
             self.engine
                 .jit
                 .activate_pending(&self.engine.active_plan.semantic);
         }
+    }
+
+    fn evaluate_no_source_tick(
+        &mut self,
+        environment_values: &mut [Value],
+    ) -> Result<(), DataflowEvaluationError> {
+        debug_assert!(!self.engine.active_plan.semantic.has_source_barrier());
         match self.engine.jit.evaluate_fused(
             &mut self.evaluators.evaluators,
             environment_values,
@@ -209,34 +352,26 @@ impl MonitorExecution {
                         &mut replay_environment,
                     );
                 }
+
                 self.evaluators
                     .evaluate_canonical_run(&self.engine.active_plan.semantic, environment_values);
-                self.commit_active_plan(environment_values, retained_environment_values);
+                self.commit_active_plan(environment_values, None);
                 return Ok(());
             }
             FusedTickOutcome::NotHandled => {}
         }
-        // A published source can only name an earlier stream in this layout, so
-        // every value it can read has already been overwritten for this tick.
-        let evaluators = &mut self.evaluators;
-        for step in &self.engine.active_plan.quick.steps {
-            match step {
-                QuickStep::ScalarRun(run) => {
-                    evaluators.evaluate_scalar_run(run, environment_values);
-                }
-                QuickStep::Graph(step) => {
-                    evaluators.evaluate_graph(
-                        &mut self.engine.jit,
-                        step,
-                        environment_values,
-                        retained_environment_values,
-                        self.stream_slots,
-                    )?;
-                }
-            }
+        let result = self.evaluators.evaluate_quick_steps::<false>(
+            &mut self.engine.jit,
+            &self.engine.active_plan.quick.main_steps,
+            environment_values,
+            None,
+            self.stream_slots,
+            true,
+        );
+        if result.is_ok() {
+            self.commit_active_plan(environment_values, None);
         }
-        self.commit_active_plan(environment_values, retained_environment_values);
-        Ok(())
+        result
     }
 
     #[inline]
@@ -251,11 +386,6 @@ impl MonitorExecution {
         }
     }
 
-    #[inline]
-    fn evaluator(&mut self, stream: StreamId) -> &mut StreamEvaluator {
-        self.evaluators.evaluator(stream.index())
-    }
-
     #[cfg(all(test, feature = "jit"))]
     pub(in crate::dataflow) fn jit_artifact_count(&self) -> usize {
         self.engine.jit.compiled_artifact_count()
@@ -268,7 +398,8 @@ struct PlanBundle {
 }
 
 struct QuickPlan {
-    steps: Box<[QuickStep]>,
+    source_steps: Box<[QuickStep]>,
+    main_steps: Box<[QuickStep]>,
 }
 
 enum QuickStep {
@@ -289,15 +420,43 @@ struct ScalarStep {
 }
 
 impl PlanBundle {
-    fn new(semantic: ScheduledExecutionPlan) -> Self {
+    fn new(semantic: ScheduledExecutionPlan, quickening: bool) -> Self {
         let mut available = vec![false; semantic.stream_slots.len()];
-        let mut steps = Vec::with_capacity(semantic.streams.len());
+        let source_steps = Self::build_quick_range(
+            &semantic,
+            semantic.source_streams(),
+            &mut available,
+            quickening,
+        );
+        let steps = Self::build_quick_range(
+            &semantic,
+            semantic.main_streams(),
+            &mut available,
+            quickening,
+        );
+
+        Self {
+            semantic: Box::new(semantic),
+            quick: QuickPlan {
+                source_steps,
+                main_steps: steps,
+            },
+        }
+    }
+
+    fn build_quick_range(
+        semantic: &ScheduledExecutionPlan,
+        planned_streams: &[super::scheduled_plan::PlannedStream],
+        available: &mut [bool],
+        quickening: bool,
+    ) -> Box<[QuickStep]> {
+        let mut steps = Vec::with_capacity(planned_streams.len());
         let mut scalar_run = Vec::new();
 
-        for planned in semantic.streams.iter() {
+        for planned in planned_streams {
             let stream = planned.stream;
             let program = planned.program.as_ref();
-            let quickening_plan = (!planned.effects.may_fail)
+            let quickening_plan = (quickening && !planned.effects.may_fail)
                 .then(|| {
                     quickening::Plan::with_published_sources(&program.graph, |slot| {
                         semantic
@@ -335,13 +494,7 @@ impl PlanBundle {
         if !scalar_run.is_empty() {
             steps.push(QuickStep::ScalarRun(scalar_run.into_boxed_slice()));
         }
-
-        Self {
-            semantic: Box::new(semantic),
-            quick: QuickPlan {
-                steps: steps.into_boxed_slice(),
-            },
-        }
+        steps.into_boxed_slice()
     }
 }
 
@@ -366,11 +519,6 @@ impl EvaluatorArena {
     }
 
     #[inline]
-    fn evaluator(&mut self, stream: usize) -> &mut StreamEvaluator {
-        &mut self.evaluators[stream]
-    }
-
-    #[inline]
     fn evaluator_with_published(
         &mut self,
         stream: usize,
@@ -378,8 +526,44 @@ impl EvaluatorArena {
         (&mut self.evaluators[stream], &self.published_scalars)
     }
 
+    fn evaluate_quick_steps<const RETAIN_VALUES: bool>(
+        &mut self,
+        jit: &mut Jit,
+        steps: &[QuickStep],
+        environment_values: &mut [Value],
+        mut retained_environment_values: Option<&mut [Value]>,
+        stream_slots: StreamSlots,
+        allow_complete_temporal_kernels: bool,
+    ) -> Result<(), DataflowEvaluationError> {
+        // Published sources only name streams earlier in the combined two-range order. Availability
+        // intentionally carries across the source barrier, while scalar runs cannot cross it.
+        for step in steps {
+            match step {
+                QuickStep::ScalarRun(run) => self.evaluate_scalar_run::<RETAIN_VALUES>(
+                    run,
+                    environment_values,
+                    retained_environment_values.as_deref_mut(),
+                ),
+                QuickStep::Graph(step) => self.evaluate_graph::<RETAIN_VALUES>(
+                    jit,
+                    step,
+                    environment_values,
+                    retained_environment_values.as_deref_mut(),
+                    stream_slots,
+                    allow_complete_temporal_kernels,
+                )?,
+            }
+        }
+        Ok(())
+    }
+
     #[inline]
-    fn evaluate_scalar_run(&mut self, run: &[ScalarStep], environment_values: &mut [Value]) {
+    fn evaluate_scalar_run<const RETAIN_VALUES: bool>(
+        &mut self,
+        run: &[ScalarStep],
+        environment_values: &mut [Value],
+        mut retained_environment_values: Option<&mut [Value]>,
+    ) {
         for step in run {
             let index = step.stream.index();
             let (evaluator, published_scalars) = self.evaluator_with_published(index);
@@ -398,18 +582,24 @@ impl EvaluatorArena {
                     value
                 }
             };
-            environment_values[step.slot.index()] = value;
+            Self::publish_environment_value::<RETAIN_VALUES>(
+                environment_values,
+                retained_environment_values.as_deref_mut(),
+                step.slot,
+                value,
+            );
         }
     }
 
     #[inline]
-    fn evaluate_graph(
+    fn evaluate_graph<const RETAIN_VALUES: bool>(
         &mut self,
         jit: &mut Jit,
         step: &GraphStep,
         environment_values: &mut [Value],
-        retained_environment_values: Option<&[Value]>,
+        retained_environment_values: Option<&mut [Value]>,
         stream_slots: StreamSlots,
+        allow_complete_temporal_kernel: bool,
     ) -> Result<(), DataflowEvaluationError> {
         let index = step.stream.index();
         let (evaluator, published_scalars) = self.evaluator_with_published(index);
@@ -423,6 +613,7 @@ impl EvaluatorArena {
                     environment_layout: &evaluator.program.environment_layout,
                     published_scalars,
                     stream_slots,
+                    allow_complete_temporal_kernel,
                 },
             ) {
                 GraphTickOutcome::Value(value) => {
@@ -442,14 +633,34 @@ impl EvaluatorArena {
                     published_scalars,
                 ),
             }
-        } else if let Some(retained) = retained_environment_values {
+        } else if let Some(retained) = retained_environment_values.as_deref() {
             evaluator.evaluate_and_stage_with_retained_environment(environment_values, retained)?
         } else {
             evaluator.evaluate_and_stage(environment_values)?
         };
         self.publish(index, ScalarValue::from_untyped_value(&value));
-        environment_values[step.slot.index()] = value;
+        Self::publish_environment_value::<RETAIN_VALUES>(
+            environment_values,
+            retained_environment_values,
+            step.slot,
+            value,
+        );
         Ok(())
+    }
+
+    fn publish_environment_value<const RETAIN_VALUES: bool>(
+        environment_values: &mut [Value],
+        retained_environment_values: Option<&mut [Value]>,
+        slot: EnvironmentSlot,
+        value: Value,
+    ) {
+        if RETAIN_VALUES
+            && value != Value::NoVal
+            && let Some(retained) = retained_environment_values
+        {
+            retained[slot.index()] = value.clone();
+        }
+        environment_values[slot.index()] = value;
     }
 
     fn replay_canonical(
@@ -512,7 +723,7 @@ mod tests {
             .engine
             .active_plan
             .quick
-            .steps
+            .main_steps
             .iter()
             .map(|step| match step {
                 QuickStep::ScalarRun(run) => {
@@ -536,6 +747,65 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    fn execution_with_ranges(
+        monitor: &DataflowMonitor,
+        source_order: &[StreamId],
+        main_order: &[StreamId],
+    ) -> MonitorExecution {
+        let current = execution(monitor);
+        MonitorExecution::new_with_source_prelude(
+            current.evaluators.programs_rc(),
+            current.stream_slots,
+            source_order,
+            main_order,
+            &current.temporal_streams,
+        )
+    }
+
+    fn steps_snapshot(steps: &[QuickStep]) -> Vec<LayoutSnapshot> {
+        steps
+            .iter()
+            .map(|step| match step {
+                QuickStep::ScalarRun(run) => {
+                    LayoutSnapshot::ScalarRun(run.iter().map(|step| step.stream.index()).collect())
+                }
+                QuickStep::Graph(step) => LayoutSnapshot::Graph(step.stream.index()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn disabling_quickening_uses_only_canonical_graph_steps() {
+        let specification = "in x: Int\n\
+            aux a: Int\n\
+            out b: Int\n\
+            a = x + 1\n\
+            b = a * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        monitor.set_quickening(false);
+        let execution = execution(&monitor);
+
+        assert!(!execution.engine.quickening);
+        for step in execution
+            .engine
+            .active_plan
+            .quick
+            .source_steps
+            .iter()
+            .chain(execution.engine.active_plan.quick.main_steps.iter())
+        {
+            assert!(matches!(
+                step,
+                QuickStep::Graph(GraphStep {
+                    quickening_plan: None,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
@@ -633,6 +903,253 @@ mod tests {
         let state = plan.streams[1].temporal.operations[0].state();
         assert_eq!(state.stream, StreamId::new(1));
         assert_eq!(state.node, NodeId::new(0));
+    }
+
+    #[test]
+    fn source_boundary_is_part_of_cached_plan_identity() {
+        let specification = "in x: Int\n\
+            aux source: Int\n\
+            out result: Int\n\
+            source = x + 1\n\
+            result = source * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        let source_plan = execution.engine.active_plan.semantic.id;
+
+        execution.select_schedule_ranges(
+            &[],
+            &[StreamId::new(0), StreamId::new(1)],
+            execution.stream_slots,
+        );
+        let main_plan = execution.engine.active_plan.semantic.id;
+        assert_ne!(main_plan, source_plan);
+        assert_eq!(execution.engine.active_plan.semantic.source_stream_count, 0);
+        assert_eq!(
+            execution
+                .engine
+                .active_plan
+                .semantic
+                .order()
+                .map(StreamId::index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+
+        execution.select_schedule_ranges(
+            &[StreamId::new(0)],
+            &[StreamId::new(1)],
+            execution.stream_slots,
+        );
+        assert_eq!(execution.engine.active_plan.semantic.id, source_plan);
+    }
+
+    #[test]
+    fn source_and_main_have_separate_scalar_runs() {
+        let specification = "in x: Int\n\
+            aux source: Int\n\
+            aux middle: Int\n\
+            out result: Int\n\
+            source = x + 1\n\
+            middle = source * 2\n\
+            result = middle - 3"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let execution = execution_with_ranges(
+            &monitor,
+            &[StreamId::new(0)],
+            &[StreamId::new(1), StreamId::new(2)],
+        );
+
+        assert_eq!(
+            steps_snapshot(&execution.engine.active_plan.quick.source_steps),
+            [LayoutSnapshot::ScalarRun(vec![0])]
+        );
+        assert_eq!(
+            steps_snapshot(&execution.engine.active_plan.quick.main_steps),
+            [LayoutSnapshot::ScalarRun(vec![1, 2])]
+        );
+    }
+
+    #[test]
+    fn source_scalar_publication_is_available_to_main_range() {
+        let specification = "in x: Int\n\
+            aux source: Int\n\
+            out result: Int\n\
+            source = x + 1\n\
+            result = source * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        let mut environment =
+            vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
+        environment[0] = Value::Int(3);
+
+        execution
+            .evaluate_source_prelude(&mut environment, None)
+            .unwrap();
+        let source_slot = execution.stream_slots.slot(StreamId::new(0)).index();
+        assert_eq!(environment[source_slot], Value::Int(4));
+        environment[source_slot] = Value::NoVal;
+        execution
+            .evaluate_main_and_commit(&mut environment, None)
+            .unwrap();
+        assert_eq!(
+            environment[execution.stream_slots.slot(StreamId::new(1)).index()],
+            Value::Int(8)
+        );
+    }
+
+    #[test]
+    fn temporal_source_moved_to_main_is_evaluated_once_per_tick() {
+        let specification = "in x: Int\n\
+            aux delayed: Int\n\
+            out result: Int\n\
+            delayed = default(x[1], 0)\n\
+            result = delayed"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        #[cfg(feature = "jit")]
+        execution.enable_jit(JitConfig::eager());
+        let mut environment =
+            vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
+        let output = execution.stream_slots.slot(StreamId::new(1)).index();
+
+        environment[0] = Value::Int(10);
+        execution
+            .evaluate_source_prelude(&mut environment, None)
+            .unwrap();
+        execution
+            .evaluate_main_and_commit(&mut environment, None)
+            .unwrap();
+        assert_eq!(environment[output], Value::Int(0));
+
+        execution.select_schedule_ranges(
+            &[],
+            &[StreamId::new(0), StreamId::new(1)],
+            execution.stream_slots,
+        );
+        for (input, expected) in [(20, 10), (30, 20)] {
+            environment[0] = Value::Int(input);
+            execution
+                .evaluate_source_prelude(&mut environment, None)
+                .unwrap();
+            execution
+                .evaluate_main_and_commit(&mut environment, None)
+                .unwrap();
+            assert_eq!(environment[output], Value::Int(expected));
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn temporal_source_barrier_prohibits_fused_kernel() {
+        let specification = "in x: Int\n\
+            out result: Bool\n\
+            result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[]);
+        execution.enable_jit(JitConfig::eager());
+
+        let report = execution.jit_report().unwrap();
+        assert_eq!(report.plan(), JitPlan::PerStream);
+        assert_eq!(report.compiled_artifacts(), 1);
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn source_barrier_uses_and_retains_global_per_stream_artifacts() {
+        let specification = "in x: Int\n\
+            aux source: Int\n\
+            out result: Int\n\
+            source = x + 1\n\
+            result = source * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        execution.enable_jit(JitConfig::eager());
+
+        let report = execution.jit_report().unwrap();
+        assert_eq!(report.plan(), JitPlan::PerStream);
+        assert_eq!(report.compiled_artifacts(), 2);
+        assert!(report.unsupported_streams().is_empty());
+        let artifacts = execution.jit_artifact_count();
+
+        execution.select_schedule_ranges(
+            &[],
+            &[StreamId::new(0), StreamId::new(1)],
+            execution.stream_slots,
+        );
+        assert_eq!(execution.jit_artifact_count(), artifacts);
+        assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::PerStream);
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn hotness_advances_once_across_both_ranges() {
+        let specification = "in x: Int\n\
+            aux source: Int\n\
+            out result: Int\n\
+            source = x + 1\n\
+            result = source * 2"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        execution.enable_jit(JitConfig::after_events(1));
+        let mut environment =
+            vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
+
+        environment[0] = Value::Int(3);
+        execution
+            .evaluate_source_prelude(&mut environment, None)
+            .unwrap();
+        execution
+            .evaluate_main_and_commit(&mut environment, None)
+            .unwrap();
+        assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::Pending);
+
+        environment[0] = Value::Int(4);
+        execution
+            .evaluate_source_prelude(&mut environment, None)
+            .unwrap();
+        assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::PerStream);
+        execution
+            .evaluate_main_and_commit(&mut environment, None)
+            .unwrap();
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn jit_reports_unsupported_streams_from_both_ranges() {
+        let specification = "in x: Str\n\
+            aux source: Str\n\
+            out result: Str\n\
+            source = x\n\
+            result = source"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut execution =
+            execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
+        execution.enable_jit(JitConfig::eager());
+
+        let report = execution.jit_report().unwrap();
+        assert_eq!(report.plan(), JitPlan::Unavailable);
+        assert_eq!(report.unsupported_streams(), [0, 1]);
     }
 
     #[test]

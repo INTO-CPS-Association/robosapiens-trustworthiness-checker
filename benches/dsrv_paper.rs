@@ -2,13 +2,21 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 use tc_testutils::streams::with_timeout;
+use trustworthiness_checker::CheckedDsrvSpecification;
 use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;
 use trustworthiness_checker::benches_common::RECONF_TOPIC;
+use trustworthiness_checker::benches_common::input_factory_dsrv_paper_bench;
 use trustworthiness_checker::benches_common::input_source_dsrv_paper_bench;
+use trustworthiness_checker::benches_common::monitor_outputs_dataflow_reconf_limited;
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow_reconf_limited;
+use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow_reconf_limited;
+use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_reconf_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_reconf_limited;
 use trustworthiness_checker::benches_common::output_builder_dsrv_paper_bench;
+use trustworthiness_checker::io::OutputBackendBuilder;
 use trustworthiness_checker::stream_utils::FanoutSender;
 
 use criterion::BenchmarkId;
@@ -59,10 +67,109 @@ async fn wait_for_input_stream_subscription<T: Clone + 'static>(
     futures::future::join_all(sub_event_futs).await;
 }
 
-/// Run a reconfiguration benchmark with a single input function for all iterations.
-/// The input function is called per iteration and must produce values for ALL input
-/// variables present in the union of both specs.
+#[derive(Clone, Copy)]
+enum ReconfigurationRuntime {
+    Semisync,
+    DataflowUntyped,
+    Dataflow,
+    DataflowQuickened,
+    #[cfg(feature = "jit")]
+    DataflowJit,
+}
+
+impl ReconfigurationRuntime {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Semisync => "semisync",
+            Self::DataflowUntyped => "dataflow_untyped",
+            Self::Dataflow => "dataflow",
+            Self::DataflowQuickened => "dataflow_quickened",
+            #[cfg(feature = "jit")]
+            Self::DataflowJit => "dataflow_jit",
+        }
+    }
+}
+
+enum ReconfigurationInput {
+    Semisync(trustworthiness_checker::io::InputSource),
+    Dataflow(trustworthiness_checker::io::InputPipeline),
+}
+
+async fn run_reconfiguration_monitor(
+    runtime: ReconfigurationRuntime,
+    executor: Rc<LocalExecutor<'static>>,
+    spec: DsrvSpecification,
+    input: ReconfigurationInput,
+    output_builder: OutputBackendBuilder,
+    ct: bool,
+) {
+    match (runtime, input) {
+        (ReconfigurationRuntime::Semisync, ReconfigurationInput::Semisync(input_source)) => {
+            monitor_outputs_untyped_reconf_limited(
+                executor,
+                spec,
+                input_source,
+                output_builder,
+                ct,
+            )
+            .await;
+        }
+        (
+            ReconfigurationRuntime::DataflowUntyped,
+            ReconfigurationInput::Dataflow(input_pipeline),
+        ) => {
+            monitor_outputs_untyped_dataflow_reconf_limited(
+                executor,
+                spec,
+                input_pipeline,
+                output_builder,
+                ct,
+            )
+            .await;
+        }
+        (ReconfigurationRuntime::Dataflow, ReconfigurationInput::Dataflow(input_pipeline)) => {
+            monitor_outputs_dataflow_reconf_limited(
+                executor,
+                spec,
+                input_pipeline,
+                output_builder,
+                ct,
+            )
+            .await;
+        }
+        (
+            ReconfigurationRuntime::DataflowQuickened,
+            ReconfigurationInput::Dataflow(input_pipeline),
+        ) => {
+            monitor_outputs_quickened_dataflow_reconf_limited(
+                executor,
+                spec,
+                input_pipeline,
+                output_builder,
+                ct,
+            )
+            .await;
+        }
+        #[cfg(feature = "jit")]
+        (ReconfigurationRuntime::DataflowJit, ReconfigurationInput::Dataflow(input_pipeline)) => {
+            monitor_outputs_jit_dataflow_reconf_limited(
+                executor,
+                spec,
+                input_pipeline,
+                output_builder,
+                ct,
+            )
+            .await;
+        }
+        _ => unreachable!("benchmark runtime and input source must match"),
+    }
+}
+
+/// Run a paired semisync/dataflow reconfiguration benchmark with a single input
+/// function for all iterations. The input function is called per iteration and
+/// must produce values for ALL input variables present in the union of both specs.
 async fn run_reconf_bench(
+    runtime: ReconfigurationRuntime,
     executor: Rc<LocalExecutor<'static>>,
     spec_1: &DsrvSpecification,
     spec_2: &DsrvSpecification,
@@ -76,15 +183,32 @@ async fn run_reconf_bench(
         .union(&spec_2.input_vars())
         .cloned()
         .collect();
-    let (input_source, tx_fans) = input_source_dsrv_paper_bench(input_vars);
+    let (input, tx_fans) = match runtime {
+        ReconfigurationRuntime::Semisync => {
+            let (input, tx_fans) = input_source_dsrv_paper_bench(input_vars);
+            (ReconfigurationInput::Semisync(input), tx_fans)
+        }
+        ReconfigurationRuntime::DataflowUntyped
+        | ReconfigurationRuntime::Dataflow
+        | ReconfigurationRuntime::DataflowQuickened => {
+            let (input, tx_fans) = input_factory_dsrv_paper_bench(input_vars);
+            (ReconfigurationInput::Dataflow(input), tx_fans)
+        }
+        #[cfg(feature = "jit")]
+        ReconfigurationRuntime::DataflowJit => {
+            let (input, tx_fans) = input_factory_dsrv_paper_bench(input_vars);
+            (ReconfigurationInput::Dataflow(input), tx_fans)
+        }
+    };
     let (output_builder, mut rx) =
         output_builder_dsrv_paper_bench(spec_1.output_vars().clone(), executor.clone());
     let mut is_spec_1 = true;
 
-    let _handle = executor.spawn(monitor_outputs_untyped_reconf_limited(
+    let _handle = executor.spawn(run_reconfiguration_monitor(
+        runtime,
         executor.clone(),
         spec_1.clone(),
-        input_source,
+        input,
         output_builder,
         ct,
     ));
@@ -139,17 +263,28 @@ async fn run_reconf_bench(
     }
 }
 
+fn assert_strict_type_checkable(config: &BenchConfig<'_>) {
+    for (replacement, spec) in [("first", &config.spec1), ("second", &config.spec2)] {
+        spec.to_string()
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{replacement} specification in {} is not strict-type-checkable: {error}",
+                    config.group_name
+                )
+            });
+    }
+}
+
 /// Instantiate one benchmark group per [BenchConfig] entry.
 fn run_reconf_bench_group(c: &mut Criterion, configs: &[BenchConfig]) {
-    let sizes = vec![
-        1, 100,
-        // 1000,
-        //2500, 5000, 7500, 10000
-    ];
+    let sizes = vec![1, 100, 1000];
     let percents = [0, 1, 5, 10, 20, 50, 100];
     let cts = [true, false];
 
     for config in configs {
+        assert_strict_type_checkable(config);
+
         let mut group = c.benchmark_group(config.group_name);
         group.sampling_mode(SamplingMode::Flat);
         group.sample_size(10);
@@ -158,32 +293,59 @@ fn run_reconf_bench_group(c: &mut Criterion, configs: &[BenchConfig]) {
 
         let input_fn = &config.input_fn;
 
-        for ((size, percent), ct) in sizes
-            .iter()
-            .copied()
-            .cartesian_product(percents)
-            .cartesian_product(cts)
-        {
-            let ct_str = if ct { "on" } else { "off" };
-            group.bench_with_input(
-                BenchmarkId::new(format!("reconf_ct_{}_percent_{}", ct_str, percent), size),
-                &(size, percent),
-                |b, param| {
-                    let ex = LocalSmolExecutor::new();
-                    b.to_async(ex.clone()).iter(move || {
-                        let ex = ex.executor.clone();
-                        let spec1 = config.spec1.clone();
-                        let spec2 = config.spec2.clone();
-                        let input_fn = input_fn.as_ref();
-                        let size = param.0;
-                        let percent = param.1;
-                        async move {
-                            run_reconf_bench(ex, &spec1, &spec2, size, ct, percent, |i| input_fn(i))
+        let runtimes = [
+            ReconfigurationRuntime::Semisync,
+            ReconfigurationRuntime::DataflowUntyped,
+            ReconfigurationRuntime::Dataflow,
+            ReconfigurationRuntime::DataflowQuickened,
+            #[cfg(feature = "jit")]
+            ReconfigurationRuntime::DataflowJit,
+        ];
+        for runtime in runtimes {
+            for ((size, percent), ct) in sizes
+                .iter()
+                .copied()
+                .cartesian_product(percents)
+                .cartesian_product(cts)
+            {
+                let ct_str = if ct { "on" } else { "off" };
+                group.bench_with_input(
+                    BenchmarkId::new(
+                        format!(
+                            "{}_reconf_ct_{}_percent_{}",
+                            runtime.label(),
+                            ct_str,
+                            percent
+                        ),
+                        size,
+                    ),
+                    &(size, percent),
+                    |b, param| {
+                        let ex = LocalSmolExecutor::new();
+                        b.to_async(ex.clone()).iter(move || {
+                            let ex = ex.executor.clone();
+                            let spec1 = config.spec1.clone();
+                            let spec2 = config.spec2.clone();
+                            let input_fn = input_fn.as_ref();
+                            let size = param.0;
+                            let percent = param.1;
+                            async move {
+                                run_reconf_bench(
+                                    runtime,
+                                    ex,
+                                    &spec1,
+                                    &spec2,
+                                    size,
+                                    ct,
+                                    percent,
+                                    |i| input_fn(i),
+                                )
                                 .await
-                        }
-                    });
-                },
-            );
+                            }
+                        });
+                    },
+                );
+            }
         }
 
         group.finish();
@@ -233,13 +395,13 @@ fn simple_and(c: &mut Criterion) {
 }
 
 fn rec_moving_average(c: &mut Criterion) {
-    let spec_n3 = "in x
-              out y
+    let spec_n3 = "in x: Int
+              out y: Int
               y = default(y[1], 0) + (x - default(x[3], 0)) / 3"
         .parse::<DsrvSpecification>()
         .expect("moving-average n=3 benchmark specification should parse");
-    let spec_n5 = "in x
-              out y
+    let spec_n5 = "in x: Int
+              out y: Int
               y = default(y[1], 0) + (x - default(x[5], 0)) / 5"
         .parse::<DsrvSpecification>()
         .expect("moving-average n=5 benchmark specification should parse");
@@ -257,16 +419,16 @@ fn rec_moving_average(c: &mut Criterion) {
 fn sindex(c: &mut Criterion) {
     for i in [1, 10, 100] {
         let spec1 = format!(
-            "in x
-              out y
+            "in x: Int
+              out y: Int
               y = x[{}]",
             i
         )
         .parse::<DsrvSpecification>()
         .expect("first stream-index benchmark specification should parse");
         let spec2 = format!(
-            "in x
-              out y
+            "in x: Int
+              out y: Int
               y = x[{}] + 0",
             i
         )

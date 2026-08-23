@@ -37,6 +37,15 @@ pub enum DataflowEvaluationError {
     DynamicDependencyCycle(VarName),
     #[error("nested dynamic dependency reconfiguration is not supported")]
     UnsupportedNestedReconfiguration,
+    #[error("nested replacement of region `{region}` is invalid: {source}")]
+    InvalidRegionReplacement {
+        region: super::reconfiguration::RegionAddress,
+        source: super::reconfiguration::ReconfigurationError,
+    },
+    #[error("nested region `{0}` cannot transfer its state into the replacement body")]
+    IncompatibleRegionTransfer(super::reconfiguration::RegionAddress),
+    #[error("dataflow semantic revision overflow during nested replacement")]
+    RevisionOverflow,
     #[error("dataflow monitor cannot continue after a previous evaluation failure")]
     MonitorFailed,
 }

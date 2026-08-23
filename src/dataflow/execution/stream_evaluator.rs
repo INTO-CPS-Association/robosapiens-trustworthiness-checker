@@ -1,6 +1,8 @@
 use super::super::ir::*;
 use super::super::*;
-use super::dynamic_expressions::update_active_expression;
+use super::dynamic_expressions::{
+    DynamicExpressionActivation, prepare_active_expression_with_change,
+};
 use super::interpreter::*;
 use super::quickening::{self, ScalarValue};
 use super::stream_state::*;
@@ -25,6 +27,77 @@ impl EvaluationContext<'_> {
                 .clone(),
         }
     }
+}
+
+struct PreparedRegionBody {
+    active_expression: ActiveExpression,
+    environment_values: Vec<Value>,
+    last_source_value: Option<Value>,
+}
+
+/// The outcome of compiling and transferring one nested replacement body.  The body remains local
+/// until the monitor has accepted the transfer; installation is a separate move performed at the
+/// source barrier.
+pub(in crate::dataflow) struct RegionReplacement {
+    pub(in crate::dataflow) activation: DynamicExpressionActivation,
+    /// `false` only when a changed body could not continue the previous body's state. Under
+    /// `Compatible` the replacement is still installed cold; under `Strict` the caller poisons.
+    pub(in crate::dataflow) state_transferred: bool,
+    replacement: Option<PreparedRegionBody>,
+}
+
+impl RegionReplacement {
+    fn unchanged() -> Self {
+        Self {
+            activation: DynamicExpressionActivation::Unchanged,
+            state_transferred: true,
+            replacement: None,
+        }
+    }
+}
+
+struct DynamicBodyDonor {
+    active_expression: ActiveExpression,
+    environment_values: Vec<Value>,
+    last_source_value: Option<Value>,
+}
+
+fn transfer_prepared_body(
+    target: &mut ActiveExpression,
+    source: &ActiveExpression,
+    target_environment_values: &mut Vec<Value>,
+    source_environment_values: &[Value],
+    layout: &Rc<EnvironmentLayout>,
+    require_exact: bool,
+) -> bool {
+    let transferred = if require_exact {
+        target.evaluator.transfer_from(&source.evaluator)
+    } else {
+        target.evaluator.transfer_compatible_from(&source.evaluator)
+    };
+    if !transferred {
+        return false;
+    }
+
+    target_environment_values.resize(layout.len(), Value::NoVal);
+    for target_slot in target.environment_slots.iter().copied() {
+        let Some(variable) = layout.variable(target_slot) else {
+            return false;
+        };
+        let Some(source_slot) = source
+            .environment_slots
+            .iter()
+            .copied()
+            .find(|slot| layout.variable(*slot) == Some(variable))
+        else {
+            return false;
+        };
+        let Some(source_value) = source_environment_values.get(source_slot.index()) else {
+            return false;
+        };
+        target_environment_values[target_slot.index()] = source_value.clone();
+    }
+    true
 }
 
 /// Owns one stream program and its persistent evaluation state.
@@ -85,18 +158,73 @@ impl StreamEvaluator {
         }
     }
 
+    /// Transfer canonical state from an evaluator in the previous monitor.
+    ///
+    /// Environment slots are replacement-local, so compatibility compares external references by
+    /// variable name. A failed transfer leaves the local destination freshly initialized.
+    pub(in crate::dataflow) fn transfer_from(&mut self, source: &Self) -> bool {
+        if !graphs_semantically_equal(
+            &self.program.graph,
+            &self.program.environment_layout,
+            &source.program.graph,
+            &source.program.environment_layout,
+        ) {
+            return false;
+        }
+        let transferred = self.state.transfer_from(
+            &source.state,
+            &self.program.graph,
+            &source.program.graph,
+            &self.program.environment_layout,
+            &source.program.environment_layout,
+        );
+        if transferred {
+            self.invalidate_derived_state();
+        }
+        transferred
+    }
+
+    /// Transfer unchanged semantic state owners into a changed local body. The target evaluator
+    /// owns a fresh graph; only matching state cells are copied, so stateless edits and new owners
+    /// remain cold while compatible delay/operator history continues.
+    pub(in crate::dataflow) fn transfer_compatible_from(&mut self, source: &Self) -> bool {
+        let transferred = self.state.transfer_compatible_from(
+            &source.state,
+            &self.program.graph,
+            &source.program.graph,
+            &self.program.environment_layout,
+            &source.program.environment_layout,
+        );
+        if transferred {
+            self.invalidate_derived_state();
+        }
+        transferred
+    }
+
+    /// Native and quickening state are derived from canonical state and cannot be copied as part of
+    /// a root transfer. Leave the canonical evaluator available as the safe fallback until a new
+    /// native/quickened tier has rebuilt its own state. Immutable quickening code remains reusable.
+    pub(in crate::dataflow) fn invalidate_derived_state(&mut self) {
+        self.quickening_state = None;
+    }
+
     /// Top-level schedule plans own their quick code. Nested evaluators retain a local plan because
     /// they are entered outside the monitor schedule and therefore have no `PlanBundle` step.
     pub(in crate::dataflow) fn detach_top_level_quick_plan(&mut self) {
         self.quick_plan = None;
     }
 
+    /// Compile a nested replacement body, transfer from the old donor, and return a local body that
+    /// has not yet been installed.  This ordering is intentional: a strict transfer failure never
+    /// leaves the new body visible, while a compatible failure can install the freshly compiled
+    /// body with incompatible cells reset.
     #[inline]
-    pub(in crate::dataflow) fn resolve_reconfiguration_point(
+    pub(in crate::dataflow) fn replace_reconfiguration_point(
         &mut self,
         node: NodeId,
         source_value: Value,
-    ) -> Result<&[EnvironmentSlot], DataflowEvaluationError> {
+        transfer: ContextTransferPolicy,
+    ) -> Result<RegionReplacement, DataflowEvaluationError> {
         let (program, state) = (&self.program, &mut self.state);
         let StreamOp::Dynamic(spec) = &program.graph.nodes[node.index()] else {
             unreachable!("reconfiguration point referenced a non-dynamic node")
@@ -104,25 +232,129 @@ impl StreamEvaluator {
         let NodeState::Dynamic(dynamic) = &mut state.node_states[node.index()] else {
             unreachable!("reconfiguration point referenced incompatible runtime state")
         };
-        let source_value = match source_value {
-            Value::NoVal => dynamic.last_source_value.clone().unwrap_or(Value::NoVal),
-            value => value,
-        };
-        match source_value {
-            Value::Str(source_text) => {
-                update_active_expression(source_text, spec, dynamic, &program.environment_layout)?
+        let source_text = match source_value {
+            Value::Str(source_text) => source_text,
+            Value::Deferred | Value::NoVal => {
+                return Ok(RegionReplacement::unchanged());
             }
-            Value::Deferred | Value::NoVal => {}
             other => {
                 return Err(DataflowEvaluationError::InvalidExpressionSource(
                     other.to_string(),
                 ));
             }
+        };
+
+        let had_active_expression = dynamic.active_expression.is_some();
+        let donor = if spec.mode == DynamicExpressionMode::Dynamic && had_active_expression {
+            Some(DynamicBodyDonor {
+                active_expression: dynamic
+                    .active_expression
+                    .take()
+                    .expect("active dynamic body was just observed"),
+                environment_values: std::mem::take(&mut dynamic.environment_values),
+                last_source_value: dynamic.last_source_value.take(),
+            })
+        } else {
+            None
+        };
+        let previous_dependency_slots = donor.as_ref().map_or(&[][..], |donor| {
+            donor.active_expression.dependency_slots.as_slice()
+        });
+        let prepared = prepare_active_expression_with_change(
+            source_text,
+            spec,
+            dynamic,
+            &program.environment_layout,
+            had_active_expression,
+            previous_dependency_slots,
+        )?
+        .expect("the source barrier requested a changed nested body");
+        let mut active_expression = prepared.active_expression;
+        let mut environment_values = Vec::new();
+        let mut state_transferred = true;
+        let mut last_source_value = None;
+
+        if let Some(donor) = donor {
+            last_source_value = donor.last_source_value;
+            if transfer != ContextTransferPolicy::None {
+                state_transferred = transfer_prepared_body(
+                    &mut active_expression,
+                    &donor.active_expression,
+                    &mut environment_values,
+                    &donor.environment_values,
+                    &program.environment_layout,
+                    transfer == ContextTransferPolicy::Strict,
+                );
+            }
         }
-        Ok(dynamic
+
+        Ok(RegionReplacement {
+            activation: prepared.activation,
+            state_transferred,
+            replacement: Some(PreparedRegionBody {
+                active_expression,
+                environment_values,
+                last_source_value,
+            }),
+        })
+    }
+
+    /// Install a previously transferred local body exactly once.
+    pub(in crate::dataflow) fn install_reconfiguration_point(
+        &mut self,
+        node: NodeId,
+        replacement: RegionReplacement,
+    ) -> Result<(), DataflowEvaluationError> {
+        let Some(replacement) = replacement.replacement else {
+            return Ok(());
+        };
+        let NodeState::Dynamic(dynamic) = &mut self.state.node_states[node.index()] else {
+            unreachable!("reconfiguration point referenced incompatible runtime state")
+        };
+        dynamic.active_expression = Some(replacement.active_expression);
+        dynamic.environment_values = replacement.environment_values;
+        dynamic.last_source_value = replacement.last_source_value;
+        Ok(())
+    }
+
+    pub(in crate::dataflow) fn reconfiguration_point_requires_update(
+        &self,
+        node: NodeId,
+        source_value: &Value,
+    ) -> bool {
+        let StreamOp::Dynamic(spec) = &self.program.graph.nodes[node.index()] else {
+            unreachable!("reconfiguration point referenced a non-dynamic node")
+        };
+        let NodeState::Dynamic(dynamic) = &self.state.node_states[node.index()] else {
+            unreachable!("reconfiguration point referenced incompatible runtime state")
+        };
+        match source_value {
+            Value::Str(source_text) => match spec.mode {
+                DynamicExpressionMode::Defer => dynamic.active_expression.is_none(),
+                DynamicExpressionMode::Dynamic => dynamic
+                    .active_expression
+                    .as_ref()
+                    .is_none_or(|active| &active.source_text != source_text),
+            },
+            Value::Deferred | Value::NoVal => false,
+            _ => true,
+        }
+    }
+
+    pub(in crate::dataflow) fn reconfiguration_point_dependency_slots(
+        &self,
+        node: NodeId,
+    ) -> &[EnvironmentSlot] {
+        let StreamOp::Dynamic(_) = &self.program.graph.nodes[node.index()] else {
+            unreachable!("reconfiguration point referenced a non-dynamic node")
+        };
+        let NodeState::Dynamic(dynamic) = &self.state.node_states[node.index()] else {
+            unreachable!("reconfiguration point referenced incompatible runtime state")
+        };
+        dynamic
             .active_expression
             .as_ref()
-            .map_or(&[], |active| active.dependency_slots.as_slice()))
+            .map_or(&[], |active| active.dependency_slots.as_slice())
     }
 
     pub(in crate::dataflow) fn evaluate_and_commit(
@@ -184,7 +416,6 @@ impl StreamEvaluator {
                 published_scalars,
             );
         } else {
-            debug_assert!(quickening_plan.is_none() && self.quickening_state.is_none());
             evaluate_nodes(&body.nodes, &mut self.state, context);
         }
         let value = context.read_value(&self.state, &body.output);
@@ -209,10 +440,13 @@ impl StreamEvaluator {
             retained_environment_values: None,
             recursive_call: None,
         };
+        let Some(state) = self.quickening_state.as_mut() else {
+            evaluate_nodes(&body.nodes, &mut self.state, context);
+            let value = context.read_value(&self.state, &body.output);
+            return quickening::DirectResult::Canonical(value);
+        };
         quickening::execute_single(
-            self.quickening_state
-                .as_mut()
-                .expect("single scalar plan requires quickening state"),
+            state,
             plan,
             body,
             &mut self.state,

@@ -41,7 +41,9 @@ def ensure_dataflow_helpers(repo: Path) -> None:
     source = path.read_text()
     if "use crate::core::ExecutionPolicy;" not in source:
         anchor = "use crate::core::OutputHandler;"
-        source = source.replace(anchor, "use crate::core::ExecutionPolicy;\n" + anchor, 1)
+        source = source.replace(
+            anchor, "use crate::core::ExecutionPolicy;\n" + anchor, 1
+        )
     for suffix in ["_limited", ""]:
         source_name = f"monitor_outputs_untyped_async{suffix}"
         target_name = f"monitor_outputs_untyped_dataflow{suffix}"
@@ -185,7 +187,9 @@ def ensure_pipeline(repo: Path) -> None:
         if target_id not in source:
             _, end, block = benchmark_block(source, source_id)
             clone = block.replace(source_id, target_id, 1)
-            compile_call = "black_box(DataflowMonitor::try_compile_checked(typed).unwrap())"
+            compile_call = (
+                "black_box(DataflowMonitor::try_compile_checked(typed).unwrap())"
+            )
             clone = clone.replace(
                 compile_call,
                 "black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));\n"
@@ -254,7 +258,7 @@ def main() -> None:
         clone_benchmark(
             repo / "benches/dup_defer.rs",
             '"dup_defer_untyped_async"',
-            '"dup_defer_untyped_dataflow"',
+            '"dup_defer_dataflow_untyped"',
             "monitor_outputs_untyped_async",
             "monitor_outputs_untyped_dataflow",
         )
@@ -272,7 +276,7 @@ def main() -> None:
         clone_benchmark(
             repo / "benches/dyn_paper.rs",
             'format!("dyn_paper_{}", percent)',
-            'format!("dyn_paper_{}_dataflow", percent)',
+            'format!("dyn_paper_{}_dataflow_untyped", percent)',
             "monitor_outputs_untyped_async_limited",
             "monitor_outputs_untyped_dataflow_limited",
         )
@@ -289,7 +293,7 @@ def main() -> None:
         clone_benchmark(
             repo / "benches/maple_sequence.rs",
             '"maple_sequence_untyped_async"',
-            '"maple_sequence_untyped_dataflow"',
+            '"maple_sequence_dataflow_untyped"',
             "monitor_outputs_untyped_async",
             "monitor_outputs_untyped_dataflow",
         )

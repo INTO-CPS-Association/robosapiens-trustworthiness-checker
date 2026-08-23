@@ -49,6 +49,7 @@ pub(in crate::dataflow) struct NativeGraphContext<'a> {
     pub(in crate::dataflow) environment_layout: &'a Rc<EnvironmentLayout>,
     pub(in crate::dataflow) published_scalars: &'a [Option<ScalarValue>],
     pub(in crate::dataflow) stream_slots: StreamSlots,
+    pub(in crate::dataflow) allow_complete_temporal_kernel: bool,
 }
 
 /// Canonical evaluator state made available to a scheduled native commit step.
@@ -150,8 +151,8 @@ impl Jit {
         self.activate(plan);
     }
 
-    /// Keeps a fused artifact tied to the schedule it was compiled from. Per-stream artifacts do
-    /// not depend on order and remain valid across layout changes.
+    /// Keeps a fused artifact tied to the schedule and source boundary it was compiled from.
+    /// Per-stream artifacts do not depend on either and remain valid across plan changes.
     pub(in crate::dataflow) fn schedule_changed(&mut self, plan: &ScheduledExecutionPlan) -> bool {
         #[cfg(feature = "jit")]
         {
@@ -170,6 +171,84 @@ impl Jit {
         {
             let _ = plan;
             false
+        }
+    }
+
+    /// Return a canonical snapshot while leaving the active native plan and its activation state
+    /// untouched. Native artifacts are derived physical state. Every native row that was executed
+    /// since the last canonical transition is replayed into the snapshot so lifting, branch, node,
+    /// and temporal state all describe the same logical tick.
+    pub(in crate::dataflow) fn snapshot_evaluators(
+        &self,
+        evaluators: &[StreamEvaluator],
+        plan: &ScheduledExecutionPlan,
+    ) -> Vec<StreamEvaluator> {
+        #[cfg(feature = "jit")]
+        let mut snapshot = evaluators.to_vec();
+        #[cfg(not(feature = "jit"))]
+        let snapshot = evaluators.to_vec();
+        #[cfg(feature = "jit")]
+        match &self.plan {
+            NativePlan::FusedScalar { evaluator, .. } => {
+                if let Some(mut environment) = evaluator.snapshot_replay_environment() {
+                    Self::replay_canonical_snapshot(&mut snapshot, plan, &mut environment);
+                }
+            }
+            NativePlan::FusedTemporal { evaluator, .. } => {
+                evaluator.snapshot_into(&mut snapshot);
+                if let Some(mut environment) = evaluator.snapshot_replay_environment() {
+                    Self::replay_canonical_snapshot(&mut snapshot, plan, &mut environment);
+                }
+            }
+            NativePlan::PerStream(stream_evaluators) => {
+                for (stream, evaluator) in stream_evaluators.iter().enumerate() {
+                    if let Some(evaluator) = evaluator {
+                        evaluator.snapshot_into(&mut snapshot[stream]);
+                    }
+                }
+            }
+            NativePlan::None => {}
+        }
+        #[cfg(not(feature = "jit"))]
+        let _ = plan;
+        snapshot
+    }
+
+    pub(in crate::dataflow) fn reset_after_context_transfer(&mut self) {
+        #[cfg(feature = "jit")]
+        {
+            self.replay_environment = None;
+            match &mut self.plan {
+                NativePlan::FusedScalar { evaluator, .. } => {
+                    evaluator.reset_after_context_transfer();
+                }
+                NativePlan::FusedTemporal { evaluator, .. } => {
+                    evaluator.reset_after_context_transfer();
+                }
+                NativePlan::PerStream(evaluators) => {
+                    for evaluator in evaluators.iter_mut().flatten() {
+                        evaluator.reset_after_context_transfer();
+                    }
+                }
+                NativePlan::None => {}
+            }
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    fn replay_canonical_snapshot(
+        evaluators: &mut [StreamEvaluator],
+        plan: &ScheduledExecutionPlan,
+        environment: &mut [Value],
+    ) {
+        for planned in plan.streams.iter() {
+            let stream = planned.stream.index();
+            let evaluator = &mut evaluators[stream];
+            let value = evaluator.evaluate_canonical_infallible(environment);
+            // Replay restores semantic state from an already committed native row. It must not become
+            // another logical tick, so discard only the staged temporal writes from this replay.
+            evaluator.discard_staged_temporal_state();
+            environment[planned.output.environment().index()] = value;
         }
     }
 
@@ -350,6 +429,7 @@ impl Jit {
                 context.environment_layout,
                 context.published_scalars,
                 context.stream_slots,
+                context.allow_complete_temporal_kernel,
             ) {
                 Some(value) => GraphTickOutcome::Value(value),
                 None if evaluator.is_disabled() => GraphTickOutcome::Canonical,

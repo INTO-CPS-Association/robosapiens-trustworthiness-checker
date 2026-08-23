@@ -14,9 +14,9 @@ DATAFLOW_INTRODUCTION = "9f0f006d16a999c6297fa2ef10f17f23f2bb86ba"
 DYNAMIC_SEMISYNC_INTRODUCTION = "b5c9613a272bf6fa9d271bb6926880d45eb9eb55"
 MAPLE_DATAFLOW_INTRODUCTION = "c37e53f84acec84d229d84cb2edba6888e2b4d73"
 HARD_DYNAMIC_DEFER = [
-    "hard_dynamic_defer/automatic_scope_dataflow/1024",
+    "hard_dynamic_defer/automatic_scope_dataflow_untyped/1024",
     "hard_dynamic_defer/automatic_scope_semisync/1024",
-    "hard_dynamic_defer/explicit_components_dataflow/1024",
+    "hard_dynamic_defer/explicit_components_dataflow_untyped/1024",
     "hard_dynamic_defer/explicit_components_semisync/1024",
 ]
 
@@ -83,8 +83,8 @@ def main() -> None:
 
         if is_ancestor(DATAFLOW_INTRODUCTION, sha):
             dataflow_benchmarks = {
-                "dup-dataflow": "dup_defer/dup_defer_untyped_dataflow/25000",
-                "dyn-dataflow": "dyn_paper/dyn_paper_50_dataflow/100000",
+                "dup-dataflow": "dup_defer/dup_defer_dataflow_untyped/25000",
+                "dyn-dataflow": "dyn_paper/dyn_paper_50_dataflow_untyped/100000",
             }
             requested.extend(
                 benchmark
@@ -95,7 +95,7 @@ def main() -> None:
                 requested.append("hard-dynamic-defer")
 
             if is_ancestor(MAPLE_DATAFLOW_INTRODUCTION, sha) and not has(
-                benches, "maple_sequence/maple_sequence_untyped_dataflow/25000"
+                benches, "maple_sequence/maple_sequence_dataflow_untyped/25000"
             ):
                 requested.append("maple-dataflow")
 

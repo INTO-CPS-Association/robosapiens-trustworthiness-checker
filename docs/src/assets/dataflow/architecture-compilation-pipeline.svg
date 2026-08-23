@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 800" role="img" aria-labelledby="architecture-compilation-title architecture-compilation-desc" style="width:100%;max-width:760px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="architecture-compilation-title">Dataflow compilation pipeline</title>
+<desc id="architecture-compilation-desc">The compiler lowers a DSRV specification into unbound evaluation graphs and named static dependencies, computes dependency-first stream order, assigns stable environment slots, binds external references into immutable StreamPrograms, and builds the immutable MonitorPlan.</desc>
+<defs>
+  <marker id="architecture-compilation-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+  </marker>
+</defs>
+<text x="24" y="29" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Compilation fixes identities and static structure</text>
+<rect x="130" y="55" width="500" height="72" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="380" y="88" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DSRV specification</text>
+<text x="380" y="108" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">inputs, outputs, stream equations</text>
+<line x1="380" y1="127" x2="380" y2="162" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+<rect x="130" y="162" width="500" height="86" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="380" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">lowered EvaluationGraphs</text>
+<text x="380" y="215" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">unbound operations + dynamic/defer metadata</text>
+<text x="380" y="233" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">collect named static same-tick dependencies</text>
+<line x1="380" y1="248" x2="380" y2="283" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+<rect x="130" y="283" width="500" height="78" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="380" y="315" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">dependency-first stream order</text>
+<text x="380" y="335" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">topological order; reject same-tick cycles</text>
+<text x="380" y="352" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">declaration order is not execution order</text>
+<line x1="380" y1="361" x2="380" y2="396" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+<rect x="130" y="396" width="500" height="78" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="380" y="428" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">stable EnvironmentLayout slots</text>
+<text x="380" y="448" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">inputs first; one fixed slot per computed stream</text>
+<text x="380" y="465" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">save output projection slots</text>
+<line x1="380" y1="474" x2="380" y2="509" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+<rect x="130" y="509" width="500" height="86" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="380" y="541" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">bind StreamPrograms</text>
+<text x="380" y="562" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">replace names with EnvironmentSlot references</text>
+<text x="380" y="580" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">record NodeIds, effects, and temporal commit needs</text>
+<line x1="380" y1="595" x2="380" y2="630" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+<rect x="70" y="630" width="620" height="140" rx="8" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="90" y="657" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Immutable compilation result</text>
+<rect x="95" y="679" width="260" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="225" y="709" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">bound StreamPrograms</text>
+<text x="225" y="728" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">one per logical stream</text>
+<rect x="405" y="679" width="260" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="535" y="709" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">MonitorPlan</text>
+<text x="535" y="728" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">dependencies + reconfiguration</text>
+<line x1="355" y1="712" x2="405" y2="712" stroke="#65758b" stroke-width="1.8" marker-end="url(#architecture-compilation-arrow)"/>
+</svg>

@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime, RuntimeSpec, Semantics,
-    StreamType,
+    ExecutionPolicy, OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime,
+    RuntimeSpec, Semantics, StreamType,
 };
 use trustworthiness_checker::io::output::ManualOutputBackend;
 use trustworthiness_checker::io::{file, map};
@@ -4124,11 +4124,6 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 }
 
 #[apply(async_test)]
-#[ignore = "Bug with DUPs here exposed by recent changes to defer impl. \
-    Subcontexts have deadlock scenario with multiple defer/dynamic streams. \
-    Before, this was not exposed because defer's usage of subcontexts was significantly different \
-    from dynamic. So before the defer patch, the bug would only happen with multiple dynamic streams, \
-    which we do not have a test for..."]
 async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {
         let spec_untyped = ("in x: Int\nin e: Str\nout z1: Int\nout z2: Int\nz1 = defer(e : Int)\nz2 = dynamic(e : Int)").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
@@ -4163,23 +4158,42 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         )
         .await?;
 
-        for (time, values) in &result {
-            assert_eq!(
-                values.len(),
+        let expected_outputs = vec![
+            (
+                0,
+                BTreeMap::from([
+                    ("z1".into(), Value::Deferred),
+                    ("z2".into(), Value::Deferred),
+                ]),
+            ),
+            (
+                1,
+                BTreeMap::from([
+                    ("z1".into(), Value::Deferred),
+                    ("z2".into(), Value::Deferred),
+                ]),
+            ),
+            (
                 2,
-                "Expected 2 output values (z1 and z2) at time {}, got {} for config {:?}",
-                time,
-                values.len(),
-                config
-            );
-
-            let (v_defer, v_dynamic) = (&values.get(&"z1".into()), &values.get(&"z2".into()));
-            assert_eq!(
-                v_defer, v_dynamic,
-                "Expected defer and dynamic outputs to match at time {}, got {:?} and {:?} for config {:?}.\nFull values:\n{:?}",
-                time, v_defer, v_dynamic, config, result
-            );
-        }
+                BTreeMap::from([
+                    ("z1".into(), Value::Deferred),
+                    ("z2".into(), Value::Deferred),
+                ]),
+            ),
+            (
+                3,
+                BTreeMap::from([("z1".into(), Value::Int(1)), ("z2".into(), Value::Deferred)]),
+            ),
+            (
+                4,
+                BTreeMap::from([("z1".into(), Value::Int(2)), ("z2".into(), Value::Deferred)]),
+            ),
+        ];
+        assert_eq!(
+            result, expected_outputs,
+            "Unexpected output for config {:?}",
+            config
+        );
     }
     Ok(())
 }
@@ -4510,6 +4524,172 @@ mod reconf_tests {
         assert!(
             err.contains("Reconfigured spec failed type checking"),
             "expected type-checking error, got: {err}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_general_builder_constructs_reconf_dataflow_for_supported_semantics(
+        ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let source_text = "in x: Int\nout z: Int\nz = x + 1";
+
+        for semantics in [
+            Semantics::Untimed,
+            Semantics::TypedUntimed,
+            Semantics::GradualTypedUntimed,
+        ] {
+            let spec = source_text
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
+            let (input_source, mut tx_fans) = manual_input_source(["x"]);
+            let input_source = input_source
+                .with_reconfiguration_route("configured-control")
+                .expect("configured control route should be accepted");
+            let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
+            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+            let (ack_tx, mut ack_rx) = bounded::channel::<
+                trustworthiness_checker::runtime::dataflow::ReconfigurationAck,
+            >(2)
+            .into_split();
+
+            let monitor = GeneralRuntimeBuilder::new()
+                .executor(ex.clone())
+                .model(spec)
+                .input_pipeline(InputPipeline::new(input_source))
+                .expect("manual input source should support reconfiguration")
+                .output_pipeline_builder(output_builder)
+                .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
+                .semantics(semantics)
+                .acknowledgements(ack_tx)
+                // No CLI/topic override: the configured source route must be retained.
+                .build()
+                .await
+                .expect("general runtime builder should succeed");
+            let task = ex.spawn(monitor.run());
+
+            send_value_noval_others(("x", Value::Int(1)), &mut tx_fans).await;
+            let mut first = with_timeout(out_rx.recv(), 3, "reconf dataflow initial output")
+                .await
+                .expect("failed to receive initial output")
+                .expect("reconf dataflow output channel closed");
+            assert_eq!(first.remove(&"z".into()), Some(Value::Int(2)));
+
+            let request = serde_json::json!({ "spec": source_text }).to_string();
+            send_value_noval_others((RECONF_TOPIC, Value::Str(request.into())), &mut tx_fans).await;
+            let acknowledgement = with_timeout(ack_rx.recv(), 3, "reconf dataflow ack")
+                .await
+                .expect("reconf dataflow did not acknowledge the command")
+                .expect("reconf dataflow acknowledgement channel closed");
+            assert!(!acknowledgement.applied);
+
+            send_value_noval_others(("x", Value::Int(3)), &mut tx_fans).await;
+            let mut second = with_timeout(out_rx.recv(), 3, "reconf dataflow replacement output")
+                .await
+                .expect("failed to receive replacement output")
+                .expect("reconf dataflow output channel closed");
+            assert_eq!(second.remove(&"z".into()), Some(Value::Int(4)));
+
+            drop(tx_fans);
+            with_timeout(task, 3, "reconf dataflow shutdown")
+                .await
+                .expect("reconf dataflow did not shut down")
+                .expect("reconf dataflow returned an error");
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_general_builder_propagates_reconf_dataflow_execution_policy(
+        ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nout z\nz = x"
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let (input_source, mut tx_fans) = manual_input_source(["x"]);
+        let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let monitor = GeneralRuntimeBuilder::new()
+            .executor(ex.clone())
+            .model(spec)
+            .input_pipeline(InputPipeline::new(input_source))
+            .expect("manual input source should support reconfiguration")
+            .output_pipeline_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
+            .semantics(Semantics::Untimed)
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
+        let task = ex.spawn(monitor.run());
+
+        let subscription_waits: Vec<_> = tx_fans
+            .values()
+            .map(|sender| {
+                let fanout = sender.fanout();
+                let seen = fanout.sub_events();
+                Box::pin(async move {
+                    with_timeout(fanout.wait_for_sub_event(seen), 3, "dataflow subscription").await
+                })
+            })
+            .collect();
+        future::join_all(subscription_waits).await;
+
+        for value in 0..255 {
+            send_value_noval_others(("x", Value::Int(value)), &mut tx_fans).await;
+        }
+        smol::Timer::after(std::time::Duration::from_millis(10)).await;
+        let mut partial_output = Box::pin(out_rx.recv());
+        assert!(
+            futures::poll!(partial_output.as_mut()).is_pending(),
+            "buffered reconfigurable dataflow flushed before its 256-tick threshold"
+        );
+        drop(partial_output);
+
+        send_value_noval_others(("x", Value::Int(255)), &mut tx_fans).await;
+        for expected in 0..256 {
+            let mut output = with_timeout(out_rx.recv(), 3, "buffered dataflow output")
+                .await
+                .expect("buffered dataflow output did not arrive")
+                .expect("buffered dataflow output channel closed");
+            assert_eq!(output.remove(&"z".into()), Some(Value::Int(expected)));
+        }
+
+        drop(tx_fans);
+        with_timeout(task, 3, "buffered reconfigurable dataflow shutdown")
+            .await
+            .expect("buffered reconfigurable dataflow did not shut down")
+            .expect("buffered reconfigurable dataflow returned an error");
+    }
+
+    #[apply(async_test)]
+    async fn test_general_builder_reports_in_memory_reconfiguration_error(
+        ex: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nout z\nz = x"
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let input =
+            InputSource::in_memory_rows(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]));
+        let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+
+        let monitor = GeneralRuntimeBuilder::new()
+            .executor(ex)
+            .model(spec)
+            .input_pipeline(InputPipeline::new(input))
+            .expect("input pipeline should be accepted by the public builder")
+            .output_pipeline_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
+            .semantics(Semantics::Untimed)
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
+        let error = monitor
+            .run()
+            .await
+            .expect_err("in-memory input must not panic or start a reconfigurable runtime");
+        assert!(
+            error
+                .to_string()
+                .contains("does not support reconfiguration")
         );
     }
 

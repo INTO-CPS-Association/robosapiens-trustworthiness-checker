@@ -1001,6 +1001,7 @@ impl<V> InputSource<V> {
                 })))
             }
             InputSourceKind::Ros { executor, .. } => {
+                validate_ros_control_route(&routes, control_route.as_ref())?;
                 cfg_select! {
                     feature = "ros" => {
                     let mapping = routes
@@ -1097,6 +1098,8 @@ fn poll_controlled_input<V>(
     control: &mut Option<crate::OutputStream<anyhow::Result<MonitorConfig>>>,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<ControlledInputNext<V>> {
+    // Check control first for responsiveness only; independent ROS/manual
+    // streams still have no ordering edge at this boundary.
     if let Some(stream) = control.as_mut() {
         match stream.as_mut().poll_next(cx) {
             std::task::Poll::Ready(Some(request)) => {
@@ -1122,6 +1125,20 @@ fn poll_controlled_input<V>(
     } else {
         std::task::Poll::Pending
     }
+}
+
+fn validate_ros_control_route(
+    data_routes: &BTreeMap<VarName, Route>,
+    control_route: &str,
+) -> anyhow::Result<()> {
+    for (variable, route) in data_routes {
+        if route.route.as_ref() == control_route {
+            anyhow::bail!(
+                "ROS control topic `{control_route}` collides with data topic for variable `{variable}`"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn controlled_input_stream<V: 'static>(
@@ -1195,12 +1212,9 @@ impl<V> InputPipeline<V> {
         &self,
         requested_route: Option<&str>,
     ) -> anyhow::Result<()> {
-        for source in self.sources.sources.values() {
-            anyhow::ensure!(
-                !matches!(source.kind, InputSourceKind::File { .. }),
-                "file-backed reconfiguration is not supported"
-            );
-        }
+        // Only the selected control source is opened by a reconfigurable
+        // generation. Other configured sources may remain inactive, including
+        // sources that cannot carry a live control route.
         self.sources
             .resolve_reconfiguration_source(requested_route)
             .map(|_| ())
@@ -1278,71 +1292,68 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        let mut sources = resolved.into_sources();
-        if !sources
+        // A reconfiguration command is ordered only when data and control are
+        // delivered by the same source-owned item stream. Validate the whole
+        // generation before looking up or opening any transport so a command
+        // can never terminate one source while another active source still has
+        // data pending.
+        let mut source_plans = resolved.into_sources();
+        let source_plan = match source_plans.len() {
+            0 => ResolvedSource::new(control.source.clone(), []),
+            1 => {
+                let source_plan = source_plans.pop().expect("source count checked above");
+                anyhow::ensure!(
+                    source_plan.source() == &control.source,
+                    "reconfigurable generation data source `{}` differs from selected control source `{}` (route `{}`); bind every active model input to `{}` or select a control route owned by `{}`",
+                    source_plan.source(),
+                    control.source,
+                    control.route,
+                    control.source,
+                    source_plan.source()
+                );
+                source_plan
+            }
+            _ => {
+                let active_sources = source_plans
+                    .iter()
+                    .map(|source| source.source().as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "reconfigurable generation has active model bindings across sources [{active_sources}]; data and the control route `{}` must use one source (selected control source `{}`). Bind all active inputs to `{}` or select a control route on their single source",
+                    control.route,
+                    control.source,
+                    control.source
+                );
+            }
+        };
+
+        // The source-plan check above is deliberately complete before this
+        // lookup and before the source opener can acquire any resource.
+        let source = self.sources.sources.get(&control.source).ok_or_else(|| {
+            anyhow::anyhow!("input source `{}` is not registered", control.source)
+        })?;
+        let description = control.source.clone();
+        let bindings = source_plan.bindings().to_vec();
+        let variables = bindings
             .iter()
-            .any(|source| source.source() == &control.source)
-        {
-            sources.push(ResolvedSource::new(control.source.clone(), []));
-        }
-        let mut streams = Vec::new();
-        for source_plan in sources {
-            let source = self
-                .sources
-                .sources
-                .get(source_plan.source())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("input source `{}` is not registered", source_plan.source())
-                })?;
-            let description = source_plan.source().clone();
-            let bindings = source_plan.bindings().to_vec();
-            let variables = bindings
-                .iter()
-                .map(|binding| binding.variable().clone())
-                .collect::<BTreeSet<_>>();
-            let stream: ReconfigurableInputStream<V> = if source_plan.source() == &control.source {
-                let control_stream = source
-                    .clone()
-                    .open_with_control(bindings, variables, control.route.clone())
-                    .await
-                    .with_context(|| {
-                        format!("reconfiguration source `{description}` could not be opened")
-                    })?;
-                Box::pin(async_stream::stream! {
-                    let mut control_stream = control_stream;
-                    while let Some(item) = control_stream.next().await {
-                        yield item.map_err(|error| {
-                            error.context(format!(
-                                "reconfiguration source `{description}` emitted an error"
-                            ))
-                        });
-                    }
-                })
-            } else {
-                let source_stream = source
-                    .clone()
-                    .open(bindings, variables)
-                    .await
-                    .with_context(|| format!("input source `{description}` could not be opened"))?;
-                Box::pin(async_stream::try_stream! {
-                    let mut source_stream = source_stream;
-                    while let Some(batch) = source_stream.next().await {
-                        yield ReconfigurableInputItem::Data(batch.with_context(|| {
-                            format!("input source `{description}` emitted an error")
-                        })?);
-                    }
-                })
-            };
-            streams.push(stream);
-        }
+            .map(|binding| binding.variable().clone())
+            .collect::<BTreeSet<_>>();
+        let control_stream = source
+            .clone()
+            .open_with_control(bindings, variables, control.route.clone())
+            .await
+            .with_context(|| {
+                format!("reconfiguration source `{description}` could not be opened")
+            })?;
         Ok(Box::pin(async_stream::stream! {
-            let mut streams = futures::stream::select_all(streams);
-            while let Some(item) = streams.next().await {
-                let terminal = matches!(&item, Ok(ReconfigurableInputItem::Reconfigure(_)));
-                yield item;
-                if terminal {
-                    return;
-                }
+            let mut control_stream = control_stream;
+            while let Some(item) = control_stream.next().await {
+                yield item.map_err(|error| {
+                    error.context(format!(
+                        "reconfiguration source `{description}` emitted an error"
+                    ))
+                });
             }
         }))
     }
@@ -1604,21 +1615,112 @@ mod resolution_tests {
     }
 
     #[test]
-    fn control_only_manual_source_remains_open_for_reconfiguration() {
+    fn reconfigurable_generation_rejects_data_source_different_from_control_before_opening() {
         smol::block_on(async {
+            let (data_sender, data_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
-            let (_data_sender, data_fanout) = Fanout::<Value>::new();
             let data_source =
-                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout)]));
-            let control_source =
-                InputSource::<Value>::manual_with_control(BTreeMap::new(), Some(control_fanout))
-                    .with_reconfiguration_route("control")
-                    .unwrap();
+                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout.clone())]));
+            let control_source = InputSource::<Value>::manual_with_control(
+                BTreeMap::new(),
+                Some(control_fanout.clone()),
+            )
+            .with_reconfiguration_route("control")
+            .unwrap();
             let pipeline = InputPipeline::from_sources(
                 InputSources::new()
                     .insert("data", data_source)
                     .insert("control", control_source),
             );
+            let variables = BTreeSet::from([VarName::new("x")]);
+            let resolved = pipeline.resolve(&variables, None).unwrap();
+            let control = ReconfigurationControl::new("control", "control").unwrap();
+
+            // Both values are pending before the attempted open. The source
+            // ownership check must reject the generation without subscribing
+            // to either fanout, rather than returning a stream that could let
+            // the command terminate over pending data from `data`.
+            data_sender.send(Value::Int(7)).await;
+            control_sender
+                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .await;
+            let error = match pipeline.open_reconfigurable(resolved, &control).await {
+                Ok(_) => panic!("data/control source mismatch must be rejected before opening"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("data source `data` differs from selected control source `control`")
+            );
+            assert_eq!(data_fanout.sub_events(), 0);
+            assert_eq!(control_fanout.sub_events(), 0);
+        });
+    }
+
+    #[test]
+    fn reconfigurable_generation_rejects_bindings_spanning_sources_before_opening() {
+        smol::block_on(async {
+            let (data_sender, data_fanout) = Fanout::<Value>::new();
+            let (_control_data_sender, control_data_fanout) = Fanout::<Value>::new();
+            let (control_sender, control_fanout) = Fanout::<Value>::new();
+            let data_source =
+                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout.clone())]));
+            let control_source = InputSource::<Value>::manual_with_control(
+                BTreeMap::from([("y".into(), control_data_fanout)]),
+                Some(control_fanout.clone()),
+            )
+            .with_reconfiguration_route("control")
+            .unwrap();
+            let pipeline = InputPipeline::from_sources(
+                InputSources::new()
+                    .insert("data", data_source)
+                    .insert("control", control_source),
+            );
+            let variables = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+            let resolved = pipeline.resolve(&variables, None).unwrap();
+            let control = ReconfigurationControl::new("control", "control").unwrap();
+
+            data_sender.send(Value::Int(1)).await;
+            control_sender
+                .send(Value::Str(r#"{"spec":"in x\nin y"}"#.into()))
+                .await;
+            let error = match pipeline.open_reconfigurable(resolved, &control).await {
+                Ok(_) => panic!("cross-source generation must be rejected before opening"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("active model bindings across sources")
+            );
+            assert_eq!(data_fanout.sub_events(), 0);
+            assert_eq!(control_fanout.sub_events(), 0);
+        });
+    }
+
+    #[test]
+    fn inactive_sources_do_not_block_reconfigurable_opening() {
+        smol::block_on(async {
+            let (control_sender, control_fanout) = Fanout::<Value>::new();
+            let (_data_sender, data_fanout) = Fanout::<Value>::new();
+            let control_source = InputSource::<Value>::manual_with_control(
+                BTreeMap::from([("x".into(), data_fanout)]),
+                Some(control_fanout),
+            )
+            .with_reconfiguration_route("control")
+            .unwrap();
+            let pipeline = InputPipeline::from_sources(
+                InputSources::new()
+                    .insert("control", control_source)
+                    .insert(
+                        "inactive-file",
+                        InputSource::file("not-opened.input".to_owned()),
+                    ),
+            );
+            pipeline.ensure_reconfigurable(None).unwrap();
             let variables = BTreeSet::from([VarName::new("x")]);
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
@@ -1630,9 +1732,78 @@ mod resolution_tests {
             control_sender
                 .send(Value::Str(r#"{"spec":"in x"}"#.into()))
                 .await;
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Reconfigure(_)
+            ));
+        });
+    }
 
-            let item = stream.next().await.unwrap().unwrap();
-            assert!(matches!(item, ReconfigurableInputItem::Reconfigure(_)));
+    #[test]
+    fn ros_control_topic_collision_is_rejected_before_opening() {
+        smol::block_on(async {
+            let source = InputSource::<Value>::ros(
+                BTreeMap::from([(
+                    VarName::new("x"),
+                    Route::new(
+                        "/shared".to_owned().into_boxed_str(),
+                        Some(CodecId::new("Int32".to_owned().into_boxed_str())),
+                    )
+                    .unwrap(),
+                )]),
+                Rc::new(LocalExecutor::new()),
+            );
+            let pipeline = InputPipeline::new(source);
+            let variables = BTreeSet::from([VarName::new("x")]);
+            let resolved = pipeline.resolve(&variables, None).unwrap();
+            let control = ReconfigurationControl::new("default", "/shared").unwrap();
+
+            let error = match pipeline.open_reconfigurable(resolved, &control).await {
+                Ok(_) => panic!("a ROS control topic cannot reuse an active data topic"),
+                Err(error) => error,
+            };
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(
+                    "ROS control topic `/shared` collides with data topic for variable `x`"
+                ),
+                "unexpected error: {message}"
+            );
+        });
+    }
+
+    #[test]
+    fn manual_control_requires_external_quiescence_before_publish() {
+        smol::block_on(async {
+            let (control_sender, control_fanout) = Fanout::<Value>::new();
+            let (data_sender, data_fanout) = Fanout::<Value>::new();
+            let source = InputSource::manual_with_control(
+                BTreeMap::from([(VarName::new("x"), data_fanout)]),
+                Some(control_fanout),
+            );
+            let pipeline = InputPipeline::new(source);
+            let variables = BTreeSet::from([VarName::new("x")]);
+            let resolved = pipeline.resolve(&variables, None).unwrap();
+            let control = ReconfigurationControl::new("default", "control").unwrap();
+            let mut stream = pipeline
+                .open_reconfigurable(resolved, &control)
+                .await
+                .unwrap();
+
+            // Both independent fanouts are populated before the first poll.
+            // A control item may therefore terminate the generation while
+            // earlier data is still queued. This is a deterministic reminder
+            // that manual producers must quiesce and acknowledge prior data
+            // before publishing control.
+            data_sender.send(Value::Int(7)).await;
+            control_sender
+                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .await;
+
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Reconfigure(_)
+            ));
             assert!(stream.next().await.is_none());
         });
     }

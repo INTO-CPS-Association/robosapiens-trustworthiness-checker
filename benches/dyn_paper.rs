@@ -2,10 +2,12 @@ use std::rc::Rc;
 use std::time::Duration;
 #[cfg(feature = "jit")]
 use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow_limited;
-use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_semisync_limited;
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_dataflow_limited, monitor_outputs_quickened_dataflow_limited,
+};
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
@@ -86,7 +88,7 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new("dyn_paper_direct_dataflow", size),
+            BenchmarkId::new("dyn_paper_direct_dataflow_untyped", size),
             &(&spec_direct),
             |b, &spec| {
                 let benchmark_executor = LocalSmolExecutor::new();
@@ -135,7 +137,7 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new(format!("dyn_paper_{}_dataflow", percent), size),
+            BenchmarkId::new(format!("dyn_paper_{}_dataflow_untyped", percent), size),
             &(&spec),
             |b, &spec| {
                 let benchmark_executor = LocalSmolExecutor::new();
@@ -150,7 +152,22 @@ fn from_elem(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
-            BenchmarkId::new(format!("dyn_paper_{}_dataflow_specialised", percent), size),
+            BenchmarkId::new(format!("dyn_paper_{}_dataflow", percent), size),
+            &(&checked_spec),
+            |b, &spec| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_dataflow_limited(
+                        benchmark_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                        size,
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(format!("dyn_paper_{}_dataflow_quickened", percent), size),
             &(&checked_spec),
             |b, &spec| {
                 let benchmark_executor = LocalSmolExecutor::new();

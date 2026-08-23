@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use async_trait::async_trait;
 use std::rc::Rc;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,6 +12,7 @@ use smol::LocalExecutor;
 use tracing::debug;
 
 use crate::ExecutionPolicy;
+use crate::dataflow::ContextTransferPolicy;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
     DsrvSpecification, InputStream, Runtime, Specification, Value, VarName,
@@ -30,7 +32,9 @@ use crate::{
     },
     lang::mstlo::MstloSpecification,
     runtime::{
-        dataflow::DataflowRuntimeBuilder,
+        dataflow::{
+            DataflowRuntimeBuilder, ReconfigurableDataflowRuntimeBuilder, ReconfigurationAckSink,
+        },
         mstlo::{MstloRuntimeBuilder, MstloStreamValue},
         reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder,
         semi_sync::{SemiSyncContext, SemiSyncRuntimeBuilder},
@@ -258,8 +262,51 @@ impl<
     }
 }
 
-struct TypeCheckingBuilder<Builder>(Builder);
-struct GradualTypeCheckingBuilder<Builder>(Builder);
+enum TypeCheckingRuntime<Mon> {
+    Ready(Mon),
+    Error(anyhow::Error),
+}
+
+#[async_trait(?Send)]
+impl<Mon> Runtime for TypeCheckingRuntime<Mon>
+where
+    Mon: Runtime + 'static,
+{
+    async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
+        match *self {
+            Self::Ready(runtime) => Box::new(runtime).run_boxed().await,
+            Self::Error(error) => Err(error),
+        }
+    }
+}
+
+struct TypeCheckingBuilder<Builder> {
+    builder: Builder,
+    type_check_error: Option<anyhow::Error>,
+}
+
+impl<Builder> TypeCheckingBuilder<Builder> {
+    fn new(builder: Builder) -> Self {
+        Self {
+            builder,
+            type_check_error: None,
+        }
+    }
+}
+
+struct GradualTypeCheckingBuilder<Builder> {
+    builder: Builder,
+    type_check_error: Option<anyhow::Error>,
+}
+
+impl<Builder> GradualTypeCheckingBuilder<Builder> {
+    fn new(builder: Builder) -> Self {
+        Self {
+            builder,
+            type_check_error: None,
+        }
+    }
+}
 
 fn parse_unchecked_spec(input: &str) -> anyhow::Result<DsrvSpecification> {
     input.parse().map_err(anyhow::Error::from)
@@ -291,6 +338,51 @@ fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecif
     })
 }
 
+fn configure_reconfigurable_dataflow_builder<S>(
+    builder: ReconfigurableDataflowRuntimeBuilder<S>,
+    input_pipeline: Option<InputPipeline<Value>>,
+    output_builder: Option<OutputBackendBuilder<Value>>,
+    reconf_topic: Option<String>,
+    execution_policy: ExecutionPolicy,
+    transfer_policy: ContextTransferPolicy,
+    acknowledgements: Option<ReconfigurationAckSink>,
+    direct_input_supplied: bool,
+) -> ReconfigurableDataflowRuntimeBuilder<S>
+where
+    S: Specification + 'static,
+    crate::dataflow::DataflowMonitor: TryFrom<S, Error = crate::dataflow::DataflowCompilationError>,
+{
+    let builder = builder
+        .execution_policy(execution_policy)
+        .context_transfer(transfer_policy);
+    let builder = if direct_input_supplied {
+        builder.setup_error(
+            "reconfigurable dataflow runtime requires an InputPipeline, not a direct InputStream",
+        )
+    } else {
+        match input_pipeline {
+            Some(input_pipeline) => builder.input_pipeline(input_pipeline),
+            None => {
+                builder.setup_error("reconfigurable dataflow runtime requires an InputPipeline")
+            }
+        }
+    };
+    let builder = match output_builder {
+        Some(output_builder) => builder.output_builder(output_builder),
+        None => {
+            builder.setup_error("reconfigurable dataflow runtime requires an OutputBackendBuilder")
+        }
+    };
+    let builder = match reconf_topic {
+        Some(topic) => builder.reconf_topic(topic),
+        None => builder,
+    };
+    match acknowledgements {
+        Some(sink) => builder.acknowledgements(sink),
+        None => builder,
+    }
+}
+
 fn configure_reconfigurable_builder<AC, MS>(
     builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     input_pipeline: InputPipeline<Value>,
@@ -320,33 +412,62 @@ impl<
     MonBuilder: RuntimeBuilder<CheckedDsrvSpecification, V, Runtime = Mon> + 'static,
 > RuntimeBuilder<DsrvSpecification, V> for TypeCheckingBuilder<MonBuilder>
 {
-    type Runtime = Mon;
+    type Runtime = TypeCheckingRuntime<Mon>;
 
     fn new() -> Self {
-        Self(MonBuilder::new())
+        Self::new(MonBuilder::new())
     }
 
     fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self(self.0.executor(ex))
+        Self {
+            builder: self.builder.executor(ex),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = model
-            .type_check(TypeCheckOptions::STRICT)
-            .expect("Model failed to type check");
-        Self(self.0.model(model))
+        let Self {
+            builder,
+            type_check_error,
+        } = self;
+        match model.type_check(TypeCheckOptions::STRICT) {
+            Ok(model) => Self {
+                builder: builder.model(model),
+                type_check_error,
+            },
+            Err(errors) => Self {
+                builder,
+                type_check_error: type_check_error
+                    .or_else(|| Some(anyhow::anyhow!("Model failed to type check: {errors:?}"))),
+            },
+        }
     }
 
     fn input(self, input: crate::InputStream<V>) -> Self {
-        Self(self.0.input(input))
+        Self {
+            builder: self.builder.input(input),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn output_writer(self, writer: OutputWriter<V>) -> Self {
-        Self(self.0.output_writer(writer))
+        Self {
+            builder: self.builder.output_writer(writer),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { self.0.build().await })
+        let Self {
+            builder,
+            type_check_error,
+        } = self;
+        Box::pin(async move {
+            match type_check_error {
+                Some(error) => TypeCheckingRuntime::Error(error),
+                None => TypeCheckingRuntime::Ready(builder.build().await),
+            }
+        })
     }
 }
 
@@ -356,33 +477,65 @@ impl<
     MonBuilder: RuntimeBuilder<CheckedDsrvSpecification, V, Runtime = Mon> + 'static,
 > RuntimeBuilder<DsrvSpecification, V> for GradualTypeCheckingBuilder<MonBuilder>
 {
-    type Runtime = Mon;
+    type Runtime = TypeCheckingRuntime<Mon>;
 
     fn new() -> Self {
-        Self(MonBuilder::new())
+        Self::new(MonBuilder::new())
     }
 
     fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self(self.0.executor(ex))
+        Self {
+            builder: self.builder.executor(ex),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn model(self, model: DsrvSpecification) -> Self {
-        let model = model
-            .type_check(TypeCheckOptions::GRADUAL)
-            .expect("Model failed to gradual type check");
-        Self(self.0.model(model))
+        let Self {
+            builder,
+            type_check_error,
+        } = self;
+        match model.type_check(TypeCheckOptions::GRADUAL) {
+            Ok(model) => Self {
+                builder: builder.model(model),
+                type_check_error,
+            },
+            Err(errors) => Self {
+                builder,
+                type_check_error: type_check_error.or_else(|| {
+                    Some(anyhow::anyhow!(
+                        "Model failed to gradual type check: {errors:?}"
+                    ))
+                }),
+            },
+        }
     }
 
     fn input(self, input: crate::InputStream<V>) -> Self {
-        Self(self.0.input(input))
+        Self {
+            builder: self.builder.input(input),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn output_writer(self, writer: OutputWriter<V>) -> Self {
-        Self(self.0.output_writer(writer))
+        Self {
+            builder: self.builder.output_writer(writer),
+            type_check_error: self.type_check_error,
+        }
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { self.0.build().await })
+        let Self {
+            builder,
+            type_check_error,
+        } = self;
+        Box::pin(async move {
+            match type_check_error {
+                Some(error) => TypeCheckingRuntime::Error(error),
+                None => TypeCheckingRuntime::Ready(builder.build().await),
+            }
+        })
     }
 }
 
@@ -638,6 +791,17 @@ async fn close_scheduler_only_output_writer<V>(mut writer: OutputWriter<V>) -> a
         .map_err(|error| anyhow::anyhow!("scheduler-only output writer close failed: {error}"))
 }
 
+async fn reject_reconfigurable_output_writer<V>(mut writer: OutputWriter<V>) -> anyhow::Error {
+    let configuration_error =
+        "reconfigurable runtimes require an output_pipeline_builder, not an output_writer";
+    match writer.close().await {
+        Ok(()) => anyhow::anyhow!(configuration_error),
+        Err(close_error) => anyhow::anyhow!(
+            "{configuration_error}; additionally failed to close the supplied output writer: {close_error}"
+        ),
+    }
+}
+
 pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
@@ -654,6 +818,8 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
     pub topic_mapping: Option<TopicMapping>,
+    /// Releases producers waiting at a reconfiguration command barrier.
+    pub acknowledgements: Option<ReconfigurationAckSink>,
     pub mstlo_algorithm: Algorithm,
     pub mstlo_synchronization_strategy: SynchronizationStrategy,
     pub mstlo_variables: Variables,
@@ -681,6 +847,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             use_context_transfer: true,
             var_msg_types: None,
             topic_mapping: None,
+            acknowledgements: None,
             mstlo_algorithm: Algorithm::default(),
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
             mstlo_variables: Variables::new(),
@@ -810,6 +977,13 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
+    pub fn acknowledgements(self, sink: ReconfigurationAckSink) -> Self {
+        Self {
+            acknowledgements: Some(sink),
+            ..self
+        }
+    }
+
     pub fn use_context_transfer(self, use_context_transfer: bool) -> Self {
         Self {
             use_context_transfer,
@@ -907,6 +1081,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                 use_context_transfer: self.use_context_transfer,
                 var_msg_types: self.var_msg_types,
                 topic_mapping: self.topic_mapping,
+                acknowledgements: self.acknowledgements,
                 mstlo_algorithm: self.mstlo_algorithm,
                 mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
                 mstlo_variables: self.mstlo_variables,
@@ -938,6 +1113,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     use_context_transfer: self.use_context_transfer,
                     var_msg_types: self.var_msg_types,
                     topic_mapping: self.topic_mapping,
+                    acknowledgements: self.acknowledgements,
                     mstlo_algorithm: self.mstlo_algorithm,
                     mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
                     mstlo_variables: self.mstlo_variables,
@@ -1041,6 +1217,8 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
         var_msg_types: Option<MsgTypeMapping>,
+        acknowledgements: Option<ReconfigurationAckSink>,
+        direct_input_supplied: bool,
     ) -> anyhow::Result<Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
@@ -1055,32 +1233,97 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     DataflowRuntimeBuilder::<DsrvSpecification>::new().execution_policy(policy),
                 ),
                 (RuntimeSpec::Dataflow(policy), Semantics::TypedUntimed) => {
-                    Box::new(TypeCheckingBuilder(
+                    Box::new(TypeCheckingBuilder::new(
                         DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
                             .execution_policy(policy),
                     ))
                 }
                 (RuntimeSpec::Dataflow(policy), Semantics::GradualTypedUntimed) => {
-                    Box::new(GradualTypeCheckingBuilder(
+                    Box::new(GradualTypeCheckingBuilder::new(
                         DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
                             .execution_policy(policy),
                     ))
                 }
+                (RuntimeSpec::ReconfDataflow(policy), Semantics::Untimed) => {
+                    let transfer_policy = if use_context_transfer {
+                        ContextTransferPolicy::Compatible
+                    } else {
+                        ContextTransferPolicy::None
+                    };
+                    let builder = configure_reconfigurable_dataflow_builder(
+                        ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
+                            .parse_spec(parse_unchecked_spec),
+                        input_pipeline,
+                        output_pipeline_builder,
+                        reconf_topic,
+                        policy,
+                        transfer_policy,
+                        acknowledgements,
+                        direct_input_supplied,
+                    );
+                    Box::new(builder)
+                }
+                (RuntimeSpec::ReconfDataflow(policy), Semantics::TypedUntimed) => {
+                    let transfer_policy = if use_context_transfer {
+                        ContextTransferPolicy::Compatible
+                    } else {
+                        ContextTransferPolicy::None
+                    };
+                    let builder = configure_reconfigurable_dataflow_builder(
+                        ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+                            .parse_spec(parse_checked_spec),
+                        input_pipeline,
+                        output_pipeline_builder,
+                        reconf_topic,
+                        policy,
+                        transfer_policy,
+                        acknowledgements,
+                        direct_input_supplied,
+                    );
+                    Box::new(TypeCheckingBuilder::new(builder))
+                }
+                (RuntimeSpec::ReconfDataflow(policy), Semantics::GradualTypedUntimed) => {
+                    let transfer_policy = if use_context_transfer {
+                        ContextTransferPolicy::Compatible
+                    } else {
+                        ContextTransferPolicy::None
+                    };
+                    let builder = configure_reconfigurable_dataflow_builder(
+                        ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+                            .parse_spec(parse_gradually_checked_spec),
+                        input_pipeline,
+                        output_pipeline_builder,
+                        reconf_topic,
+                        policy,
+                        transfer_policy,
+                        acknowledgements,
+                        direct_input_supplied,
+                    );
+                    Box::new(GradualTypeCheckingBuilder::new(builder))
+                }
+                (runtime @ RuntimeSpec::ReconfDataflow(_), semantics) => Box::new(
+                    ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new().setup_error(
+                        format!(
+                            "{runtime:?} supports only Untimed, TypedUntimed, and GradualTypedUntimed semantics; got {semantics:?}"
+                        ),
+                    ),
+                ),
                 (RuntimeSpec::SemiSync, Semantics::Untimed) => Box::new(SemiSyncRuntimeBuilder::<
                     SemiSyncValueConfig,
                     UntimedDsrvSemantics,
                 >::new()),
                 (RuntimeSpec::SemiSync, Semantics::TypedUntimed) => {
-                    Box::new(TypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    Box::new(TypeCheckingBuilder::new(SemiSyncRuntimeBuilder::<
                         CheckedSemiSyncValueConfig,
                         CheckedUntimedDsrvSemantics,
                     >::new()))
                 }
                 (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed) => {
-                    Box::new(GradualTypeCheckingBuilder(SemiSyncRuntimeBuilder::<
+                    Box::new(GradualTypeCheckingBuilder::new(SemiSyncRuntimeBuilder::<
                         CheckedSemiSyncValueConfig,
                         CheckedUntimedDsrvSemantics,
-                    >::new()))
+                    >::new(
+                    )))
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::Untimed) => {
                     let builder = configure_reconfigurable_builder(
@@ -1122,7 +1365,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     reconf_topic,
                     use_context_transfer,
                 );
-                    Box::new(TypeCheckingBuilder(builder))
+                    Box::new(TypeCheckingBuilder::new(builder))
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed) => {
                     let builder = configure_reconfigurable_builder(
@@ -1144,19 +1387,20 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     reconf_topic,
                     use_context_transfer,
                 );
-                    Box::new(GradualTypeCheckingBuilder(builder))
+                    Box::new(GradualTypeCheckingBuilder::new(builder))
                 }
                 (RuntimeSpec::Async, Semantics::TypedUntimed) => {
-                    Box::new(TypeCheckingBuilder(AsyncRuntimeBuilder::<
+                    Box::new(TypeCheckingBuilder::new(AsyncRuntimeBuilder::<
                         CheckedValueConfig,
                         CheckedUntimedDsrvSemantics,
                     >::new()))
                 }
                 (RuntimeSpec::Async, Semantics::GradualTypedUntimed) => {
-                    Box::new(GradualTypeCheckingBuilder(AsyncRuntimeBuilder::<
+                    Box::new(GradualTypeCheckingBuilder::new(AsyncRuntimeBuilder::<
                         CheckedValueConfig,
                         CheckedUntimedDsrvSemantics,
-                    >::new()))
+                    >::new(
+                    )))
                 }
                 (RuntimeSpec::Distributed, Semantics::Untimed) => {
                     debug!(
@@ -1341,12 +1585,23 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         Ok(builder)
     }
 
-    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
+    pub async fn build(mut self) -> anyhow::Result<Box<dyn Runtime>> {
         if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
-            let writer = self
-                .output_writer
-                .expect("output writer exists after simultaneous-output check");
+            let Some(writer) = self.output_writer.take() else {
+                return Err(anyhow::anyhow!(
+                    "output writer configuration changed while validating runtime outputs"
+                ));
+            };
             return Err(reject_simultaneous_output_sources(writer).await);
+        }
+        let reconfigurable = matches!(
+            self.runtime,
+            RuntimeSpec::ReconfSemiSync | RuntimeSpec::ReconfDataflow(_)
+        );
+        if reconfigurable {
+            if let Some(writer) = self.output_writer.take() {
+                return Err(reject_reconfigurable_output_writer(writer).await);
+            }
         }
 
         let distribution_mode = match self.distribution_mode_builder {
@@ -1387,19 +1642,12 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         });
         let scheduler_only =
             distributed_constraint_scheduler_only(self.runtime, &distribution_mode);
-        let (input_pipeline, input) = if self.runtime == RuntimeSpec::ReconfSemiSync {
-            if self.input.is_some() {
-                anyhow::bail!("ReconfigurableSemiSync runtime requires an InputPipeline");
-            }
-            (
-                Some(self.input_pipeline.ok_or_else(|| {
-                    anyhow::anyhow!("ReconfigurableSemiSync runtime requires an InputPipeline")
-                })?),
-                None,
-            )
+        let direct_input_supplied = self.input.is_some();
+        let (input_pipeline, input) = if reconfigurable {
+            (self.input_pipeline, None)
         } else {
             if self.input_pipeline.is_some() {
-                anyhow::bail!("InputPipeline is only supported by ReconfigurableSemiSync runtime");
+                anyhow::bail!("InputPipeline is only supported by reconfigurable runtimes");
             }
             (None, self.input)
         };
@@ -1421,10 +1669,12 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.use_context_transfer,
                 self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
+                self.acknowledgements,
+                direct_input_supplied,
             )?;
         // Construct the complete output pipeline before the runtime starts.
         // Runtimes receive one writer and retain their native logical tick shape.
-        let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
+        let builder = if reconfigurable {
             builder
         } else {
             match input {
@@ -1444,7 +1694,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             return Ok(builder.build().await);
         }
 
-        let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
+        let builder = if reconfigurable {
             builder
         } else if let Some(output_backend_builder) = output_pipeline_builder {
             let writer = output_backend_builder

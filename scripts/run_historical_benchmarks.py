@@ -12,10 +12,10 @@ from typing import Any
 
 EXPECTED = {
     "dup-semisync": ("dup_defer", "dup_defer/dup_defer_untyped_semisync/25000"),
-    "dup-dataflow": ("dup_defer", "dup_defer/dup_defer_untyped_dataflow/25000"),
+    "dup-dataflow": ("dup_defer", "dup_defer/dup_defer_dataflow_untyped/25000"),
     "dyn-async": ("dyn_paper", "dyn_paper/dyn_paper_50/100000"),
     "dyn-semisync": ("dyn_paper", "dyn_paper/dyn_paper_50_semisync/100000"),
-    "dyn-dataflow": ("dyn_paper", "dyn_paper/dyn_paper_50_dataflow/100000"),
+    "dyn-dataflow": ("dyn_paper", "dyn_paper/dyn_paper_50_dataflow_untyped/100000"),
     "maple-async": (
         "maple_sequence",
         "maple_sequence/maple_sequence_untyped_async/25000",
@@ -26,13 +26,13 @@ EXPECTED = {
     ),
     "maple-dataflow": (
         "maple_sequence",
-        "maple_sequence/maple_sequence_untyped_dataflow/25000",
+        "maple_sequence/maple_sequence_dataflow_untyped/25000",
     ),
 }
 HARD_DYNAMIC_DEFER = [
-    "hard_dynamic_defer/automatic_scope_dataflow/1024",
+    "hard_dynamic_defer/automatic_scope_dataflow_untyped/1024",
     "hard_dynamic_defer/automatic_scope_semisync/1024",
-    "hard_dynamic_defer/explicit_components_dataflow/1024",
+    "hard_dynamic_defer/explicit_components_dataflow_untyped/1024",
     "hard_dynamic_defer/explicit_components_semisync/1024",
 ]
 PIPELINE = [

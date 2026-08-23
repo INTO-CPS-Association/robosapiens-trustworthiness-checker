@@ -1390,12 +1390,15 @@ where
     }
 
     fn subcontext_excluding(&self, excluded: &VarName, _history_length: usize) -> Self {
+        // Automatic DUP scopes must not subscribe to every sibling computed stream. Such a
+        // subscription can make two owners wait on each other's subcontext; explicit scopes still
+        // use restricted_subcontext and retain their requested computed dependencies.
         let variables = self
             .variables
             .borrow()
-            .keys()
-            .filter(|name| *name != excluded)
-            .cloned()
+            .iter()
+            .filter(|(name, variable)| *name != excluded && variable.is_external())
+            .map(|(name, _)| name.clone())
             .collect();
         self.subcontext_common(variables)
     }
