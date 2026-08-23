@@ -39,7 +39,7 @@ pub(crate) trait RosPublisher<V: StreamData>: 'static {
 }
 
 pub(crate) type InterfaceValidator = fn(&OutputInterface) -> Result<(), OutputError>;
-pub(crate) type PublisherFactory<V: StreamData> =
+pub(crate) type PublisherFactory<V> =
     fn(&mut r2r::Node, &OutputRoute) -> Result<Box<dyn RosPublisher<V>>, OutputError>;
 
 /// A reusable local ROS output backend.

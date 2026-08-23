@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use smol::LocalExecutor;
 
-use crate::core::{InputStream, RosStreamValue, SharedOutputBackend, Value, VarName};
+use crate::core::{InputStream, RosStreamValue, SharedOutputBackend, Value};
 use crate::io::output::{RosOutputBackend, create_value_ros_publisher, validate_value_interface};
 use crate::runtime::mstlo::MstloTimedValue;
 
@@ -89,7 +89,7 @@ impl RosStreamValue for MstloTimedValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{OutputInterface, OutputRole, OutputRoute};
+    use crate::core::{OutputInterface, OutputRole, OutputRoute, VarName};
 
     #[test]
     fn dynamic_output_rejects_mstlo_messages_during_configuration() {

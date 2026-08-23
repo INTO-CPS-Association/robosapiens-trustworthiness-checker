@@ -628,9 +628,9 @@ mod tests {
 
     use super::*;
     use crate::core::{OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter};
-    use crate::io::{
-        CodecId, InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, Route,
-    };
+    #[cfg(not(feature = "ros"))]
+    use crate::io::{CodecId, Route};
+    use crate::io::{InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig};
     use crate::runtime::RuntimeBuilder;
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::semantics::UntimedDsrvSemantics;

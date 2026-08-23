@@ -1,19 +1,19 @@
 use tracing::warn;
 
 use super::ros_topic_stream_mapping::RosMsgType;
-use crate::Value;
+use crate::{Value, core::JsonStreamValue};
 
 /// Type-erased conversion used by the dynamic `Value` ROS output backend.
 pub(crate) trait ValuePublisher: 'static {
     fn publish_value(&self, value: &Value) -> anyhow::Result<()>;
 }
 
-struct TypedValuePublisher<T: r2r::WrappedTypesupport> {
+struct TypedValuePublisher<T: r2r::WrappedTypesupport + 'static> {
     publisher: r2r::Publisher<T>,
     convert_and_publish: fn(&r2r::Publisher<T>, &Value) -> anyhow::Result<()>,
 }
 
-impl<T: r2r::WrappedTypesupport> ValuePublisher for TypedValuePublisher<T> {
+impl<T: r2r::WrappedTypesupport + 'static> ValuePublisher for TypedValuePublisher<T> {
     fn publish_value(&self, value: &Value) -> anyhow::Result<()> {
         (self.convert_and_publish)(&self.publisher, value)
     }

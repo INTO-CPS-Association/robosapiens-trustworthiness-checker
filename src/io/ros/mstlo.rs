@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Context;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use smol::LocalExecutor;
 
 use uuid::Uuid;
