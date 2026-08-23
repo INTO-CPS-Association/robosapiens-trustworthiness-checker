@@ -196,9 +196,8 @@ routing, destination stages, and all destinations. Cross-transport transactions
 are not promised: one external destination may observe a batch before another
 fails.
 
-See [Output Architecture](./output.md) and [Output Pipeline Benchmarks](./output-pipeline-benchmarks.md)
-for routing, mirroring, backpressure, and benchmark methodology and workload
-tradeoffs.
+See [Output Architecture](./output.md) for routing, mirroring, backpressure,
+and benchmark methodology and workload tradeoffs.
 
 ## ROS2 Usage
 

@@ -349,7 +349,10 @@ per-update performance claim. All results remain local-sink results: they do
 not model broker behavior, serialization, network contention, transport
 acknowledgements, Redis/MQTT/ROS scheduling, or remote queueing.
 
-No performance numbers are retained in this document. Use the benchmark
-methodology and provenance requirements in
-`docs/src/output-pipeline-benchmarks.md`; a compile-only check or focused
-correctness smoke run is not a controlled production performance baseline.
+No performance numbers are retained in this document. Compile the benchmark
+with `cargo bench --profile bench-fast --bench output_pipeline --no-run`, then
+pin only the resulting benchmark executable to an otherwise-idle P-core for
+controlled measurements. Record the source revision, feature set, CPU/core,
+filter, sample configuration, and machine load alongside published results. A
+compile-only check or focused correctness smoke run is not a controlled
+production performance baseline.
