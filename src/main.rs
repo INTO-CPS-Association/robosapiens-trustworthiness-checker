@@ -35,6 +35,7 @@ use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
 use trustworthiness_checker::cli::args::{Cli, InputWindowMode, Language, resolve_runtime};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

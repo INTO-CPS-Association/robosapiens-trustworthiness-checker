@@ -24,6 +24,7 @@ use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 use trustworthiness_checker::{InputStream, io::map};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

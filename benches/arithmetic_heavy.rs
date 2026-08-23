@@ -16,6 +16,7 @@ use trustworthiness_checker::{
     CheckedDsrvSpecification, DsrvSpecification, InputStream, Value, VarName,
 };
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

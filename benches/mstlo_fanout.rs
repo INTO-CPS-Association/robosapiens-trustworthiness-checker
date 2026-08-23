@@ -18,6 +18,7 @@ use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
 use trustworthiness_checker::{InputStream, VarName};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

@@ -24,6 +24,7 @@ use trustworthiness_checker::dsrv_fixtures::{
 };
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

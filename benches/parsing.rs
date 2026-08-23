@@ -4,6 +4,7 @@ use rand::{RngExt, SeedableRng};
 
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

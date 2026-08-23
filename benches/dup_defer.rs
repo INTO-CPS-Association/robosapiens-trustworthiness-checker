@@ -30,6 +30,7 @@ use trustworthiness_checker::io::map;
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

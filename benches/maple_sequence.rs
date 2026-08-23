@@ -20,6 +20,7 @@ use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
 use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

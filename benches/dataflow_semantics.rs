@@ -17,6 +17,7 @@ use trustworthiness_checker::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use trustworthiness_checker::semantics::UntimedDsrvSemantics;
 use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

@@ -19,6 +19,10 @@ use trustworthiness_checker::io::{
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, Runtime, Value, VarName};
 
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 const ROWS: usize = 256;
 
 fn variable(index: usize) -> VarName {

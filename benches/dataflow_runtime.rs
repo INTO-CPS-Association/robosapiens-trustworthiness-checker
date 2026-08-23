@@ -7,6 +7,7 @@ use criterion::{
 use trustworthiness_checker::dataflow::{ContextTransferPolicy, DataflowMonitor};
 use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

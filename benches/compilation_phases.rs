@@ -17,6 +17,7 @@ use trustworthiness_checker::lang::dsrv::parser::{parse_expr, parse_str};
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, VarName};
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

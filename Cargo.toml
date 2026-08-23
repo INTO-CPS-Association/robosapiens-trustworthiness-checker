@@ -114,11 +114,11 @@ lto = false
 codegen-units = 16
 
 [features]
-default = ["jemalloc", "mqtt", "redis", "sat"]
+default = ["mqtt", "redis"]
 jemalloc = ["dep:tikv-jemallocator"]
 mqtt = ["dep:paho-mqtt"]
 redis = ["dep:redis"]
-sat = ["dep:sat-solver"]
+sat = ["dep:sat-solver", "jemalloc"]
 ros = ["dep:r2r", "tc-testutils/ros", "mqtt"]
 testcontainers = ["redis", "tc-testutils/testcontainers"]
 span-tracing = []
@@ -140,43 +140,53 @@ tc-testutils = { path = "libs/tc-testutils" }
 [[bench]]
 name = "simple_add"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dataflow_semantics"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "maple_sequence"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dup_defer"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dyn_paper"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dsrv_paper"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "parsing"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "compilation_phases"
 harness = false
+required-features = ["jemalloc"]
 
 
 [[bench]]
 name = "time_dependent_property"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dataflow_runtime"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "dataflow_allocations"
@@ -185,26 +195,31 @@ harness = false
 [[bench]]
 name = "threshold_property"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "mstlo_fanout"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "arithmetic_heavy"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "input_api"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "output_pipeline"
 harness = false
+required-features = ["jemalloc"]
 
 [[bench]]
 name = "jit_layers"
 harness = false
-required-features = ["jit"]
+required-features = ["jemalloc", "jit"]
 # [dev-dependencies.tc-testutils]
 # path = "libs/tc-testutils"

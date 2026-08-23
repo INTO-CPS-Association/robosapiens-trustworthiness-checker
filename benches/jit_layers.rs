@@ -1,5 +1,9 @@
 #![cfg(feature = "jit")]
 
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::hint::black_box;
 use std::time::Duration;
 
