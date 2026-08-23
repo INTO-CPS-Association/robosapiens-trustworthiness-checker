@@ -9,18 +9,24 @@ use criterion::Throughput;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
-use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow;
-use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_semisync_limited;
 
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_jit_dataflow, monitor_outputs_jit_dataflow_limited,
+};
+use trustworthiness_checker::benches_common::{
+    monitor_outputs_quickened_dataflow, monitor_outputs_quickened_dataflow_limited,
+};
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 use trustworthiness_checker::io::map;
+use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
 #[global_allocator]
@@ -59,6 +65,10 @@ fn from_elem(c: &mut Criterion) {
     let spec = spec_add_defer()
         .parse::<DsrvSpecification>()
         .expect("add/defer benchmark specification should parse");
+    let checked_spec = spec
+        .clone()
+        .type_check(TypeCheckOptions::GRADUAL)
+        .expect("add/defer benchmark specification should type check");
     let dynamic_spec = "in x\nin y\nin e\nout z\nz = dynamic(e)"
         .parse::<DsrvSpecification>()
         .expect("dynamic benchmark specification should parse");
@@ -138,10 +148,10 @@ fn from_elem(c: &mut Criterion) {
         let specialized_dataflow_executor = LocalSmolExecutor::new();
         group.bench_with_input(
             BenchmarkId::new("dup_defer_dataflow_specialised", size),
-            &(&spec),
+            &(&checked_spec),
             |b, &spec| {
                 b.to_async(specialized_dataflow_executor.clone()).iter(|| {
-                    monitor_outputs_specialized_dataflow(
+                    monitor_outputs_quickened_dataflow(
                         specialized_dataflow_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),
@@ -149,6 +159,23 @@ fn from_elem(c: &mut Criterion) {
                 })
             },
         );
+        #[cfg(feature = "jit")]
+        {
+            let jit_dataflow_executor = LocalSmolExecutor::new();
+            group.bench_with_input(
+                BenchmarkId::new("dup_defer_dataflow_jit", size),
+                &(&checked_spec),
+                |b, &spec| {
+                    b.to_async(jit_dataflow_executor.clone()).iter(|| {
+                        monitor_outputs_jit_dataflow(
+                            jit_dataflow_executor.executor.clone(),
+                            spec.clone(),
+                            input_stream_fn(),
+                        )
+                    })
+                },
+            );
+        }
         let semisync_executor = LocalSmolExecutor::new();
         group.bench_with_input(
             BenchmarkId::new("dup_defer_untyped_semisync", size),
@@ -343,6 +370,10 @@ fn hard_dynamic_defer(c: &mut Criterion) {
         HardDynamicDeferVariant::ExplicitComponents,
     ] {
         let spec = hard_dynamic_defer_spec(variant);
+        let checked_spec = spec
+            .clone()
+            .type_check(TypeCheckOptions::GRADUAL)
+            .expect("hard dynamic/defer benchmark specification should type check");
         for size in variant.sizes().iter().copied() {
             group.throughput(Throughput::Elements(size as u64));
 
@@ -368,15 +399,34 @@ fn hard_dynamic_defer(c: &mut Criterion) {
                 &size,
                 |b, &size| {
                     b.to_async(specialized_dataflow_executor.clone()).iter(|| {
-                        monitor_outputs_specialized_dataflow_limited(
+                        monitor_outputs_quickened_dataflow_limited(
                             specialized_dataflow_executor.executor.clone(),
-                            spec.clone(),
+                            checked_spec.clone(),
                             hard_dynamic_defer_input_stream(size, variant),
                             size,
                         )
                     })
                 },
             );
+
+            #[cfg(feature = "jit")]
+            {
+                let jit_dataflow_executor = LocalSmolExecutor::new();
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{}_dataflow_jit", variant.name()), size),
+                    &size,
+                    |b, &size| {
+                        b.to_async(jit_dataflow_executor.clone()).iter(|| {
+                            monitor_outputs_jit_dataflow_limited(
+                                jit_dataflow_executor.executor.clone(),
+                                checked_spec.clone(),
+                                hard_dynamic_defer_input_stream(size, variant),
+                                size,
+                            )
+                        })
+                    },
+                );
+            }
 
             let semisync_executor = LocalSmolExecutor::new();
             group.bench_with_input(

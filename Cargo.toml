@@ -88,6 +88,11 @@ anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"
 event-listener = "5.4.1"
 mstlo = "0.1.1"
+cranelift-codegen = { version = "0.134.2", optional = true }
+cranelift-frontend = { version = "0.134.2", optional = true }
+cranelift-jit = { version = "0.134.2", optional = true }
+cranelift-module = { version = "0.134.2", optional = true }
+cranelift-native = { version = "0.134.2", optional = true }
 
 [profile.dev-fast]
 # Optimize build times for debug builds
@@ -117,6 +122,13 @@ ros = ["dep:r2r", "tc-testutils/ros", "mqtt"]
 testcontainers = ["tc-testutils/testcontainers"]
 span-tracing = []
 extended-proptests = []
+jit = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-jit",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+]
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_smol", "html_reports"] }
@@ -189,5 +201,9 @@ harness = false
 name = "output_pipeline"
 harness = false
 
+[[bench]]
+name = "jit_layers"
+harness = false
+required-features = ["jit"]
 # [dev-dependencies.tc-testutils]
 # path = "libs/tc-testutils"

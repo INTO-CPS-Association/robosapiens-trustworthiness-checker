@@ -8,7 +8,7 @@ use super::plan::{Instruction, Plan, SingleScalarPlan, Source};
 use super::scalar::{ScalarValue, apply_binary, apply_unary, retain_last};
 use super::state::{Node, NodeState, State};
 
-/// Executes a specialization plan while preserving canonical graph state.
+/// Executes a quickening plan while preserving canonical graph state.
 pub(in crate::dataflow) fn execute(
     state: &mut State,
     plan: &Plan,
@@ -129,7 +129,7 @@ pub(in crate::dataflow) fn execute(
                 canonical.node_values[index] = value;
                 continue;
             }
-            _ => unreachable!("specialization instruction has incompatible runtime state"),
+            _ => unreachable!("quickening instruction has incompatible runtime state"),
         };
 
         match outcome {
@@ -422,7 +422,7 @@ fn evaluate_branch(
             execute(state, plan, graph, canonical, context, published_scalars)
         }
         (None, None) => evaluate_nodes(&graph.nodes, canonical, context),
-        _ => unreachable!("branch specialization plan and state must be present together"),
+        _ => unreachable!("branch quickening plan and state must be present together"),
     }
     let output = context.read_value(canonical, &graph.output);
     stage_recursive_delays(&graph.recursive_delays, canonical, &output);
@@ -438,13 +438,13 @@ mod tests {
     fn evaluate(
         graph: &BoundEvaluationGraph,
         plan: &Plan,
-        specialization: &mut State,
+        quickening: &mut State,
         canonical: &mut StreamState,
         environment_values: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
     ) -> Value {
         execute(
-            specialization,
+            quickening,
             plan,
             graph,
             canonical,
@@ -485,23 +485,16 @@ mod tests {
             BoundRef::Node(NodeId::new(2)),
         );
         let plan = Plan::new(&graph).unwrap();
-        let mut specialization = State::new(&plan);
+        let mut quickening = State::new(&plan);
         let mut canonical = StreamState::new(&graph);
         let layout = Rc::new(EnvironmentLayout::default());
 
         assert_eq!(
-            evaluate(
-                &graph,
-                &plan,
-                &mut specialization,
-                &mut canonical,
-                &[],
-                &layout,
-            ),
+            evaluate(&graph, &plan, &mut quickening, &mut canonical, &[], &layout,),
             Value::Int(5)
         );
         assert!(matches!(
-            specialization.nodes[2].state,
+            quickening.nodes[2].state,
             NodeState::Binary { .. }
         ));
     }
@@ -534,7 +527,7 @@ mod tests {
             BoundRef::Node(NodeId::new(1)),
         );
         let plan = Plan::new(&graph).unwrap();
-        let mut specialization = State::new(&plan);
+        let mut quickening = State::new(&plan);
         let mut canonical = StreamState::new(&graph);
         let layout = Rc::new(EnvironmentLayout::from_variables([VarName::new("x")]));
 
@@ -542,7 +535,7 @@ mod tests {
             evaluate(
                 &graph,
                 &plan,
-                &mut specialization,
+                &mut quickening,
                 &mut canonical,
                 &[Value::Bool(true)],
                 &layout,
@@ -550,12 +543,9 @@ mod tests {
             Value::Bool(true)
         );
         assert!(matches!(
-            specialization.nodes[0].state,
+            quickening.nodes[0].state,
             NodeState::Deoptimized { .. }
         ));
-        assert!(matches!(
-            specialization.nodes[1].state,
-            NodeState::Unary { .. }
-        ));
+        assert!(matches!(quickening.nodes[1].state, NodeState::Unary { .. }));
     }
 }

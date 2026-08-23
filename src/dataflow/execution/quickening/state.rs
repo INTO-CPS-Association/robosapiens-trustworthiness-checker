@@ -3,7 +3,7 @@ use super::super::stream_state::NodeState as CanonicalNodeState;
 use super::plan::{Instruction, Plan};
 use super::scalar::ScalarValue;
 
-/// Persistent state for one instantiated specialization plan.
+/// Persistent state for one instantiated quickening plan.
 #[derive(Clone)]
 pub(in crate::dataflow) struct State {
     pub(super) nodes: Vec<Node>,
@@ -113,7 +113,7 @@ impl NodeState {
                 *canonical_left = last_left.map(ScalarValue::into_value);
                 *canonical_right = last_right.map(ScalarValue::into_value);
             }
-            _ => unreachable!("specialization state has incompatible canonical state"),
+            _ => unreachable!("quickening state has incompatible canonical state"),
         }
     }
 }
@@ -170,7 +170,7 @@ mod tests {
             else_state: Some(else_state),
         } = &state.nodes[1].state
         else {
-            panic!("reset changed the conditional specialization state");
+            panic!("reset changed the conditional quickening state");
         };
         assert!(matches!(
             then_state.nodes[0].state,

@@ -3,6 +3,7 @@ use super::super::*;
 use super::dynamic_expressions::*;
 use super::functions::*;
 use super::lifting::*;
+use super::quickening::ScalarValue;
 use super::stream_evaluator::*;
 use super::stream_state::*;
 use crate::core::values::operations as value_operations;
@@ -39,33 +40,54 @@ pub(in crate::dataflow) fn evaluate_node(
         StreamOp::Delay { input, offset } => {
             if *offset == 0 {
                 let current = context.read_value(state, input);
-                let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
-                    unreachable!("delay node has incompatible runtime state")
-                };
-                history.retain_current_value(current)
+                match &mut state.node_states[node_id.index()] {
+                    NodeState::Delay(history) => history.retain_current_value(current),
+                    NodeState::ScalarDelay(history) => ScalarValue::from_untyped_value(&current)
+                        .map(|value| history.retain_current_value(value).into_value())
+                        .unwrap_or_else(|| panic!("scalar delay received {current:?}")),
+                    _ => unreachable!("delay node has incompatible runtime state"),
+                }
             } else {
-                let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
-                    unreachable!("delay node has incompatible runtime state")
-                };
-                history.read_and_stage_write()
+                match &mut state.node_states[node_id.index()] {
+                    NodeState::Delay(history) => history.read_and_stage_write(),
+                    NodeState::ScalarDelay(history) => history.read_and_stage_write().into_value(),
+                    _ => unreachable!("delay node has incompatible runtime state"),
+                }
             }
         }
-        StreamOp::RecursiveDelay { .. } => {
-            let NodeState::Delay(history) = &mut state.node_states[node_id.index()] else {
-                unreachable!("recursive delay node has incompatible runtime state")
-            };
-            history.read_delayed_value()
-        }
+        StreamOp::RecursiveDelay { .. } => match &mut state.node_states[node_id.index()] {
+            NodeState::Delay(history) => history.read_delayed_value(),
+            NodeState::ScalarDelay(history) => history.read_delayed_value().into_value(),
+            _ => unreachable!("recursive delay node has incompatible runtime state"),
+        },
         StreamOp::Default { input, fallback } => {
             let input = context.read_value(state, input);
-            let NodeState::Default { last_input } = &mut state.node_states[node_id.index()] else {
-                unreachable!("default node has incompatible runtime state")
-            };
-            let input = retain_last_value(input, last_input);
-            if input == Value::Deferred {
-                context.read_value(state, fallback)
-            } else {
-                input
+            match &mut state.node_states[node_id.index()] {
+                NodeState::Default { last_input } => {
+                    let input = retain_last_value(input, last_input);
+                    if input == Value::Deferred {
+                        context.read_value(state, fallback)
+                    } else {
+                        input
+                    }
+                }
+                NodeState::ScalarDefault { last_input } => {
+                    let input = ScalarValue::from_untyped_value(&input)
+                        .unwrap_or_else(|| panic!("scalar default received {input:?}"));
+                    let input = match input {
+                        ScalarValue::NoVal => last_input.unwrap_or(ScalarValue::NoVal),
+                        value => {
+                            *last_input = Some(value);
+                            value
+                        }
+                    };
+                    if input == ScalarValue::Deferred {
+                        context.read_value(state, fallback)
+                    } else {
+                        input.into_value()
+                    }
+                }
+                _ => unreachable!("default node has incompatible runtime state"),
             }
         }
         StreamOp::Init { input, initial } => {
@@ -593,10 +615,15 @@ pub(in crate::dataflow) fn stage_recursive_delays(
     output: &Value,
 ) {
     for delay in delays {
-        let NodeState::Delay(history) = &mut state.node_states[delay.index()] else {
-            unreachable!("recursive delay node has incompatible runtime state")
-        };
-        history.stage_recursive_value(output.clone());
+        match &mut state.node_states[delay.index()] {
+            NodeState::Delay(history) => history.stage_recursive_value(output.clone()),
+            NodeState::ScalarDelay(history) => {
+                let output = ScalarValue::from_untyped_value(output)
+                    .expect("scheduled scalar delay received a non-scalar output");
+                history.stage_recursive_value(output);
+            }
+            _ => unreachable!("recursive delay node has incompatible runtime state"),
+        }
     }
 }
 
@@ -609,17 +636,21 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
         match op {
             StreamOp::Delay { input, offset } if *offset > 0 => {
                 let current = context.read_value(state, input);
-                let NodeState::Delay(history) = &mut state.node_states[index] else {
-                    unreachable!("delay node has incompatible runtime state")
-                };
-                history.commit_staged_write(current);
+                match &mut state.node_states[index] {
+                    NodeState::Delay(history) => history.commit_staged_write(current),
+                    NodeState::ScalarDelay(history) => {
+                        let current = ScalarValue::from_untyped_value(&current)
+                            .unwrap_or_else(|| panic!("scalar delay commit received {current:?}"));
+                        history.commit_staged_write(current);
+                    }
+                    _ => unreachable!("delay node has incompatible runtime state"),
+                }
             }
-            StreamOp::RecursiveDelay { .. } => {
-                let NodeState::Delay(history) = &mut state.node_states[index] else {
-                    unreachable!("recursive delay node has incompatible runtime state")
-                };
-                history.commit_recursive_value();
-            }
+            StreamOp::RecursiveDelay { .. } => match &mut state.node_states[index] {
+                NodeState::Delay(history) => history.commit_recursive_value(),
+                NodeState::ScalarDelay(history) => history.commit_recursive_value(),
+                _ => unreachable!("recursive delay node has incompatible runtime state"),
+            },
             StreamOp::If {
                 then_branch,
                 else_branch,
@@ -669,6 +700,53 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
                     active
                         .evaluator
                         .commit_temporal_state(&dynamic.environment_values);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(in crate::dataflow) fn discard_staged_temporal_state(
+    body: &BoundEvaluationGraph,
+    state: &mut StreamState,
+) {
+    for (index, op) in body.nodes.iter().enumerate() {
+        match op {
+            StreamOp::Delay { offset, .. } if *offset > 0 => match &mut state.node_states[index] {
+                NodeState::Delay(history) => history.discard_staged_write(),
+                NodeState::ScalarDelay(history) => history.discard_staged_write(),
+                _ => unreachable!("delay node has incompatible runtime state"),
+            },
+            StreamOp::RecursiveDelay { .. } => match &mut state.node_states[index] {
+                NodeState::Delay(history) => history.discard_recursive_value(),
+                NodeState::ScalarDelay(history) => history.discard_recursive_value(),
+                _ => unreachable!("recursive delay node has incompatible runtime state"),
+            },
+            StreamOp::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
+                    unreachable!("if node has incompatible runtime state")
+                };
+                discard_staged_temporal_state(then_branch, &mut lazy_if.then_state);
+                discard_staged_temporal_state(else_branch, &mut lazy_if.else_state);
+            }
+            StreamOp::DirectApply { .. } => {
+                let NodeState::PersistentCall { evaluator, .. } = &mut state.node_states[index]
+                else {
+                    unreachable!("direct application node has incompatible runtime state")
+                };
+                evaluator.discard_staged_temporal_state();
+            }
+            StreamOp::Dynamic(_) => {
+                let NodeState::Dynamic(dynamic) = &mut state.node_states[index] else {
+                    unreachable!("dynamic node has incompatible runtime state")
+                };
+                if let Some(active) = dynamic.active_expression.as_mut() {
+                    active.evaluator.discard_staged_temporal_state();
                 }
             }
             _ => {}

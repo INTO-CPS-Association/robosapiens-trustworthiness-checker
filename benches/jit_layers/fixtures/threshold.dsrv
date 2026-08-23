@@ -1,0 +1,3 @@
+in x: Int
+out result: Bool
+result = x > 3

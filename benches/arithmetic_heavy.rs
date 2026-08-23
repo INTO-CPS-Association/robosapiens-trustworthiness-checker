@@ -4,11 +4,13 @@ use std::rc::Rc;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use smol::LocalExecutor;
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
 use trustworthiness_checker::benches_common::{
-    monitor_outputs_typed_dataflow, monitor_outputs_typed_semisync,
+    monitor_outputs_quickened_dataflow, monitor_outputs_typed_semisync,
     monitor_outputs_untyped_dataflow, monitor_outputs_untyped_little,
 };
-use trustworthiness_checker::core::Semantics;
+
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
     CheckedDsrvSpecification, DsrvSpecification, InputStream, Value, VarName,
@@ -105,15 +107,25 @@ fn arithmetic_heavy(c: &mut Criterion) {
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
-                    monitor_outputs_typed_dataflow(
+                    monitor_outputs_quickened_dataflow(
                         benchmark_executor.executor.clone(),
                         checked.clone(),
                         arithmetic_input(size),
-                        Semantics::TypedUntimed,
                     )
                 })
             },
         );
+        #[cfg(feature = "jit")]
+        group.bench_with_input(BenchmarkId::new("dataflow_jit", size), &size, |b, &size| {
+            let benchmark_executor = LocalSmolExecutor::new();
+            b.to_async(benchmark_executor.clone()).iter(|| {
+                monitor_outputs_jit_dataflow(
+                    benchmark_executor.executor.clone(),
+                    checked.clone(),
+                    arithmetic_input(size),
+                )
+            })
+        });
         group.bench_with_input(
             BenchmarkId::new("semisync_untyped", size),
             &size,

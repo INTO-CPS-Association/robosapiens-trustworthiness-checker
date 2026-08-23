@@ -1,5 +1,6 @@
 use super::super::ir::*;
 use super::super::*;
+use super::quickening::ScalarValue;
 use super::stream_evaluator::StreamEvaluator;
 use crate::core::{RuntimeFunction, RuntimeFunctionValueCallable};
 use std::{cell::RefCell, rc::Rc};
@@ -23,8 +24,14 @@ pub(in crate::dataflow) enum NodeState {
         last_operands: Vec<Option<Value>>,
     },
     Delay(DelayState),
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    ScalarDelay(ScalarDelayState),
     Default {
         last_input: Option<Value>,
+    },
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    ScalarDefault {
+        last_input: Option<ScalarValue>,
     },
     Init {
         started: bool,
@@ -140,6 +147,17 @@ pub(in crate::dataflow) struct DelayState {
     staged_recursive_value: Option<Value>,
 }
 
+/// Compact evaluator-owned state used by scheduled scalar temporal operations.
+#[derive(Clone)]
+pub(in crate::dataflow) struct ScalarDelayState {
+    values: Vec<ScalarValue>,
+    next_write: usize,
+    filled_slots: usize,
+    last_output: Option<ScalarValue>,
+    write_pending: bool,
+    staged_recursive_value: Option<ScalarValue>,
+}
+
 impl DelayState {
     pub(in crate::dataflow) fn new(offset: usize) -> Self {
         Self {
@@ -186,6 +204,10 @@ impl DelayState {
         }
     }
 
+    pub(in crate::dataflow) fn discard_staged_write(&mut self) {
+        self.write_pending = false;
+    }
+
     pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: Value) {
         debug_assert!(
             self.staged_recursive_value.is_none(),
@@ -200,11 +222,163 @@ impl DelayState {
         }
     }
 
+    pub(in crate::dataflow) fn discard_recursive_value(&mut self) {
+        self.staged_recursive_value = None;
+    }
+
     pub(in crate::dataflow) fn retain_current_value(&mut self, value: Value) -> Value {
         super::lifting::retain_last_value(value, &mut self.last_output)
     }
 
     pub(in crate::dataflow) fn reset(&mut self) {
+        self.next_write = 0;
+        self.filled_slots = 0;
+        self.last_output = None;
+        self.write_pending = false;
+        self.staged_recursive_value = None;
+    }
+
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(in crate::dataflow) fn to_scalar(&self) -> Option<ScalarDelayState> {
+        let optional_scalar = |value: &Option<Value>| match value {
+            Some(value) => ScalarValue::from_untyped_value(value).map(Some),
+            None => Some(None),
+        };
+        Some(ScalarDelayState {
+            values: self
+                .values
+                .iter()
+                .map(ScalarValue::from_untyped_value)
+                .collect::<Option<Vec<_>>>()?,
+            next_write: self.next_write,
+            filled_slots: self.filled_slots,
+            last_output: optional_scalar(&self.last_output)?,
+            write_pending: self.write_pending,
+            staged_recursive_value: optional_scalar(&self.staged_recursive_value)?,
+        })
+    }
+}
+
+impl ScalarDelayState {
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn native_parts(
+        &self,
+    ) -> (&[ScalarValue], usize, usize, Option<ScalarValue>) {
+        (
+            &self.values,
+            self.next_write,
+            self.filled_slots,
+            self.last_output,
+        )
+    }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn restore_native_parts(
+        &mut self,
+        values: &[ScalarValue],
+        next_write: usize,
+        filled_slots: usize,
+        last_output: Option<ScalarValue>,
+    ) {
+        debug_assert_eq!(self.values.len(), values.len());
+        self.values.copy_from_slice(values);
+        self.next_write = next_write;
+        self.filled_slots = filled_slots.min(self.values.len());
+        self.last_output = last_output;
+        self.write_pending = false;
+        self.staged_recursive_value = None;
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn read_delayed_value(&self) -> ScalarValue {
+        if self.values.is_empty() || self.filled_slots < self.values.len() {
+            ScalarValue::Deferred
+        } else {
+            self.values[self.next_write]
+        }
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> ScalarValue {
+        debug_assert!(!self.write_pending);
+        self.write_pending = true;
+        let previous = self.read_delayed_value();
+        match previous {
+            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
+            value => {
+                self.last_output = Some(value);
+                value
+            }
+        }
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn retain_current_value(&mut self, value: ScalarValue) -> ScalarValue {
+        match value {
+            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
+            value => {
+                self.last_output = Some(value);
+                value
+            }
+        }
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn commit_staged_write(&mut self, value: ScalarValue) {
+        if !self.write_pending {
+            return;
+        }
+        self.write_pending = false;
+        if self.values.is_empty() {
+            return;
+        }
+        self.values[self.next_write] = value;
+        self.next_write = (self.next_write + 1) % self.values.len();
+        self.filled_slots = self.filled_slots.saturating_add(1).min(self.values.len());
+    }
+
+    pub(in crate::dataflow) fn discard_staged_write(&mut self) {
+        self.write_pending = false;
+    }
+
+    pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: ScalarValue) {
+        debug_assert!(self.staged_recursive_value.is_none());
+        self.staged_recursive_value = Some(value);
+    }
+
+    pub(in crate::dataflow) fn commit_recursive_value(&mut self) {
+        if let Some(value) = self.staged_recursive_value.take() {
+            if self.values.is_empty() {
+                return;
+            }
+            self.values[self.next_write] = value;
+            self.next_write = (self.next_write + 1) % self.values.len();
+            self.filled_slots = self.filled_slots.saturating_add(1).min(self.values.len());
+        }
+    }
+
+    pub(in crate::dataflow) fn discard_recursive_value(&mut self) {
+        self.staged_recursive_value = None;
+    }
+
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(in crate::dataflow) fn to_canonical(&self) -> DelayState {
+        DelayState {
+            values: self
+                .values
+                .iter()
+                .copied()
+                .map(ScalarValue::into_value)
+                .collect(),
+            next_write: self.next_write,
+            filled_slots: self.filled_slots,
+            last_output: self.last_output.map(ScalarValue::into_value),
+            write_pending: self.write_pending,
+            staged_recursive_value: self.staged_recursive_value.map(ScalarValue::into_value),
+        }
+    }
+
+    fn reset(&mut self) {
         self.next_write = 0;
         self.filled_slots = 0;
         self.last_output = None;
@@ -344,6 +518,8 @@ impl NodeState {
             }
             Self::OperandLift { last_operands } => last_operands.fill(None),
             Self::Delay(history) => history.reset(),
+            Self::ScalarDelay(history) => history.reset(),
+            Self::ScalarDefault { last_input } => *last_input = None,
             Self::Init { started } => *started = false,
             Self::When {
                 last_input,

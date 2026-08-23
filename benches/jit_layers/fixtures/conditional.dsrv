@@ -1,0 +1,4 @@
+in x: Int
+in y: Int
+out result: Int
+result = if x % 5 == 0 then y * 3 else x + y

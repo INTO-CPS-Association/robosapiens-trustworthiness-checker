@@ -33,6 +33,8 @@ use async_unsync::bounded;
 use smol::LocalExecutor;
 
 pub const RECONF_TOPIC: &str = "R";
+#[cfg(feature = "jit")]
+pub const KEY_BENCHMARK_JIT_HOTNESS_EVENTS: u64 = 1_024;
 
 pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -> usize {
     assert!(terms > 0);
@@ -242,13 +244,21 @@ pub async fn monitor_outputs_typed_dataflow(
         );
     }
 
+    monitor_outputs_quickened_dataflow(executor, spec, input_stream).await;
+}
+
+/// Run the checked dataflow interpreter through its scheduler-plan quickening tier.
+pub async fn monitor_outputs_quickened_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+) {
     let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
     let writer = output_builder
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
-        .expect("typed dataflow output pipeline should open");
-
-    let monitor = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .expect("quickened dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor)
         .model(spec)
@@ -256,7 +266,85 @@ pub async fn monitor_outputs_typed_dataflow(
         .input(input_stream)
         .build()
         .await;
-    monitor.run().await.expect("Error running monitor");
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run a fixed number of checked dataflow outputs through scheduler-plan quickening.
+pub async fn monitor_outputs_quickened_dataflow_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+    limit: usize,
+) {
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("limited quickened dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream)
+        .build()
+        .await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run the same checked dataflow runtime with native compilation after the common dashboard
+/// hotness threshold.
+#[cfg(feature = "jit")]
+pub async fn monitor_outputs_jit_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+) {
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("JIT dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .jit(crate::dataflow::JitConfig::after_events(
+            KEY_BENCHMARK_JIT_HOTNESS_EVENTS,
+        ))
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream)
+        .build()
+        .await;
+    runtime.run().await.expect("Error running monitor");
+}
+
+/// Run a fixed number of checked dataflow outputs with native compilation after the common
+/// dashboard hotness threshold.
+#[cfg(feature = "jit")]
+pub async fn monitor_outputs_jit_dataflow_limited(
+    executor: Rc<LocalExecutor<'static>>,
+    spec: CheckedDsrvSpecification,
+    input_stream: InputStream<Value>,
+    limit: usize,
+) {
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("limited JIT dataflow output pipeline should open");
+    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        .execution_policy(ExecutionPolicy::Buffered)
+        .jit(crate::dataflow::JitConfig::after_events(
+            KEY_BENCHMARK_JIT_HOTNESS_EVENTS,
+        ))
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream)
+        .build()
+        .await;
+    runtime.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_untyped_reconf_limited(

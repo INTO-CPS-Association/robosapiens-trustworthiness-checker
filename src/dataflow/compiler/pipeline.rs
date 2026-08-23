@@ -29,6 +29,22 @@ impl DataflowMonitor {
         Self::compile_specification(specification, build_checked_expression_graph)
     }
 
+    /// Compiles a checked monitor and replaces complete eligible scalar graphs with guarded
+    /// native-code fast paths. Unsupported graphs continue through the canonical interpreter.
+    ///
+    /// This is an opt-in prototype: [`Self::compile_checked`] never enables native graph
+    /// execution, even when the crate is built with the `jit` feature.
+    #[cfg(feature = "jit")]
+    pub fn compile_checked_with_jit(
+        specification: CheckedDsrvSpecification,
+        config: JitConfig,
+    ) -> Result<Self, DataflowCompilationError> {
+        let mut monitor =
+            Self::compile_specification(specification, build_checked_expression_graph)?;
+        monitor.enable_jit(config);
+        Ok(monitor)
+    }
+
     pub fn compile_untyped(
         specification: DsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {

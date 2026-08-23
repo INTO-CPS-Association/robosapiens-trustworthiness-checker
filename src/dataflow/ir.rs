@@ -1,5 +1,4 @@
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
-use super::execution::specialization;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::DynamicExprScope;
@@ -225,7 +224,6 @@ pub(super) struct StreamProgram {
     pub(super) environment_layout: Rc<EnvironmentLayout>,
     pub(super) evaluation_mode: EvaluationMode,
     pub(super) requires_temporal_commit: bool,
-    pub(super) specialization_plan: Option<Rc<specialization::Plan>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,16 +243,11 @@ impl StreamProgram {
             EvaluationMode::Infallible
         };
         let requires_temporal_commit = graph_requires_temporal_commit(&graph);
-        let specialization_plan = (evaluation_mode == EvaluationMode::Infallible)
-            .then(|| specialization::Plan::new(&graph))
-            .flatten()
-            .map(Rc::new);
         Self {
             graph,
             environment_layout,
             evaluation_mode,
             requires_temporal_commit,
-            specialization_plan,
         }
     }
 

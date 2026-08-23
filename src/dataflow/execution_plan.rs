@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct StreamId(usize);
 
 impl StreamId {

@@ -2,7 +2,7 @@ use super::super::ir::*;
 use super::super::*;
 use super::dynamic_expressions::update_active_expression;
 use super::interpreter::*;
-use super::specialization::{self, ScalarValue};
+use super::quickening::{self, ScalarValue};
 use super::stream_state::*;
 
 #[derive(Clone, Copy)]
@@ -29,10 +29,14 @@ impl EvaluationContext<'_> {
 
 /// Owns one stream program and its persistent evaluation state.
 #[derive(Clone)]
+#[repr(C)]
 pub(in crate::dataflow) struct StreamEvaluator {
     pub(in crate::dataflow) program: Rc<StreamProgram>,
     pub(in crate::dataflow) state: StreamState,
-    specialization_state: Option<specialization::State>,
+    quickening_state: Option<quickening::State>,
+    // Code is deliberately last: growing a quick plan must not perturb the offsets of the hot
+    // semantic state fields used by canonical and native temporal execution.
+    quick_plan: Option<Rc<quickening::Plan>>,
 }
 
 impl StreamEvaluator {
@@ -41,24 +45,50 @@ impl StreamEvaluator {
             .graph
             .debug_assert_valid(program.environment_layout.len());
         let state = StreamState::new(&program.graph);
-        let specialization_state = program
-            .specialization_plan
-            .as_deref()
-            .map(specialization::State::new);
+        let quick_plan = program
+            .is_infallible()
+            .then(|| quickening::Plan::new(&program.graph))
+            .flatten();
+        let quickening_state = quick_plan.as_ref().map(quickening::State::new);
+        let quick_plan = quick_plan.map(Rc::new);
         debug_assert_eq!(state.node_values.len(), program.graph.nodes.len());
         debug_assert_eq!(state.node_states.len(), program.graph.nodes.len());
         Self {
             program,
             state,
-            specialization_state,
+            quickening_state,
+            quick_plan,
         }
+    }
+
+    pub(in crate::dataflow) fn evaluate_canonical_infallible(
+        &mut self,
+        environment_values: &[Value],
+    ) -> Value {
+        let body = &self.program.graph;
+        let context = EvaluationContext {
+            environment_values,
+            environment_layout: &self.program.environment_layout,
+            retained_environment_values: None,
+            recursive_call: None,
+        };
+        evaluate_nodes(&body.nodes, &mut self.state, context);
+        let value = context.read_value(&self.state, &body.output);
+        stage_recursive_delays(&body.recursive_delays, &mut self.state, &value);
+        value
     }
 
     pub(in crate::dataflow) fn reset(&mut self) {
         self.state.reset();
-        if let Some(state) = &mut self.specialization_state {
+        if let Some(state) = &mut self.quickening_state {
             state.reset();
         }
+    }
+
+    /// Top-level schedule plans own their quick code. Nested evaluators retain a local plan because
+    /// they are entered outside the monitor schedule and therefore have no `PlanBundle` step.
+    pub(in crate::dataflow) fn detach_top_level_quick_plan(&mut self) {
+        self.quick_plan = None;
     }
 
     #[inline]
@@ -129,7 +159,7 @@ impl StreamEvaluator {
     pub(in crate::dataflow) fn evaluate_infallible_and_stage_with_plan(
         &mut self,
         environment_values: &[Value],
-        specialization_plan_override: Option<&specialization::Plan>,
+        quickening_plan_override: Option<&quickening::Plan>,
         published_scalars: &[Option<ScalarValue>],
     ) -> Value {
         debug_assert!(self.program.is_infallible());
@@ -143,10 +173,9 @@ impl StreamEvaluator {
             recursive_call: None,
         };
 
-        let specialization_plan =
-            specialization_plan_override.or(self.program.specialization_plan.as_deref());
-        if let (Some(plan), Some(state)) = (specialization_plan, &mut self.specialization_state) {
-            specialization::execute(
+        let quickening_plan = quickening_plan_override.or(self.quick_plan.as_deref());
+        if let (Some(plan), Some(state)) = (quickening_plan, &mut self.quickening_state) {
+            quickening::execute(
                 state,
                 plan,
                 body,
@@ -155,7 +184,7 @@ impl StreamEvaluator {
                 published_scalars,
             );
         } else {
-            debug_assert!(specialization_plan.is_none() && self.specialization_state.is_none());
+            debug_assert!(quickening_plan.is_none() && self.quickening_state.is_none());
             evaluate_nodes(&body.nodes, &mut self.state, context);
         }
         let value = context.read_value(&self.state, &body.output);
@@ -167,9 +196,9 @@ impl StreamEvaluator {
     pub(in crate::dataflow) fn evaluate_single_scalar_with_plan(
         &mut self,
         environment_values: &[Value],
-        plan: &specialization::SingleScalarPlan,
+        plan: &quickening::SingleScalarPlan,
         published_scalars: &[Option<ScalarValue>],
-    ) -> specialization::DirectResult {
+    ) -> quickening::DirectResult {
         let body = &self.program.graph;
         debug_assert_eq!(body.nodes.len(), 1);
         debug_assert_eq!(body.output, BoundRef::Node(NodeId::new(0)));
@@ -180,10 +209,10 @@ impl StreamEvaluator {
             retained_environment_values: None,
             recursive_call: None,
         };
-        specialization::execute_single(
-            self.specialization_state
+        quickening::execute_single(
+            self.quickening_state
                 .as_mut()
-                .expect("single scalar plan requires specialization state"),
+                .expect("single scalar plan requires quickening state"),
             plan,
             body,
             &mut self.state,
@@ -210,6 +239,10 @@ impl StreamEvaluator {
         commit_staged_temporal_state(&self.program.graph, &mut self.state, context);
     }
 
+    pub(in crate::dataflow) fn discard_staged_temporal_state(&mut self) {
+        super::interpreter::discard_staged_temporal_state(&self.program.graph, &mut self.state);
+    }
+
     fn evaluate_and_stage_with_context(
         &mut self,
         environment_values: &[Value],
@@ -227,13 +260,12 @@ impl StreamEvaluator {
         };
 
         if self.program.is_infallible() {
-            if let Some(state) = &mut self.specialization_state {
-                specialization::execute(
+            if let Some(state) = &mut self.quickening_state {
+                quickening::execute(
                     state,
-                    self.program
-                        .specialization_plan
+                    self.quick_plan
                         .as_deref()
-                        .expect("specialization state requires a plan"),
+                        .expect("quickening state requires a plan"),
                     body,
                     &mut self.state,
                     context,

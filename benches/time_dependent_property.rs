@@ -11,8 +11,12 @@ use mstlo::{
     Semantics as MstloSemantics, Step, StlMonitor, SynchronizationStrategy, Variables, parse_stl,
 };
 use smol::LocalExecutor;
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
+use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
 use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
+use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
@@ -344,6 +348,10 @@ fn compare_time_dependent_property_diagnostics(c: &mut Criterion) {
 fn compare_time_dependent_property(c: &mut Criterion) {
     let sizes = [100, 1_000, 5_000, 10_000];
     let dsrv_spec = dsrv_time_dependent_spec();
+    let checked_dsrv_spec = dsrv_spec
+        .clone()
+        .type_check(TypeCheckOptions::GRADUAL)
+        .expect("time-dependent benchmark specification should type check");
 
     let mstlo_spec = mstlo_time_dependent_spec();
 
@@ -410,11 +418,26 @@ fn compare_time_dependent_property(c: &mut Criterion) {
             |b, &size| {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
-                    run_dsrv(
+                    monitor_outputs_quickened_dataflow(
                         benchmark_executor.executor.clone(),
-                        dsrv_spec.clone(),
+                        checked_dsrv_spec.clone(),
                         dsrv_input(size),
-                        RuntimeSpec::Dataflow(Default::default()),
+                    )
+                })
+            },
+        );
+
+        #[cfg(feature = "jit")]
+        group.bench_with_input(
+            BenchmarkId::new("dsrv_default_window_dataflow_jit", size),
+            &size,
+            |b, &size| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_jit_dataflow(
+                        benchmark_executor.executor.clone(),
+                        checked_dsrv_spec.clone(),
+                        dsrv_input(size),
                     )
                 })
             },

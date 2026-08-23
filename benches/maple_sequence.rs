@@ -6,12 +6,14 @@ use criterion::SamplingMode;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow;
+use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
-use trustworthiness_checker::benches_common::monitor_outputs_typed_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_little;
-use trustworthiness_checker::core::Semantics;
+
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
 use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
@@ -120,11 +122,25 @@ fn from_elem(c: &mut Criterion) {
             |b, &spec_typed| {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
-                    monitor_outputs_typed_dataflow(
+                    monitor_outputs_quickened_dataflow(
                         benchmark_executor.executor.clone(),
                         spec_typed.clone(),
                         input_stream_fn(),
-                        Semantics::TypedUntimed,
+                    )
+                })
+            },
+        );
+        #[cfg(feature = "jit")]
+        group.bench_with_input(
+            BenchmarkId::new("maple_sequence_dataflow_jit", size),
+            &(&spec_typed),
+            |b, &spec_typed| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_jit_dataflow(
+                        benchmark_executor.executor.clone(),
+                        spec_typed.clone(),
+                        input_stream_fn(),
                     )
                 })
             },

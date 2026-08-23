@@ -13,8 +13,12 @@ const IMPORTANT_SECTIONS = [
             name: "maple_sequence/maple_sequence_untyped_dataflow/25000",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "maple_sequence/maple_sequence_dataflow_specialised/25000",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "maple_sequence/maple_sequence_dataflow_jit/25000",
           },
           {
             label: "SemiSync",
@@ -36,8 +40,12 @@ const IMPORTANT_SECTIONS = [
             name: "arithmetic_heavy/dataflow/25000",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "arithmetic_heavy/dataflow_specialised/25000",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "arithmetic_heavy/dataflow_jit/25000",
           },
           {
             label: "SemiSync untyped",
@@ -59,8 +67,12 @@ const IMPORTANT_SECTIONS = [
             name: "dyn_paper/dyn_paper_50_dataflow/100000",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "dyn_paper/dyn_paper_50_dataflow_specialised/100000",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "dyn_paper/dyn_paper_50_dataflow_jit/100000",
           },
           {
             label: "SemiSync",
@@ -82,8 +94,12 @@ const IMPORTANT_SECTIONS = [
             name: "hard_dynamic_defer/automatic_scope_dataflow/1024",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "hard_dynamic_defer/automatic_scope_dataflow_specialised/1024",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "hard_dynamic_defer/automatic_scope_dataflow_jit/1024",
           },
           {
             label: "SemiSync",
@@ -101,8 +117,12 @@ const IMPORTANT_SECTIONS = [
             name: "hard_dynamic_defer/explicit_components_dataflow/1024",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "hard_dynamic_defer/explicit_components_dataflow_specialised/1024",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "hard_dynamic_defer/explicit_components_dataflow_jit/1024",
           },
           {
             label: "SemiSync",
@@ -120,8 +140,12 @@ const IMPORTANT_SECTIONS = [
             name: "dup_defer/dup_defer_untyped_dataflow/25000",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "dup_defer/dup_defer_dataflow_specialised/25000",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "dup_defer/dup_defer_dataflow_jit/25000",
           },
           {
             label: "SemiSync",
@@ -157,8 +181,12 @@ const IMPORTANT_SECTIONS = [
             name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
           },
           {
-            label: "Dataflow specialized",
+            label: "Dataflow quickened",
             name: "time_dependent_property/dsrv_default_window_dataflow_specialised/10000",
+          },
+          {
+            label: "Dataflow JIT (1,024-event hotness)",
+            name: "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
           },
           {
             label: "SemiSync",
@@ -221,8 +249,12 @@ const IMPORTANT_SECTIONS = [
             name: "threshold_property/dsrv_dataflow_untyped/10000",
           },
           {
-            label: "DSRV dataflow specialized",
+            label: "DSRV dataflow quickened",
             name: "threshold_property/dsrv_dataflow_specialised/10000",
+          },
+          {
+            label: "DSRV dataflow JIT (1,024-event hotness)",
+            name: "threshold_property/dsrv_dataflow_jit/10000",
           },
           {
             label: "DSRV SemiSync",
@@ -247,8 +279,12 @@ const IMPORTANT_SECTIONS = [
             name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
           },
           {
-            label: "DSRV dataflow specialized",
+            label: "DSRV dataflow quickened",
             name: "time_dependent_property/dsrv_default_window_dataflow_specialised/10000",
+          },
+          {
+            label: "DSRV dataflow JIT (1,024-event hotness)",
+            name: "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
           },
           {
             label: "DSRV SemiSync",

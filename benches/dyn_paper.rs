@@ -1,6 +1,8 @@
 use std::rc::Rc;
 use std::time::Duration;
-use trustworthiness_checker::benches_common::monitor_outputs_specialized_dataflow_limited;
+#[cfg(feature = "jit")]
+use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow_limited;
+use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_semisync_limited;
@@ -18,6 +20,7 @@ use trustworthiness_checker::dsrv_fixtures::spec_direct_and;
 use trustworthiness_checker::dsrv_fixtures::{
     direct_paper_benchmark_input_stream, paper_benchmark_input_stream,
 };
+use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -59,6 +62,10 @@ fn from_elem(c: &mut Criterion) {
     let spec = spec_deferred_and()
         .parse::<DsrvSpecification>()
         .expect("deferred benchmark specification should parse");
+    let checked_spec = spec
+        .clone()
+        .type_check(TypeCheckOptions::GRADUAL)
+        .expect("deferred benchmark specification should type check");
     let percents = vec![0, 25, 50, 75, 100];
 
     for size in sizes.iter() {
@@ -144,11 +151,27 @@ fn from_elem(c: &mut Criterion) {
         );
         group.bench_with_input(
             BenchmarkId::new(format!("dyn_paper_{}_dataflow_specialised", percent), size),
-            &(&spec),
+            &(&checked_spec),
             |b, &spec| {
                 let benchmark_executor = LocalSmolExecutor::new();
                 b.to_async(benchmark_executor.clone()).iter(|| {
-                    monitor_outputs_specialized_dataflow_limited(
+                    monitor_outputs_quickened_dataflow_limited(
+                        benchmark_executor.executor.clone(),
+                        spec.clone(),
+                        input_stream_fn(),
+                        size,
+                    )
+                })
+            },
+        );
+        #[cfg(feature = "jit")]
+        group.bench_with_input(
+            BenchmarkId::new(format!("dyn_paper_{}_dataflow_jit", percent), size),
+            &(&checked_spec),
+            |b, &spec| {
+                let benchmark_executor = LocalSmolExecutor::new();
+                b.to_async(benchmark_executor.clone()).iter(|| {
+                    monitor_outputs_jit_dataflow_limited(
                         benchmark_executor.executor.clone(),
                         spec.clone(),
                         input_stream_fn(),

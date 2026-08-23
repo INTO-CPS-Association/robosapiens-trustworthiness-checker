@@ -10,7 +10,7 @@ use super::*;
 ///
 /// Each tick evaluates expression sources, resolves reconfiguration points, updates the dependency
 /// schedule, evaluates every remaining stream once, and commits staged temporal state. Static
-/// monitors are the empty-reconfiguration specialization of the same flow.
+/// monitors are the empty-reconfiguration quickening of the same flow.
 pub struct DataflowMonitor {
     input_vars: Vec<VarName>,
     output_vars: Vec<VarName>,
@@ -52,6 +52,7 @@ impl DataflowMonitor {
             stream_programs,
             monitor_plan.stream_slots,
             scheduler.execution_schedule().evaluation_order(),
+            monitor_plan.temporal_streams.as_slice(),
         );
 
         let retained_environment_values = (!monitor_plan.reconfiguration.is_empty())
@@ -70,12 +71,23 @@ impl DataflowMonitor {
         }
     }
 
+    #[cfg(feature = "jit")]
+    pub(crate) fn enable_jit(&mut self, config: JitConfig) {
+        self.execution.enable_jit(config);
+    }
+
     pub fn input_vars(&self) -> &[VarName] {
         &self.input_vars
     }
 
     pub fn output_vars(&self) -> &[VarName] {
         &self.output_vars
+    }
+
+    /// Reports which native plan was selected, including safe fallback and backend failures.
+    #[cfg(feature = "jit")]
+    pub fn jit_report(&self) -> Option<&JitReport> {
+        self.execution.jit_report()
     }
 
     pub fn evaluate(
@@ -112,7 +124,6 @@ impl DataflowMonitor {
         if self.monitor_plan.reconfiguration.is_empty() {
             self.execution
                 .evaluate(&mut self.environment_values, None)?;
-            self.commit_temporal_state();
             return Ok(());
         }
         self.evaluate_expression_sources();
@@ -129,7 +140,6 @@ impl DataflowMonitor {
             );
         }
         self.evaluate_scheduled_streams()?;
-        self.commit_temporal_state();
         self.retain_environment_values();
         Ok(())
     }
@@ -183,16 +193,6 @@ impl DataflowMonitor {
         )
     }
 
-    fn commit_temporal_state(&mut self) {
-        for stream in self.monitor_plan.temporal_streams.iter() {
-            self.execution.commit_temporal_state(
-                stream,
-                &self.environment_values,
-                self.retained_environment_values.as_deref(),
-            );
-        }
-    }
-
     fn retain_environment_values(&mut self) {
         let retained = self
             .retained_environment_values
@@ -218,6 +218,11 @@ pub(in crate::dataflow) mod test_support {
 
     pub(in crate::dataflow) fn execution(monitor: &DataflowMonitor) -> &MonitorExecution {
         &monitor.execution
+    }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn jit_artifact_count(monitor: &DataflowMonitor) -> usize {
+        monitor.execution.jit_artifact_count()
     }
 }
 
@@ -415,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_delay_state_survives_execution_layout() {
+    fn recursive_delay_state_survives_scheduled_plan() {
         let specification = "out counter: Int\n\
             aux incremented: Int\n\
             out result: Int\n\
@@ -484,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn deoptimization_state_survives_cached_layout_swaps() {
+    fn deoptimization_state_survives_cached_plan_swaps() {
         let specification = "in x: Int\n\
             in a_source: Str\n\
             in b_source: Str\n\

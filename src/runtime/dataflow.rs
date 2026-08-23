@@ -101,6 +101,8 @@ use std::sync::Arc;
 use crate::core::{
     ExecutionPolicy, InputStream, OutputBatch, OutputError, OutputWriter, Runtime, Value,
 };
+#[cfg(feature = "jit")]
+use crate::dataflow::JitConfig;
 use crate::dataflow::{DataflowCompilationError, DataflowMonitor};
 use crate::runtime::builder::RuntimeBuilder;
 use async_trait::async_trait;
@@ -129,6 +131,8 @@ where
     input: Option<InputStream<Value>>,
     output_writer: Option<OutputWriter<Value>>,
     execution_policy: ExecutionPolicy,
+    #[cfg(feature = "jit")]
+    jit_config: Option<JitConfig>,
 }
 
 impl<S> DataflowRuntimeBuilder<S>
@@ -148,6 +152,16 @@ where
     pub fn output_writer(self, output_writer: OutputWriter<Value>) -> Self {
         Self {
             output_writer: Some(output_writer),
+            ..self
+        }
+    }
+
+    /// Enable the optional native tier on the checked dataflow monitor constructed by this
+    /// runtime. The runtime adapter, buffering policy, and output path are otherwise unchanged.
+    #[cfg(feature = "jit")]
+    pub fn jit(self, config: JitConfig) -> Self {
+        Self {
+            jit_config: Some(config),
             ..self
         }
     }
@@ -179,6 +193,8 @@ where
             input: None,
             output_writer: None,
             execution_policy: ExecutionPolicy::Buffered,
+            #[cfg(feature = "jit")]
+            jit_config: None,
         }
     }
 
@@ -208,6 +224,14 @@ where
         Box::pin(async move {
             let model = self.model.expect("Model not supplied");
             let monitor = DataflowMonitor::try_from(model);
+            #[cfg(feature = "jit")]
+            let monitor = {
+                let mut monitor = monitor;
+                if let (Some(config), Ok(monitor)) = (self.jit_config, &mut monitor) {
+                    monitor.enable_jit(config);
+                }
+                monitor
+            };
             let input_stream = self.input.expect("Input stream not supplied");
             let output_writer = self.output_writer.expect("Output writer not supplied");
             DataflowRuntime {
@@ -705,6 +729,44 @@ mod tests {
             .run()
             .await
             .expect("typed dataflow runtime should run");
+    }
+
+    #[cfg(feature = "jit")]
+    #[apply(async_test)]
+    async fn checked_dataflow_runtime_can_enable_delayed_jit(executor: Rc<LocalExecutor<'static>>) {
+        let spec = "in x: Int\nout z: Int\nz = x + 1"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+            .jit(JitConfig::after_events(1))
+            .executor(executor.clone())
+            .model(spec)
+            .input(map::input_stream(BTreeMap::from([(
+                VarName::new("x"),
+                vec![1.into(), 2.into(), 3.into()],
+            )])))
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        executor.spawn(runtime.run()).detach();
+        let outputs = tc_testutils::streams::with_timeout(
+            outputs.collect::<Vec<_>>(),
+            5,
+            "JIT dataflow output collection",
+        )
+        .await
+        .expect("JIT dataflow output collection should finish");
+
+        assert_eq!(
+            outputs,
+            vec![
+                BTreeMap::from([(VarName::new("z"), Value::Int(2))]),
+                BTreeMap::from([(VarName::new("z"), Value::Int(3))]),
+                BTreeMap::from([(VarName::new("z"), Value::Int(4))]),
+            ]
+        );
     }
 
     #[apply(async_test)]

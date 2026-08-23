@@ -221,7 +221,7 @@
 //! `Rc<EnvironmentLayout>`, an `EvaluationMode::{Infallible, Fallible}` classification, and a cached
 //! `requires_temporal_commit` flag. Sharing the program is important for function call sites and
 //! runtime-compiled programs: each evaluator can own state without cloning operation vectors or
-//! layouts. The later [execution layouts and type specialization](#execution-layouts-and-type-specialization)
+//! layouts. The later [execution layouts and type quickening](#execution-layouts-and-type-quickening)
 //! section describes the optional metadata stored beside these semantic fields.
 //!
 //! ## Execute one tick
@@ -864,14 +864,17 @@
 //! `defer(source: Int, {x})` permits the name `x`; it cannot declare a bound such as “retain four
 //! samples of `x`.” Neither construct accepts a memory-strategy selector or retained-history length.
 //!
-//! # Execution layouts and type specialization
+//! # Scheduled plans, quickening, and native execution
 //!
 //! Everything above describes the canonical dataflow machine: bound graphs, stable environment
 //! slots, dependency scheduling, persistent evaluator state, and the common temporal commit. That
 //! model is sufficient to understand the language semantics and correctness of the interpreter.
-//! This section elaborates the current execution architecture. It adds schedule-specific routing
-//! and optional type-specialized scalar instructions without replacing the canonical graph or its
-//! state.
+//! This section elaborates the three-tier execution architecture. The semantic graph and scheduler
+//! remain backend unaware. `MonitorExecution` combines a scheduler order with the already-bound
+//! programs to make one backend-neutral `ScheduledExecutionPlan`; canonical execution, quickening,
+//! and the optional JIT derive different physical executables from that same semantic plan.
+//! Evaluators, rather than plans or compiled artifacts, own canonical language state; a native
+//! artifact may temporarily hold a packed representation with an explicit plan-slot mapping.
 //!
 //! ## Type-specialized scalar plans
 //!
@@ -880,14 +883,14 @@
 //! non-scalar nodes record `None`. These annotations do not change the graph's semantics: every
 //! canonical operation remains present.
 //!
-//! An infallible `StreamProgram` with eligible scalar work owns an immutable
-//! `execution::specialization::Plan` in addition to its canonical graph. The plan has exactly one
-//! instruction per graph node. A supported checked unary or binary operation becomes a scalar
-//! instruction; an eligible `if` may carry plans for its branches; every other node becomes a
-//! `Canonical` instruction. Fallible graphs and graphs with no specialized instruction have no plan.
+//! Planning, not the graph IR, creates immutable `execution::quickening::Plan` values for
+//! infallible programs with eligible scalar work. A plan has exactly one instruction per graph
+//! node. A supported checked unary or binary operation becomes a scalar instruction; an eligible
+//! `if` may carry plans for its branches; every other node becomes a `Canonical` instruction.
+//! `StreamProgram` deliberately contains no quickening or JIT artifact.
 //!
-//! `StreamEvaluator` always owns its canonical `StreamState`. When its program has a plan, it also
-//! owns a parallel `specialization::State` containing compact node values, lifting state, and any
+//! `StreamEvaluator` always owns its canonical `StreamState`. When planning finds quickened work,
+//! the evaluator also owns a parallel `quickening::State` containing compact node values, lifting state, and any
 //! persistent deoptimization decisions. The canonical state remains the semantic authority.
 //!
 //! Scalar instructions operate on `ScalarValue::{Int, Float, Bool, NoVal, Deferred}`. The direct set
@@ -905,7 +908,7 @@
 //! Each operand is independently selected as a scalar constant, an earlier scalar node, a scalar
 //! published by an earlier stream in the current execution layout, or a canonical `DataRef`.
 //! Unsupported collections, maps, functions, temporal operators, and reconfiguration nodes continue
-//! through `execution::interpreter::evaluate_node`. The result is a mixed specialization overlay rather
+//! through `execution::interpreter::evaluate_node`. The result is a mixed quickening overlay rather
 //! than a second semantic IR.
 //!
 //! <figure style="margin:1.25rem 0">
@@ -913,15 +916,21 @@
 //! <figcaption>The optional scalar plan and state run beside the complete canonical graph and state; canonical execution remains available at every node.</figcaption>
 //! </figure>
 //!
-//! ## Schedule-specific execution layouts
+//! ## Schedule-specific plan bundles
 //!
 //! `MonitorExecution` owns every `StreamEvaluator` in a fixed `EvaluatorArena`, together with one
 //! optional published scalar slot per logical stream. The immutable `MonitorPlan` remains the
 //! logical description: stable stream slots, static dependencies, reconfiguration metadata, and the
-//! temporal commit set. An `ExecutionLayout` provides replaceable, schedule-specific routing over
-//! that stable state. It owns no evaluator or language state.
+//! temporal commit set. A `PlanBundle` provides replaceable, schedule-specific routing over that
+//! stable state. It owns no evaluator or language state. Its semantic `ScheduledExecutionPlan`
+//! records a unique `PlanId`, ordered stream/program references, stable publication slots, stable
+//! `(stream, node)` state identities, fallibility and temporal effects, and the logical commit set.
+//! Hotness and schedule-wide native artifacts are tied to that identity.
 //!
-//! A layout records the active stream order as `Graph` and `ScalarRun` steps:
+//! A bundle pairs that semantic plan with a derived `QuickPlan`. Sharing a semantic plan does not
+//! require sharing a physical instruction format: canonical execution follows its ordered stream
+//! descriptors, quickening records `Graph` and `ScalarRun` steps, and native lowering constructs
+//! SSA. The quick view uses:
 //!
 //! - A `Graph` step enters the normal graph-level evaluator. It may still execute a mixed scalar
 //!   plan internally.
@@ -930,24 +939,26 @@
 //! - Consecutive eligible streams form a `ScalarRun`, avoiding repeated general graph traversal
 //!   while retaining a descriptor and publication boundary for every logical stream.
 //!
-//! Every step publishes its result as a canonical `Value` in the stable environment slot. A scalar
+//! Every interpreted step publishes its result as a canonical `Value` in the stable environment slot. A scalar
 //! result is additionally published in compact form for later streams in the same layout. Fan-out,
 //! intermediate outputs, canonical instructions, and nested evaluators therefore retain their
 //! ordinary observation points. A rich graph ends a direct run but can publish a scalar result that
 //! allows a later stream to specialize.
 //!
-//! The initial schedule creates the first layout. When dynamic dependencies change the order,
-//! `MonitorExecution` selects a matching cached layout or builds a new one; it retains at most four
-//! previous layouts. Since layouts contain only stream IDs and schedule routing, replacement cannot
-//! reset delay rings, branch state, function frames, active dynamic expressions, or deoptimization
-//! decisions.
+//! The initial schedule creates the first bundle. When dynamic dependencies change the order,
+//! `ExecutionEngine` selects a matching cached bundle or builds a new one; it retains at most four
+//! previous bundles. Since plans contain identities, immutable program references, effects, and
+//! routing but no mutable evaluator state, replacement cannot reset delay rings, branch state,
+//! function frames, active dynamic expressions, or deoptimization decisions. Schedule-independent
+//! per-stream native regions can be reused; a whole-plan artifact is rebuilt for a different
+//! `PlanId`.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/execution-layout.svg")]
-//! <figcaption>The logical monitor plan and fixed evaluator arena survive schedule changes; only the small execution layout is selected or rebuilt.</figcaption>
+//! <figcaption>The logical monitor plan and fixed evaluator arena survive schedule changes; only the small scheduled plan is selected or rebuilt.</figcaption>
 //! </figure>
 //!
-//! ## Example specialized execution layout
+//! ## Example quickened scheduled plan
 //!
 //! Recall the three equations:
 //!
@@ -959,7 +970,7 @@
 //!
 //! The example near the start of this page uses the untyped entry point, which provides no scalar
 //! signatures and therefore executes all three streams as canonical `Graph` steps. Compiling the
-//! same specification through [`DataflowMonitor::compile_checked`] allows the specialization planner to
+//! same specification through [`DataflowMonitor::compile_checked`] allows the quickening planner to
 //! select scalar instructions.
 //!
 //! Three labels are enough to read the resulting plan:
@@ -999,7 +1010,7 @@
 //! temporal commit, then output projection
 //! ```
 //!
-//! The dependency order is still `scaled, total, alert`; specialization has not reordered the
+//! The dependency order is still `scaled, total, alert`; quickening has not reordered the
 //! language. `total` separates the two direct runs because its complete graph cannot use the narrow
 //! one-operation executor. It is not wholly unspecialized, however. Its temporal read and `default`
 //! use canonical state, after which the addition consumes the canonical base value and the published
@@ -1026,18 +1037,18 @@
 //! A scalar instruction deoptimizes when a runtime operand cannot be represented with its checked
 //! kind—for example, when the public monitor API supplies a value inconsistent with the checked
 //! model. On the first mismatch, the instruction transfers its retained scalar lifting operands
-//! into the corresponding canonical `NodeState`, marks only that specialization node
+//! into the corresponding canonical `NodeState`, marks only that quickening node
 //! `Deoptimized`, and evaluates the canonical operation for the current tick. Later ticks enter that
 //! canonical operation directly.
 //!
 //! Other nodes and streams remain specialized. Scalar results are always mirrored into canonical
 //! `node_values`; canonical and deoptimized stream results are converted back into published scalars
-//! when their actual values permit it. Downstream specialization can therefore continue after a
+//! when their actual values permit it. Downstream quickening can therefore continue after a
 //! local fallback.
 //!
 //! ## Interaction with the full language
 //!
-//! Type specialization does not define separate semantics for richer language features:
+//! Type quickening does not define separate semantics for richer language features:
 //!
 //! - Temporal nodes remain canonical and use the same staging and post-row commit described above.
 //!   Scalar nodes before or after them can still use the mixed plan.
@@ -1053,11 +1064,42 @@
 //!   active program is infallible. The enclosing stream remains a fallible `Graph` step because
 //!   parsing, type checking, scope validation, and replacement can fail.
 //!
+//! ## Complete temporal kernels
+//!
+//! The native backend can compile a complete infallible scheduled plan containing a checked subset:
+//! scalar graphs, positive fixed delays of scalar inputs, recursive delays, and their `default`
+//! nodes. One generated function loads external inputs, keeps cross-stream publications in a raw
+//! environment, evaluates every stream in scheduler order, writes observable stream slots, and
+//! commits the plan's temporal state. Intermediate publications therefore remain logical without
+//! requiring canonical `Value` materialization. On success `MonitorExecution` returns directly;
+//! there is no second monitor-level commit loop.
+//!
+//! Native writes are emitted at the plan's logical commit barrier, only after every checked scalar
+//! operation in every scheduled stream has succeeded. A presence,
+//! representation, or arithmetic side exit therefore observes the pre-tick native state. The
+//! runtime materializes that state into the canonical delay/default nodes, replays the previous
+//! successful native row to reconstruct lifting state, and continues the current tick through the
+//! same semantic plan in the canonical tier. The native layout maps each packed range back to the
+//! plan's stable state slots. Complete plans do not eagerly compile a duplicate scalar-only native
+//! fallback, and hot activation performs the inverse state promotion without resetting history.
+//!
+//! ## Tier boundary
+//!
+//! The optional JIT consumes the active `ScheduledExecutionPlan` directly and first attempts a
+//! schedule-wide artifact. Eligible temporal schedules use one complete tick call. If the entire
+//! plan is not lowerable, schedule-independent scalar regions derived from its stream descriptors
+//! may still be reused while the quick-plan interpreter preserves the logical commit barrier. If
+//! native execution is pending or unavailable, the engine executes quick instructions;
+//! instructions that cannot preserve the checked scalar contract enter the canonical evaluator
+//! with retained state transferred explicitly. Dynamic and otherwise fallible programs remain
+//! canonical. Native compilation is feature-gated, but the canonical and quick tiers, planner,
+//! plan cache, and state contract are always built.
+//!
 //! In the seven-phase logical tick described earlier, only phase 5 is elaborated physically. The
 //! scheduler supplies the active dependency order, `MonitorExecution` selects the corresponding
-//! layout, and its `Graph` and `ScalarRun` steps address stable evaluators in that order. Each step
-//! still writes the canonical environment row exactly once. Source resolution, cycle rejection,
-//! temporal commit, error handling, and output projection are unchanged.
+//! bundle. Canonical and quick execution interpret its order and commit set; native execution may
+//! compile both into one function while preserving their observation points. Source resolution,
+//! cycle rejection, error handling, and output projection are unchanged.
 //!
 //! # References
 //!
@@ -1090,9 +1132,131 @@ mod execution_plan;
 mod ir;
 mod monitor;
 mod scheduler;
-
 #[cfg(test)]
 mod tests;
 
 pub use error::{DataflowCompilationError, DataflowEvaluationError, StreamProgramError};
 pub use monitor::DataflowMonitor;
+/// Activation policy for the integrated JIT. All configurations use the same optimizer and
+/// generated-code path; only the point at which native compilation occurs differs.
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JitConfig {
+    /// `None` compiles eagerly. `Some(n)` runs `n` canonical ticks before compiling all eligible
+    /// graphs together, keeping short-lived monitors on the low-startup interpreter tier.
+    hotness_threshold: Option<u64>,
+}
+
+#[cfg(feature = "jit")]
+impl JitConfig {
+    pub const fn eager() -> Self {
+        Self {
+            hotness_threshold: None,
+        }
+    }
+
+    pub const fn after_events(events: u64) -> Self {
+        Self {
+            hotness_threshold: Some(events),
+        }
+    }
+
+    pub(in crate::dataflow) const fn hotness_threshold(self) -> Option<u64> {
+        self.hotness_threshold
+    }
+}
+
+#[cfg(feature = "jit")]
+impl Default for JitConfig {
+    fn default() -> Self {
+        Self::eager()
+    }
+}
+
+/// The native execution layout selected for a monitor.
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JitPlan {
+    /// The monitor is still below its configured hotness threshold.
+    Pending,
+    /// One native artifact evaluates the complete static schedule.
+    Fused,
+    /// Eligible streams have individual native artifacts; other streams remain interpreted.
+    PerStream,
+    /// Native compilation produced no usable artifact.
+    Unavailable,
+}
+
+/// Observable result of enabling the JIT.
+///
+/// Unsupported streams are normal and continue through the canonical interpreter. A backend
+/// error is also non-fatal: execution remains canonical, but the error is retained here rather
+/// than silently discarded.
+#[cfg(feature = "jit")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JitReport {
+    plan: JitPlan,
+    compiled_artifacts: usize,
+    unsupported_streams: Vec<usize>,
+    scheduled_temporal_streams: Vec<usize>,
+    complete_temporal_kernel_streams: Vec<usize>,
+    backend_error: Option<String>,
+}
+
+#[cfg(feature = "jit")]
+impl JitReport {
+    pub fn plan(&self) -> JitPlan {
+        self.plan
+    }
+
+    pub fn compiled_artifacts(&self) -> usize {
+        self.compiled_artifacts
+    }
+
+    pub fn unsupported_streams(&self) -> &[usize] {
+        &self.unsupported_streams
+    }
+
+    /// Stream indices whose native regions are fed by evaluator-scheduled temporal state.
+    pub fn scheduled_temporal_streams(&self) -> &[usize] {
+        &self.scheduled_temporal_streams
+    }
+
+    /// Stream indices evaluated and committed by one complete native temporal kernel call.
+    pub fn complete_temporal_kernel_streams(&self) -> &[usize] {
+        &self.complete_temporal_kernel_streams
+    }
+
+    pub fn backend_error(&self) -> Option<&str> {
+        self.backend_error.as_deref()
+    }
+
+    pub(in crate::dataflow) fn pending() -> Self {
+        Self {
+            plan: JitPlan::Pending,
+            compiled_artifacts: 0,
+            unsupported_streams: Vec::new(),
+            scheduled_temporal_streams: Vec::new(),
+            complete_temporal_kernel_streams: Vec::new(),
+            backend_error: None,
+        }
+    }
+
+    pub(in crate::dataflow) fn compiled(
+        plan: JitPlan,
+        compiled_artifacts: usize,
+        unsupported_streams: Vec<usize>,
+        scheduled_temporal_streams: Vec<usize>,
+        complete_temporal_kernel_streams: Vec<usize>,
+        backend_error: Option<String>,
+    ) -> Self {
+        Self {
+            plan,
+            compiled_artifacts,
+            unsupported_streams,
+            scheduled_temporal_streams,
+            complete_temporal_kernel_streams,
+            backend_error,
+        }
+    }
+}

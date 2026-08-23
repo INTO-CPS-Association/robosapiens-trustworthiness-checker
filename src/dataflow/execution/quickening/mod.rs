@@ -1,4 +1,4 @@
-//! A deliberately small specialization overlay for checked scalar operations.
+//! A deliberately small quickening overlay for checked scalar operations.
 //!
 //! The canonical evaluation graph, `StreamState`, and `Value` slots remain the
 //! semantic authority. A [`Plan`] selects scalar instructions where possible
@@ -8,7 +8,7 @@
 //! The important invariants are:
 //!
 //! - canonical instructions call the canonical `evaluate_node`;
-//! - specialized results are always mirrored into canonical `node_values`;
+//! - quickened results are always mirrored into canonical `node_values`;
 //! - canonical results are converted only at a scalar consumer boundary;
 //! - scalar node-to-node edges are used only when the producer is scalar;
 //! - `NoVal` and `Deferred` retain exactly the canonical lifting semantics;
@@ -17,13 +17,13 @@
 //! - immutable plans are shared by every evaluator of a function program;
 //! - fallible dynamic graphs continue to use the canonical traversal.
 //!
-//! Lazy `if` branches recursively carry specialization plans because they are
+//! Lazy `if` branches recursively carry quickening plans because they are
 //! separate evaluation graphs. Branches containing recursive self-calls remain
-//! canonical: recursive frames are short-lived, and allocating specialization
+//! canonical: recursive frames are short-lived, and allocating quickening
 //! state for each frame costs more than the small scalar body saves.
 //!
 //! Temporal storage, collections, maps, functions, and dynamic expressions
-//! intentionally remain canonical. Extending the specialized set should
+//! intentionally remain canonical. Extending the quickened set should
 //! require benchmark evidence strong enough to justify duplicating the
 //! relevant state transition rather than merely proving that it can be done.
 
