@@ -1,0 +1,7 @@
+{
+  default: "primary",
+  destinations: {
+    primary: { kind: "null" },
+    mirror: { kind: "stdout", mirror: true }
+  }
+}

@@ -13,10 +13,14 @@ use tc_core::causal::{
     CausalCauseReport, CausalDomain, CausalResultReport, CausalRole, CausalSet, CausalValue,
     RoleCausalAntichain, RoleCausalSet, causality_report,
 };
-use tc_core::core::{ExecutionPolicy, OutputStream, Runtime, RuntimeSpec, Semantics};
-use tc_core::io::InputController;
-use tc_core::io::testing::{ManualInputController, ManualOutputHandler, channel};
-use tc_core::runtime::RuntimeBuilder;
+use tc_core::core::{
+    ExecutionPolicy, OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime,
+    RuntimeSpec, Semantics,
+};
+use tc_core::io::output::{ManualOutputBackend, OutputBackendConfig};
+use tc_core::io::testing::{ManualInputController, channel};
+use tc_core::io::{InputController, OutputBackendBuilder};
+
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
 use tc_core::semantics::CausalRuntimeBuilder;
 use tc_core::{DsrvSpecification, InputUpdate, Value, VarName};
@@ -25,6 +29,22 @@ type OutputBatch = BTreeMap<VarName, Value>;
 type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
 type RoleCausalSetOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalSet>>;
 type RoleCausalAntichainOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalAntichain>>;
+
+async fn manual_causal_output<D: CausalDomain>(
+    output_vars: BTreeSet<VarName>,
+) -> anyhow::Result<(
+    OutputWriter<CausalValue<D>>,
+    OutputStream<BTreeMap<VarName, CausalValue<D>>>,
+)> {
+    let (manual_backend, receiver) = ManualOutputBackend::<CausalValue<D>>::channel(1024);
+    let interface = OutputInterface::outputs(output_vars)?;
+    let writer = manual_backend.open(interface).await?;
+    let outputs = Box::pin(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|output| (output, receiver)) },
+    ));
+    Ok((writer, outputs))
+}
 
 enum RuntimeMode {
     Ordinary(Semantics),
@@ -210,7 +230,7 @@ fn read_pathlike(path: &Bound<'_, PyAny>) -> PyResult<String> {
 }
 
 fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
-    match semantics {
+    match normalize_option(semantics).as_str() {
         "typed" | "typed-untimed" => Ok(RuntimeMode::Ordinary(Semantics::TypedUntimed)),
         "untyped" | "untimed" => Ok(RuntimeMode::Ordinary(Semantics::Untimed)),
         "gradual" | "gradual-typed" | "gradual-typed-untimed" => {
@@ -223,6 +243,10 @@ fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
             "unsupported semantics {semantics:?}; expected ordinary untimed semantics or one of 'causal', 'causal-set', 'role-causal-set', 'role-causal-antichain'"
         ))),
     }
+}
+
+fn normalize_option(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 fn collect_input_values(
@@ -327,85 +351,84 @@ fn build_runtime(
 )> {
     let runtime_executor = executor.clone();
 
-    smol::block_on(executor.run(async move {
-        let spec = model
-            .parse::<DsrvSpecification>()
-            .map_err(|err| anyhow::anyhow!("example model could not be parsed: {err:?}"))?;
-        let input_vars = spec.input_vars().clone();
-        let (input, input_controller) = channel();
-        let (input, tick_controller) = tc_core::io::controlled(input);
+    smol::block_on(
+        executor.run(async move {
+            let spec = model
+                .parse::<DsrvSpecification>()
+                .map_err(|err| anyhow::anyhow!("example model could not be parsed: {err:?}"))?;
+            let input_vars = spec.input_vars().clone();
+            let (input, input_controller) = channel();
+            let (input, tick_controller) = tc_core::io::controlled(input);
 
-        let outputs = match semantics {
-            RuntimeMode::Ordinary(semantics) => {
-                let mut output_handler = Box::new(ManualOutputHandler::new(
-                    runtime_executor.clone(),
-                    spec.output_vars().clone(),
-                ));
-                let outputs = output_handler.get_output();
-                let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
-                    .executor(runtime_executor.clone())
-                    .model(spec)
-                    .input(input)
-                    .output(output_handler)
-                    .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
-                    .semantics(semantics)
-                    .build()
-                    .await;
-                runtime_executor.spawn(monitor.run()).detach();
-                RuntimeOutputs::Ordinary(outputs)
-            }
-            RuntimeMode::ReferenceCausalSet => {
-                let mut output_handler = Box::new(ManualOutputHandler::new(
-                    runtime_executor.clone(),
-                    spec.output_vars().clone(),
-                ));
-                let outputs = output_handler.get_output();
-                let monitor = CausalRuntimeBuilder::<CausalSet>::new()
-                    .executor(runtime_executor.clone())
-                    .model(spec)
-                    .input(input)
-                    .output(output_handler)
-                    .build()
-                    .await?;
-                runtime_executor.spawn(monitor.run()).detach();
-                RuntimeOutputs::ReferenceCausalSet(outputs)
-            }
-            RuntimeMode::RoleCausalSet => {
-                let mut output_handler = Box::new(ManualOutputHandler::new(
-                    runtime_executor.clone(),
-                    spec.output_vars().clone(),
-                ));
-                let outputs = output_handler.get_output();
-                let monitor = CausalRuntimeBuilder::<RoleCausalSet>::role_new()
-                    .executor(runtime_executor.clone())
-                    .model(spec)
-                    .input(input)
-                    .output(output_handler)
-                    .build()
-                    .await?;
-                runtime_executor.spawn(monitor.run()).detach();
-                RuntimeOutputs::RoleCausalSet(outputs)
-            }
-            RuntimeMode::RoleCausalAntichain => {
-                let mut output_handler = Box::new(ManualOutputHandler::new(
-                    runtime_executor.clone(),
-                    spec.output_vars().clone(),
-                ));
-                let outputs = output_handler.get_output();
-                let monitor = CausalRuntimeBuilder::<RoleCausalAntichain>::role_new()
-                    .executor(runtime_executor.clone())
-                    .model(spec)
-                    .input(input)
-                    .output(output_handler)
-                    .build()
-                    .await?;
-                runtime_executor.spawn(monitor.run()).detach();
-                RuntimeOutputs::RoleCausalAntichain(outputs)
-            }
-        };
+            let outputs = match semantics {
+                RuntimeMode::Ordinary(semantics) => {
+                    let (manual_backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
+                    let sender = manual_backend.sender().clone();
+                    let outputs: OutputStream<OutputBatch> = Box::pin(futures::stream::unfold(
+                        receiver,
+                        |mut receiver| async move {
+                            receiver.recv().await.map(|output| (output, receiver))
+                        },
+                    ));
+                    let output_builder =
+                        OutputBackendBuilder::new(OutputBackendConfig::Manual(sender));
+                    let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+                        .executor(runtime_executor.clone())
+                        .model(spec)
+                        .input(input)
+                        .output_pipeline_builder(output_builder)
+                        .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
+                        .semantics(semantics)
+                        .build()
+                        .await?;
+                    runtime_executor.spawn(monitor.run()).detach();
+                    RuntimeOutputs::Ordinary(outputs)
+                }
+                RuntimeMode::ReferenceCausalSet => {
+                    let (output_writer, outputs) =
+                        manual_causal_output::<CausalSet>(spec.output_vars().clone()).await?;
+                    let monitor = CausalRuntimeBuilder::<CausalSet>::new()
+                        .executor(runtime_executor.clone())
+                        .model(spec)
+                        .input(input)
+                        .output_writer(output_writer)
+                        .build()
+                        .await?;
+                    runtime_executor.spawn(monitor.run()).detach();
+                    RuntimeOutputs::ReferenceCausalSet(outputs)
+                }
+                RuntimeMode::RoleCausalSet => {
+                    let (output_writer, outputs) =
+                        manual_causal_output::<RoleCausalSet>(spec.output_vars().clone()).await?;
+                    let monitor = CausalRuntimeBuilder::<RoleCausalSet>::role_new()
+                        .executor(runtime_executor.clone())
+                        .model(spec)
+                        .input(input)
+                        .output_writer(output_writer)
+                        .build()
+                        .await?;
+                    runtime_executor.spawn(monitor.run()).detach();
+                    RuntimeOutputs::RoleCausalSet(outputs)
+                }
+                RuntimeMode::RoleCausalAntichain => {
+                    let (output_writer, outputs) =
+                        manual_causal_output::<RoleCausalAntichain>(spec.output_vars().clone())
+                            .await?;
+                    let monitor = CausalRuntimeBuilder::<RoleCausalAntichain>::role_new()
+                        .executor(runtime_executor.clone())
+                        .model(spec)
+                        .input(input)
+                        .output_writer(output_writer)
+                        .build()
+                        .await?;
+                    runtime_executor.spawn(monitor.run()).detach();
+                    RuntimeOutputs::RoleCausalAntichain(outputs)
+                }
+            };
 
-        Ok((input_vars, input_controller, tick_controller, outputs))
-    }))
+            Ok((input_vars, input_controller, tick_controller, outputs))
+        }),
+    )
 }
 
 fn py_to_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {

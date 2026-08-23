@@ -1,6 +1,6 @@
 use core::panic;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display};
 use std::future::ready;
@@ -17,9 +17,10 @@ use async_trait::async_trait;
 use async_unsync::bounded;
 use async_unsync::oneshot;
 use async_unsync::semaphore;
+use event_listener::Event;
 use futures::future::LocalBoxFuture;
 use futures::future::join_all;
-use futures::{FutureExt, StreamExt, join, select};
+use futures::{FutureExt, StreamExt, select};
 use smol::LocalExecutor;
 use strum_macros::Display;
 use tracing::Level;
@@ -29,13 +30,164 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::core::DeferrableStreamData;
-use crate::core::OutputHandler;
+
 use crate::core::Runtime;
 use crate::core::Specification;
-use crate::core::{InputStream, OutputStream, StreamData, VarName};
+use crate::core::{InputStream, OutputStream, OutputWriter, StreamData, VarName};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
+
+#[derive(Clone)]
+struct ForwardingTracker {
+    state: Rc<ForwardingState>,
+}
+
+struct ForwardingState {
+    pending: Cell<usize>,
+    active: Cell<usize>,
+    event: Event,
+}
+
+struct ForwardingAck {
+    tracker: ForwardingTracker,
+    armed: bool,
+}
+
+struct WorkGuard {
+    tracker: ForwardingTracker,
+}
+
+#[derive(Clone)]
+struct InputCompletion {
+    remaining: Rc<Cell<usize>>,
+    cancellation_token: CancellationToken,
+}
+
+impl ForwardingTracker {
+    fn new() -> Self {
+        Self {
+            state: Rc::new(ForwardingState {
+                pending: Cell::new(0),
+                active: Cell::new(0),
+                event: Event::new(),
+            }),
+        }
+    }
+
+    fn register(&self) -> ForwardingAck {
+        self.state.pending.set(self.state.pending.get() + 1);
+        ForwardingAck {
+            tracker: self.clone(),
+            armed: true,
+        }
+    }
+
+    fn begin_work(&self) -> WorkGuard {
+        self.state.active.set(self.state.active.get() + 1);
+        WorkGuard {
+            tracker: self.clone(),
+        }
+    }
+
+    fn finish_pending(&self) {
+        self.state.pending.set(
+            self.state
+                .pending
+                .get()
+                .checked_sub(1)
+                .expect("forwarding acknowledgement count underflow"),
+        );
+        self.state.event.notify(usize::MAX);
+    }
+
+    fn finish_work(&self) {
+        self.state.active.set(
+            self.state
+                .active
+                .get()
+                .checked_sub(1)
+                .expect("active forwarding work count underflow"),
+        );
+        self.state.event.notify(usize::MAX);
+    }
+
+    async fn wait_quiescent(&self, cancellation_token: &CancellationToken) -> bool {
+        loop {
+            if self.state.pending.get() == 0 && self.state.active.get() == 0 {
+                return true;
+            }
+
+            let listener = self.state.event.listen();
+            if self.state.pending.get() == 0 && self.state.active.get() == 0 {
+                continue;
+            }
+
+            futures::select! {
+                _ = listener.fuse() => {}
+                _ = cancellation_token.cancelled().fuse() => return false,
+            }
+        }
+    }
+}
+
+impl ForwardingAck {
+    fn acknowledge(&mut self) {
+        if self.armed {
+            self.armed = false;
+            self.tracker.finish_pending();
+        }
+    }
+}
+
+impl Drop for ForwardingAck {
+    fn drop(&mut self) {
+        self.acknowledge();
+    }
+}
+
+impl Drop for WorkGuard {
+    fn drop(&mut self) {
+        self.tracker.finish_work();
+    }
+}
+
+impl InputCompletion {
+    fn new(count: usize, cancellation_token: CancellationToken) -> Self {
+        Self {
+            remaining: Rc::new(Cell::new(count)),
+            cancellation_token,
+        }
+    }
+
+    fn complete(&self) {
+        let remaining = self.remaining.get();
+        if remaining == 0 {
+            return;
+        }
+        let remaining = remaining - 1;
+        self.remaining.set(remaining);
+        if remaining == 0 {
+            self.cancellation_token.cancel();
+        }
+    }
+}
+
+fn track_direct_stream<V: 'static>(
+    mut stream: OutputStream<V>,
+    forwarding: ForwardingTracker,
+) -> OutputStream<V> {
+    // Register before returning the lazy wrapper. The manager releases its
+    // subscription permit immediately after constructing this stream, so a
+    // lazy registration would let input completion observe no pending work.
+    let mut completion = forwarding.register();
+    Box::pin(stream! {
+        while let Some(value) = stream.next().await {
+            yield value;
+        }
+        completion.acknowledge();
+    })
+}
 
 mod input_fanout;
 use input_fanout::fan_out_input;
@@ -99,7 +251,11 @@ pub struct VarManager<V: StreamData> {
     /// are outstanding subscription requests)
     var_semaphore: Rc<semaphore::Semaphore>,
     /// A sender to give messages to each subscriber to the variable
-    subscribers: Rc<RefCell<Vec<bounded::Sender<V>>>>,
+    subscribers: Rc<RefCell<Vec<bounded::Sender<(V, ForwardingAck)>>>>,
+    /// Tracks work and downstream consumption across this context
+    forwarding: ForwardingTracker,
+    /// Completes the root input phase after all root inputs have drained
+    input_completion: Option<InputCompletion>,
     /// The current clock value of the variable
     clock: Rc<RefCell<usize>>,
     /// Unique identifier for this variable manager
@@ -132,6 +288,26 @@ impl<V: StreamData> VarManager<V> {
         cancellation_token: CancellationToken,
         drain_when_unsubscribed: bool,
     ) -> Self {
+        Self::with_state(
+            executor,
+            var,
+            input_stream,
+            cancellation_token,
+            drain_when_unsubscribed,
+            ForwardingTracker::new(),
+            None,
+        )
+    }
+
+    fn with_state(
+        executor: Rc<LocalExecutor<'static>>,
+        var: VarName,
+        input_stream: OutputStream<V>,
+        cancellation_token: CancellationToken,
+        drain_when_unsubscribed: bool,
+        forwarding: ForwardingTracker,
+        input_completion: Option<InputCompletion>,
+    ) -> Self {
         let var_stage = AsyncCell::new_with(VarStage::Gathering).into_shared();
         let var_semaphore = Rc::new(semaphore::Semaphore::new(1));
         let clock = Rc::new(RefCell::new(0));
@@ -146,6 +322,8 @@ impl<V: StreamData> VarManager<V> {
             var_stage,
             outstanding_sub_requests,
             subscribers,
+            forwarding,
+            input_completion,
             clock,
             id,
             cancellation_token,
@@ -164,6 +342,10 @@ impl<V: StreamData> VarManager<V> {
         let outstanding_sub_requests_ref = self.outstanding_sub_requests.clone();
         let var = self.var.clone();
         let id = self.id;
+        let forwarding = self.forwarding.clone();
+        // Keep input completion from canceling the context before this lazy
+        // subscription has delivered its stream to the consumer.
+        let mut subscription = forwarding.register();
 
         debug!(?var, "VarManager {id}: Subscribing to variable");
 
@@ -211,6 +393,7 @@ impl<V: StreamData> VarManager<V> {
                     // Take the stream out of the RefCell by replacing it with None
                     let mut input_ref = input_stream_ref.borrow_mut();
                     let stream = input_ref.take().unwrap();
+                    let stream = track_direct_stream(stream, forwarding.clone());
                     output_tx.send(stream).expect(format!("VarManager {}: Tried to send output for variable {}", id, var).as_str());
                     subscribers_ref.borrow_mut().pop();
                 } else if current_var_stage == VarStage::Open
@@ -222,9 +405,10 @@ impl<V: StreamData> VarManager<V> {
                             let id = id;
                             loop {
                                 debug!("VarManager {id}: Waiting to forward to subs");
-                                if let Some(data) = rx.recv().await {
+                                if let Some((data, mut acknowledgement)) = rx.recv().await {
                                     debug!("VarManager {id}: Forwarding {:?} to subs", data);
                                     yield data;
+                                    acknowledgement.acknowledge();
                                 }
                                 else {
                                     debug!("VarManager {id}: Stream ended - no more to forward to subs");
@@ -236,6 +420,7 @@ impl<V: StreamData> VarManager<V> {
                 } else {
                     unreachable!()
                 };
+                subscription.acknowledge();
 
                 if *outstanding_sub_requests_ref.borrow() == 1 {
                     debug!("VarManager {id}: Adding permit back to semaphore");
@@ -265,12 +450,15 @@ impl<V: StreamData> VarManager<V> {
         let var_stage = self.var_stage.clone();
         let cancellation_token = self.cancellation_token.clone();
         let drain_when_unsubscribed = self.drain_when_unsubscribed;
+        let forwarding = self.forwarding.clone();
         let id = self.id;
 
         debug!("VarManager {}: Starting tick for variable '{}'", id, var);
 
         // Return a future which will actually do the distribution
         Box::pin(async move {
+            let _work = forwarding.begin_work();
+
             // Check if cancellation was requested
             if cancellation_token.is_cancelled().await {
                 debug!("VarManager {id}: Cancellation requested, stopping tick");
@@ -337,8 +525,9 @@ impl<V: StreamData> VarManager<V> {
 
                     for (i, child_sender) in subscribers_ref.borrow().iter().enumerate() {
                         // Use select! to race send operation against cancellation
+                        let acknowledgement = forwarding.register();
                         let send_result = select! {
-                            result = child_sender.send(data.clone()).fuse() => result,
+                            result = child_sender.send((data.clone(), acknowledgement)).fuse() => result,
                             _ = cancellation_token.cancelled().fuse() => {
                                 debug!("VarManager {id}: Cancellation requested during send");
                                 return false;
@@ -378,6 +567,8 @@ impl<V: StreamData> VarManager<V> {
         self.var_stage.set(VarStage::Closed);
 
         let cancellation_token = self.cancellation_token.clone();
+        let forwarding = self.forwarding.clone();
+        let input_completion = self.input_completion.clone();
         let id = self.id;
 
         // Return a future which will run the tick function until it returns
@@ -386,6 +577,7 @@ impl<V: StreamData> VarManager<V> {
         Box::pin(async move {
             debug!("VarManager {id}: Starting run loop with cancellation token");
             let mut should_continue = true;
+            let mut completed_naturally = false;
             while should_continue {
                 should_continue = select! {
                     _ = cancellation_token.cancelled().fuse() => {
@@ -397,10 +589,17 @@ impl<V: StreamData> VarManager<V> {
                             true  // Continue the loop
                         } else {
                             debug!("VarManager {id}: Tick returned false, stopping run loop");
+                            completed_naturally = true;
                             false  // Exit the loop
                         }
                     }
                 };
+            }
+            if completed_naturally
+                && forwarding.wait_quiescent(&cancellation_token).await
+                && let Some(input_completion) = input_completion
+            {
+                input_completion.complete();
             }
             debug!(
                 "VarManager {id}: Run loop ended, cancellation: {}",
@@ -533,6 +732,7 @@ pub struct ContextBuilder<AC: AsyncConfig> {
     input_streams: Option<Vec<OutputStream<AC::Val>>>,
     history_length: Option<usize>,
     drain_when_unsubscribed: BTreeMap<VarName, bool>,
+    forwarding: Option<ForwardingTracker>,
     nested: Option<Box<Context<AC>>>,
     id: Option<ContextId>,
 }
@@ -550,6 +750,7 @@ where
             input_streams: None,
             history_length: None,
             drain_when_unsubscribed: BTreeMap::new(),
+            forwarding: None,
             nested: None,
             id: None,
         }
@@ -598,12 +799,13 @@ where
         }
 
         res.drain_when_unsubscribed = self.drain_when_unsubscribed.clone();
+        res.forwarding = self.forwarding.clone();
 
         res
     }
 
     fn build(self) -> AC::Ctx {
-        let builder = self.partial_clone();
+        let mut builder = self.partial_clone();
         let executor = self.executor.expect("Executor not supplied");
         let var_names = self.var_names.expect("Var names not supplied");
         let input_streams = self.input_streams.expect("Input streams not supplied");
@@ -615,18 +817,33 @@ where
         // TODO: push the mutability to the API of contexts
         let var_managers = Rc::new(RefCell::new(BTreeMap::new()));
         let cancellation_token = CancellationToken::new();
+        let forwarding = self.forwarding.unwrap_or_else(ForwardingTracker::new);
+        builder.forwarding = Some(forwarding.clone());
+        let input_count = var_names
+            .iter()
+            .filter(|var| self.drain_when_unsubscribed.contains_key(*var))
+            .count();
+        let input_completion = (input_count > 0)
+            .then(|| InputCompletion::new(input_count, cancellation_token.clone()));
 
         for (var, input_stream) in var_names.iter().zip(input_streams.into_iter()) {
             let input_stream =
                 store_history(executor.clone(), var.clone(), history_length, input_stream);
+            let drain_when_unsubscribed = *self.drain_when_unsubscribed.get(var).unwrap_or(&false);
             var_managers.borrow_mut().insert(
                 var.clone(),
-                VarManager::new_with_drain_policy(
+                VarManager::with_state(
                     executor.clone(),
                     var.clone(),
                     input_stream,
                     cancellation_token.clone(),
-                    *self.drain_when_unsubscribed.get(var).unwrap_or(&false),
+                    drain_when_unsubscribed,
+                    forwarding.clone(),
+                    drain_when_unsubscribed.then(|| {
+                        input_completion
+                            .clone()
+                            .expect("input completion exists for a root input manager")
+                    }),
                 ),
             );
         }
@@ -955,9 +1172,13 @@ where
 {
     pub executor: Rc<LocalExecutor<'static>>,
     input_drive: OutputStream<anyhow::Result<()>>,
-    output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
+    output_writer: OutputWriter<AC::Val>,
     output_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
     cancellation_token: CancellationToken,
+    /// Whether input completion is reported by root variable managers
+    await_input_completion: bool,
+    /// Whether a standalone input driver should cancel output on success
+    cancel_after_input_completion: bool,
     #[allow(dead_code)]
     semantics_t: PhantomData<S>,
 }
@@ -966,7 +1187,7 @@ pub struct AsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<AC::Spec>,
     pub(super) input: Option<InputStream<AC::Val>>,
-    pub(super) output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
+    pub(super) output_writer: Option<OutputWriter<AC::Val>>,
     pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     semantics_t: PhantomData<S>,
 }
@@ -977,7 +1198,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncRuntimeBuilder<AC, S> {
             executor: self.executor.clone(),
             model: self.model.clone(),
             input: None,
-            output: None,
+            output_writer: None,
             context_builder: self
                 .context_builder
                 .as_ref()
@@ -1016,7 +1237,7 @@ where
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
             context_builder: None,
             semantics_t: PhantomData,
         }
@@ -1043,9 +1264,9 @@ where
         }
     }
 
-    fn output(self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
+    fn output_writer(self, output_writer: OutputWriter<AC::Val>) -> Self {
         Self {
-            output: Some(output),
+            output_writer: Some(output_writer),
             ..self
         }
     }
@@ -1064,7 +1285,7 @@ where
 
             let input = self.input.expect("Input streams not supplied");
 
-            let output_handler = self.output.expect("Output handler not supplied");
+            let output_writer = self.output_writer.expect("Output writer not supplied");
 
             let context_builder = self
                 .context_builder
@@ -1157,9 +1378,11 @@ where
             let runner = AsyncRuntime {
                 executor,
                 input_drive,
-                output_handler,
+                output_writer,
                 output_streams,
                 cancellation_token,
+                await_input_completion: !input_vars.is_empty(),
+                cancel_after_input_completion: false,
                 semantics_t: PhantomData,
             };
             debug!("AsyncRuntimeBuilder: Build process complete, runner created");
@@ -1178,13 +1401,13 @@ where
         executor: Rc<LocalExecutor<'static>>,
         model: AC::Spec,
         input: InputStream<AC::Val>,
-        output: Box<dyn OutputHandler<Val = AC::Val>>,
+        output: OutputWriter<AC::Val>,
     ) -> Self {
         AsyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
-            .output(output)
+            .output_writer(output)
             .build()
             .await
     }
@@ -1199,14 +1422,43 @@ where
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         debug!("AsyncRuntime: Starting monitor execution");
-        self.output_handler.provide_streams(self.output_streams);
+        debug!("AsyncRuntime: Creating futures for input and output writer");
+        let AsyncRuntime {
+            input_drive,
+            mut output_writer,
+            output_streams,
+            cancellation_token,
+            await_input_completion,
+            cancel_after_input_completion,
+            ..
+        } = *self;
 
-        debug!("AsyncRuntime: Creating futures for input and output handlers");
-        let output_fut = self.output_handler.run().fuse();
+        // The output driver owns the output streams. If another side fails,
+        // drop that driver explicitly and finalize the writer rather than
+        // relying on an async Drop implementation to perform cleanup.
+        let output_cancellation = cancellation_token.clone();
+        let output_fut: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
+            let drive = Box::pin(crate::runtime::output::drive_singleton_streams(
+                output_streams,
+                &mut output_writer,
+            ));
+            let drive_result: Option<anyhow::Result<()>> =
+                match futures::future::select(drive, output_cancellation.cancelled()).await {
+                    futures::future::Either::Left((result, _)) => Some(result),
+                    futures::future::Either::Right((_, drive)) => {
+                        drop(drive);
+                        None
+                    }
+                };
+            match drive_result {
+                Some(result) => result,
+                None => crate::runtime::output::finish_writer(&mut output_writer).await,
+            }
+        });
 
-        // Wrap input stream's run with cancellation support
-        let cancellation_token = self.cancellation_token.clone();
-        let mut input_drive = self.input_drive;
+        // Wrap input stream's run with cancellation support.
+        let input_cancellation = cancellation_token.clone();
+        let mut input_drive = input_drive;
         let input_driver = async move {
             while let Some(step) = input_drive.next().await {
                 step?;
@@ -1215,35 +1467,89 @@ where
             Ok::<_, anyhow::Error>(())
         };
 
-        let input_fut = async move {
+        let input_fut: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
             let result = futures::select! {
                 result = input_driver.fuse() => Some(result),
-                _ = cancellation_token.cancelled().fuse() => {
+                _ = input_cancellation.cancelled().fuse() => {
                     debug!("AsyncRuntime: Input stream cancelled");
                     None
                 }
             };
-            if let Some(result) = result {
-                result?;
+            match result {
+                Some(Ok(())) => {
+                    // Input fan-out has delivered its final values to the
+                    // context's channels. Root input managers complete only
+                    // after all causally generated forwarding is quiescent;
+                    // wait for that barrier before stopping independent output
+                    // streams that otherwise have no natural EOF.
+                    if await_input_completion {
+                        // The shared token is canceled by InputCompletion only
+                        // after root managers and all forwarding work finish.
+                        input_cancellation.cancelled().await;
+                    } else if cancel_after_input_completion {
+                        input_cancellation.cancel();
+                    }
+                    Ok(())
+                }
+                Some(Err(error)) => {
+                    // An input failure must stop independent output streams
+                    // before this future is joined with them.
+                    input_cancellation.cancel();
+                    Err(error)
+                }
+                None => Ok(()),
             }
-            Ok::<_, anyhow::Error>(())
+        });
+
+        // Race the two sides. Whichever side reports an error cancels the
+        // shared context before the still-running side is awaited.
+        let (output_result, input_result) =
+            match futures::future::select(output_fut, input_fut).await {
+                futures::future::Either::Left((output_result, input_fut)) => {
+                    // A completed output side has no more work that can
+                    // signal input progress. This includes an intentionally
+                    // empty output map, so cancel pending input instead of
+                    // waiting for it forever.
+                    cancellation_token.cancel();
+                    let input_result = input_fut.await;
+                    (output_result, input_result)
+                }
+                futures::future::Either::Right((input_result, output_fut)) => {
+                    if input_result.is_err() {
+                        cancellation_token.cancel();
+                    }
+                    let output_result = output_fut.await;
+                    (output_result, input_result)
+                }
+            };
+
+        let result = match (output_result, input_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(primary), Err(additional)) => Err(combine_runtime_errors(primary, additional)),
         };
-
-        let (result, input_result) = join!(output_fut, input_fut);
-        input_result?;
-
-        self.cancellation_token.cancel();
         debug!(?result, "AsyncRuntime: Monitor execution completed");
         result
+    }
+}
+
+fn combine_runtime_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::Error {
+    let primary_message = primary.to_string();
+    let additional_message = additional.to_string();
+    if primary_message == additional_message {
+        primary
+    } else {
+        anyhow::anyhow!("{primary_message}; additionally: {additional_message}")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        DsrvSpecification, InputStream, Value,
+        DsrvSpecification, InputStream, OutputBatch, OutputError, OutputStream, OutputWriter,
+        Value,
         dsrv_fixtures::{TestConfig, TestRuntime, spec_simple_add_monitor},
-        io::testing::NullOutputHandler,
+        io::{output::AsyncFnSink, testing::null_output},
     };
 
     use super::*;
@@ -1251,7 +1557,11 @@ mod tests {
     use crate::async_test;
     use futures::stream;
     use macro_rules_attribute::apply;
-    use std::cell::RefCell;
+    use std::{
+        cell::{Cell, RefCell},
+        future::Future,
+        time::Duration,
+    };
 
     fn failing_input() -> InputStream<Value> {
         Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
@@ -1263,14 +1573,142 @@ mod tests {
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
         let source = spec_simple_add_monitor();
         let spec = source.parse::<DsrvSpecification>().unwrap();
-        let output = Box::new(NullOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
+        let output = null_output(spec.output_vars().clone()).await;
         let runtime: TestRuntime = TestRuntime::new(executor, spec, failing_input(), output).await;
 
         let error = runtime.run().await.unwrap_err();
         assert_eq!(error.to_string(), "input failed");
+    }
+
+    fn writer_with_close_counter(
+        send_error: Option<OutputError>,
+        closes: Rc<Cell<usize>>,
+    ) -> OutputWriter<Value> {
+        let mut send_error = send_error;
+        let sink = AsyncFnSink::with_close(
+            move |_batch: OutputBatch<Value>| {
+                let result = match send_error.take() {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                };
+                async move { result }
+            },
+            move || {
+                closes.set(closes.get() + 1);
+                async { Ok::<(), OutputError>(()) }
+            },
+        );
+        OutputWriter::from_sink(sink)
+    }
+
+    fn direct_runtime(
+        executor: Rc<LocalExecutor<'static>>,
+        input_drive: OutputStream<anyhow::Result<()>>,
+        output_stream: Option<OutputStream<Value>>,
+        output_writer: OutputWriter<Value>,
+        cancellation_token: CancellationToken,
+    ) -> TestRuntime {
+        AsyncRuntime {
+            executor,
+            input_drive,
+            output_writer,
+            output_streams: output_stream.map_or_else(BTreeMap::new, |stream| {
+                BTreeMap::from([(VarName::new("out"), stream)])
+            }),
+            cancellation_token,
+            await_input_completion: false,
+            cancel_after_input_completion: true,
+            semantics_t: PhantomData,
+        }
+    }
+
+    async fn complete_promptly<F, T>(future: F) -> T
+    where
+        F: Future<Output = T> + 'static,
+    {
+        match futures::future::select(
+            Box::pin(future),
+            Box::pin(async {
+                smol::Timer::after(Duration::from_secs(1)).await;
+            }),
+        )
+        .await
+        {
+            futures::future::Either::Left((result, _)) => result,
+            futures::future::Either::Right((_, _)) => {
+                std::panic!("async runtime did not complete promptly")
+            }
+        }
+    }
+
+    #[apply(async_test)]
+    async fn input_failure_cancels_independent_output_and_closes_writer(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let closes = Rc::new(Cell::new(0));
+        let cancellation_token = CancellationToken::new();
+        let runtime = direct_runtime(
+            executor,
+            Box::pin(stream::iter([Err(anyhow::anyhow!("input failed"))])),
+            Some(Box::pin(stream::repeat(Value::Int(1)))),
+            writer_with_close_counter(None, Rc::clone(&closes)),
+            cancellation_token.clone(),
+        );
+
+        let error = complete_promptly(Box::new(runtime).run_boxed())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "input failed");
+        assert!(cancellation_token.is_cancelled().await);
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn successful_empty_output_cancels_pending_input_and_closes_writer(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let closes = Rc::new(Cell::new(0));
+        let cancellation_token = CancellationToken::new();
+        let runtime = direct_runtime(
+            executor,
+            Box::pin(stream::pending()),
+            None,
+            writer_with_close_counter(None, Rc::clone(&closes)),
+            cancellation_token.clone(),
+        );
+
+        let result = complete_promptly(Box::new(runtime).run_boxed()).await;
+
+        assert!(result.is_ok());
+        assert!(cancellation_token.is_cancelled().await);
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn output_failure_cancels_pending_input_and_closes_writer(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let closes = Rc::new(Cell::new(0));
+        let cancellation_token = CancellationToken::new();
+        let runtime = direct_runtime(
+            executor,
+            Box::pin(stream::pending()),
+            Some(Box::pin(stream::once(async { Value::Int(1) }))),
+            writer_with_close_counter(
+                Some(OutputError::backend("output failed")),
+                Rc::clone(&closes),
+            ),
+            cancellation_token.clone(),
+        );
+
+        let error = complete_promptly(Box::new(runtime).run_boxed())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "output backend error: output failed");
+        assert!(cancellation_token.is_cancelled().await);
+        assert_eq!(closes.get(), 1);
     }
 
     #[apply(async_test)]

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     VarName,
+    core::{OutputError, OutputRoute},
     io::config::{MsgTypeMapping, TopicMapping},
 };
 
@@ -41,6 +42,48 @@ pub struct VariableMappingData {
 }
 
 pub type RosStreamMapping = BTreeMap<String, VariableMappingData>;
+
+/// Return the topic and parsed ROS message type for a concrete output route.
+/// Auxiliary routes are intentionally not mapped because they are consumed
+/// without creating a publisher.
+pub(crate) fn ros_output_route_mapping(
+    route: &OutputRoute,
+) -> Result<(&str, RosMsgType), OutputError> {
+    if route.role.is_auxiliary() {
+        return Err(OutputError::invalid(format!(
+            "ROS auxiliary route `{}` does not have a publisher mapping",
+            route.variable
+        )));
+    }
+
+    let topic = route.topic.as_deref().ok_or_else(|| {
+        OutputError::invalid(format!(
+            "ROS output route `{}` must specify a topic",
+            route.variable
+        ))
+    })?;
+    if topic.is_empty() {
+        return Err(OutputError::invalid(format!(
+            "ROS output route `{}` must specify a non-empty topic",
+            route.variable
+        )));
+    }
+
+    let message_type = route.message_type.as_deref().ok_or_else(|| {
+        OutputError::invalid(format!(
+            "ROS output route `{}` must specify a message type",
+            route.variable
+        ))
+    })?;
+    let message_type = string_to_ros_msg_type(message_type).map_err(|error| {
+        OutputError::invalid(format!(
+            "ROS output route `{}` has invalid message type: {error}",
+            route.variable
+        ))
+    })?;
+
+    Ok((topic, message_type))
+}
 
 pub fn string_to_ros_msg_type(typ: &str) -> Result<RosMsgType, anyhow::Error> {
     match typ {

@@ -16,14 +16,14 @@ cargo run -- <model> <input-options> [output-options] [extra options]
 In the simplest case, provide a model, and an input source:
 
 ```bash
-cargo run -- examples/simple_add.dsrv --input-file examples/simple_add.input 
+cargo run -- examples/simple_add.dsrv --input-file examples/simple_add.input
 ```
 
 This starts the TC with the model in `examples/simple_add.dsrv`, reads the trace from `examples/simple_add.input`, and prints the monitoring result to standard output. Printing to standard output can also be explicitly specified with `--output-stdout`.
 
 Additional flags can be added for language selection, parser choice, runtime settings, or distributed monitoring.
 
-### Getting help 
+### Getting help
 
 To see the available command-line options, run:
 
@@ -130,6 +130,75 @@ used. The update limit is a flush threshold and soft bound, not a hard maximum:
 the window flushes after accepting a complete logical tick that reaches or
 exceeds the threshold. One atomic logical tick is never split, so a wide
 simultaneous tick can exceed the nominal limit.
+
+## Output destinations and stages
+
+The single-destination shortcuts remain concise:
+
+```bash
+cargo run -- examples/simple_add.dsrv --input-file examples/simple_add.input --output-stdout
+cargo run -- examples/simple_add.dsrv --mqtt-input --mqtt-output
+cargo run -- examples/simple_add.dsrv --redis-input --redis-output
+```
+
+Use `--output-config` for multiple destinations, explicit mirroring, or buffering
+and coalescing. The file is JSON5 and contains only local configuration. This
+valid example makes the default destination primary and mirrors explicitly:
+
+```json5
+{
+  default: "telemetry",
+  shared_stages: [],
+  destinations: {
+    telemetry: {
+      kind: "mqtt",
+      host: "localhost",
+      port: 1883,
+      routes: { alarm: "/robot/alarm", verdict: "/robot/verdict" },
+      stages: [
+        { kind: "buffer", max_batches: 64, max_updates: 4096 },
+        { kind: "coalesce", max_delay_ms: 2, update_limit: 256 }
+      ]
+    },
+    archive: {
+      kind: "redis",
+      host: "localhost",
+      port: 6379,
+      mirror: true,
+      routes: { alarm: "monitor:alarm", verdict: "monitor:verdict" }
+    }
+  }
+}
+```
+
+`telemetry` is the primary destination; `archive` receives both values only
+because `mirror: true` is explicit. A secondary destination must also declare a
+`partition`, legacy `variables`, `mirror: true`, or a route catalog. The
+`variables`, `partition`, and `mirror` fields cannot be combined. `limited-null`
+requires a positive `limit`, the manual output backend is programmatic-only, and
+MQTT output always uses Paho.
+
+The runtime emits logical ticks independently of the destination. A packed
+producer stays packed; a semi-sync producer stays row-oriented; singleton-heavy
+runtimes preserve every width-one tick. Buffering is bounded and blocking, with
+`max_updates` acting as a pressure threshold that can overshoot by one
+indivisible physical batch. Coalescing count limits are flush thresholds
+evaluated between incoming physical batches: a complete physical batch may
+contain enough ticks or updates to overshoot either limit, because coalescing
+never splits an incoming physical batch and preserves every logical tick. Timed
+coalescing drives the backend from its worker when a deadline or count limit
+fires, even if the producer is idle. Within one destination, duplicate MQTT
+topics and Redis channels are rejected; the same topic or channel may be reused
+by a distinct destination. The router waits for every destination's readiness
+and scans/clones selected values per destination, so destination stages do not
+provide full pressure isolation. A flush or close barrier drains shared stages,
+routing, destination stages, and all destinations. Cross-transport transactions
+are not promised: one external destination may observe a batch before another
+fails.
+
+See [Output Architecture](./output.md) and [Output Pipeline Benchmarks](./output-pipeline-benchmarks.md)
+for routing, mirroring, backpressure, and benchmark methodology and workload
+tradeoffs.
 
 ## ROS2 Usage
 

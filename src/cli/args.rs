@@ -142,16 +142,10 @@ pub struct InputMode {
     pub input_config: Option<PathBuf>,
 }
 
-/// Output handler configuration for monitoring results
-///
-/// Specifies either to use a given mode of output (Files, ROS, MQTT, Redis) or to select the
-/// output mode an provide an additional configuration file at the same time. This configuration
-/// file is mandatory for ROS since the message types need to be specified, or optional for all
-/// other protocols (with the default behaviour being to directly use the stream variable
-/// names as topic names).
+/// Local output selection for monitoring results.
 #[derive(Args, Clone, Debug)]
 #[group(required = false, multiple = false)]
-pub struct OutputMode {
+pub struct OutputSelection {
     #[clap(long, help = "Output monitoring results to stdout")]
     pub output_stdout: bool,
 
@@ -164,11 +158,14 @@ pub struct OutputMode {
     #[clap(long, help = "Enable generic Redis output mode")]
     pub redis_output: bool,
 
-    #[clap(long, help = "ROS topics configuration file for output")]
+    #[clap(long, help = "Redis channels configuration file for output")]
     pub output_redis_file: Option<PathBuf>,
 
     #[clap(long, help = "ROS topics configuration file for output")]
     pub output_ros_file: Option<PathBuf>,
+
+    #[clap(long, help = "Advanced multi-destination output configuration file")]
+    pub output_config: Option<PathBuf>,
 }
 
 /// Distribution and deployment configuration for monitoring
@@ -297,7 +294,7 @@ pub struct Cli {
 
     // The mode of output to use
     #[command(flatten)]
-    pub output_mode: OutputMode,
+    pub output_selection: OutputSelection,
 
     #[arg(long, help = "Write tracing logs to this file")]
     pub log_file: Option<String>,
@@ -598,6 +595,49 @@ mod runtime_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn output_config_is_parsed_as_a_distinct_output_selection() {
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.dsrv",
+            "--input-file",
+            "trace.json5",
+            "--output-config",
+            "outputs.json5",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.output_selection.output_config,
+            Some(PathBuf::from("outputs.json5"))
+        );
+        assert!(!cli.output_selection.output_stdout);
+    }
+
+    #[test]
+    fn output_config_conflicts_with_shortcut_output_modes() {
+        for mode in [
+            vec!["--output-stdout"],
+            vec!["--mqtt-output"],
+            vec!["--output-mqtt-file", "routes.json5"],
+            vec!["--redis-output"],
+            vec!["--output-redis-file", "routes.json5"],
+            vec!["--output-ros-file", "routes.json5"],
+        ] {
+            let mut arguments = vec![
+                "trustworthiness_checker",
+                "checker.dsrv",
+                "--input-file",
+                "trace.json5",
+                "--output-config",
+                "outputs.json5",
+            ];
+            arguments.extend(mode.iter().copied());
+            let result = Cli::try_parse_from(arguments);
+            assert!(result.is_err(), "accepted output config with {mode:?}");
+        }
     }
 
     #[test]

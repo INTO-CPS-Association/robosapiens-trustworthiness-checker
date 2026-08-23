@@ -1,14 +1,15 @@
 use anyhow::Context;
 use smol::LocalExecutor;
-use std::{collections::BTreeMap, num::NonZeroU32, rc::Rc, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroU32, path::Path, rc::Rc, time::Duration};
 use tracing::{debug, info};
 
-use crate::cli::args::{Cli, OutputMode};
+use crate::cli::args::{Cli, OutputSelection};
 use crate::core::{FileInputValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
-use crate::io::OutputHandlerSpec;
+use crate::io::OutputBackendBuilder;
 use crate::io::config::deserialisation::json_to_routes;
-use crate::io::config::{InputConfigFile, MsgTypeMapping, Route, SourceConfig, TopicMapping};
+use crate::io::config::{InputConfigFile, OutputConfigFile, SourceConfig};
+use crate::io::output::{OutputBackendConfig, OutputDestination};
 use crate::{
     VarName,
     core::REDIS_HOSTNAME,
@@ -263,80 +264,87 @@ where
     })
 }
 
-pub fn output_handler_spec<V>(output_mode: OutputMode) -> anyhow::Result<OutputHandlerSpec<V>> {
-    Ok(match output_mode {
-        OutputMode {
-            output_stdout: true,
-            ..
-        } => OutputHandlerSpec::Stdout,
-        OutputMode {
-            output_ros_file: Some(output_ros_file),
-            ..
-        } => {
-            let json_string = std::fs::read_to_string(&output_ros_file).with_context(|| {
-                format!("Output mapping file {output_ros_file:?} could not be read")
-            })?;
-            let routes =
-                json_to_routes(&json_string).context("Output route catalog could not be parsed")?;
-            let (topic_mapping, msg_types) = route_mappings(routes, true)?;
-            OutputHandlerSpec::Ros(topic_mapping, msg_types)
-        }
-        OutputMode {
-            output_mqtt_file: Some(output_mqtt_file),
-            ..
-        } => {
-            let json_string = std::fs::read_to_string(&output_mqtt_file).with_context(|| {
-                format!("Output MQTT mapping file {output_mqtt_file:?} could not be read")
-            })?;
-            let routes = json_to_routes(&json_string)
-                .context("Output MQTT route catalog could not be parsed")?;
-            let (topic_mapping, _) = route_mappings(routes, false)?;
-            OutputHandlerSpec::Mqtt(Some(topic_mapping))
-        }
-        OutputMode {
-            output_redis_file: Some(output_redis_file),
-            ..
-        } => {
-            let json_string = std::fs::read_to_string(&output_redis_file).with_context(|| {
-                format!("Output Redis mapping file {output_redis_file:?} could not be read")
-            })?;
-            let routes = json_to_routes(&json_string)
-                .context("Output Redis route catalog could not be parsed")?;
-            let (topic_mapping, _) = route_mappings(routes, false)?;
-            OutputHandlerSpec::Redis(Some(topic_mapping))
-        }
-        OutputMode {
-            mqtt_output: true, ..
-        } => OutputHandlerSpec::Mqtt(None),
-        OutputMode {
-            redis_output: true, ..
-        } => OutputHandlerSpec::Redis(None),
-        // Default to stdout if no options provided
-        _ => OutputHandlerSpec::Stdout,
-    })
+pub fn output_config_from_path(path: &Path) -> anyhow::Result<OutputConfigFile> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("output config {path:?} could not be read"))?;
+    OutputConfigFile::from_json(&contents)
+        .with_context(|| format!("output config {path:?} could not be parsed"))
 }
 
-pub fn route_mappings(
-    routes: std::collections::BTreeMap<VarName, Route>,
-    require_codec: bool,
-) -> anyhow::Result<(TopicMapping, MsgTypeMapping)> {
-    let mut topics = TopicMapping::new();
-    let mut codecs = MsgTypeMapping::new();
-    for (variable, route) in routes {
-        topics.insert(variable.clone(), route.route.to_string());
-        if let Some(codec) = route.codec {
-            codecs.insert(variable, codec.0.to_string());
-        } else if require_codec {
-            anyhow::bail!("route for `{variable}` requires a codec");
-        }
+pub fn output_pipeline_builder<V>(
+    selection: OutputSelection,
+    executor: Rc<LocalExecutor<'static>>,
+    mqtt_port: Option<u16>,
+    redis_port: Option<u16>,
+) -> anyhow::Result<OutputBackendBuilder<V>>
+where
+    V: FileInputValue + RosStreamValue,
+{
+    if let Some(path) = selection.output_config {
+        let config = output_config_from_path(&path)?;
+        #[cfg(feature = "ros")]
+        let builder = OutputBackendBuilder::from_config_with_executor(config, executor.clone())?;
+        #[cfg(not(feature = "ros"))]
+        let builder = OutputBackendBuilder::from_config(config)?;
+        return Ok(builder.executor(executor));
     }
-    Ok((topics, codecs))
-}
 
-impl From<OutputMode> for OutputHandlerSpec {
-    fn from(output_mode: OutputMode) -> Self {
-        output_handler_spec(output_mode).expect("output mode could not be configured")
+    let (backend, routes) = if selection.output_stdout {
+        (OutputBackendConfig::stdout(), None)
+    } else if let Some(path) = selection.output_mqtt_file {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("Output MQTT route catalog {path:?} could not be read"))?;
+        (
+            OutputBackendConfig::mqtt(crate::core::MQTT_HOSTNAME, mqtt_port),
+            Some(
+                json_to_routes(&contents)
+                    .context("Output MQTT route catalog could not be parsed")?,
+            ),
+        )
+    } else if selection.mqtt_output {
+        (
+            OutputBackendConfig::mqtt(crate::core::MQTT_HOSTNAME, mqtt_port),
+            None,
+        )
+    } else if let Some(path) = selection.output_redis_file {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("Output Redis route catalog {path:?} could not be read"))?;
+        (
+            OutputBackendConfig::redis(crate::core::REDIS_HOSTNAME, redis_port),
+            Some(
+                json_to_routes(&contents)
+                    .context("Output Redis route catalog could not be parsed")?,
+            ),
+        )
+    } else if selection.redis_output {
+        (
+            OutputBackendConfig::redis(crate::core::REDIS_HOSTNAME, redis_port),
+            None,
+        )
+    } else if let Some(path) = selection.output_ros_file {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("Output ROS route catalog {path:?} could not be read"))?;
+        let routes =
+            json_to_routes(&contents).context("Output ROS route catalog could not be parsed")?;
+        #[cfg(feature = "ros")]
+        {
+            let backend = OutputBackendConfig::ros(executor.clone(), "tc_ros_output");
+            (backend, Some(routes))
+        }
+        #[cfg(not(feature = "ros"))]
+        {
+            let _ = (executor, routes);
+            anyhow::bail!("ROS output requires the `ros` feature")
+        }
+    } else {
+        (OutputBackendConfig::stdout(), None)
+    };
+
+    let mut destination = OutputDestination::new("default", backend);
+    if let Some(routes) = routes {
+        destination = destination.with_route_catalog(routes);
     }
+    Ok(OutputBackendBuilder::from_destination(destination).executor(executor))
 }
 
 impl Cli {
@@ -749,6 +757,7 @@ mod tests {
     use smol::LocalExecutor;
     #[cfg(feature = "ros")]
     use std::rc::Rc;
+    use std::{fs, path::PathBuf};
 
     #[test]
     fn test_scheduler_communication_mock_mode_maps_to_null() {
@@ -1173,6 +1182,103 @@ mod tests {
                 && constraints == vec![VarName::new("c1"), VarName::new("c2")]
                 && topic == "/dist_graph"
         ));
+    }
+
+    fn output_config_test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "trustworthiness-checker-output-{name}-{}.json5",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn output_config_helper_reports_unreadable_and_malformed_files() {
+        let unreadable = output_config_test_path("missing");
+        let _ = fs::remove_file(&unreadable);
+        let error = output_config_from_path(&unreadable).unwrap_err();
+        assert!(error.to_string().contains("could not be read"));
+
+        let malformed = output_config_test_path("malformed");
+        fs::write(
+            &malformed,
+            r#"{destinations:{out:{kind:"stdout",unknown:true}}}"#,
+        )
+        .unwrap();
+        let error = output_config_from_path(&malformed).unwrap_err();
+        assert!(error.to_string().contains("could not be parsed"));
+        let _ = fs::remove_file(malformed);
+    }
+
+    #[test]
+    fn output_config_build_path_supports_dsrv_and_mstlo_value_types() {
+        let path = output_config_test_path("multi");
+        fs::write(
+            &path,
+            r#"{
+                default: "primary",
+                destinations: {
+                    primary: {kind: "null"},
+                    secondary: {kind: "stdout", partition: ["y"]}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let dsrv = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.dsrv",
+            "--input-file",
+            "trace.json5",
+            "--output-config",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let dsrv_builder = output_pipeline_builder::<crate::Value>(
+            dsrv.output_selection,
+            std::rc::Rc::new(smol::LocalExecutor::new()),
+            None,
+            None,
+        )
+        .unwrap();
+        let dsrv_resolved = dsrv_builder
+            .resolve(
+                [VarName::new("x"), VarName::new("y")],
+                std::iter::empty::<VarName>(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(dsrv_resolved.destinations().len(), 2);
+        assert_eq!(dsrv_resolved.destinations()[1].bindings().len(), 1);
+
+        let mstlo = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "checker.mstlo",
+            "--language",
+            "mstlo",
+            "--input-file",
+            "trace.json5",
+            "--output-config",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let mstlo_builder = output_pipeline_builder::<crate::runtime::mstlo::MstloTimedValue>(
+            mstlo.output_selection,
+            std::rc::Rc::new(smol::LocalExecutor::new()),
+            None,
+            None,
+        )
+        .unwrap();
+        let mstlo_resolved = mstlo_builder
+            .resolve(
+                [VarName::new("x"), VarName::new("y")],
+                std::iter::empty::<VarName>(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(mstlo_resolved.destinations().len(), 2);
+        assert_eq!(mstlo_resolved.destinations()[1].bindings().len(), 1);
+
+        let _ = fs::remove_file(path);
     }
 
     fn knowledge_config(json: &str) -> InputConfigFile {

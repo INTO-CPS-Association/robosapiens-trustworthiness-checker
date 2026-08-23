@@ -2,7 +2,7 @@ use super::*;
 use crate::core::BinaryOperator;
 use crate::dsrv_fixtures::TestConfig;
 use crate::io::map;
-use crate::io::testing::ManualOutputHandler;
+use crate::io::testing::manual_output;
 use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
 use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
@@ -585,16 +585,12 @@ async fn eval_runtime_with<S>(
 where
     S: MonitoringSemantics<TestConfig>,
 {
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars.clone()).await;
     let runtime = AsyncRuntimeBuilder::<TestConfig, S>::new()
         .executor(executor.clone())
         .model(spec)
         .input(map::input_stream(inputs))
-        .output(output_handler)
+        .output_writer(output_writer)
         .build()
         .await;
 
@@ -608,16 +604,12 @@ async fn eval_dataflow_runtime(
     inputs: BTreeMap<VarName, Vec<Value>>,
     limit: usize,
 ) -> Vec<BTreeMap<VarName, Value>> {
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars.clone()).await;
     let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(map::input_stream(inputs))
-        .output(output_handler)
+        .output_writer(output_writer)
         .build()
         .await;
 
@@ -631,16 +623,12 @@ async fn eval_specialized_dataflow_runtime(
     inputs: BTreeMap<VarName, Vec<Value>>,
     limit: usize,
 ) -> Vec<BTreeMap<VarName, Value>> {
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
     let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(map::input_stream(inputs))
-        .output(output_handler)
+        .output_writer(output_writer)
         .build()
         .await;
 
@@ -654,16 +642,12 @@ async fn eval_semisync_runtime(
     inputs: BTreeMap<VarName, Vec<Value>>,
     limit: usize,
 ) -> Vec<BTreeMap<VarName, Value>> {
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars.clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars.clone()).await;
     let runtime = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
         .executor(executor.clone())
         .model(spec)
         .input(map::input_stream(inputs))
-        .output(output_handler)
+        .output_writer(output_writer)
         .build()
         .await;
 

@@ -8,7 +8,7 @@ use smol::LocalExecutor;
 use trustworthiness_checker::core::Runtime;
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::io::testing::LimitedNullOutputHandler;
+use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
 use trustworthiness_checker::lang::dsrv::ast::CheckedDsrvSpecification;
 
 use trustworthiness_checker::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
@@ -62,16 +62,15 @@ async fn monitor_recursive_outputs_semisync(
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
-    let output_handler = Box::new(LimitedNullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-        output_limit,
-    ));
+    let output = OutputBackendBuilder::new(OutputBackendConfig::limited_null(output_limit))
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("semi-sync benchmark output pipeline should open");
     let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output)
         .build()
         .await;
     monitor.run().await.expect("Error running monitor");
@@ -83,16 +82,15 @@ async fn monitor_recursive_outputs_dataflow(
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
-    let output_handler = Box::new(LimitedNullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-        output_limit,
-    ));
+    let output = OutputBackendBuilder::new(OutputBackendConfig::limited_null(output_limit))
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("dataflow benchmark output pipeline should open");
     let monitor = DataflowRuntimeBuilder::<DsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output)
         .build()
         .await;
     monitor.run().await.expect("Error running monitor");
@@ -104,11 +102,10 @@ async fn monitor_recursive_outputs_typed_semisync(
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
-    let output_handler = Box::new(LimitedNullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-        output_limit,
-    ));
+    let output = OutputBackendBuilder::new(OutputBackendConfig::limited_null(output_limit))
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("typed semi-sync benchmark output pipeline should open");
     let monitor = SemiSyncRuntimeBuilder::<
         trustworthiness_checker::runtime::builder::CheckedSemiSyncValueConfig,
         trustworthiness_checker::semantics::CheckedUntimedDsrvSemantics,
@@ -116,7 +113,7 @@ async fn monitor_recursive_outputs_typed_semisync(
     .executor(executor.clone())
     .model(spec)
     .input(input_stream)
-    .output(output_handler)
+    .output_writer(output)
     .build()
     .await;
     monitor.run().await.expect("Error running monitor");
@@ -128,16 +125,15 @@ async fn monitor_recursive_outputs_typed_dataflow(
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
-    let output_handler = Box::new(LimitedNullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-        output_limit,
-    ));
+    let output = OutputBackendBuilder::new(OutputBackendConfig::limited_null(output_limit))
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("typed dataflow benchmark output pipeline should open");
     let monitor = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output)
         .build()
         .await;
     monitor.run().await.expect("Error running monitor");

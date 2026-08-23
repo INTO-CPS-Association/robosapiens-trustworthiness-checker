@@ -3,20 +3,25 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Context;
-use futures::future::LocalBoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use smol::LocalExecutor;
 
 use uuid::Uuid;
 
 use crate::core::{
-    InputBatch, InputStream, OutputHandler, OutputStream, StreamData, VarName, empty_input_stream,
+    InputBatch, InputStream, OutputError, OutputInterface, OutputRoute, OutputStream, VarName,
+    empty_input_stream,
 };
 use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
 
-use super::{ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT};
+use crate::io::output::{RosPublisher, validate_ros_interface};
+
+use super::{
+    ROS_SPIN_INTERVAL, ROS_SPIN_TIMEOUT,
+    ros_topic_stream_mapping::{RosMsgType, ros_output_route_mapping},
+};
 
 pub type RosMstloTimedValue = r2r::robo_sapiens_interfaces::msg::MstloTimedValue;
 
@@ -98,6 +103,67 @@ pub fn mstlo_value_to_ros(value: &MstloTimedValue) -> anyhow::Result<RosMstloTim
     Ok(message)
 }
 
+/// Validate the fixed interface used by the typed MSTLO sink.
+pub(crate) fn validate_output_interface(interface: &OutputInterface) -> Result<(), OutputError> {
+    validate_ros_interface(interface, |message_type| {
+        if *message_type == RosMsgType::MstloTimedValue {
+            Ok(())
+        } else {
+            Err(OutputError::invalid(format!(
+                "MSTLO ROS output requires message type `MstloTimedValue`, got `{message_type:?}`"
+            )))
+        }
+    })
+}
+
+struct MstloOutputPublisher {
+    topic: String,
+    publisher: r2r::Publisher<RosMstloTimedValue>,
+}
+
+impl RosPublisher<MstloTimedValue> for MstloOutputPublisher {
+    fn publish(&self, value: &MstloTimedValue) -> Result<(), OutputError> {
+        let message = mstlo_value_to_ros(value).map_err(|error| {
+            OutputError::backend(format!(
+                "failed to encode MSTLO ROS output on `{}`: {error}",
+                self.topic
+            ))
+        })?;
+        self.publisher.publish(&message).map_err(|error| {
+            OutputError::backend(format!(
+                "failed to publish MSTLO ROS output on `{}`: {error:?}",
+                self.topic
+            ))
+        })
+    }
+}
+
+/// Create the typed publisher used by [`crate::io::output::RosOutputBackend`].
+pub(crate) fn create_mstlo_output_publisher(
+    node: &mut r2r::Node,
+    route: &OutputRoute,
+) -> Result<Box<dyn RosPublisher<MstloTimedValue>>, OutputError> {
+    let (topic, message_type) = ros_output_route_mapping(route)?;
+    if message_type != RosMsgType::MstloTimedValue {
+        return Err(OutputError::invalid(format!(
+            "MSTLO ROS output route `{}` has message type `{message_type:?}`, expected `MstloTimedValue`",
+            route.variable
+        )));
+    }
+
+    let publisher = node
+        .create_publisher::<RosMstloTimedValue>(topic, r2r::QosProfile::default())
+        .map_err(|error| {
+            OutputError::backend(format!(
+                "failed to create MSTLO ROS publisher for `{topic}`: {error:?}"
+            ))
+        })?;
+    Ok(Box::new(MstloOutputPublisher {
+        topic: topic.to_owned(),
+        publisher,
+    }))
+}
+
 fn validate_mapping(mapping: &BTreeMap<String, (String, String)>) -> anyhow::Result<()> {
     for (variable, (_topic, message_type)) in mapping {
         anyhow::ensure!(
@@ -163,151 +229,6 @@ pub fn input_stream(
             yield InputBatch::update(variable, value);
         }
     }))
-}
-
-struct OutputVarData {
-    topic: Option<String>,
-    stream: Option<OutputStream<MstloTimedValue>>,
-}
-
-/// MSTLO ROS output handler.
-pub struct MstloRosOutputHandler {
-    executor: Rc<LocalExecutor<'static>>,
-    node_name: String,
-    variables: BTreeMap<VarName, OutputVarData>,
-    aux_info: Vec<VarName>,
-}
-
-impl MstloRosOutputHandler {
-    pub fn new(
-        executor: Rc<LocalExecutor<'static>>,
-        node_name: String,
-        mapping: BTreeMap<String, (String, String)>,
-        aux_info: Vec<VarName>,
-    ) -> anyhow::Result<Self> {
-        validate_mapping(&mapping)?;
-        let variables = mapping
-            .into_iter()
-            .map(|(variable, (topic, _))| {
-                (
-                    VarName::new(&variable),
-                    OutputVarData {
-                        topic: Some(topic),
-                        stream: None,
-                    },
-                )
-            })
-            .collect();
-        Ok(Self {
-            executor,
-            node_name,
-            variables,
-            aux_info,
-        })
-    }
-
-    async fn publish_stream(
-        topic: String,
-        mut stream: OutputStream<MstloTimedValue>,
-        publisher: r2r::Publisher<RosMstloTimedValue>,
-    ) -> anyhow::Result<()> {
-        while let Some(value) = stream.next().await {
-            if value.is_no_val() {
-                continue;
-            }
-            let message = mstlo_value_to_ros(&value)
-                .with_context(|| format!("failed to encode MSTLO ROS output for `{topic}`"))?;
-            publisher
-                .publish(&message)
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("failed to publish MSTLO ROS output on `{topic}`"))?;
-        }
-        Ok(())
-    }
-
-    async fn drain_stream(mut stream: OutputStream<MstloTimedValue>) -> anyhow::Result<()> {
-        while stream.next().await.is_some() {}
-        Ok(())
-    }
-
-    async fn inner_handler(
-        executor: Rc<LocalExecutor<'static>>,
-        node_name: String,
-        streams: Vec<(VarName, Option<String>, OutputStream<MstloTimedValue>)>,
-        aux_info: Vec<VarName>,
-    ) -> anyhow::Result<()> {
-        let context = r2r::Context::create()?;
-        let node_name = format!("{}_{}", node_name, Uuid::new_v4().simple());
-        let mut node = r2r::Node::create(context, &node_name, "")?;
-        let cancellation_token = CancellationToken::new();
-        let cancellation_guard = cancellation_token.drop_guard();
-        let cancellation_for_spin = cancellation_guard.clone_tok();
-
-        let mut tasks: Vec<LocalBoxFuture<'static, anyhow::Result<()>>> = Vec::new();
-        for (variable, topic, stream) in streams {
-            if aux_info.contains(&variable) {
-                tasks.push(Box::pin(Self::drain_stream(stream)));
-                continue;
-            }
-            let topic = topic.ok_or_else(|| {
-                anyhow::anyhow!("ROS output mapping is missing topic for `{variable}`")
-            })?;
-            let publisher = node
-                .create_publisher::<RosMstloTimedValue>(&topic, r2r::QosProfile::default())
-                .map_err(|error| anyhow::anyhow!(error))
-                .with_context(|| format!("failed to create MSTLO ROS publisher for `{topic}`"))?;
-            tasks.push(Box::pin(Self::publish_stream(topic, stream, publisher)));
-        }
-
-        executor
-            .spawn(async move {
-                let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
-                loop {
-                    futures::select_biased! {
-                        _ = cancellation_for_spin.cancelled().fuse() => break,
-                        _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
-                    }
-                }
-            })
-            .detach();
-
-        futures::future::try_join_all(tasks).await.map(|_| ())
-    }
-}
-
-impl OutputHandler for MstloRosOutputHandler {
-    type Val = MstloTimedValue;
-
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Self::Val>>) {
-        for (variable, stream) in streams {
-            self.variables
-                .entry(variable)
-                .or_insert(OutputVarData {
-                    topic: None,
-                    stream: None,
-                })
-                .stream = Some(stream);
-        }
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let streams = self
-            .variables
-            .iter_mut()
-            .filter_map(|(variable, data)| {
-                data.stream
-                    .take()
-                    .map(|stream| (variable.clone(), data.topic.clone(), stream))
-            })
-            .collect();
-        Self::inner_handler(
-            self.executor.clone(),
-            self.node_name.clone(),
-            streams,
-            self.aux_info.clone(),
-        )
-        .boxed_local()
-    }
 }
 
 #[cfg(test)]

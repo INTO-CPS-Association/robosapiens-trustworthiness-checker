@@ -14,7 +14,7 @@ mod integration_tests {
     use trustworthiness_checker::core::Runtime;
 
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
-    use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
+    use trustworthiness_checker::io::mqtt::MqttInputBackend;
     use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
 
     use macro_rules_attribute::apply;
@@ -22,12 +22,38 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
 
     use trustworthiness_checker::{
-        DsrvSpecification, VarName,
-        io::mqtt::{self, MqttOutputHandler},
+        DsrvSpecification, OutputWriter, VarName,
+        io::mqtt,
+        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
         semantics::distributed::localisation::Localisable,
     };
 
-    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
+    async fn open_mqtt_output(
+        port: u16,
+        routes: BTreeMap<VarName, String>,
+    ) -> anyhow::Result<OutputWriter<Value>> {
+        let variables = routes
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let routes = routes
+            .into_iter()
+            .map(|(variable, route)| {
+                (
+                    variable,
+                    Route::new(route.into_boxed_str(), None)
+                        .expect("test MQTT output route should be valid"),
+                )
+            })
+            .collect();
+        OutputBackendBuilder::from_destination(
+            OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
+                .with_route_catalog(routes),
+        )
+        .build(variables, std::iter::empty::<VarName>(), None)
+        .await
+        .map_err(anyhow::Error::from)
+    }
     const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
 
     fn generate_test_publisher_tasks(
@@ -182,20 +208,9 @@ mod integration_tests {
         .await
         .expect("Failed to connect MQTT input stream 1");
 
-        let mut output_handler_1 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["w".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_1.into_iter().collect(),
-            vec![],
-        )
-        .expect("Failed to create output handler 1");
-        output_handler_1
-            .connect()
+        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1.into_iter().collect())
             .await
-            .expect("Failed to connect output handler 1");
+            .expect("Failed to open output writer 1");
 
         let input_stream_2 = with_timeout_res(
             mqtt::input_stream(
@@ -211,37 +226,26 @@ mod integration_tests {
         .await
         .expect("Failed to connect MQTT input stream 2");
 
-        let mut output_handler_2 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["v".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_2.into_iter().collect(),
-            vec![],
-        )
-        .expect("Failed to create output handler 2");
-        output_handler_2
-            .connect()
+        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2.into_iter().collect())
             .await
-            .expect("Failed to connect output handler 2");
+            .expect("Failed to open output writer 2");
 
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             input_stream_1,
-            Box::new(output_handler_1),
+            output_writer_1,
         )
         .await;
-        executor.spawn(runner_1.run()).detach();
 
         let runner_2: TestRuntime = TestRuntime::new(
             executor.clone(),
             model2.clone(),
             input_stream_2,
-            Box::new(output_handler_2),
+            output_writer_2,
         )
         .await;
+        executor.spawn(runner_1.run()).detach();
         executor.spawn(runner_2.run()).detach();
 
         // Get the output stream before starting publishers to ensure subscription is ready
@@ -341,20 +345,9 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_1, "Var out topics 1");
 
-        let mut output_handler_1 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["w".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_1,
-            vec![],
-        )
-        .expect("Failed to create output handler 1");
-        output_handler_1
-            .connect()
+        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1)
             .await
-            .expect("Failed to connect output handler 1");
+            .expect("Failed to open output writer 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
             .output_vars()
             .iter()
@@ -362,26 +355,15 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_2, "Var out topics 2");
 
-        let mut output_handler_2 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["v".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_2.into_iter().collect(),
-            vec![],
-        )
-        .expect("Failed to create output handler 2");
-        output_handler_2
-            .connect()
+        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2.into_iter().collect())
             .await
-            .expect("Failed to connect output handler 2");
+            .expect("Failed to open output writer 2");
 
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             input_stream_1,
-            Box::new(output_handler_1),
+            output_writer_1,
         )
         .await;
 
@@ -389,7 +371,7 @@ mod integration_tests {
             executor.clone(),
             model2.clone(),
             input_stream_2,
-            Box::new(output_handler_2),
+            output_writer_2,
         )
         .await;
 
@@ -491,45 +473,23 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let mut output_handler_1 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["w".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_1,
-            vec![],
-        )
-        .expect("Failed to create output handler 1");
-        output_handler_1
-            .connect()
+        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1)
             .await
-            .expect("Failed to connect output handler 1");
+            .expect("Failed to open output writer 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
             .output_vars()
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let mut output_handler_2 = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["v".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            var_out_topics_2.into_iter().collect(),
-            vec![],
-        )
-        .expect("Failed to create output handler 2");
-        output_handler_2
-            .connect()
+        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2)
             .await
-            .expect("Failed to connect output handler 2");
+            .expect("Failed to open output writer 2");
 
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
             model1.clone(),
             input_stream_1,
-            Box::new(output_handler_1),
+            output_writer_1,
         )
         .await;
 
@@ -537,7 +497,7 @@ mod integration_tests {
             executor.clone(),
             model2.clone(),
             input_stream_2,
-            Box::new(output_handler_2),
+            output_writer_2,
         )
         .await;
 

@@ -1,8 +1,9 @@
 use crate::{
     InputStream, InputUpdate, OutputStream, VarName,
-    core::{DeferrableStreamData, OutputHandler, Runtime, Specification, input},
+    core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
+    runtime::output::{drive_row_streams, finish_writer},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils::{self},
     utils::cancellation_token::CancellationToken,
@@ -53,7 +54,7 @@ where
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<AC::Spec>,
     input: Option<InputStream<AC::Val>>,
-    output: Option<Box<dyn OutputHandler<Val = AC::Val>>>,
+    output_writer: Option<OutputWriter<AC::Val>>,
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     _marker: std::marker::PhantomData<MS>,
 }
@@ -68,6 +69,12 @@ where
 {
     pub fn starting_history(mut self, history: BTreeMap<VarName, Vec<AC::Val>>) -> Self {
         self.starting_history = Some(history);
+        self
+    }
+
+    /// Supply an already-open sink for a fixed semisync generation.
+    pub fn output_writer(mut self, writer: OutputWriter<AC::Val>) -> Self {
+        self.output_writer = Some(writer);
         self
     }
 }
@@ -87,7 +94,7 @@ where
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
             starting_history: None,
             _marker: std::marker::PhantomData,
         }
@@ -108,8 +115,8 @@ where
         self
     }
 
-    fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
-        self.output = Some(output);
+    fn output_writer(mut self, writer: OutputWriter<AC::Val>) -> Self {
+        self.output_writer = Some(writer);
         self
     }
 
@@ -118,15 +125,14 @@ where
             let executor = self.executor.unwrap();
             let model = self.model.unwrap();
             let input = self.input.unwrap();
-            let output = self.output.unwrap();
             let starting_history = self.starting_history.unwrap_or_default();
 
             SemiSyncRuntime {
                 _executor: executor,
                 model,
                 input_stream: input,
-                output_handler: output,
-                starting_history: starting_history,
+                output_writer: self.output_writer,
+                starting_history,
                 _marker: std::marker::PhantomData,
             }
         })
@@ -484,9 +490,53 @@ where
     _executor: Rc<LocalExecutor<'static>>,
     model: AC::Spec,
     input_stream: InputStream<AC::Val>,
-    output_handler: Box<dyn OutputHandler<Val = AC::Val>>,
+    output_writer: Option<OutputWriter<AC::Val>>,
     starting_history: BTreeMap<VarName, Vec<AC::Val>>,
     _marker: std::marker::PhantomData<MS>,
+}
+
+pub(crate) struct SemiSyncOutput<V> {
+    writer: OutputWriter<V>,
+    streams: BTreeMap<VarName, OutputStream<V>>,
+}
+
+impl<V: DeferrableStreamData> SemiSyncOutput<V> {
+    pub(crate) fn run(self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(async move {
+            let SemiSyncOutput {
+                mut writer,
+                streams,
+            } = self;
+            drive_row_streams(streams, &mut writer).await
+        })
+    }
+
+    fn run_with_cancellation(
+        self,
+        cancellation: CancellationToken,
+    ) -> LocalBoxFuture<'static, anyhow::Result<()>> {
+        Box::pin(async move {
+            let SemiSyncOutput {
+                mut writer,
+                streams,
+            } = self;
+            let drive = Box::pin(drive_row_streams(streams, &mut writer));
+            let drive_result: Option<anyhow::Result<()>> = {
+                let selected = futures::future::select(drive, cancellation.cancelled()).await;
+                match selected {
+                    futures::future::Either::Left((result, _)) => Some(result),
+                    futures::future::Either::Right((_, drive)) => {
+                        drop(drive);
+                        None
+                    }
+                }
+            };
+            match drive_result {
+                Some(result) => result,
+                None => finish_writer(&mut writer).await,
+            }
+        })
+    }
 }
 
 impl<AC, MS> SemiSyncRuntime<AC, MS>
@@ -501,13 +551,13 @@ where
         executor: Rc<LocalExecutor<'static>>,
         model: AC::Spec,
         input: InputStream<AC::Val>,
-        output: Box<dyn OutputHandler<Val = AC::Val>>,
+        output: OutputWriter<AC::Val>,
     ) -> Self {
         SemiSyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
             .input(input)
-            .output(output)
+            .output_writer(output)
             .build()
             .await
     }
@@ -568,15 +618,6 @@ where
             res
         })
         .fuse()
-    }
-
-    fn log_task_errors(output_res: &anyhow::Result<()>, work_res: &anyhow::Result<()>) {
-        if let Err(e) = output_res {
-            error!(?e, "Output handler had an error");
-        }
-        if let Err(e) = work_res {
-            error!(?e, "Work task had an error");
-        }
     }
 
     async fn eval_expr_evals(
@@ -720,22 +761,33 @@ where
         }
     }
 
+    async fn work_task_inner(
+        ctx: &mut SemiSyncContext<AC>,
+        expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
+    ) -> anyhow::Result<()> {
+        let mut res = Self::step(ctx, expr_evals).await?;
+        while res != StreamState::Finished {
+            res = Self::step(ctx, expr_evals).await?;
+        }
+        Ok(())
+    }
+
     pub async fn work_task(
         mut ctx: SemiSyncContext<AC>,
         mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
-        let mut res = Self::step(&mut ctx, &mut expr_evals).await?;
-        while res != StreamState::Finished {
-            res = Self::step(&mut ctx, &mut expr_evals).await?;
+        let result = Self::work_task_inner(&mut ctx, &mut expr_evals).await;
+        if result.is_err() {
+            ctx.cancel();
         }
-        Ok(())
+        result
     }
 
     async fn initialize_runtime(
         self,
     ) -> anyhow::Result<(
         InputStream<AC::Val>,
-        Box<dyn OutputHandler<Val = AC::Val>>,
+        SemiSyncOutput<AC::Val>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
@@ -743,84 +795,110 @@ where
             _executor: _,
             model,
             input_stream,
-            mut output_handler,
+            output_writer,
             starting_history,
             _marker: _,
         } = self;
-        let input_vars = model.input_vars();
-        // Assert: All history lengths are the same:
-        let hist_len = starting_history
-            .first_key_value()
-            .map(|(_, hist)| hist.len())
-            .unwrap_or(0);
-        assert!(
-            starting_history
-                .iter()
-                .all(|(_, hist)| hist.len() == hist_len),
-            "All history lengths must be the same"
-        );
+        let mut output_writer = output_writer;
+        let setup_result = async {
+            let input_vars = model.input_vars();
+            // Starting-history rows must align before replaying them into the context.
+            let hist_len = starting_history
+                .first_key_value()
+                .map(|(_, hist)| hist.len())
+                .unwrap_or(0);
+            anyhow::ensure!(
+                starting_history
+                    .iter()
+                    .all(|(_, hist)| hist.len() == hist_len),
+                "All history lengths must be the same"
+            );
 
-        info!(
-            "Setting up runtime with starting history: {:?}",
-            starting_history
-        );
+            info!(
+                "Setting up runtime with starting history: {:?}",
+                starting_history
+            );
 
-        let output_vars = model.output_vars();
-        let (expr_eval_components, mut variables) = Self::setup_computed_variables(&model)?;
-        let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = variables
-            .iter_mut()
-            .filter_map(|vm| {
-                output_vars.contains(&vm.var_name).then(|| {
-                    let var_name = vm.var_name.clone();
-                    let stream = vm.subscribe(0);
-                    (var_name, stream)
-                })
-            })
-            .collect();
-        let mut context = Self::build_context(variables, &input_vars, model.clone());
-        let mut expr_evals = expr_eval_components
-            .into_iter()
-            .map(|(var_name, expr, sender)| {
-                let hist = starting_history
-                    .get(&var_name)
-                    .cloned()
-                    .unwrap_or_else(|| vec![AC::Val::no_val_value(); hist_len]);
-                ExprEvalutor::new(var_name, expr, sender, &context, hist)
-            })
-            .collect();
-        for index in 0..hist_len {
-            let tick = input_vars
-                .iter()
-                .map(|var| {
-                    InputUpdate::new(
-                        var.clone(),
-                        starting_history
-                            .get(var)
-                            .and_then(|history| history.get(index))
-                            .cloned()
-                            .unwrap_or_else(AC::Val::no_val_value),
-                    )
+            let output_vars = model.output_vars();
+            let (expr_eval_components, mut variables) = Self::setup_computed_variables(&model)?;
+            let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = variables
+                .iter_mut()
+                .filter_map(|vm| {
+                    output_vars.contains(&vm.var_name).then(|| {
+                        let var_name = vm.var_name.clone();
+                        let stream = vm.subscribe(0);
+                        (var_name, stream)
+                    })
                 })
                 .collect();
-            context.set_input_tick(tick)?;
-            Self::step(&mut context, &mut expr_evals)
-                .await
-                .expect("Step failed when syncing starting history");
-            for (_, sub) in subscriptions.iter_mut() {
-                // Drain the subscription to sync it up with the context
-                let _ = sub.next().await;
+            let mut context = Self::build_context(variables, &input_vars, model.clone());
+            let mut expr_evals = expr_eval_components
+                .into_iter()
+                .map(|(var_name, expr, sender)| {
+                    let hist = starting_history
+                        .get(&var_name)
+                        .cloned()
+                        .unwrap_or_else(|| vec![AC::Val::no_val_value(); hist_len]);
+                    ExprEvalutor::new(var_name, expr, sender, &context, hist)
+                })
+                .collect();
+            for index in 0..hist_len {
+                let tick = input_vars
+                    .iter()
+                    .map(|var| {
+                        InputUpdate::new(
+                            var.clone(),
+                            starting_history
+                                .get(var)
+                                .and_then(|history| history.get(index))
+                                .cloned()
+                                .unwrap_or_else(AC::Val::no_val_value),
+                        )
+                    })
+                    .collect();
+                context.set_input_tick(tick)?;
+                Self::step(&mut context, &mut expr_evals)
+                    .await
+                    .map_err(|error| {
+                        anyhow!("Step failed when syncing starting history: {error}")
+                    })?;
+                for (_, sub) in subscriptions.iter_mut() {
+                    // Drain the subscription to sync it up with the context
+                    let _ = sub.next().await;
+                }
             }
+            info!("Finished syncing starting history of length {}", hist_len,);
+            let writer = output_writer
+                .take()
+                .ok_or_else(|| anyhow!("SemiSync output writer must be set"))?;
+            let output = SemiSyncOutput {
+                writer,
+                streams: subscriptions,
+            };
+            Ok((input_stream, output, context, expr_evals))
         }
-        info!("Finished syncing starting history of length {}", hist_len,);
-        output_handler.provide_streams(subscriptions);
-        Ok((input_stream, output_handler, context, expr_evals))
+        .await;
+
+        match setup_result {
+            Ok(result) => Ok(result),
+            Err(primary) => match output_writer.take() {
+                Some(mut writer) => match finish_writer(&mut writer).await {
+                    Ok(()) => Err(primary),
+                    Err(cleanup) => Err(combine_runtime_errors(
+                        primary,
+                        anyhow!("SemiSync initialization output cleanup failed: {cleanup}"),
+                    )),
+                },
+                None => Err(primary),
+            },
+        }
     }
 
     pub(crate) async fn setup_runtime(
         self,
     ) -> anyhow::Result<(
         input::InputTickStream<AC::Val>,
-        Box<dyn OutputHandler<Val = AC::Val>>,
+        SemiSyncOutput<AC::Val>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
@@ -831,7 +909,7 @@ where
     pub(crate) async fn setup_runtime_without_input(
         self,
     ) -> anyhow::Result<(
-        Box<dyn OutputHandler<Val = AC::Val>>,
+        SemiSyncOutput<AC::Val>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
@@ -844,8 +922,39 @@ where
         mut context: SemiSyncContext<AC>,
         mut expr_evals: Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<()> {
-        while Self::advance_input(&mut ticks, &mut context, &mut expr_evals).await? {}
-        Self::work_task(context, expr_evals).await
+        let cancellation = context.cancellation_token();
+        let result = loop {
+            futures::select! {
+                result = Self::advance_input(&mut ticks, &mut context, &mut expr_evals).fuse() => {
+                    match result {
+                        Ok(true) => continue,
+                        Ok(false) => {
+                            let (result, cancelled) = {
+                                let mut drain =
+                                    Box::pin(Self::work_task_inner(&mut context, &mut expr_evals)).fuse();
+                                futures::select! {
+                                    result = drain => (result, false),
+                                    _ = cancellation.cancelled().fuse() => (Ok(()), true),
+                                }
+                            };
+                            if cancelled {
+                                context.cancel();
+                            }
+                            break result;
+                        },
+                        Err(error) => break Err(error),
+                    }
+                },
+                _ = cancellation.cancelled().fuse() => {
+                    context.cancel();
+                    break Ok(());
+                },
+            }
+        };
+        if result.is_err() {
+            context.cancel();
+        }
+        result
     }
 
     pub(super) async fn advance_input(
@@ -871,11 +980,80 @@ where
     }
 }
 
+fn combine_runtime_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::Error {
+    let primary_message = primary.to_string();
+    let additional_message = additional.to_string();
+    if primary_message == additional_message {
+        primary
+    } else {
+        anyhow!("{primary_message}; additionally: {additional_message}")
+    }
+}
+
 fn stream_state_name(state: Option<&StreamState>) -> &'static str {
     match state {
         Some(StreamState::Pending) => "pending",
         Some(StreamState::Finished) => "finished",
         None => "error",
+    }
+}
+
+async fn coordinate_runtime<OutputFut, WorkFut>(
+    output_fut: OutputFut,
+    work_fut: WorkFut,
+    output_cancellation: CancellationToken,
+) -> anyhow::Result<()>
+where
+    OutputFut: futures::Future<Output = anyhow::Result<()>>,
+    WorkFut: futures::Future<Output = anyhow::Result<()>>,
+{
+    futures::pin_mut!(output_fut, work_fut);
+
+    match futures::future::select(output_fut, work_fut).await {
+        futures::future::Either::Left((output_res, work_fut)) => {
+            // Output completion makes further input work unobservable. Cancel
+            // the shared context before awaiting a potentially pending input.
+            output_cancellation.cancel();
+            let work_res = work_fut.await;
+            match (output_res, work_res) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(output_error), Ok(())) => Err(anyhow!(
+                    "SemiSync output failed with error: {}",
+                    output_error
+                )),
+                (Ok(()), Err(work_error)) => Err(anyhow!(
+                    "SemiSync work task failed with error: {}",
+                    work_error
+                )),
+                (Err(output_error), Err(work_error)) => Err(combine_runtime_errors(
+                    anyhow!("SemiSync output failed with error: {}", output_error),
+                    anyhow!("SemiSync work task failed with error: {}", work_error),
+                )),
+            }
+        }
+        futures::future::Either::Right((work_res, output_fut)) => {
+            if work_res.is_err() {
+                // Work/input failures are terminal too; stop output before
+                // awaiting its writer cleanup and retain both errors.
+                output_cancellation.cancel();
+            }
+            let output_res = output_fut.await;
+            match (work_res, output_res) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(work_error), Ok(())) => Err(anyhow!(
+                    "SemiSync work task failed with error: {}",
+                    work_error
+                )),
+                (Ok(()), Err(output_error)) => Err(anyhow!(
+                    "SemiSync output failed with error: {}",
+                    output_error
+                )),
+                (Err(work_error), Err(output_error)) => Err(combine_runtime_errors(
+                    anyhow!("SemiSync work task failed with error: {}", work_error),
+                    anyhow!("SemiSync output failed with error: {}", output_error),
+                )),
+            }
+        }
     }
 }
 
@@ -891,21 +1069,18 @@ where
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         debug!(?self.model, "Running SemiSyncMonitor based on model:");
 
-        let (ticks, mut output_handler, context, expr_evals) = Self::setup_runtime(*self).await?;
+        let (ticks, output, context, expr_evals) = Self::setup_runtime(*self).await?;
+        let output_cancellation = context.cancellation_token();
 
-        let output_fut = Self::log_when_done(output_handler.run(), "output_handler.run() ended");
+        let output_fut = Self::log_when_done(
+            output.run_with_cancellation(output_cancellation.clone()),
+            "output sink/handler run ended",
+        );
         let work_fut = Self::log_when_done(
             Self::process_input_ticks(ticks, context, expr_evals),
             "work_task.run() ended",
         );
-        let (output_res, work_res) = futures::join!(output_fut, work_fut);
-        Self::log_task_errors(&output_res, &work_res);
-
-        match (output_res, work_res) {
-            (Ok(_), Ok(_)) => Ok(()),
-            (Err(e), _) => Err(anyhow!("OutputHandler failed with error: {}", e)),
-            (_, Err(e)) => Err(anyhow!("SemiSync work task failed with error: {}", e)),
-        }
+        coordinate_runtime(output_fut, work_fut, output_cancellation).await
     }
 }
 
@@ -1260,9 +1435,8 @@ mod tests {
 
     use crate::async_test;
     use crate::core::Runtime;
-
-    use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
-    use crate::io::{controlled, map};
+    use crate::io::testing::{manual_output, null_output};
+    use crate::io::{controlled, map, output::AsyncFnSink};
 
     use crate::runtime::RuntimeBuilder;
     use crate::runtime::builder::SemiSyncValueConfig;
@@ -1271,14 +1445,18 @@ mod tests {
         AbstractContextBuilder, CheckedUntimedDsrvSemantics, StreamContext, UntimedDsrvSemantics,
     };
     use crate::{
-        CheckedDsrvSpecification, DsrvSpecification, InputBatch, InputStream, InputUpdate, Value,
+        CheckedDsrvSpecification, DsrvSpecification, InputBatch, InputStream, InputUpdate,
+        OutputBatch, OutputError, OutputStream, OutputWriter, Value,
     };
     use crate::{VarName, dsrv_fixtures::*};
-    use futures::{FutureExt, stream::StreamExt};
+    use futures::{FutureExt, Sink, stream::StreamExt};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
-    use std::collections::BTreeMap;
+    use std::cell::Cell;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::pin::Pin;
     use std::rc::Rc;
+    use std::task::{Context, Poll};
 
     use tc_testutils::streams::{with_timeout, with_timeout_res};
 
@@ -1322,6 +1500,75 @@ mod tests {
         events
     }
 
+    fn failing_input() -> InputStream<Value> {
+        Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
+            "input failed"
+        ))]))
+    }
+
+    fn recording_writer(
+        close_error: Option<OutputError>,
+    ) -> (OutputWriter<Value>, Rc<Cell<usize>>) {
+        let closes = Rc::new(Cell::new(0));
+        let close_counter = Rc::clone(&closes);
+        let sink = AsyncFnSink::with_close(
+            |_batch: OutputBatch<Value>| async { Ok::<(), OutputError>(()) },
+            move || async move {
+                close_counter.set(close_counter.get() + 1);
+                match close_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
+            },
+        );
+        (OutputWriter::from_sink(sink), closes)
+    }
+
+    struct ClosedSink {
+        closes: Rc<Cell<usize>>,
+    }
+
+    impl Sink<OutputBatch<Value>> for ClosedSink {
+        type Error = OutputError;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, _batch: OutputBatch<Value>) -> Result<(), Self::Error> {
+            Err(OutputError::Closed)
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let this = self.get_mut();
+            this.closes.set(this.closes.get() + 1);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn closed_writer() -> (OutputWriter<Value>, Rc<Cell<usize>>) {
+        let closes = Rc::new(Cell::new(0));
+        (
+            OutputWriter::from_sink(ClosedSink {
+                closes: Rc::clone(&closes),
+            }),
+            closes,
+        )
+    }
+
     async fn assert_compatibility_case(
         executor: Rc<LocalExecutor<'static>>,
         case: CompatibilityCase,
@@ -1329,16 +1576,12 @@ mod tests {
         let source = case.specification;
         let spec = source.parse::<DsrvSpecification>().unwrap();
         let (input, controller) = controlled(map::input_stream(case.inputs));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let mut outputs = output_handler.get_output();
+        let (output_writer, mut outputs) = manual_output(spec.output_vars().clone()).await;
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec)
             .input(input)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
         let monitor_task = executor.spawn(monitor.run());
@@ -1384,6 +1627,216 @@ mod tests {
         with_timeout_res(monitor_task, 1, &monitor_name)
             .await
             .unwrap();
+    }
+
+    #[apply(async_test)]
+    async fn input_failure_closes_output_writer_and_preserves_primary_error(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
+        let (output_writer, closes) = recording_writer(Some(OutputError::backend("close failed")));
+        let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .input(failing_input())
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        let error = with_timeout_res(monitor.run(), 1, "semi-sync input failure")
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("SemiSync work task failed with error: input failed"));
+        assert!(
+            message
+                .contains("SemiSync output failed with error: output backend error: close failed")
+        );
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn initialization_failure_closes_output_writer_and_combines_cleanup_error(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([VarName::new("z")]),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
+        let (output_writer, closes) = recording_writer(Some(OutputError::backend("close failed")));
+        let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .input(Box::pin(futures::stream::empty()))
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        let error = match monitor.setup_runtime_without_input().await {
+            Err(error) => error,
+            Ok(_) => panic!("semi-sync initialization unexpectedly succeeded"),
+        };
+        let message = error.to_string();
+        assert!(message.contains("No expression found for computed variable z"));
+        assert!(message.contains("SemiSync initialization output cleanup failed"));
+        assert!(message.contains("output backend error: close failed"));
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn mismatched_starting_history_closes_output_writer(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
+        let (output_writer, closes) = recording_writer(None);
+        let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .input(Box::pin(futures::stream::empty()))
+            .output_writer(output_writer)
+            .starting_history(BTreeMap::from([
+                ("x".into(), vec![Value::Int(1)]),
+                ("z".into(), vec![Value::Int(2), Value::Int(3)]),
+            ]))
+            .build()
+            .await;
+
+        let error = match monitor.setup_runtime_without_input().await {
+            Err(error) => error,
+            Ok(_) => panic!("semi-sync initialization unexpectedly succeeded"),
+        };
+        assert_eq!(error.to_string(), "All history lengths must be the same");
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn history_sync_error_closes_output_writer(executor: Rc<LocalExecutor<'static>>) {
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([VarName::new("x")]),
+            BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeSet::new(),
+        );
+        let (output_writer, closes) = recording_writer(None);
+        let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .input(Box::pin(futures::stream::empty()))
+            .output_writer(output_writer)
+            .starting_history(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]))
+            .build()
+            .await;
+
+        let error = match monitor.setup_runtime_without_input().await {
+            Err(error) => error,
+            Ok(_) => panic!("semi-sync initialization unexpectedly succeeded"),
+        };
+        let message = error.to_string();
+        assert!(message.contains("Step failed when syncing starting history"));
+        assert!(message.contains("eval_expr_evals finished but forward_values pending"));
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn eof_drain_cancellation_cancels_pending_work(executor: Rc<LocalExecutor<'static>>) {
+        let drain_started = Rc::new(Cell::new(false));
+        let drain_started_by_stream = Rc::clone(&drain_started);
+        let pending_stream: OutputStream<Value> = Box::pin(futures::stream::poll_fn(move |_| {
+            drain_started_by_stream.set(true);
+            Poll::Pending
+        }));
+        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
+        let context = super::SemiSyncContextBuilder::<SemiSyncValueConfig>::new()
+            .variables(BTreeMap::from([(
+                VarName::new("x"),
+                super::ManagedVariable::computed(VarName::new("x"), pending_stream),
+            )]))
+            .spec(spec)
+            .build();
+        let cancellation = context.cancellation_token();
+        let ticks: super::input::InputTickStream<Value> = Box::pin(futures::stream::empty());
+        let work = executor.spawn(TestRuntime::process_input_ticks(ticks, context, Vec::new()));
+
+        let drain_started_for_wait = Rc::clone(&drain_started);
+        with_timeout(
+            async move {
+                while !drain_started_for_wait.get() {
+                    smol::future::yield_now().await;
+                }
+            },
+            1,
+            "semi-sync EOF drain start",
+        )
+        .await
+        .unwrap();
+        cancellation.cancel();
+
+        with_timeout_res(work, 1, "semi-sync EOF drain cancellation")
+            .await
+            .unwrap();
+        assert!(cancellation.is_cancelled().await);
+    }
+
+    #[apply(async_test)]
+    async fn successful_output_eof_cancels_pending_input(_executor: Rc<LocalExecutor<'static>>) {
+        let (writer, closes) = recording_writer(None);
+        let context = external_input_context();
+        let cancellation = context.cancellation_token();
+        let output = super::SemiSyncOutput {
+            writer,
+            streams: BTreeMap::from([(
+                VarName::new("z"),
+                Box::pin(futures::stream::empty()) as OutputStream<Value>,
+            )]),
+        };
+        let work = TestRuntime::process_input_ticks(
+            Box::pin(futures::stream::pending()),
+            context,
+            Vec::new(),
+        );
+
+        with_timeout_res(
+            super::coordinate_runtime(
+                output.run_with_cancellation(cancellation.clone()),
+                work,
+                cancellation.clone(),
+            ),
+            1,
+            "semi-sync successful output EOF",
+        )
+        .await
+        .unwrap();
+
+        assert!(cancellation.is_cancelled().await);
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn intentional_downstream_closed_cancels_pending_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nout z\nz = 1".parse::<DsrvSpecification>().unwrap();
+        let input: InputStream<Value> = Box::pin(
+            futures::stream::iter([Ok(InputBatch::update("x", Value::Int(1)))])
+                .chain(futures::stream::pending()),
+        );
+        let (output_writer, closes) = closed_writer();
+        let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
+            .executor(executor)
+            .model(spec)
+            .input(input)
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        with_timeout_res(monitor.run(), 1, "semi-sync intentional downstream close")
+            .await
+            .unwrap();
+        assert_eq!(closes.get(), 1);
     }
 
     #[test]
@@ -1485,6 +1938,38 @@ mod tests {
             );
             assert_eq!(values.next().await, None);
         });
+    }
+
+    #[apply(async_test)]
+    async fn direct_writer_preserves_one_complete_row_per_semisync_step(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let spec = "in x\nin y\nout z\nz = x + y"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let input = map::input_stream(BTreeMap::from([
+            (VarName::new("x"), int_values(&[1, 2, 3])),
+            (VarName::new("y"), int_values(&[10, 20, 30])),
+        ]));
+        let (writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
+            .executor(executor)
+            .model(spec)
+            .input(input)
+            .output_writer(writer)
+            .build()
+            .await;
+
+        monitor.run().await.unwrap();
+        let outputs = outputs.collect::<Vec<_>>().await;
+        assert_eq!(
+            outputs,
+            vec![
+                output([("z", Value::Int(11))]),
+                output([("z", Value::Int(22))]),
+                output([("z", Value::Int(33))]),
+            ]
+        );
     }
 
     #[apply(async_test)]
@@ -1738,16 +2223,12 @@ mod tests {
             ])
             .unwrap())]));
         let (input, controller) = controlled(input);
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let mut outputs = output_handler.get_output();
+        let (output_writer, mut outputs) = manual_output(spec.output_vars().clone()).await;
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec)
             .input(input)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
         let monitor_task = executor.spawn(monitor.run());
@@ -1775,17 +2256,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1816,17 +2293,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestTypedRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1849,7 +2322,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_simple_add_null_handler(executor: Rc<LocalExecutor<'static>>) {
-        // Testing that the monitor works with a NullOutputHandler
+        // Testing that the monitor works with a null output writer
         // (to avoid previous regressions)
         let spec = spec_simple_add_monitor()
             .parse::<DsrvSpecification>()
@@ -1858,15 +2331,12 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let y = vec![3.into(), 4.into(), 5.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let output_handler = Box::new(NullOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
+        let output_writer = null_output(spec.output_vars().clone()).await;
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1885,17 +2355,13 @@ mod tests {
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1935,17 +2401,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1983,16 +2445,12 @@ mod tests {
             ("left_source".into(), vec![Value::Str("x".into())]),
             ("right_source".into(), vec![Value::Deferred]),
         ]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2023,16 +2481,12 @@ mod tests {
                 vec!["x[1]".into(), Value::Deferred, "x[1]".into()],
             ),
         ]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2064,16 +2518,12 @@ mod tests {
                 vec!["x[1]".into(), Value::Deferred, "x[1]".into()],
             ),
         ]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
         let monitor: TestTypedRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2099,17 +2549,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), Value::Deferred, Value::Deferred];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2138,17 +2584,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2177,17 +2619,13 @@ mod tests {
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, Value::Deferred, "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2222,17 +2660,13 @@ mod tests {
             Value::Deferred,
         ];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -2269,17 +2703,13 @@ mod tests {
 
         let x = vec![0.into(), 1.into(), 2.into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 

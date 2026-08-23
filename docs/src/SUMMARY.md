@@ -4,6 +4,8 @@
 - [General Usage](./general-usage.md)
 - [Input Architecture](./input-architecture.md)
 - [Redis knowledge-state input](./redis-knowledge-input.md)
+- [Output Architecture](./output.md)
+- [Output Pipeline Benchmarks](./output-pipeline-benchmarks.md)
 - [Reconfiguration](./reconfiguration.md)
 - [Distributed Monitoring](./distributed-monitoring.md)
 - [Distributed Monitoring Counter Example](./distributed-monitoring-counter-tri.md)

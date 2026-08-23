@@ -1,2 +1,1 @@
-pub mod stdout_output_handler;
-pub use stdout_output_handler::StdoutOutputHandler;
+//! Command-line output selection is implemented by `crate::io::output`.

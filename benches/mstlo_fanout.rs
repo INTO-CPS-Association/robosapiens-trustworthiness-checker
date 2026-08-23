@@ -12,7 +12,7 @@ use mstlo::{
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, Specification};
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::io::testing::NullOutputHandler;
+use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
@@ -239,15 +239,20 @@ async fn run_runtime(
     specification: MstloSpecification,
     input: InputStream<MstloTimedValue>,
 ) {
-    let output = Box::new(NullOutputHandler::<MstloTimedValue>::new(
-        executor.clone(),
-        specification.output_vars(),
-    ));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let output_writer = output_builder
+        .build(
+            specification.output_vars(),
+            std::iter::empty::<VarName>(),
+            None,
+        )
+        .await
+        .expect("MSTLO benchmark output pipeline should open");
     let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
         .executor(executor)
         .model(specification)
         .input(input)
-        .output(output)
+        .output_writer(output_writer)
         .semantics(MstloSemantics::DelayedQualitative)
         .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)
         .build()

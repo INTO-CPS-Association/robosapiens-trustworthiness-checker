@@ -1,7 +1,7 @@
 use crate::core::StreamType;
 use async_trait::async_trait;
 use clap::ValueEnum;
-use futures::future::LocalBoxFuture;
+
 #[cfg(feature = "ros")]
 use smol::LocalExecutor;
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,6 +10,8 @@ use std::fmt::Debug;
 use std::rc::Rc;
 use strum_macros::Display;
 
+#[cfg(feature = "ros")]
+use super::SharedOutputBackend;
 use super::{StreamData, VarName};
 
 /* Enum specifying which semantics is to be used */
@@ -80,12 +82,10 @@ pub trait RosStreamValue: StreamData + Sized {
         mapping: BTreeMap<String, (String, String)>,
     ) -> anyhow::Result<crate::core::InputStream<Self>>;
 
-    fn ros_output_handler(
+    fn ros_output_backend(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-        mapping: BTreeMap<String, (String, String)>,
-        aux_info: Vec<VarName>,
-    ) -> anyhow::Result<Box<dyn OutputHandler<Val = Self>>>;
+    ) -> anyhow::Result<SharedOutputBackend<Self>>;
 }
 
 #[cfg(not(feature = "ros"))]
@@ -120,24 +120,6 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     fn var_expr(&self, var: &VarName) -> Option<Self::Expr>;
 
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType>;
-}
-
-// This could alternatively implement Sink
-// The constructor (which is not specified by the trait) should provide any
-// configuration details needed by the output handler (e.g. host, port,
-// output file name, etc.) whilst provide_streams is called by the runtime to
-// finish the setup of the output handler by providing the streams to be output,
-// and finally run is called to start the output handler.
-pub trait OutputHandler {
-    type Val: StreamData;
-
-    // async fn handle_output(&mut self, var: &VarName, value: V);
-    // This should only be called once by the runtime to provide the streams
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Self::Val>>);
-
-    // Essentially this is of type
-    // async fn run(&mut self);
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>>;
 }
 
 /*

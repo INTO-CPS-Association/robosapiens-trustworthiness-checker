@@ -271,6 +271,36 @@ mod integration_tests {
         format!("tests/fixtures/{}", filename)
     }
 
+    fn temporary_output_config_path(label: &str) -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "trustworthiness-checker-cli-output-{label}-{}.json5",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn assert_cli_error_contains(output: &std::process::Output, fragments: &[&str]) {
+        assert!(
+            !output.status.success(),
+            "CLI unexpectedly succeeded; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.trim().is_empty(),
+            "CLI error did not explain the failure"
+        );
+        for fragment in fragments {
+            assert!(
+                stderr.contains(fragment),
+                "Expected stderr to contain {fragment:?}, got: {stderr}"
+            );
+        }
+    }
+
     #[cfg(feature = "ros")]
     fn render_template(template_path: &str, replacements: &[(&str, &str)]) -> String {
         let mut content =
@@ -620,6 +650,128 @@ mod integration_tests {
             "Expected error message not found in: {}",
             stderr
         );
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_dsrv_multi_destination() {
+        let output = run_cli(&[
+            &fixture_path("if_else.dsrv"),
+            "--input-file",
+            &fixture_path("if_else.input"),
+            "--output-config",
+            &fixture_path("output_config_dsrv_multi.json5"),
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("result[0]") && stdout.contains("result[1]"),
+            "Expected partitioned DSRV output not found in: {stdout}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_mstlo_multi_destination() {
+        let output = run_cli(&[
+            &fixture_path("simple_stl.mstlo"),
+            "--input-file",
+            &fixture_path("simple_stl.input"),
+            "--output-config",
+            &fixture_path("output_config_mstlo_mirror.json5"),
+            "--language",
+            "mstlo",
+            "--semantics",
+            "delayed-qualitative",
+            "--execution-policy",
+            "synchronous",
+            "--mstlo-synchronization",
+            "none",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert!(
+            output.status.success(),
+            "CLI command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("always_x[0]") && stdout.contains("combo[3]"),
+            "Expected mirrored MSTLO output not found in: {stdout}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_unreadable_path() {
+        let missing_path = temporary_output_config_path("missing");
+        let _ = std::fs::remove_file(&missing_path);
+
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-config",
+            &missing_path,
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert_cli_error_contains(&output, &["output config", "could not be read"]);
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_malformed_json5() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-config",
+            &fixture_path("output_config_malformed.json5"),
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert_cli_error_contains(&output, &["output config", "could not be parsed"]);
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_strict_validation() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-config",
+            &fixture_path("output_config_missing_limit.json5"),
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert_cli_error_contains(&output, &["limited-null", "limit"]);
+    }
+
+    #[apply(async_test)]
+    async fn test_output_config_conflicts_with_stdout_binary() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-config",
+            &fixture_path("output_config_mstlo_mirror.json5"),
+            "--output-stdout",
+        ])
+        .await
+        .expect("Failed to run CLI");
+
+        assert_cli_error_contains(&output, &["output-config", "output-stdout"]);
     }
 
     #[apply(async_test)]

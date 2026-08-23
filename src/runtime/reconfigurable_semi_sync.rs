@@ -1,12 +1,14 @@
-use crate::core::{DeferrableStreamData, OutputHandler, Runtime, Specification, input};
+use crate::core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input};
 use crate::io::reconfigurable_input::{
     ReconfigurableInput, ReconfigurableInputItem, ReconfigurableInputStream,
 };
-use crate::io::{InputPipeline, MonitorConfig, OutputHandlerBuilder, OutputHandlerSpec, Route};
+use crate::io::{InputPipeline, MonitorConfig, OutputBackendBuilder};
 use crate::lang::core::{DependencyGraphExpr, DependencyGraphSpec};
 use crate::runtime::{
     RuntimeBuilder,
-    semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime, SemiSyncRuntimeBuilder},
+    semi_sync::{
+        ExprEvalutor, SemiSyncContext, SemiSyncOutput, SemiSyncRuntime, SemiSyncRuntimeBuilder,
+    },
 };
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::{InputStream, Value, VarName};
@@ -33,7 +35,9 @@ where
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<AC::Spec>,
     input_pipeline: Option<InputPipeline<AC::Val>>,
-    output_builder: Option<OutputHandlerBuilder<AC::Val>>,
+    resolved_input: Option<crate::io::config::ResolvedInput>,
+    output_builder: Option<OutputBackendBuilder<AC::Val>>,
+    resolved_output: Option<crate::io::output::ResolvedOutput>,
     reconf_topic: Option<String>,
     input_config: Option<MonitorConfig>,
     use_context_transfer: bool,
@@ -58,7 +62,9 @@ where
             executor: None,
             model: None,
             input_pipeline: None,
+            resolved_input: None,
             output_builder: None,
+            resolved_output: None,
             reconf_topic: None,
             input_config: None,
             use_context_transfer: true,
@@ -83,22 +89,133 @@ where
         self.with_setup_error("direct input streams are not supported by the reconfigurable runtime; configure an InputPipeline")
     }
 
-    fn output(self, _output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
-        self.with_setup_error("direct output handlers are not supported by the reconfigurable runtime; configure an OutputHandlerBuilder")
+    fn output_writer(self, _writer: OutputWriter<AC::Val>) -> Self {
+        self.with_setup_error("direct output writers are not supported by the reconfigurable runtime; configure an output pipeline")
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
-            let finalized_input = self.finalize_input().await;
-            let (input, input_stream, setup_error) = match finalized_input {
-                Ok((input, input_stream)) => (Some(input), Some(input_stream), None),
+            let mut builder = self;
+            let (mut input, resolved_input, mut setup_error) = match builder.finalize_input() {
+                Ok((input, resolved_input)) => (Some(input), Some(resolved_input), None),
                 Err(error) => (None, None, Some(error.to_string())),
             };
+            builder.resolved_input = resolved_input;
+
+            // Resolution is deliberately resource-free. Resolve the complete
+            // initial generation before opening either input or output; the
+            // same ordering is used by replacement builders below.
+            if setup_error.is_none()
+                && builder.setup_error.is_none()
+                && builder.resolved_output.is_none()
+            {
+                match (builder.output_builder.as_ref(), builder.model.as_ref()) {
+                    (Some(output_builder), Some(model)) => {
+                        match output_builder.resolve(model.output_vars(), model.aux_vars(), None) {
+                            Ok(resolved) => builder.resolved_output = Some(resolved),
+                            Err(error) => setup_error = Some(error.to_string()),
+                        }
+                    }
+                    (None, _) => {
+                        setup_error = Some("reconfigurable output builder is not configured".into())
+                    }
+                    (_, None) => {
+                        setup_error = Some("reconfigurable runtime model is not configured".into())
+                    }
+                }
+            }
+            if setup_error.is_none() {
+                setup_error = builder.setup_error.clone();
+            }
+
+            let mut input_stream = None;
+            let mut output_writer = None;
+            if setup_error.is_none() {
+                let Some(executor) = builder.executor.clone() else {
+                    setup_error = Some("reconfigurable runtime executor is not configured".into());
+                    return ReconfSemiSyncRuntime {
+                        builder,
+                        input,
+                        input_stream,
+                        output: output_writer,
+                        setup_error,
+                        _marker: std::marker::PhantomData,
+                    };
+                };
+                let input_ref = input
+                    .as_ref()
+                    .expect("resolved reconfigurable input must be present");
+                let resolved_input = builder
+                    .resolved_input
+                    .clone()
+                    .expect("resolved reconfigurable input plan must be present");
+                let output_builder = builder
+                    .output_builder
+                    .clone()
+                    .expect("resolved reconfigurable output builder must be present")
+                    .executor(executor);
+                let resolved_output = builder
+                    .resolved_output
+                    .clone()
+                    .expect("resolved reconfigurable output plan must be present");
+
+                // Input is opened during build so callers can safely send the
+                // first manual tick immediately after spawning the runtime.
+                // Both opens still start only after all resolution is complete.
+                let (input_result, output_result) = futures::join!(
+                    input_ref.open_resolved(resolved_input),
+                    output_builder.open(resolved_output),
+                );
+                let input_result = input_result.map_err(|error| {
+                    let message =
+                        format!("reconfigurable input stream could not be opened: {error:#}");
+                    error.context(message)
+                });
+                let output_result = output_result.map_err(|error| {
+                    let message =
+                        format!("reconfigurable output pipeline could not be opened: {error}");
+                    anyhow::Error::new(error).context(message)
+                });
+                match (input_result, output_result) {
+                    (Ok(opened_input), Ok(opened_output)) => {
+                        input_stream = Some(opened_input);
+                        output_writer = Some(opened_output);
+                    }
+                    (Err(input_error), Ok(mut opened_output)) => {
+                        let cleanup = opened_output.close().await;
+                        drop(opened_output);
+                        drop(input.take());
+                        setup_error = Some(match cleanup {
+                            Ok(()) => input_error,
+                            Err(cleanup_error) => anyhow!(
+                                "{input_error}; additionally: reconfigurable output cleanup failed: {cleanup_error}"
+                            ),
+                        }
+                        .to_string());
+                    }
+                    (Ok(opened_input), Err(output_error)) => {
+                        drop(opened_input);
+                        drop(input.take());
+                        setup_error = Some(output_error.to_string());
+                    }
+                    (Err(input_error), Err(output_error)) => {
+                        drop(input.take());
+                        setup_error = Some(
+                            anyhow!(
+                                "{output_error}; additionally: reconfigurable input opening failed: {input_error}"
+                            )
+                            .to_string(),
+                        );
+                    }
+                }
+            }
+
             ReconfSemiSyncRuntime {
-                builder: self,
+                builder,
                 input,
-                setup_error,
                 input_stream,
+                output: output_writer,
+                setup_error,
                 _marker: std::marker::PhantomData,
             }
         })
@@ -123,8 +240,9 @@ where
         self
     }
 
-    pub fn output_builder(mut self, output_builder: OutputHandlerBuilder<AC::Val>) -> Self {
+    pub fn output_builder(mut self, output_builder: OutputBackendBuilder<AC::Val>) -> Self {
         self.output_builder = Some(output_builder);
+        self.resolved_output = None;
         self
     }
 
@@ -148,11 +266,11 @@ where
         self
     }
 
-    async fn finalize_input(
+    fn finalize_input(
         &self,
     ) -> anyhow::Result<(
         ReconfigurableInput<AC::Val>,
-        ReconfigurableInputStream<AC::Val>,
+        crate::io::config::ResolvedInput,
     )> {
         if let Some(error) = self.setup_error.as_ref() {
             return Err(anyhow!(error.clone()));
@@ -163,11 +281,13 @@ where
             .ok_or_else(|| anyhow!("reconfigurable input pipeline is not configured"))?;
         let input = ReconfigurableInput::new(pipeline, self.reconf_topic.clone())
             .context("reconfigurable input could not be configured")?;
-        let input_stream = input
-            .open(self.model_ref()?.input_vars(), self.input_config.as_ref())
-            .await
-            .context("reconfigurable input stream could not be opened")?;
-        Ok((input, input_stream))
+        let resolved_input = match self.resolved_input.clone() {
+            Some(resolved) => resolved,
+            None => input
+                .pipeline()
+                .resolve(&self.model_ref()?.input_vars(), self.input_config.as_ref())?,
+        };
+        Ok((input, resolved_input))
     }
 
     fn model_ref(&self) -> anyhow::Result<&AC::Spec> {
@@ -187,8 +307,9 @@ where
 {
     builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     input: Option<ReconfigurableInput<AC::Val>>,
-    setup_error: Option<String>,
     input_stream: Option<ReconfigurableInputStream<AC::Val>>,
+    output: Option<OutputWriter<AC::Val>>,
+    setup_error: Option<String>,
     _marker: std::marker::PhantomData<MS>,
 }
 
@@ -203,7 +324,7 @@ where
     async fn setup_inner_monitor(
         monitor: SemiSyncRuntime<AC, MS>,
     ) -> anyhow::Result<(
-        Box<dyn OutputHandler<Val = AC::Val>>,
+        SemiSyncOutput<AC::Val>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
@@ -274,52 +395,13 @@ where
         }
     }
 
-    fn update_output_builder(
+    fn resolve_output_generation(
         &self,
-        builder: &mut OutputHandlerBuilder<AC::Val>,
+        builder: &OutputBackendBuilder<AC::Val>,
         model: &AC::Spec,
-        configured: Option<&BTreeMap<VarName, Route>>,
-    ) -> anyhow::Result<()> {
-        let output_vars = model.output_vars();
-        match &mut builder.spec {
-            OutputHandlerSpec::Stdout | OutputHandlerSpec::Manual(_) => {}
-            OutputHandlerSpec::Mqtt(topics) | OutputHandlerSpec::Redis(topics) => {
-                let previous = topics.take().unwrap_or_default();
-                let mut next = BTreeMap::new();
-                for variable in output_vars {
-                    let route = configured
-                        .and_then(|routes| routes.get(&variable))
-                        .map(|route| route.route.to_string())
-                        .or_else(|| previous.get(&variable).cloned())
-                        .unwrap_or_else(|| variable.to_string());
-                    next.insert(variable, route);
-                }
-                *topics = Some(next);
-            }
-            OutputHandlerSpec::Ros(topics, codecs) => {
-                let previous_topics = std::mem::take(topics);
-                let previous_codecs = std::mem::take(codecs);
-                let mut next_topics = BTreeMap::new();
-                let mut next_codecs = BTreeMap::new();
-                for variable in output_vars {
-                    let route = configured.and_then(|routes| routes.get(&variable));
-                    let topic = route
-                        .map(|route| route.route.to_string())
-                        .or_else(|| previous_topics.get(&variable).cloned())
-                        .unwrap_or_else(|| variable.to_string());
-                    let codec = route
-                        .and_then(|route| route.codec.as_ref())
-                        .map(|codec| codec.0.to_string())
-                        .or_else(|| previous_codecs.get(&variable).cloned())
-                        .ok_or_else(|| anyhow!("output route for `{variable}` requires a codec"))?;
-                    next_topics.insert(variable.clone(), topic);
-                    next_codecs.insert(variable, codec);
-                }
-                *topics = next_topics;
-                *codecs = next_codecs;
-            }
-        }
-        Ok(())
+        request: Option<&MonitorConfig>,
+    ) -> anyhow::Result<crate::io::output::ResolvedOutput> {
+        builder.resolve(model.output_vars(), model.aux_vars(), request)
     }
 
     /// Parse, validate, resolve, transfer, and prepare the next generation.
@@ -341,13 +423,18 @@ where
         self.log_model_changes(&old_model, &next_model);
 
         let mut next_builder = self.builder.clone().model(next_model.clone());
-        input
+        let resolved_input = input
             .pipeline()
             .resolve(&next_model.input_vars(), Some(&request))?;
+        next_builder.resolved_input = Some(resolved_input);
         next_builder.input_config = Some(request.clone());
 
-        if let Some(output_builder) = next_builder.output_builder.as_mut() {
-            self.update_output_builder(output_builder, &next_model, request.outputs.as_ref())?;
+        if let Some(output_builder) = next_builder.output_builder.as_ref() {
+            next_builder.resolved_output = Some(self.resolve_output_generation(
+                output_builder,
+                &next_model,
+                Some(&request),
+            )?);
         }
 
         next_builder.starting_history = Some(self.transfer_context(context, &next_model));
@@ -362,11 +449,42 @@ where
         context: &mut SemiSyncContext<AC>,
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
-        while let Some(item) = input_stream.next().await {
+        let cancellation = context.cancellation_token();
+        loop {
+            let item = match futures::future::select(input_stream.next(), cancellation.cancelled())
+                .await
+            {
+                futures::future::Either::Left((item, _cancelled)) => item,
+                futures::future::Either::Right((_cancelled, _input)) => {
+                    context.cancel();
+                    return Ok(None);
+                }
+            };
+            let Some(item) = item else {
+                return Ok(None);
+            };
+
             match item? {
                 ReconfigurableInputItem::Data(batch) => {
                     for tick in batch.into_ticks() {
-                        SemiSyncRuntime::<AC, MS>::advance_tick(tick, context, expr_evals).await?;
+                        let tick_cancelled = match futures::future::select(
+                            Box::pin(SemiSyncRuntime::<AC, MS>::advance_tick(
+                                tick, context, expr_evals,
+                            )),
+                            cancellation.cancelled(),
+                        )
+                        .await
+                        {
+                            futures::future::Either::Left((result, _cancelled)) => {
+                                result?;
+                                false
+                            }
+                            futures::future::Either::Right((_cancelled, _tick_future)) => true,
+                        };
+                        if tick_cancelled {
+                            context.cancel();
+                            return Ok(None);
+                        }
                     }
                 }
                 ReconfigurableInputItem::Reconfigure(request) => {
@@ -374,7 +492,6 @@ where
                 }
             }
         }
-        Ok(None)
     }
 
     /// Own all resources of one generation locally. The replacement builder is
@@ -396,32 +513,30 @@ where
             .input
             .take()
             .ok_or_else(|| anyhow!("reconfigurable input is not configured"))?;
-        let input_stream = self
+        let mut input_stream = self
             .input_stream
             .take()
             .ok_or_else(|| anyhow!("reconfigurable input stream is not configured"))?;
-        let output_builder = self
-            .builder
-            .output_builder
-            .clone()
-            .ok_or_else(|| anyhow!("reconfigurable output builder is not configured"))?
-            .output_var_names(model.output_vars());
-        let output = output_builder
-            .build()
-            .await
-            .context("reconfigurable output handler could not be built")?;
+        let writer = self
+            .output
+            .take()
+            .ok_or_else(|| anyhow!("reconfigurable output pipeline is not configured"))?;
+
+        // Input and output plans were resolved before either resource opened in
+        // the builder. The input stream is already subscribed here so a tick
+        // sent immediately after build cannot be lost.
+
         let monitor = SemiSyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
             .input(input::empty_input_stream())
-            .output(output)
             .starting_history(self.builder.starting_history.clone().unwrap_or_default())
+            .output_writer(writer)
             .build()
             .await;
-        let (mut output_handler, mut context, mut expr_evals) =
-            Self::setup_inner_monitor(monitor).await?;
-        let mut input_stream = input_stream;
-        let mut output_future = Box::pin(output_handler.run().fuse());
+        let (output, mut context, mut expr_evals) = Self::setup_inner_monitor(monitor).await?;
+        let generation_cancellation = context.cancellation_token();
+        let mut output_future = Box::pin(output.run().fuse());
         let mut output_completed = false;
         let pending_builder = {
             let mut process = Box::pin(
@@ -435,13 +550,21 @@ where
             );
             loop {
                 if output_completed {
+                    // Output completion is terminal for this generation. The
+                    // processing future is cancellation-aware, so a pending
+                    // input cannot keep the runtime alive indefinitely.
+                    generation_cancellation.cancel();
                     break process.await;
                 }
                 futures::select! {
                     input = process.as_mut() => break input,
                     output = output_future.as_mut() => {
                         output_completed = true;
-                        if let Err(error) = output.context("reconfigurable output handler failed") {
+                        // Cancel before awaiting processing. This covers both
+                        // normal output EOF and an intentional downstream
+                        // close, while preserving a ready replacement request.
+                        generation_cancellation.cancel();
+                        if let Err(error) = output.context("reconfigurable output failed") {
                             break Err(error);
                         }
                     },
@@ -449,16 +572,20 @@ where
             }
         };
 
+        // Cancellation stops the current generation's producers, but the
+        // output future remains owned here until its flush/close barrier has
+        // completed. This drains coalescers and buffers before any old input
+        // resources are dropped or the replacement is built.
         context.cancel();
+        if !output_completed {
+            output_future
+                .await
+                .context("reconfigurable output failed")?;
+        }
         drop(input_stream);
         drop(input);
         drop(context);
         drop(expr_evals);
-        if !output_completed {
-            output_future
-                .await
-                .context("reconfigurable output handler failed")?;
-        }
         pending_builder
     }
 }
@@ -481,5 +608,395 @@ where
             self = Box::new(builder.build().await);
             info!("Starting reconfigured runtime");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::Cell,
+        collections::BTreeMap,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll},
+        time::Duration,
+    };
+
+    use async_trait::async_trait;
+    use async_unsync::bounded;
+    use futures::{Sink, future::Either};
+
+    use super::*;
+    use crate::core::{OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter};
+    use crate::io::{
+        CodecId, InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, Route,
+    };
+    use crate::runtime::RuntimeBuilder;
+    use crate::runtime::builder::SemiSyncValueConfig;
+    use crate::semantics::UntimedDsrvSemantics;
+    use crate::stream_utils::{Fanout, FanoutSender};
+    use crate::{DsrvSpecification, Value, VarName};
+
+    type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics>;
+
+    const PENDING_MODEL: &str = "in x: Int\nout z: Int\nz = x";
+    const FINITE_FIRST_OUTPUT_MODEL: &str = "in x: Int\nout z: Int\nz = 1";
+
+    fn parse_spec(source: &str) -> anyhow::Result<DsrvSpecification> {
+        source.parse().map_err(anyhow::Error::from)
+    }
+
+    fn manual_input() -> (
+        InputSource,
+        FanoutSender<Value>,
+        Rc<Fanout<Value>>,
+        FanoutSender<Value>,
+        Rc<Fanout<Value>>,
+    ) {
+        let (data_sender, data_fanout) = Fanout::new();
+        let (control_sender, control_fanout) = Fanout::new();
+        let source = InputSource::manual_with_control(
+            BTreeMap::from([(VarName::new("x"), Rc::clone(&data_fanout))]),
+            Some(Rc::clone(&control_fanout)),
+        );
+        (
+            source,
+            data_sender,
+            data_fanout,
+            control_sender,
+            control_fanout,
+        )
+    }
+
+    async fn build_runtime(
+        executor: Rc<smol::LocalExecutor<'static>>,
+        model: &str,
+        input: InputSource,
+        output: OutputBackendBuilder<Value>,
+    ) -> TestRuntime {
+        ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
+            .parse_spec(parse_spec)
+            .executor(executor)
+            .model(model.parse().expect("test model should parse"))
+            .input_pipeline(InputPipeline::new(input))
+            .output_builder(output)
+            .reconf_topic("reconf".to_owned())
+            .build()
+            .await
+    }
+
+    async fn run_with_timeout(runtime: TestRuntime) -> anyhow::Result<()> {
+        let run = Box::pin(runtime.run());
+        let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
+        match futures::future::select(run, timeout).await {
+            Either::Left((result, _timeout)) => result,
+            Either::Right((_timeout, _run)) => {
+                panic!("reconfigurable runtime did not finish before the timeout")
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct CountingBackend {
+        opens: Rc<Cell<usize>>,
+        closes: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+        fail_on_attempt: Option<usize>,
+        close_error: Option<OutputError>,
+        send_error: Option<OutputError>,
+    }
+
+    impl CountingBackend {
+        fn new(fail_on_attempt: Option<usize>, close_error: Option<OutputError>) -> Self {
+            Self {
+                opens: Rc::new(Cell::new(0)),
+                closes: Rc::new(Cell::new(0)),
+                drops: Rc::new(Cell::new(0)),
+                fail_on_attempt,
+                close_error,
+                send_error: None,
+            }
+        }
+
+        fn with_send_error(mut self, send_error: OutputError) -> Self {
+            self.send_error = Some(send_error);
+            self
+        }
+
+        fn builder(&self) -> OutputBackendBuilder<Value> {
+            OutputBackendBuilder::new(OutputBackendConfig::custom(self.clone()))
+        }
+    }
+
+    struct CountingSink {
+        closes: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+        close_error: Option<OutputError>,
+        send_error: Option<OutputError>,
+        ready: bool,
+        closed: bool,
+    }
+
+    impl Drop for CountingSink {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    impl Sink<OutputBatch<Value>> for CountingSink {
+        type Error = OutputError;
+
+        fn poll_ready(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.ready = true;
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(
+            mut self: Pin<&mut Self>,
+            _batch: OutputBatch<Value>,
+        ) -> Result<(), Self::Error> {
+            if self.closed {
+                return Err(OutputError::Closed);
+            }
+            if !self.ready {
+                return Err(OutputError::backend("counting sink was not ready"));
+            }
+            self.ready = false;
+            if let Some(error) = self.send_error.take() {
+                return Err(error);
+            }
+            Ok(())
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.ready = true;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.closes.set(self.closes.get() + 1);
+            self.closed = true;
+            Poll::Ready(self.close_error.take().map_or(Ok(()), Err))
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl OutputBackend for CountingBackend {
+        type Val = Value;
+
+        async fn open(
+            &self,
+            _interface: OutputInterface,
+        ) -> Result<OutputWriter<Value>, OutputError> {
+            let attempt = self.opens.get();
+            self.opens.set(attempt + 1);
+            if self.fail_on_attempt == Some(attempt) {
+                return Err(OutputError::backend("counting output open failed"));
+            }
+            Ok(OutputWriter::from_sink(CountingSink {
+                closes: Rc::clone(&self.closes),
+                drops: Rc::clone(&self.drops),
+                close_error: self.close_error.clone(),
+                send_error: self.send_error.clone(),
+                ready: false,
+                closed: false,
+            }))
+        }
+    }
+
+    #[test]
+    fn output_closed_cancels_pending_input() {
+        smol::block_on(async {
+            let executor = Rc::new(smol::LocalExecutor::new());
+            let (input, data_sender, _data_fanout, _control_sender, _control_fanout) =
+                manual_input();
+            let output = CountingBackend::new(None, None)
+                .with_send_error(OutputError::Closed)
+                .builder();
+            let runtime = build_runtime(executor, FINITE_FIRST_OUTPUT_MODEL, input, output).await;
+            let send_first_tick = async move {
+                data_sender.send(Value::Int(1)).await;
+            };
+            let run = Box::pin(runtime.run());
+            let send_first_tick = Box::pin(send_first_tick);
+            let joined = Box::pin(futures::future::join(run, send_first_tick));
+            let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
+            let result = match futures::future::select(joined, timeout).await {
+                Either::Left(((result, ()), _timeout)) => result,
+                Either::Right((_timeout, _joined)) => {
+                    panic!("closed output did not cancel pending input before the timeout")
+                }
+            };
+            assert!(
+                result.is_ok(),
+                "closed output should end the generation: {result:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn healthy_generation_forwards_immediate_input() {
+        smol::block_on(async {
+            let executor = Rc::new(smol::LocalExecutor::new());
+            let (input, data_sender, _data_fanout, _control_sender, _control_fanout) =
+                manual_input();
+            let (output_sender, mut output_receiver) =
+                bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
+            let output = OutputBackendBuilder::new(OutputBackendConfig::Manual(output_sender));
+            let runtime = build_runtime(executor, PENDING_MODEL, input, output).await;
+
+            // Queue the tick before the runtime is polled. A healthy build must
+            // already own its input subscription, otherwise the fan-out drops
+            // this value and the generation waits forever for its first tick.
+            data_sender.send(Value::Int(7)).await;
+            let first = Box::pin(futures::future::select(
+                Box::pin(output_receiver.recv()),
+                Box::pin(runtime.run()),
+            ));
+            let output = match futures::future::select(
+                first,
+                Box::pin(smol::Timer::after(Duration::from_secs(1))),
+            )
+            .await
+            {
+                Either::Left((Either::Left((Some(output), _run)), _timeout)) => output,
+                Either::Left((Either::Left((None, _run)), _timeout)) => {
+                    panic!("healthy output channel closed")
+                }
+                Either::Left((Either::Right((result, _output)), _timeout)) => {
+                    panic!("healthy generation ended before output: {result:?}")
+                }
+                Either::Right((_timeout, _first)) => {
+                    panic!("healthy generation did not forward immediate input")
+                }
+            };
+            assert_eq!(output.get(&VarName::new("z")), Some(&Value::Int(7)));
+        });
+    }
+
+    #[test]
+    fn initial_output_failure_drops_open_input() {
+        smol::block_on(async {
+            let executor = Rc::new(smol::LocalExecutor::new());
+            let (input, data_sender, data_fanout, _control_sender, _control_fanout) =
+                manual_input();
+            let backend = CountingBackend::new(Some(0), None);
+            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+
+            let error = run_with_timeout(runtime)
+                .await
+                .expect_err("initial output open should fail");
+            assert!(
+                error.to_string().contains("counting output open failed"),
+                "{error}"
+            );
+            assert_eq!(backend.opens.get(), 1);
+            assert_eq!(backend.closes.get(), 0);
+            assert_eq!(backend.drops.get(), 0);
+            assert!(data_fanout.sub_events() > 0, "input source was not opened");
+
+            let seen = data_fanout.prune_events();
+            data_sender.send(Value::Int(1)).await;
+            assert!(
+                data_fanout.prune_events() > seen,
+                "opened input source was not dropped after output failure"
+            );
+        });
+    }
+
+    #[cfg(not(feature = "ros"))]
+    #[test]
+    fn initial_input_failure_closes_output_and_preserves_cleanup_error() {
+        smol::block_on(async {
+            let executor = Rc::new(smol::LocalExecutor::new());
+            let input = InputSource::ros(
+                BTreeMap::from([(
+                    VarName::new("x"),
+                    Route::new("x".to_owned().into_boxed_str(), Some(CodecId::new("json")))
+                        .unwrap(),
+                )]),
+                Rc::clone(&executor),
+            );
+            let backend = CountingBackend::new(
+                None,
+                Some(OutputError::backend("counting output close failed")),
+            );
+            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+
+            let error = run_with_timeout(runtime)
+                .await
+                .expect_err("ROS-disabled input open should fail");
+            let message = error.to_string();
+            assert!(message.contains("ROS support not enabled"), "{message}");
+            assert!(
+                message.contains("counting output close failed"),
+                "{message}"
+            );
+            assert_eq!(backend.opens.get(), 1);
+            assert_eq!(backend.closes.get(), 1);
+            assert_eq!(backend.drops.get(), 1);
+        });
+    }
+
+    #[test]
+    fn replacement_output_failure_drops_new_input_and_closes_old_output() {
+        smol::block_on(async {
+            let executor = Rc::new(smol::LocalExecutor::new());
+            let (input, data_sender, data_fanout, control_sender, _control_fanout) = manual_input();
+            let backend = CountingBackend::new(Some(1), None);
+            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+            let request = async move {
+                let payload = serde_json::json!({ "spec": PENDING_MODEL }).to_string();
+                control_sender.send(Value::Str(payload.into())).await;
+            };
+            let run = Box::pin(runtime.run());
+            let request = Box::pin(request);
+            let joined = Box::pin(futures::future::join(run, request));
+            let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
+            let result = match futures::future::select(joined, timeout).await {
+                Either::Left(((result, ()), _timeout)) => result,
+                Either::Right((_timeout, _joined)) => {
+                    panic!("replacement failure did not finish before the timeout")
+                }
+            };
+
+            let error = result.expect_err("replacement output open should fail");
+            assert!(
+                error.to_string().contains("counting output open failed"),
+                "{error}"
+            );
+            assert_eq!(backend.opens.get(), 2);
+            assert_eq!(backend.closes.get(), 1);
+            assert_eq!(backend.drops.get(), 1);
+            assert!(
+                data_fanout.sub_events() >= 2,
+                "replacement input source was not opened"
+            );
+
+            let seen = data_fanout.prune_events();
+            data_sender.send(Value::Int(1)).await;
+            assert!(
+                data_fanout.prune_events() > seen,
+                "replacement input source was not dropped after output failure"
+            );
+        });
     }
 }

@@ -68,10 +68,6 @@ impl<V> InputSegment<V> {
         }
     }
 
-    pub(crate) fn ticks(&self) -> InputTicks<'_, V> {
-        InputTicks::new(SegmentCursor::Single(Some(self)), self.tick_count())
-    }
-
     fn map_values<U, F>(self, map: &mut F) -> InputSegment<U>
     where
         F: FnMut(&VarName, V) -> U,
@@ -218,6 +214,14 @@ impl<V> InputBatch<V> {
     /// representation outside the crate.
     pub(crate) fn segments(&self) -> impl ExactSizeIterator<Item = &InputSegment<V>> + '_ {
         self.segment_cursor()
+    }
+
+    pub(crate) fn packed_rows_segment(&self) -> Option<(&[VarName], &[V])> {
+        let mut segments = self.segments();
+        let segment = segments.next()?;
+        (segments.next().is_none())
+            .then(|| segment.packed_rows())
+            .flatten()
     }
 
     #[cfg(test)]

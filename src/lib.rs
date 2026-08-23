@@ -4,9 +4,10 @@ pub mod benches_common;
 pub mod causal;
 pub mod core;
 pub use core::{
-    ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick, InputUpdate,
-    InputUpdateRef, JsonStreamValue, OutputStream, RosStreamValue, Runtime, Specification, Value,
-    VarName,
+    DynOutputSink, ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick,
+    InputUpdate, InputUpdateRef, JsonStreamValue, OutputBackend, OutputBatch, OutputError,
+    OutputInterface, OutputRole, OutputRoute, OutputStream, OutputUpdate, OutputWriter,
+    RosStreamValue, Runtime, SharedOutputBackend, Specification, Value, VarName,
 };
 pub mod cli;
 pub mod dataflow;

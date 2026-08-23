@@ -2,11 +2,14 @@ use approx::assert_abs_diff_eq;
 use futures::stream::StreamExt;
 use macro_rules_attribute::apply;
 use smol::LocalExecutor;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, StreamType};
-use trustworthiness_checker::io::testing::ManualOutputHandler;
+use trustworthiness_checker::core::{
+    OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime, RuntimeSpec, Semantics,
+    StreamType,
+};
+use trustworthiness_checker::io::output::ManualOutputBackend;
 use trustworthiness_checker::io::{file, map};
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
@@ -18,10 +21,56 @@ use trustworthiness_checker::{
     InputStream, Value,
     lang::dsrv::parser::{parse_expr, parse_str},
     parse_file,
-    runtime::RuntimeBuilder,
 };
 use trustworthiness_checker::{VarName, async_test};
 use winnow::Parser;
+
+async fn manual_output(
+    variables: impl IntoIterator<Item = VarName>,
+) -> (OutputWriter<Value>, OutputStream<BTreeMap<VarName, Value>>) {
+    let (backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
+    let variables = variables
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let interface = OutputInterface::outputs(variables.iter().cloned())
+        .expect("test output interface is valid");
+    let writer = backend
+        .open(interface)
+        .await
+        .expect("test manual output backend opens");
+    let queues = variables
+        .iter()
+        .cloned()
+        .map(|variable| (variable, VecDeque::<Value>::new()))
+        .collect::<BTreeMap<_, _>>();
+    let outputs = Box::pin(futures::stream::unfold(
+        (receiver, queues),
+        |(mut receiver, mut queues)| async move {
+            loop {
+                if queues.values().all(|queue| !queue.is_empty()) {
+                    let row = queues
+                        .iter_mut()
+                        .map(|(variable, queue)| {
+                            (
+                                variable.clone(),
+                                queue.pop_front().expect("queue was checked above"),
+                            )
+                        })
+                        .collect();
+                    return Some((row, (receiver, queues)));
+                }
+                let map = receiver.recv().await?;
+
+                for (variable, value) in map {
+                    if let Some(queue) = queues.get_mut(&variable) {
+                        queue.push_back(value);
+                    }
+                }
+            }
+        },
+    ));
+    (writer, outputs)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TestConfiguration {
@@ -104,21 +153,18 @@ async fn run_typed_runtime_with_spec(
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output_writer)
         .runtime(runtime)
         .semantics(Semantics::TypedUntimed)
         .build()
-        .await;
+        .await
+        .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
@@ -134,21 +180,18 @@ async fn run_typed_lalr_runtime_with_spec(
     let spec_input = spec_str;
     let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output_writer)
         .runtime(runtime)
         .semantics(Semantics::TypedUntimed)
         .build()
-        .await;
+        .await
+        .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
@@ -164,21 +207,18 @@ async fn run_untyped_lalr_runtime_with_spec(
     let spec_input = spec_str;
     let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output_writer)
         .runtime(runtime)
         .semantics(Semantics::Untimed)
         .build()
-        .await;
+        .await
+        .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
@@ -225,21 +265,18 @@ async fn run_gradual_typed_runtime_with_spec(
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output_writer)
         .runtime(runtime)
         .semantics(Semantics::GradualTypedUntimed)
         .build()
-        .await;
+        .await
+        .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
@@ -1091,21 +1128,18 @@ echoed = payload
     )
     .await?;
     let input_stream = file::input_stream(input_data, spec.input_vars().clone());
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
-    let outputs = output_handler.get_output();
+    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream)
-        .output(output_handler)
+        .output_writer(output_writer)
         .runtime(RuntimeSpec::Async)
         .semantics(Semantics::TypedUntimed)
         .build()
-        .await;
+        .await
+        .expect("general runtime builder should succeed");
 
     executor.spawn(monitor.run()).detach();
     let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -1442,18 +1476,17 @@ id = Map.get(robot, "id")
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
         let input_stream = map::input_stream(BTreeMap::from([("tick".into(), vec![0.into()])]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
-        let monitor = create_builder_from_config(builder, config).build().await;
+            .output_writer(output_writer);
+        let monitor = create_builder_from_config(builder, config)
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -1516,18 +1549,17 @@ renamed = Map.insert(robot, "name", "bb8")
                 ])),
             ],
         )]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
-        let monitor = create_builder_from_config(builder, config).build().await;
+            .output_writer(output_writer);
+        let monitor = create_builder_from_config(builder, config)
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -1634,7 +1666,7 @@ in tick: Int
 out selected: List<Bool>
 out hasflags: Bool
 selected = Map.get(Map("flags": List(tick == 1, tick == 2)), "flags")
-hasflags = Map.has_key(Map("flags": List(true)), "flags")
+hasflags = Map.has_key(Map("flags": List(tick == 1)), "flags")
 "#;
 
     let outputs = run_typed_runtime(
@@ -1736,21 +1768,20 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1794,21 +1825,20 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1852,21 +1882,20 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1910,21 +1939,20 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -1976,21 +2004,20 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
             ("y".into(), y),
             ("e".into(), e),
         ]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2039,21 +2066,20 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let x = vec!["x0".into(), "x1".into(), "x2".into()];
         let y = vec!["y0".into(), "y1".into(), "y2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2089,21 +2115,20 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2149,21 +2174,20 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2214,21 +2238,20 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             "y_happy".into(),
         ];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2254,102 +2277,10 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
     Ok(())
 }
 
-// #[apply(async_test)]
-// async fn test_recursive_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-//     // TODO: This test only works on the constraint-based runtime
-//     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = ("in x\nout z\nz = update(x, z))").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
-//
-//             let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
-//             let input_stream = BTreeMap::from([("x".into(), x)]);
-//             let mut output_handler = Box::new(ManualOutputHandler::new(
-//                 executor.clone(),
-//                 spec_untyped.output_vars(),
-//             ));
-//             let outputs = output_handler.get_output();
-//
-//             let builder = RuntimeBuilder::new()
-//                 .executor(executor.clone())
-//                 .model(spec_untyped.clone())
-//                 .input(input_stream)
-//                 .output(output_handler);
-//
-//             let builder = create_builder_from_config(builder, config);
-//
-//             let monitor = builder.build();
-//
-//             executor.spawn(monitor.run()).detach();
-//             let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-//             assert_eq!(
-//                 outputs.len(),
-//                 4,
-//                 "Recursive update test failed for config {:?}",
-//                 config,
-//             );
-//             assert_eq!(
-//                 outputs,
-//                 vec![
-//                     (0, vec!["x0".into()]),
-//                     (1, vec!["x1".into()]),
-//                     (2, vec!["x2".into()]),
-//                     (3, vec!["x3".into()]),
-//                 ],
-//                 "Recursive update output mismatch for config {:?}",
-//                 config,
-//             );
-//         }
-// }
-
 // NOTE: While this test is interesting, it cannot work due to how defer is handled.
 // When defer receives a prop stream it changes state from being a defer expression into
 // the received prop stream. Thus, it cannot be used recursively.
 // This is the reason why we also need dynamic for the constraint based runtime.
-// #[apply(async_test)]
-// async fn test_recursive_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
-//     // TODO: This test only runs on the constraint-based runtime due to update/defer functionality
-//     // limitations
-//     for config in vec![TestConfiguration::Constraints] {
-//         let spec_untyped = ("in x\nout z\nz = update(defer(x), z)").parse::<DsrvSpecification>().expect("test DSRV specification should parse");
-//
-//             let x = vec!["0".into(), "1".into(), "2".into(), "3".into()];
-//             let input_stream = BTreeMap::from([("x".into(), x)]);
-//             let mut output_handler = Box::new(ManualOutputHandler::new(
-//                 executor.clone(),
-//                 spec_untyped.output_vars(),
-//             ));
-//             let outputs = output_handler.get_output();
-//
-//             let builder = RuntimeBuilder::new()
-//                 .executor(executor.clone())
-//                 .model(spec_untyped.clone())
-//                 .input(input_stream)
-//                 .output(output_handler);
-//
-//             let builder = create_builder_from_config(builder, config);
-//
-//             let monitor = builder.build();
-//
-//             executor.spawn(monitor.run()).detach();
-//             let outputs: Vec<(usize, Vec<Value>)> = outputs.enumerate().collect().await;
-//             assert_eq!(
-//                 outputs.len(),
-//                 4,
-//                 "Recursive update defer test failed for config {:?}",
-//                 config,
-//             );
-//             assert_eq!(
-//                 outputs,
-//                 vec![
-//                     (0, vec![0.into()]),
-//                     (1, vec![0.into()],),
-//                     (2, vec![0.into()],),
-//                     (3, vec![0.into()],),
-//                 ],
-//                 "Recursive update defer output mismatch for config {:?}",
-//                 config,
-//             );
-//         }
-// }
 
 pub fn constraint_input_stream(vars: impl IntoIterator<Item = VarName>) -> InputStream<Value> {
     let mut input_stream = BTreeMap::new();
@@ -2376,21 +2307,20 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
             .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2413,21 +2343,20 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2460,21 +2389,20 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -2511,21 +2439,20 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2558,21 +2485,20 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2607,21 +2533,20 @@ async fn test_index_past_mult_dependencies(
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2666,21 +2591,20 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
             .expect("test DSRV specification should parse");
 
         let input_stream = boolean_pair_input_stream();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2713,21 +2637,20 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
             .expect("test DSRV specification should parse");
 
         let input_stream = string_pair_input_stream();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2759,21 +2682,20 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2809,21 +2731,20 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
             "x".into(),
             vec![Value::Deferred, Value::Deferred, Value::Deferred],
         )]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2859,21 +2780,20 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
             "x".into(),
             vec![1.into(), Value::Deferred, 5.into()],
         )]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -2906,21 +2826,20 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
             .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
@@ -2966,27 +2885,26 @@ async fn test_simple_add_monitor_does_not_go_away(
         // Test that monitor continues to work even after output handler goes out of scope
         let outputs = {
             // Create output handler based on configuration
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars().clone(),
-            ));
-            let outputs = output_handler.get_output();
+            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
             // Build base monitor with common settings
             let builder = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(input_stream)
-                .output(output_handler);
+                .output_writer(output_writer);
 
             // Apply configuration-specific settings
             let builder = create_builder_from_config(builder, config);
-            let monitor = builder.build().await;
+            let monitor = builder
+                .build()
+                .await
+                .expect("general runtime builder should succeed");
 
             // Start monitor and return outputs stream
             executor.spawn(monitor.run()).detach();
             outputs
-            // output_handler goes out of scope here, but monitor should continue
+            // output_writer goes out of scope here, but monitor should continue
         };
 
         // Collect results after output handler has been dropped
@@ -3021,23 +2939,22 @@ async fn test_simple_add_monitor_large_input(
         let input_stream = trustworthiness_checker::dsrv_fixtures::simple_add_input_stream(100);
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3091,21 +3008,20 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let input_stream = integer_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3136,21 +3052,20 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let input_stream = integer_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3185,21 +3100,20 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3234,21 +3148,20 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
             .expect("test DSRV specification should parse");
 
         let input_stream = dynamic_expression_input_stream();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3285,21 +3198,20 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let input_stream = integer_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3335,21 +3247,20 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let input_stream = float_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3381,20 +3292,17 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars().clone(),
-            ));
-            let outputs = output_handler.get_output();
+            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(input_stream)
-                .output(output_handler)
+                .output_writer(output_writer)
                 .semantics(semantics)
                 .build()
-                .await;
+                .await
+                .expect("general runtime builder should succeed");
 
             executor.spawn(monitor.run()).detach();
             let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3420,20 +3328,17 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                spec_untyped.output_vars().clone(),
-            ));
-            let outputs = output_handler.get_output();
+            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
                 .model(spec_untyped.clone())
                 .input(input_stream)
-                .output(output_handler)
+                .output_writer(output_writer)
                 .semantics(semantics)
                 .build()
-                .await;
+                .await
+                .expect("general runtime builder should succeed");
 
             executor.spawn(monitor.run()).detach();
             let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3537,20 +3442,17 @@ async fn test_drop_guard_cancellation_behaviour(
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .semantics(semantics)
             .build()
-            .await;
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
 
@@ -3586,23 +3488,22 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let input_stream = map::input_stream(BTreeMap::new());
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3635,21 +3536,20 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let input_stream = integer_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3681,21 +3581,20 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
         let spec = (spec_str)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3731,21 +3630,20 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let input_stream = string_pair_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3771,21 +3669,20 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let input_stream = constraint_style_input_stream();
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3815,21 +3712,20 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let input_stream = maple_valid_input_stream(10);
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         let builder = create_builder_from_config(builder, config);
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         executor.spawn(monitor.run()).detach();
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -3878,23 +3774,22 @@ async fn test_restricted_dynamic_monitor(
         let input_stream = dynamic_expression_input_stream();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -3944,23 +3839,22 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_1();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4021,23 +3915,22 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_2();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4098,23 +3991,22 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_3();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4175,23 +4067,22 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_4();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4246,23 +4137,22 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let input_stream = dynamic_defer_composition_input_stream();
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec_untyped.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec_untyped.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4319,23 +4209,22 @@ async fn test_benchmark_regression_long_add_defer(
         let input_stream = add_defer_input_stream(SIZE);
 
         // Create output handler based on configuration
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
 
         // Apply configuration-specific settings
         let builder = create_builder_from_config(builder, config);
 
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
 
         // Run monitor and collect results
         executor.spawn(monitor.run()).detach();
@@ -4375,19 +4264,18 @@ async fn test_map_get_deferred_propagates(
             ],
         )]));
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
             .model(spec)
             .input(input_stream)
-            .output(output_handler);
+            .output_writer(output_writer);
         let builder = create_builder_from_config(builder, config);
-        let monitor = builder.build().await;
+        let monitor = builder
+            .build()
+            .await
+            .expect("general runtime builder should succeed");
         executor.spawn(monitor.run()).detach();
 
         let outputs: Vec<(usize, BTreeMap<VarName, Value>)> =
@@ -4412,12 +4300,13 @@ mod reconf_tests {
     use super::*;
     use async_unsync::bounded;
     use futures::future;
-    use std::collections::BTreeSet;
+
     use tc_testutils::streams::with_timeout;
     use tracing::info;
     use trustworthiness_checker::io::{
-        InputPipeline, InputSource, OutputHandlerBuilder, OutputHandlerSpec,
+        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
     };
+    use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
     use trustworthiness_checker::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
     use trustworthiness_checker::semantics::UntimedDsrvSemantics;
@@ -4497,23 +4386,20 @@ mod reconf_tests {
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("manual input factory should support reconfiguration")
-            .output_handler_builder(output_builder)
+            .output_pipeline_builder(output_builder)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
             .build()
-            .await;
+            .await
+            .expect("general runtime builder should succeed");
         ex.spawn(monitor.run()).detach();
 
         let x_iter1 = xs.clone().into_iter().take(in_len / 2);
@@ -4586,22 +4472,20 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(out_tx))
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("manual input factory should support reconfiguration")
-            .output_handler_builder(output_builder)
+            .output_pipeline_builder(output_builder)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
             .build()
-            .await;
+            .await
+            .expect("general runtime builder should succeed");
 
         let (run_tx, mut run_rx) = bounded::channel::<Result<(), String>>(1).into_split();
         ex.spawn(async move {
@@ -4645,23 +4529,21 @@ mod reconf_tests {
                 .expect("test DSRV specification should parse");
             let (input_source, mut tx_fans) = manual_input_source(["x"]);
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
-            let output_builder = OutputHandlerBuilder::new(OutputHandlerSpec::Manual(out_tx))
-                .executor(ex.clone())
-                .output_var_names(BTreeSet::from(["z".into()]))
-                .aux_info(vec![]);
+            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
                 .model(spec)
                 .input_pipeline(InputPipeline::new(input_source))
                 .expect("manual input source should support reconfiguration")
-                .output_handler_builder(output_builder)
+                .output_pipeline_builder(output_builder)
                 .runtime(RuntimeSpec::ReconfSemiSync)
                 .semantics(semantics)
                 .reconf_topic(RECONF_TOPIC.into())
                 .use_context_transfer(false)
                 .build()
-                .await;
+                .await
+                .expect("general runtime builder should succeed");
             ex.spawn(monitor.run()).detach();
 
             send_value_noval_others(("x", Value::Int(7)), &mut tx_fans).await;
@@ -4724,11 +4606,7 @@ mod reconf_tests {
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -4853,11 +4731,7 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -4972,11 +4846,7 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -5078,11 +4948,7 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["v".into(), "w".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -5183,11 +5049,7 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["v".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -5293,11 +5155,7 @@ mod reconf_tests {
         let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_spec = OutputHandlerSpec::Manual(out_tx);
-        let output_builder = OutputHandlerBuilder::new(output_spec)
-            .executor(ex.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .aux_info(vec![]);
+        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -5412,11 +5270,7 @@ mod reconf_tests {
             let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-            let output_spec = OutputHandlerSpec::Manual(out_tx);
-            let output_builder = OutputHandlerBuilder::new(output_spec)
-                .executor(ex.clone())
-                .output_var_names(BTreeSet::from(["y".into(), "z".into()]))
-                .aux_info(vec![]);
+            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
@@ -5534,11 +5388,7 @@ mod reconf_tests {
             let (input_factory, mut tx_fans) = manual_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-            let output_spec = OutputHandlerSpec::Manual(out_tx);
-            let output_builder = OutputHandlerBuilder::new(output_spec)
-                .executor(ex.clone())
-                .output_var_names(BTreeSet::from(["z".into()]))
-                .aux_info(vec![]);
+            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))

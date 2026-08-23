@@ -5,7 +5,7 @@ use smol::LocalExecutor;
 use crate::causal::{
     CausalDomain, CausalSet, CausalValue, RoleCausalAntichain, RoleCausalDomain, RoleCausalSet,
 };
-use crate::core::OutputHandler;
+use crate::core::OutputWriter;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::semi_sync::{SemiSyncRuntime, SemiSyncRuntimeBuilder};
@@ -25,7 +25,7 @@ pub struct CausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<DsrvSpecification>,
     input: Option<InputStream<Value>>,
-    output: Option<Box<dyn OutputHandler<Val = CausalValue<D>>>>,
+    output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
 
 impl<D: CausalDomain> CausalRuntimeBuilder<D> {
@@ -44,8 +44,8 @@ impl<D: CausalDomain> CausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn output(mut self, output: Box<dyn OutputHandler<Val = CausalValue<D>>>) -> Self {
-        self.output = Some(output);
+    pub fn output_writer(mut self, output_writer: OutputWriter<CausalValue<D>>) -> Self {
+        self.output_writer = Some(output_writer);
         self
     }
 }
@@ -56,7 +56,7 @@ impl CausalRuntimeBuilder<CausalSet> {
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
         }
     }
 
@@ -80,7 +80,7 @@ impl<D: RoleCausalDomain> CausalRuntimeBuilder<D> {
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
         }
     }
 
@@ -109,21 +109,21 @@ where
         executor,
         model,
         input,
-        output,
+        output_writer,
     } = builder;
     let executor =
         executor.ok_or_else(|| anyhow::anyhow!("causal runtime executor was not configured"))?;
     let model = model.ok_or_else(|| anyhow::anyhow!("causal runtime model was not configured"))?;
     let input = input.ok_or_else(|| anyhow::anyhow!("causal runtime input was not configured"))?;
-    let output =
-        output.ok_or_else(|| anyhow::anyhow!("causal runtime output was not configured"))?;
+    let output_writer = output_writer
+        .ok_or_else(|| anyhow::anyhow!("causal runtime output writer was not configured"))?;
     let input = annotate_input_for_spec::<D, _>(input, &model);
 
     Ok(SemiSyncRuntimeBuilder::<CausalSemiSyncConfig<D>, MS>::new()
         .executor(executor)
         .model(model)
         .input(input)
-        .output(output)
+        .output_writer(output_writer)
         .build()
         .await)
 }
@@ -133,7 +133,7 @@ pub struct CheckedCausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<CheckedDsrvSpecification>,
     input: Option<InputStream<Value>>,
-    output: Option<Box<dyn OutputHandler<Val = CausalValue<D>>>>,
+    output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
 
 impl<D: CausalDomain> CheckedCausalRuntimeBuilder<D> {
@@ -152,8 +152,8 @@ impl<D: CausalDomain> CheckedCausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn output(mut self, output: Box<dyn OutputHandler<Val = CausalValue<D>>>) -> Self {
-        self.output = Some(output);
+    pub fn output_writer(mut self, output_writer: OutputWriter<CausalValue<D>>) -> Self {
+        self.output_writer = Some(output_writer);
         self
     }
 }
@@ -164,7 +164,7 @@ impl CheckedCausalRuntimeBuilder<CausalSet> {
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
         }
     }
 
@@ -188,7 +188,7 @@ impl<D: RoleCausalDomain> CheckedCausalRuntimeBuilder<D> {
             executor: None,
             model: None,
             input: None,
-            output: None,
+            output_writer: None,
         }
     }
 
@@ -223,7 +223,7 @@ where
         executor,
         model,
         input,
-        output,
+        output_writer,
     } = builder;
     let executor = executor
         .ok_or_else(|| anyhow::anyhow!("checked causal runtime executor was not configured"))?;
@@ -231,8 +231,9 @@ where
         model.ok_or_else(|| anyhow::anyhow!("checked causal runtime model was not configured"))?;
     let input =
         input.ok_or_else(|| anyhow::anyhow!("checked causal runtime input was not configured"))?;
-    let output = output
-        .ok_or_else(|| anyhow::anyhow!("checked causal runtime output was not configured"))?;
+    let output_writer = output_writer.ok_or_else(|| {
+        anyhow::anyhow!("checked causal runtime output writer was not configured")
+    })?;
     let input = annotate_input_for_spec::<D, _>(input, &model);
 
     Ok(
@@ -240,7 +241,7 @@ where
             .executor(executor)
             .model(model)
             .input(input)
-            .output(output)
+            .output_writer(output_writer)
             .build()
             .await,
     )

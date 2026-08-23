@@ -1,11 +1,11 @@
 use futures::StreamExt;
 
-use crate::core::{InputBatch, VarName};
+use crate::core::InputBatch;
 use crate::io::aggregation::{
     InputTimer, RealTimeInputTimer, WindowEvent, WindowEventStream, drive_window,
 };
 use crate::io::builders::InputPipeline;
-use crate::io::config::{InputStage, MonitorConfig, SourceId};
+use crate::io::config::{InputStage, MonitorConfig, ResolvedInput, SourceId};
 
 /// A terminal control item is private to the reconfigurable orchestration
 /// boundary. Ordinary input streams contain only `InputBatch` values.
@@ -42,7 +42,7 @@ impl ReconfigurationControl {
 
 /// Input generation adapter used only by the reconfigurable semi-sync runtime.
 /// It owns the reusable pipeline and validated control binding, but opens no
-/// source resources until [`Self::open`] is called.
+/// source handles until [`Self::open_resolved`] is called.
 #[derive(Clone, Debug)]
 pub(crate) struct ReconfigurableInput<V = crate::Value> {
     pipeline: InputPipeline<V>,
@@ -74,15 +74,13 @@ impl<V: Clone> ReconfigurableInput<V> {
         &self.pipeline
     }
 
-    pub async fn open(
+    pub async fn open_resolved(
         &self,
-        variables: std::collections::BTreeSet<VarName>,
-        monitor_config: Option<&MonitorConfig>,
+        resolved: ResolvedInput,
     ) -> anyhow::Result<ReconfigurableInputStream<V>>
     where
         V: crate::core::FileInputValue + crate::core::RosStreamValue,
     {
-        let resolved = self.pipeline.resolve(&variables, monitor_config)?;
         let raw = self
             .pipeline
             .open_reconfigurable(resolved, &self.control)

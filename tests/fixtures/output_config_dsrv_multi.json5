@@ -1,0 +1,8 @@
+{
+  default: "primary",
+  destinations: {
+    primary: { kind: "null" },
+    result_partition: { kind: "stdout", partition: ["result"] },
+    mirror: { kind: "null", mirror: true }
+  }
+}

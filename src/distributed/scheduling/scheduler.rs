@@ -184,6 +184,13 @@ impl<M: Specification + Localisable> Scheduler<M> {
 
         // Monitor + Analyse phase in let
         loop {
+            // The scheduler's sources can be permanently ready (for example a
+            // static graph repeated forever), so an iteration can complete
+            // without ever returning `Poll::Pending`. Yield once per iteration
+            // so the scheduler cannot monopolise the local executor and starve
+            // output sinks, input drivers, or the task awaiting the runtime.
+            smol::future::yield_now().await;
+
             let mape_iteration_started = Instant::now();
             let monitor_analyse_started = Instant::now();
             let next_graph = async {

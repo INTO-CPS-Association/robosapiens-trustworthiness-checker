@@ -16,12 +16,11 @@ mod integration_tests {
     };
     use tracing::info;
     use trustworthiness_checker::async_test;
-    use trustworthiness_checker::core::{RuntimeSpec, Semantics};
+    use trustworthiness_checker::core::{RuntimeSpec, Semantics, Specification};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
     use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
-    use trustworthiness_checker::io::testing::ManualOutputHandler;
     use trustworthiness_checker::lang::mstlo::MstloSpecification;
-    use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
+
     use trustworthiness_checker::runtime::mstlo::{
         MstloRuntimeBuilder, MstloTimedValue, MstloValue,
     };
@@ -30,17 +29,37 @@ mod integration_tests {
     use std::{collections::BTreeMap, rc::Rc};
     use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
 
-    use trustworthiness_checker::dsrv_fixtures::{TestRuntime, integer_pair_input_stream};
+    use trustworthiness_checker::dsrv_fixtures::integer_pair_input_stream;
     use trustworthiness_checker::{
         DsrvSpecification, Value, VarName,
         core::Runtime,
         dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
-        io::mqtt::{self, MqttMessage, MqttOutputHandler},
-        runtime::RuntimeBuilder,
+        io::mqtt::{self, MqttMessage},
+        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
+        runtime::{RuntimeBuilder, builder::GeneralRuntimeBuilder},
     };
 
-    const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
     const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
+
+    fn mqtt_output_builder<V>(
+        port: u16,
+        routes: BTreeMap<VarName, String>,
+    ) -> OutputBackendBuilder<V> {
+        let routes = routes
+            .into_iter()
+            .map(|(variable, route)| {
+                (
+                    variable,
+                    Route::new(route.into_boxed_str(), None)
+                        .expect("test MQTT output route should be valid"),
+                )
+            })
+            .collect();
+        OutputBackendBuilder::from_destination(
+            OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
+                .with_route_catalog(routes),
+        )
+    }
 
     async fn start_mqtt_get_port() -> (Box<dyn std::any::Any>, u16) {
         let mqtt_server = start_mqtt().await;
@@ -127,8 +146,7 @@ mod integration_tests {
             .expect("Failed to get host port for MQTT server");
 
         let input_stream = integer_pair_input_stream();
-        let mqtt_host = "localhost";
-        let mqtt_topic = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
+        let mqtt_topic = BTreeMap::from_iter(vec![(VarName::new("z"), Z_TOPIC.to_owned())]);
 
         let outputs = with_timeout(
             get_mqtt_outputs(Z_TOPIC.to_string(), "z_subscriber".to_string(), mqtt_port),
@@ -138,20 +156,16 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let mut output_handler = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["z".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            mqtt_topic,
-            vec![],
-        )
-        .unwrap();
-        output_handler.connect().await.unwrap();
-        let output_handler = Box::new(output_handler);
-        let async_monitor: TestRuntime =
-            TestRuntime::new(executor.clone(), spec.clone(), input_stream, output_handler).await;
+        let async_monitor = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(input_stream)
+            .output_pipeline_builder(mqtt_output_builder(mqtt_port, mqtt_topic))
+            .runtime(RuntimeSpec::Async)
+            .semantics(Semantics::Untimed)
+            .build()
+            .await
+            .expect("MQTT async runtime builder should succeed");
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -172,8 +186,7 @@ mod integration_tests {
             .expect("Failed to get host port for MQTT server");
 
         let input_stream = float_pair_input_stream();
-        let mqtt_host = "localhost";
-        let mqtt_topics = BTreeMap::from_iter(vec![("z".into(), Z_TOPIC.into())]);
+        let mqtt_topics = BTreeMap::from_iter(vec![(VarName::new("z"), Z_TOPIC.to_owned())]);
 
         let outputs = with_timeout(
             get_mqtt_outputs(
@@ -187,20 +200,16 @@ mod integration_tests {
         .await
         .unwrap();
 
-        let mut output_handler = MqttOutputHandler::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec!["z".into()],
-            mqtt_host,
-            Some(mqtt_port),
-            mqtt_topics,
-            vec![],
-        )
-        .unwrap();
-        output_handler.connect().await.unwrap();
-        let output_handler = Box::new(output_handler);
-        let async_monitor: TestRuntime =
-            TestRuntime::new(executor.clone(), spec.clone(), input_stream, output_handler).await;
+        let async_monitor = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec.clone())
+            .input(input_stream)
+            .output_pipeline_builder(mqtt_output_builder(mqtt_port, mqtt_topics))
+            .runtime(RuntimeSpec::Async)
+            .semantics(Semantics::Untimed)
+            .build()
+            .await
+            .expect("MQTT async runtime builder should succeed");
         executor.spawn(async_monitor.run()).detach();
         // Test the outputs
         let outputs = with_timeout(outputs.take(2).collect::<Vec<_>>(), 10, "outputs.take")
@@ -379,17 +388,6 @@ mod integration_tests {
         )
         .await?;
 
-        let mut output_handler = MqttOutputHandler::<MstloTimedValue>::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec![VarName::new("robustness")],
-            "localhost",
-            Some(mqtt_port),
-            BTreeMap::from([(VarName::new("robustness"), MSTLO_OUT_TOPIC.to_string())]),
-            vec![],
-        )?;
-        output_handler.connect().await?;
-
         let outputs = with_timeout(
             get_mqtt_json_outputs::<MstloTimedValue>(
                 MSTLO_OUT_TOPIC.to_string(),
@@ -405,13 +403,21 @@ mod integration_tests {
             VarName::new("robustness"),
             mstlo::FormulaDefinition::GreaterThan("x", 5.0),
         );
+        let output_writer = mqtt_output_builder(
+            mqtt_port,
+            BTreeMap::from([(VarName::new("robustness"), MSTLO_OUT_TOPIC.to_owned())]),
+        )
+        .build(formula.output_vars(), std::iter::empty::<VarName>(), None)
+        .await?;
         let (input_stream, input_controller) =
             trustworthiness_checker::io::controlled(input_stream);
-        let builder = MstloRuntimeBuilder::<MstloTimedValue>::new()
+        let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
-            .input(input_stream);
-        let runtime = builder.output(Box::new(output_handler)).build().await;
+            .input(input_stream)
+            .output_writer(output_writer)
+            .build()
+            .await;
         let runtime_task = executor.spawn(runtime.run());
 
         let values = vec![mstlo_mqtt_input(0, 7.0), mstlo_mqtt_input(10, 4.0)];
@@ -478,20 +484,6 @@ mod integration_tests {
         )
         .await?;
 
-        let mut output_handler = MqttOutputHandler::<MstloTimedValue>::new(
-            executor.clone(),
-            MQTT_FACTORY,
-            vec![VarName::new("gt"), VarName::new("lt")],
-            "localhost",
-            Some(mqtt_port),
-            BTreeMap::from([
-                (VarName::new("gt"), MSTLO_GT_TOPIC.to_string()),
-                (VarName::new("lt"), MSTLO_LT_TOPIC.to_string()),
-            ]),
-            vec![],
-        )?;
-        output_handler.connect().await?;
-
         let mut gt_outputs = with_timeout(
             get_mqtt_json_outputs::<MstloTimedValue>(
                 MSTLO_GT_TOPIC.to_string(),
@@ -523,11 +515,20 @@ mod integration_tests {
                 mstlo::FormulaDefinition::LessThan("y", 3.0),
             ),
         ]));
+        let output_writer = mqtt_output_builder(
+            mqtt_port,
+            BTreeMap::from([
+                (VarName::new("gt"), MSTLO_GT_TOPIC.to_owned()),
+                (VarName::new("lt"), MSTLO_LT_TOPIC.to_owned()),
+            ]),
+        )
+        .build(formula.output_vars(), std::iter::empty::<VarName>(), None)
+        .await?;
         let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
             .input(input_stream)
-            .output(Box::new(output_handler))
+            .output_writer(output_writer)
             .build()
             .await;
         let runtime_task = executor.spawn(runtime.run());
@@ -601,21 +602,25 @@ mod integration_tests {
         )
         .await?;
 
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            spec.output_vars().clone(),
+        let (output_sender, output_receiver) =
+            async_unsync::bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
+        let outputs = Box::pin(futures::stream::unfold(
+            output_receiver,
+            |mut receiver| async move { receiver.recv().await.map(|row| (row, receiver)) },
         ));
-        let outputs = output_handler.get_output();
 
         let monitor: Box<dyn Runtime> = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec)
+            .model(spec.clone())
             .input(input_stream)
-            .output(output_handler)
+            .output_pipeline_builder(OutputBackendBuilder::new(OutputBackendConfig::manual(
+                output_sender,
+            )))
             .runtime(RuntimeSpec::Async)
             .semantics(semantics)
             .build()
-            .await;
+            .await
+            .expect("MQTT JSON object runtime builder should succeed");
         executor.spawn(monitor.run()).detach();
 
         let payloads = vec![
@@ -647,7 +652,7 @@ mod integration_tests {
         payload_tick.send(()).await?;
         payload_tick.send(()).await?;
         let outputs = with_timeout(
-            outputs.enumerate().take(2).collect::<Vec<_>>(),
+            outputs.enumerate().take(4).collect::<Vec<_>>(),
             5,
             "mqtt json object input outputs.collect()",
         )
@@ -657,6 +662,42 @@ mod integration_tests {
         publisher_task.await?;
 
         Ok(outputs)
+    }
+
+    fn assert_async_json_object_outputs(outputs: &[(usize, BTreeMap<VarName, Value>)]) {
+        assert_eq!(outputs.len(), 4);
+        assert!(
+            outputs.iter().all(|(_, tick)| tick.len() == 1),
+            "async outputs must remain independent singleton ticks"
+        );
+
+        let selected = outputs
+            .iter()
+            .filter_map(|(_, tick)| tick.get(&VarName::new("selected")))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(selected, vec![Value::Int(10), Value::Int(30)]);
+
+        let echoed = outputs
+            .iter()
+            .filter_map(|(_, tick)| tick.get(&VarName::new("echoed")))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            echoed,
+            vec![
+                Value::Map(BTreeMap::from([
+                    ("extra".into(), Value::Int(99)),
+                    ("x".into(), Value::Int(10)),
+                    ("y".into(), Value::Int(20)),
+                ])),
+                Value::Map(BTreeMap::from([
+                    ("extra".into(), Value::Int(100)),
+                    ("x".into(), Value::Int(30)),
+                    ("y".into(), Value::Int(40)),
+                ])),
+            ]
+        );
     }
 
     #[apply(async_test)]
@@ -679,39 +720,7 @@ echoed = payload
         )
         .await?;
 
-        assert_eq!(
-            outputs,
-            vec![
-                (
-                    0,
-                    BTreeMap::from([
-                        (
-                            "echoed".into(),
-                            Value::Map(BTreeMap::from([
-                                ("extra".into(), Value::Int(99)),
-                                ("x".into(), Value::Int(10)),
-                                ("y".into(), Value::Int(20)),
-                            ])),
-                        ),
-                        ("selected".into(), Value::Int(10)),
-                    ]),
-                ),
-                (
-                    1,
-                    BTreeMap::from([
-                        (
-                            "echoed".into(),
-                            Value::Map(BTreeMap::from([
-                                ("extra".into(), Value::Int(100)),
-                                ("x".into(), Value::Int(30)),
-                                ("y".into(), Value::Int(40)),
-                            ])),
-                        ),
-                        ("selected".into(), Value::Int(30)),
-                    ]),
-                ),
-            ]
-        );
+        assert_async_json_object_outputs(&outputs);
         Ok(())
     }
 
@@ -735,39 +744,7 @@ echoed = payload
         )
         .await?;
 
-        assert_eq!(
-            outputs,
-            vec![
-                (
-                    0,
-                    BTreeMap::from([
-                        (
-                            "echoed".into(),
-                            Value::Map(BTreeMap::from([
-                                ("extra".into(), Value::Int(99)),
-                                ("x".into(), Value::Int(10)),
-                                ("y".into(), Value::Int(20)),
-                            ])),
-                        ),
-                        ("selected".into(), Value::Int(10)),
-                    ]),
-                ),
-                (
-                    1,
-                    BTreeMap::from([
-                        (
-                            "echoed".into(),
-                            Value::Map(BTreeMap::from([
-                                ("extra".into(), Value::Int(100)),
-                                ("x".into(), Value::Int(30)),
-                                ("y".into(), Value::Int(40)),
-                            ])),
-                        ),
-                        ("selected".into(), Value::Int(30)),
-                    ]),
-                ),
-            ]
-        );
+        assert_async_json_object_outputs(&outputs);
         Ok(())
     }
 
@@ -822,7 +799,7 @@ mod reconf_tests {
     use macro_rules_attribute::apply;
     use serde_json::json;
     use smol::LocalExecutor;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     use std::rc::Rc;
     use tc_testutils::mqtt::{
         dummy_stream_mqtt_payload_publisher, dummy_stream_mqtt_publisher, get_mqtt_outputs,
@@ -832,11 +809,13 @@ mod reconf_tests {
     use tracing::info;
     use trustworthiness_checker::DsrvSpecification;
     use trustworthiness_checker::async_test;
-    use trustworthiness_checker::cli::args::OutputMode;
+
     use trustworthiness_checker::core::Runtime;
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::dsrv_fixtures::*;
-    use trustworthiness_checker::io::{InputPipeline, InputSource, OutputHandlerBuilder, Route};
+    use trustworthiness_checker::io::{
+        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, Route,
+    };
 
     use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
@@ -854,8 +833,7 @@ mod reconf_tests {
         Route::new(topic.to_owned().into_boxed_str(), None).expect("test route is non-empty")
     }
 
-    // TODO: Thomas suggested implement a type of OutputHandler for these tests that uses mpsc channels because
-    // this is possible while still being clonable
+    // TODO: Add a clonable in-memory output backend for tests that need mpsc channels.
 
     const X_TOPIC: &str = "x";
     const Y_TOPIC: &str = "y";
@@ -944,20 +922,8 @@ mod reconf_tests {
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let output_mode = OutputMode {
-            output_stdout: false,
-            output_mqtt_file: None,
-            mqtt_output: true,
-            output_redis_file: None,
-            redis_output: false,
-            output_ros_file: None,
-        };
-
-        let output_builder = OutputHandlerBuilder::new(output_mode)
-            .executor(executor.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .mqtt_port(Some(mqtt_port))
-            .aux_info(vec![]);
+        let output_builder =
+            OutputBackendBuilder::new(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(parse_str)
@@ -1082,7 +1048,7 @@ mod reconf_tests {
 
         // TODO: Should not be needed in the future when reconf is more stable
         //
-        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // Wait a while. Needed because the MQTT output path reconnects to the server,
         // but we have no way of knowing when this is done since runtime is being spawned...
         // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
         smol::Timer::after(std::time::Duration::from_millis(2000)).await;
@@ -1177,20 +1143,8 @@ mod reconf_tests {
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let output_mode = OutputMode {
-            output_stdout: false,
-            output_mqtt_file: None,
-            mqtt_output: true,
-            output_redis_file: None,
-            redis_output: false,
-            output_ros_file: None,
-        };
-
-        let output_builder = OutputHandlerBuilder::new(output_mode)
-            .executor(executor.clone())
-            .output_var_names(BTreeSet::from(["z".into()]))
-            .mqtt_port(Some(mqtt_port))
-            .aux_info(vec![]);
+        let output_builder =
+            OutputBackendBuilder::new(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(parse_str)
@@ -1284,7 +1238,7 @@ mod reconf_tests {
 
         // TODO: Should not be needed in the future when reconf is more stable
         //
-        // Wait a while. Needed because the OutputHandler needs to reconnect to the MQTT server,
+        // Wait a while. Needed because the MQTT output path reconnects to the server,
         // but we have no way of knowing when this is done since runtime is being spawned...
         // Effects visible mainly when running single-threaded either with `-j 1 -- --test-threads 1` or on test runner.
         smol::Timer::after(std::time::Duration::from_millis(2000)).await;

@@ -12,9 +12,9 @@ use trustworthiness_checker::benches_common::{
 };
 use trustworthiness_checker::core::{InputBatch, InputStream, InputUpdate, input};
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::io::testing::NullOutputHandler;
 use trustworthiness_checker::io::{
     InputPipeline, InputReduction, InputSource, InputSources, InputStage, InputWindow,
+    OutputBackendBuilder, OutputBackendConfig,
 };
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, Runtime, Value, VarName};
@@ -172,16 +172,20 @@ fn prepare_dataflow(rows: usize) -> trustworthiness_checker::runtime::dataflow::
             (0..rows).map(|row| Value::Int((2 * row) as i64)).collect(),
         ),
     ]));
-    let output = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        BTreeSet::from([VarName::new("sum")]),
-    ));
+    let output = smol::block_on(
+        OutputBackendBuilder::new(OutputBackendConfig::null()).build(
+            spec.output_vars(),
+            spec.aux_vars(),
+            None,
+        ),
+    )
+    .unwrap();
     smol::block_on(
         trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
             .input(input)
-            .output(output)
+            .output_writer(output)
             .build(),
     )
 }

@@ -28,13 +28,23 @@ A control message is a generation barrier:
 3. The private reconfiguration item is delivered and the window driver
    terminates.
 4. No later data from the old source generation is polled or emitted.
-5. The old input and runtime tasks are dropped before the replacement pipeline
-   is opened.
+5. The replacement model is parsed/type-checked and both replacement input and
+   output plans are resolved without opening resources.
+6. Context is transferred explicitly, then the current generation is cancelled.
+7. The old output future flushes coalescing and buffers, closes every destination,
+   and joins every stage worker.
+8. Old input resources are dropped before the replacement builder is started.
+9. The replacement builder opens input and output during `build`; input opening
+   establishes the subscriptions needed before the new generation can receive
+   data.
 
-The replacement specification is parsed and validated, its generation-local
-input bindings are resolved against the reusable, owned local `InputSources`
-set, output routes are updated, and the next generation starts. A replacement is rebuilt
-even when its input and output sets have the same shape.
+Both plans are resolved while the old generation is still active, before any
+replacement resource opens. The old generation closes and releases its input
+resources before replacement `build` starts. The replacement specification is
+rebuilt even when its input/output sets have the same shape. Route, codec,
+destination, and mirroring changes therefore form a new generation, while local
+backend parameters and stage configuration remain owned by the process and
+cannot be changed over the wire.
 
 ## Reconfiguration message format
 
@@ -107,7 +117,35 @@ routes for the new generation.
 
 For a manually authored message, put route and codec information inside the
 compact `inputs`, `sources`, or `outputs` objects; the owned local source set
-remains responsible for transport configuration.
+remains responsible for transport configuration. Flat output bindings can target
+a named local destination. A flat binding has one destination owner and does not
+implicitly mirror; repeat a variable in grouped `destinations` to request
+explicit mirroring:
+
+```json5
+{
+  spec: "in x: Int\nout z: Int\nz = x",
+  destination: "telemetry",
+  outputs: { z: "/robot/output/z" }
+}
+```
+
+Grouped output bindings can explicitly partition or mirror model outputs. A
+variable present in more than one group is intentional mirroring:
+
+```json5
+{
+  spec: "in x: Int\nout z: Int\nz = x",
+  destinations: {
+    telemetry: { z: "/robot/output/z" },
+    archive: { z: "monitor:z" }
+  }
+}
+```
+
+The destination IDs must already exist in the local `OutputConfigFile`. A wire
+request cannot create a broker endpoint, change its host/port or credentials, or
+change shared/destination stage lists.
 
 ## Control route and source configuration
 
@@ -202,9 +240,12 @@ left, allowing compatible temporal context to survive changes to the
 specification. Use `--no-context-transfer` when the replacement must start
 without prior history.
 
-Context transfer does not keep the old input source alive. The old generation
-is dropped before the replacement sources are opened, so old-generation data
-cannot feed the new model.
+Context transfer does not keep the old input source alive. The old generation's
+output barriers complete before old input resources are dropped and replacement
+`build` opens its resources, so old-generation data cannot feed the new model.
+Input opening during replacement `build` establishes subscriptions before the
+new generation receives data. A pending logical output tick is never represented
+as a reconfiguration control variant; control remains outside `OutputBatch`.
 
 ## Unsupported file reconfiguration
 

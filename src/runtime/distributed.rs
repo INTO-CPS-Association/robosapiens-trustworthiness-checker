@@ -11,7 +11,7 @@ use unsync::spsc;
 
 use crate::{
     DsrvSpecification, InputStream, OutputStream, Value, VarName,
-    core::{OutputHandler, Runtime, input},
+    core::{OutputWriter, Runtime, input},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
         scheduling::{
@@ -48,6 +48,7 @@ use crate::{
         },
     },
     stream_utils::channel_to_output_stream,
+    utils::cancellation_token::CancellationToken,
 };
 
 #[cfg(feature = "mqtt")]
@@ -408,12 +409,20 @@ struct DirectSchedulerInputRuntime {
     constraint_input_index: ConstraintInputIndex,
     constraint_sender: spsc::Sender<ConstraintInputBatch>,
     planning_context: Option<PlanningContext>,
+    cancellation_token: CancellationToken,
 }
 
 impl DirectSchedulerInputRuntime {
     async fn run(mut self) -> anyhow::Result<()> {
-        while let Some(tick) = self.input_ticks.next().await {
-            let tick = tick?;
+        let cancellation_token = self.cancellation_token.clone();
+        loop {
+            let tick = select! {
+                tick = self.input_ticks.next().fuse() => match tick {
+                    Some(tick) => tick?,
+                    None => break,
+                },
+                _ = cancellation_token.cancelled().fuse() => break,
+            };
             let mut compact_batch = Vec::new();
             let mut planning_batch = Vec::new();
             for crate::InputUpdate {
@@ -435,12 +444,25 @@ impl DirectSchedulerInputRuntime {
             }
 
             if !compact_batch.is_empty() {
-                self.constraint_sender
-                    .send(compact_batch)
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("failed to send scheduler constraint input batch")
-                    })?;
+                // Scheduler shutdown can close the receiver just before or just after it requests
+                // worker cancellation. Prefer cancellation, and classify a closed send observed
+                // after cancellation as normal shutdown rather than a worker error.
+                futures::select_biased! {
+                    _ = cancellation_token.cancelled().fuse() => return Ok(()),
+                    result = self.constraint_sender.send(compact_batch).fuse() => {
+                        match result {
+                            Ok(()) => {}
+                            Err(_) => {
+                                if cancellation_token.is_cancelled().await {
+                                    return Ok(());
+                                }
+                                return Err(anyhow::anyhow!(
+                                    "failed to send scheduler constraint input batch"
+                                ));
+                            }
+                        }
+                    },
+                }
             }
         }
         Ok(())
@@ -522,13 +544,13 @@ where
         self
     }
 
-    fn output(mut self, output: Box<dyn OutputHandler<Val = AC::Val>>) -> Self {
-        debug!("Setting output handler");
-        self.async_monitor_builder = self.async_monitor_builder.output(output);
+    fn output_writer(mut self, writer: OutputWriter<AC::Val>) -> Self {
+        debug!("Setting output writer");
+        self.async_monitor_builder = self.async_monitor_builder.output_writer(writer);
         self
     }
 
-    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
+    fn build(mut self) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
             let dist_graph_mode = self
                 .dist_graph_mode
@@ -1179,6 +1201,24 @@ where
                 dist_constraints.is_empty(),
                 false,
             ))));
+            // Optimized distributed constraint modes are scheduler/input-driver only. They
+            // intentionally do not construct a local monitor, so an output writer supplied to
+            // this builder cannot emit anything. Close it deliberately instead of silently
+            // dropping an already-open writer. GeneralRuntimeBuilder avoids opening a configured
+            // output pipeline before reaching this branch.
+            let scheduler_only_output_writer = if !dist_constraints.is_empty() {
+                self.async_monitor_builder.output_writer.take()
+            } else {
+                None
+            };
+            if let Some(mut writer) = scheduler_only_output_writer {
+                if let Err(error) = writer.close().await {
+                    debug!(
+                        %error,
+                        "scheduler-only distributed runtime failed to close its unused output writer"
+                    );
+                }
+            }
             let placement_labelling_stream = scheduler
                 .borrow_mut()
                 .as_mut()
@@ -1209,6 +1249,7 @@ where
                     .unwrap()
                     .provide_dist_constraints_streams(vec![stream]);
 
+                let cancellation_token = CancellationToken::new();
                 return DistributedRuntime {
                     async_monitor: None,
                     direct_input_runtime: Some(DirectSchedulerInputRuntime {
@@ -1216,8 +1257,10 @@ where
                         constraint_input_index: constraint_input_index.clone(),
                         constraint_sender,
                         planning_context,
+                        cancellation_token: cancellation_token.clone(),
                     }),
                     scheduler: scheduler.take().unwrap(),
+                    worker_cancellation: cancellation_token,
                 };
             }
 
@@ -1227,11 +1270,16 @@ where
                 spec.input_vars().iter().cloned().collect::<Vec<_>>();
             let planning_context_for_callback = planning_context.clone();
             let executor_for_planning_context = executor.clone();
+            let worker_cancellation = Rc::new(RefCell::new(None));
+            let worker_cancellation_for_callback = worker_cancellation.clone();
             let context_builder = self
                 .context_builder
                 .unwrap_or(DistributedContextBuilder::new().graph_stream(dist_graph_stream))
                 .node_names(locations.clone())
                 .add_callback(Box::new(move |ctx| {
+                    worker_cancellation_for_callback
+                        .borrow_mut()
+                        .replace(ctx.cancellation_token());
                     if let Some(planning_context) = planning_context_for_callback {
                         let streams = input_vars_for_planning_context
                             .iter()
@@ -1280,11 +1328,16 @@ where
                 .model(monitor_spec);
 
             let async_monitor = async_builder.build().await;
+            let worker_cancellation = worker_cancellation
+                .borrow_mut()
+                .take()
+                .expect("distributed async runtime context did not expose cancellation");
 
             DistributedRuntime {
                 async_monitor: Some(async_monitor),
                 direct_input_runtime: None,
                 scheduler: scheduler.take().unwrap(),
+                worker_cancellation,
             }
         })
     }
@@ -1310,11 +1363,16 @@ where
 {
     pub(crate) async_monitor: Option<AsyncRuntime<AC, S>>,
     direct_input_runtime: Option<DirectSchedulerInputRuntime>,
+    worker_cancellation: CancellationToken,
     // TODO: should we be responsible for building the stream of graphs
     pub(crate) scheduler: Scheduler<AC::Spec>,
 }
 
-async fn run_with_stay_alive_scheduler<S, W>(scheduler: S, worker: W) -> anyhow::Result<()>
+async fn run_with_stay_alive_scheduler<S, W>(
+    scheduler: S,
+    worker: W,
+    worker_cancellation: CancellationToken,
+) -> anyhow::Result<()>
 where
     S: Future<Output = anyhow::Result<()>>,
     W: Future<Output = anyhow::Result<()>>,
@@ -1323,13 +1381,43 @@ where
     let worker = worker.fuse();
     pin_mut!(scheduler, worker);
 
-    select! {
-        result = scheduler => result,
-        result = worker => {
-            result?;
-            // A clean worker shutdown must not close distributed output topics.
-            // The scheduler owns that stay-alive policy and normally remains pending.
-            scheduler.await
+    futures::select_biased! {
+        scheduler_result = scheduler => {
+            // The scheduler is the stay-alive owner. Request cooperative cancellation from the
+            // worker, then await its normal shutdown so output-owned resources are finalized.
+            worker_cancellation.cancel();
+            let worker_result = worker.await;
+            combine_runtime_results(scheduler_result, worker_result)
+        }
+        worker_result = worker => match worker_result {
+            Ok(()) => {
+                // A clean worker shutdown must not close distributed output topics.
+                // The scheduler owns that stay-alive policy and normally remains pending.
+                scheduler.await
+            }
+            Err(worker_error) => {
+                // Preserve a scheduler error when it completed at the same time, but do not
+                // await a scheduler that intentionally owns the stay-alive lifetime.
+                match scheduler.now_or_never() {
+                    Some(scheduler_result) => {
+                        combine_runtime_results(scheduler_result, Err(worker_error))
+                    }
+                    None => Err(worker_error),
+                }
+            }
+        }
+    }
+}
+
+fn combine_runtime_results(
+    primary: anyhow::Result<()>,
+    additional: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    match (primary, additional) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(primary), Err(additional)) => {
+            Err(anyhow::anyhow!("{primary}; additionally: {additional}"))
         }
     }
 }
@@ -1346,13 +1434,28 @@ where
     }
 
     async fn run(self: Self) -> anyhow::Result<()> {
-        match (self.async_monitor, self.direct_input_runtime) {
+        let DistributedRuntime {
+            async_monitor,
+            direct_input_runtime,
+            worker_cancellation,
+            scheduler,
+        } = self;
+        match (async_monitor, direct_input_runtime) {
             (Some(async_monitor), None) => {
-                run_with_stay_alive_scheduler(self.scheduler.run(), async_monitor.run()).await
+                run_with_stay_alive_scheduler(
+                    scheduler.run(),
+                    async_monitor.run(),
+                    worker_cancellation,
+                )
+                .await
             }
             (None, Some(direct_input_runtime)) => {
-                run_with_stay_alive_scheduler(self.scheduler.run(), direct_input_runtime.run())
-                    .await
+                run_with_stay_alive_scheduler(
+                    scheduler.run(),
+                    direct_input_runtime.run(),
+                    worker_cancellation,
+                )
+                .await
             }
             _ => panic!("Distributed runtime must have exactly one input driver"),
         }
@@ -1361,7 +1464,20 @@ where
 
 #[cfg(test)]
 mod input_tests {
+    use std::cell::Cell;
+
     use super::*;
+
+    async fn cooperative_worker(
+        cancellation_token: CancellationToken,
+        cancellation_observed: Rc<Cell<bool>>,
+        cleanups: Rc<Cell<usize>>,
+    ) -> anyhow::Result<()> {
+        cancellation_token.cancelled().await;
+        cancellation_observed.set(true);
+        cleanups.set(cleanups.get() + 1);
+        Ok(())
+    }
 
     #[test]
     fn distributed_task_orchestration_propagates_worker_errors() {
@@ -1369,7 +1485,7 @@ mod input_tests {
             let scheduler = futures::future::pending::<anyhow::Result<()>>();
             let worker = futures::future::ready(Err(anyhow::anyhow!("input failed")));
 
-            let error = run_with_stay_alive_scheduler(scheduler, worker)
+            let error = run_with_stay_alive_scheduler(scheduler, worker, CancellationToken::new())
                 .await
                 .unwrap_err();
             assert_eq!(error.to_string(), "input failed");
@@ -1381,9 +1497,78 @@ mod input_tests {
         let result = run_with_stay_alive_scheduler(
             futures::future::pending::<anyhow::Result<()>>(),
             futures::future::ready(Ok(())),
+            CancellationToken::new(),
         )
         .now_or_never();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn distributed_task_orchestration_preserves_simultaneous_scheduler_and_worker_errors() {
+        let result = smol::block_on(run_with_stay_alive_scheduler(
+            futures::future::ready(Err(anyhow::anyhow!("scheduler failed"))),
+            futures::future::ready(Err(anyhow::anyhow!("worker failed"))),
+            CancellationToken::new(),
+        ));
+
+        let error = result.expect_err("simultaneous failures should be returned");
+        let message = error.to_string();
+        assert!(message.contains("scheduler failed"));
+        assert!(message.contains("worker failed"));
+    }
+
+    #[test]
+    fn scheduler_completion_requests_cancellation_and_awaits_worker_cleanup() {
+        let cancellation_token = CancellationToken::new();
+        let cancellation_observed = Rc::new(Cell::new(false));
+        let cleanups = Rc::new(Cell::new(0));
+        let result = smol::block_on(run_with_stay_alive_scheduler(
+            futures::future::ready(Ok(())),
+            cooperative_worker(
+                cancellation_token.clone(),
+                cancellation_observed.clone(),
+                cleanups.clone(),
+            ),
+            cancellation_token.clone(),
+        ));
+
+        assert!(result.is_ok());
+        assert!(smol::block_on(cancellation_token.is_cancelled()));
+        assert!(cancellation_observed.get());
+        assert_eq!(cleanups.get(), 1);
+    }
+
+    #[test]
+    fn scheduler_error_cancels_worker_and_preserves_scheduler_error() {
+        let cancellation_token = CancellationToken::new();
+        let cancellation_observed = Rc::new(Cell::new(false));
+        let cleanups = Rc::new(Cell::new(0));
+        let result = smol::block_on(run_with_stay_alive_scheduler(
+            futures::future::ready(Err(anyhow::anyhow!("scheduler failed"))),
+            cooperative_worker(
+                cancellation_token.clone(),
+                cancellation_observed.clone(),
+                cleanups.clone(),
+            ),
+            cancellation_token,
+        ));
+
+        let error = result.expect_err("scheduler failure should be returned");
+        assert_eq!(error.to_string(), "scheduler failed");
+        assert!(cancellation_observed.get());
+        assert_eq!(cleanups.get(), 1);
+    }
+
+    #[test]
+    fn scheduler_and_worker_errors_are_combined_when_both_complete() {
+        let result = combine_runtime_results(
+            Err(anyhow::anyhow!("scheduler failed")),
+            Err(anyhow::anyhow!("worker cleanup failed")),
+        )
+        .expect_err("both errors should be retained");
+
+        assert!(result.to_string().contains("scheduler failed"));
+        assert!(result.to_string().contains("worker cleanup failed"));
     }
 
     #[test]
@@ -1431,10 +1616,39 @@ mod input_tests {
                 constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
                 constraint_sender,
                 planning_context: None,
+                cancellation_token: CancellationToken::new(),
             };
 
             let error = runtime.run().await.unwrap_err();
             assert_eq!(error.to_string(), "input failed");
+        });
+    }
+
+    #[test]
+    fn direct_scheduler_input_treats_closed_send_after_cancellation_as_clean_shutdown() {
+        smol::block_on(async {
+            let cancellation_token = CancellationToken::new();
+            let cancellation_for_tick = cancellation_token.clone();
+            let input_ticks: input::InputTickStream<Value> =
+                Box::pin(futures::stream::once(async move {
+                    cancellation_for_tick.cancel();
+                    Ok::<_, anyhow::Error>(vec![crate::InputUpdate::new(
+                        VarName::new("x"),
+                        Value::Int(1),
+                    )])
+                }));
+            let (constraint_sender, constraint_receiver) = spsc::channel(1);
+            drop(constraint_receiver);
+            let runtime = DirectSchedulerInputRuntime {
+                input_ticks,
+                constraint_input_index: ConstraintInputIndex::new([VarName::new("x")]),
+                constraint_sender,
+                planning_context: None,
+                cancellation_token: cancellation_token.clone(),
+            };
+
+            assert!(runtime.run().await.is_ok());
+            assert!(cancellation_token.is_cancelled().await);
         });
     }
 
@@ -1451,6 +1665,7 @@ mod input_tests {
                 constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
                 constraint_sender,
                 planning_context: Some(planning_context.clone()),
+                cancellation_token: CancellationToken::new(),
             };
             let mut constraint_ticks = channel_to_output_stream(constraint_receiver);
 

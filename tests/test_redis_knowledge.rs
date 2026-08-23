@@ -19,12 +19,11 @@ use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::REDIS_HOSTNAME;
-use trustworthiness_checker::io::testing::ManualOutputHandler;
 use trustworthiness_checker::io::{
     InputPipeline, InputReduction, InputSource, InputSources, InputStage, InputWindow,
-    RedisKnowledgeConfig, RedisKnowledgeRetry, Route,
+    OutputBackendBuilder, OutputBackendConfig, RedisKnowledgeConfig, RedisKnowledgeRetry, Route,
 };
-use trustworthiness_checker::runtime::RuntimeBuilder;
+
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{InputBatch, InputStream, InputUpdate, Runtime, Value, VarName};
 
@@ -434,24 +433,20 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
 
     let spec = "in analyse_completed\nin execute_completed\nin current_plan\nout observed_plan\nobserved_plan = if analyse_completed && execute_completed then current_plan else \"waiting\""
         .parse::<DsrvSpecification>()?;
-    let mut output_handler = Box::new(ManualOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
+    let (output_sender, output_receiver) =
+        async_unsync::bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
+    let mut outputs = Box::pin(futures::stream::unfold(
+        output_receiver,
+        |mut receiver| async move { receiver.recv().await.map(|row| (row, receiver)) },
     ));
-    let mut outputs = output_handler.get_output();
-    let builder = <GeneralRuntimeBuilder<DsrvSpecification, Value> as RuntimeBuilder<
-        DsrvSpecification,
-        Value,
-    >>::new()
-    .executor(executor.clone())
-    .model(spec)
-    .input(input)
-    .output(output_handler);
-    let runtime = <GeneralRuntimeBuilder<DsrvSpecification, Value> as RuntimeBuilder<
-        DsrvSpecification,
-        Value,
-    >>::build(builder)
-    .await;
+    let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+        .executor(executor.clone())
+        .model(spec.clone())
+        .input(input)
+        .output_pipeline_builder(OutputBackendBuilder::new(OutputBackendConfig::manual(
+            output_sender,
+        )));
+    let runtime = builder.build().await?;
     let runtime_task = executor.spawn(Runtime::run(runtime));
 
     // The initial knowledge update is held by the update-limit window. The

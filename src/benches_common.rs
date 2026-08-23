@@ -10,13 +10,12 @@ use crate::InputStream;
 use crate::Value;
 use crate::VarName;
 use crate::core::ExecutionPolicy;
-use crate::core::OutputHandler;
+
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
-use crate::io::testing::{LimitedNullOutputHandler, NullOutputHandler};
-use crate::io::{InputPipeline, InputSource};
-use crate::io::{OutputHandlerBuilder, OutputHandlerSpec};
+use crate::io::output::OutputBackendConfig;
+use crate::io::{InputPipeline, InputSource, OutputBackendBuilder};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
@@ -87,27 +86,22 @@ pub async fn monitor_runtime_outputs(
     input_stream: InputStream<Value>,
     output_limit: Option<usize>,
 ) {
-    let output_handler: Box<dyn OutputHandler<Val = Value>> = match output_limit {
-        Some(output_limit) => Box::new(LimitedNullOutputHandler::new(
-            executor.clone(),
-            spec.output_vars.clone(),
-            output_limit,
-        )),
-        None => Box::new(NullOutputHandler::new(
-            executor.clone(),
-            spec.output_vars.clone(),
-        )),
+    let output_backend = match output_limit {
+        Some(limit) => OutputBackendConfig::limited_null(limit),
+        None => OutputBackendConfig::null(),
     };
+    let output_builder = OutputBackendBuilder::new(output_backend);
 
     let monitor = crate::runtime::GeneralRuntimeBuilder::new()
         .runtime(runtime)
         .semantics(semantics)
         .executor(executor)
         .model(spec)
-        .output(output_handler)
+        .output_pipeline_builder(output_builder)
         .input(input_stream)
         .build()
-        .await;
+        .await
+        .expect("monitor runtime could not be built");
     monitor.run().await.expect("Error running monitor");
 }
 
@@ -216,16 +210,17 @@ pub async fn monitor_outputs_typed_semisync(
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("typed semi-sync output pipeline should open");
 
     let monitor =
         SemiSyncRuntimeBuilder::<CheckedSemiSyncValueConfig, CheckedUntimedDsrvSemantics>::new()
             .executor(executor)
             .model(spec)
-            .output(output_handler)
+            .output_writer(writer)
             .input(input_stream)
             .build()
             .await;
@@ -247,16 +242,17 @@ pub async fn monitor_outputs_typed_dataflow(
         );
     }
 
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("typed dataflow output pipeline should open");
 
     let monitor = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor)
         .model(spec)
-        .output(output_handler)
+        .output_writer(writer)
         .input(input_stream)
         .build()
         .await;
@@ -267,7 +263,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_source: InputSource,
-    output_handler_builder: OutputHandlerBuilder,
+    output_pipeline_builder: OutputBackendBuilder,
     use_context_transfer: bool,
 ) {
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
@@ -276,7 +272,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
             .executor(executor)
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
-            .output_builder(output_handler_builder)
+            .output_builder(output_pipeline_builder)
             .reconf_topic(RECONF_TOPIC.into())
             .use_context_transfer(use_context_transfer);
     let monitor = Box::new(builder).build().await;
@@ -321,17 +317,19 @@ pub async fn monitor_outputs_typed_async(
     input_stream: InputStream<Value>,
 ) {
     // Currently cannot be deduplicated since it includes the type
-    // checking
-    let output_handler = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        spec.output_vars().clone(),
-    ));
+    // checking. The async runtime keeps independent named streams, so it uses
+    // the drain adapter over the sink-based null backend.
+    let output_builder = OutputBackendBuilder::<Value>::new(OutputBackendConfig::null());
+    let writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("typed async output pipeline should open");
     let async_monitor =
         AsyncRuntimeBuilder::<CheckedValueConfig, CheckedUntimedDsrvSemantics>::new()
             .executor(executor.clone())
             .model(spec)
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(writer)
             .build()
             .await;
     async_monitor.run().await.expect("Error running monitor");
@@ -357,18 +355,14 @@ pub fn input_source_dsrv_paper_bench(
 }
 
 pub fn output_builder_dsrv_paper_bench(
-    output_var_names: BTreeSet<VarName>,
-    ex: Rc<LocalExecutor<'static>>,
+    _output_var_names: BTreeSet<VarName>,
+    _ex: Rc<LocalExecutor<'static>>,
 ) -> (
-    OutputHandlerBuilder,
+    OutputBackendBuilder,
     bounded::Receiver<BTreeMap<VarName, Value>>,
 ) {
     let (out_tx, out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
-    let output_spec = OutputHandlerSpec::Manual(out_tx);
-    let output_builder = OutputHandlerBuilder::new(output_spec)
-        .executor(ex.clone())
-        .output_var_names(output_var_names)
-        .aux_info(vec![]);
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::manual(out_tx));
 
     (output_builder, out_rx)
 }

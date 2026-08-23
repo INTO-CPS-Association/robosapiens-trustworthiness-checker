@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::rc::Rc;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use mstlo::{
 };
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
-use trustworthiness_checker::io::testing::NullOutputHandler;
+use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
 use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
@@ -102,20 +102,18 @@ async fn run_dsrv_with_semantics(
     runtime_spec: RuntimeSpec,
     semantics: Semantics,
 ) {
-    let output = Box::new(NullOutputHandler::new(
-        executor.clone(),
-        BTreeSet::from([VarName::new("always_x")]),
-    ));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
         .model(spec)
         .input(input)
-        .output(output)
+        .output_pipeline_builder(output_builder)
         .runtime(runtime_spec)
         .semantics(semantics)
         .build()
-        .await;
+        .await
+        .expect("DSRV threshold benchmark runtime could not be built");
 
     runtime
         .run()
@@ -145,10 +143,11 @@ async fn run_mstlo(
     input: InputStream<MstloTimedValue>,
     semantics: Semantics,
 ) {
-    let output = Box::new(NullOutputHandler::<MstloTimedValue>::new(
-        executor.clone(),
-        spec.output_vars(),
-    ));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let output_writer = output_builder
+        .build(spec.output_vars(), spec.aux_vars(), None)
+        .await
+        .expect("MSTLO threshold benchmark output pipeline should open");
 
     let semantics = match semantics {
         Semantics::DelayedQuantitative => MstloSemantics::DelayedQuantitative,
@@ -162,7 +161,7 @@ async fn run_mstlo(
         .executor(executor)
         .model(spec)
         .input(input)
-        .output(output)
+        .output_writer(output_writer)
         .semantics(semantics)
         .build()
         .await;

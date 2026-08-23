@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
+    mem,
     rc::Rc,
     time::Duration,
 };
@@ -9,7 +10,7 @@ use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 
 use futures::StreamExt;
-use futures::future::{Either, LocalBoxFuture};
+use futures::future::LocalBoxFuture;
 use mstlo::{
     Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, FormulaDefinition,
     RobustnessInterval, RobustnessSemantics, Rosi, Semantics, Step, StlMonitor,
@@ -18,14 +19,14 @@ use mstlo::{
 use smol::LocalExecutor;
 
 use crate::{
-    ExecutionPolicy, InputStream, OutputStream, Runtime, Value, VarName,
-    core::{FileInputValue, JsonStreamValue, OutputHandler, StreamData, input},
+    ExecutionPolicy, InputStream, Runtime, Value, VarName,
+    core::{
+        FileInputValue, JsonStreamValue, OutputBatch, OutputError, OutputUpdate, OutputWriter,
+        StreamData, input,
+    },
     lang::mstlo::MstloSpecification,
     runtime::builder::RuntimeBuilder,
-    stream_utils,
 };
-
-const MSTLO_OUTPUT_CHANNEL_SIZE: usize = 1024;
 
 /// A timestamped stream value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -239,51 +240,34 @@ enum MstloRouting {
 }
 
 struct MstloRuntime<RS, V = Value> {
-    _executor: Rc<LocalExecutor<'static>>,
+    _executor: Option<Rc<LocalExecutor<'static>>>,
     input_vars: Vec<VarName>,
     monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
     monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
     routing: MstloRouting,
     input_stream: InputStream<V>,
-    output_handler: Box<dyn OutputHandler<Val = V>>,
+    output_writer: Option<OutputWriter<V>>,
     execution_policy: ExecutionPolicy,
 }
 
 type MstloMonitorId = usize;
 
-struct MstloMonitorSlot<RS, V> {
+struct MstloMonitorSlot<RS> {
+    name: VarName,
     monitor: StlMonitor<f64, RS>,
-    output: MstloOutputStream<V>,
 }
 
 struct MstloInputState<'a, RS, V = Value> {
     signal_names: &'a BTreeMap<VarName, &'static str>,
-    monitors: Vec<MstloMonitorSlot<RS, V>>,
+    monitors: Vec<MstloMonitorSlot<RS>>,
     signal_monitors: BTreeMap<&'static str, Vec<MstloMonitorId>>,
     fanout_monitors: Vec<MstloMonitorId>,
     clocked_monitors: Vec<MstloMonitorId>,
     routing: MstloRouting,
     last_clock_timestamp: Option<Duration>,
+    /// MSTLO verdicts are sparse singleton ticks and may repeat a variable.
+    direct_events: Vec<OutputUpdate<V>>,
     blocked: bool,
-}
-
-struct MstloOutputStream<V> {
-    sender: unsync::spsc::Sender<V>,
-    pending: Vec<V>,
-}
-
-impl<V> MstloOutputStream<V> {
-    fn push(&mut self, value: V) -> bool {
-        if self.pending.is_empty() {
-            if let Err(unsync::spsc::SendError(value)) = self.sender.try_send(value) {
-                self.pending.push(value);
-                return true;
-            }
-        } else {
-            self.pending.push(value);
-        }
-        false
-    }
 }
 
 pub struct MstloRuntimeBuilder<V = Value> {
@@ -294,7 +278,7 @@ pub struct MstloRuntimeBuilder<V = Value> {
     synchronization_strategy: SynchronizationStrategy,
     variables: Variables,
     input: Option<InputStream<V>>,
-    output: Option<Box<dyn OutputHandler<Val = V>>>,
+    output_writer: Option<OutputWriter<V>>,
     execution_policy: ExecutionPolicy,
 }
 
@@ -349,14 +333,19 @@ where
             .variables(variables)
     }
 
+    pub fn output_writer(mut self, writer: OutputWriter<V>) -> Self {
+        self.output_writer = Some(writer);
+        self
+    }
+
     fn runtime<RS>(
-        executor: Rc<LocalExecutor<'static>>,
+        executor: Option<Rc<LocalExecutor<'static>>>,
         input_vars: Vec<VarName>,
         monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
         monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
         routing: MstloRouting,
         input_stream: InputStream<V>,
-        output_handler: Box<dyn OutputHandler<Val = V>>,
+        output_writer: Option<OutputWriter<V>>,
         execution_policy: ExecutionPolicy,
     ) -> Box<dyn Runtime>
     where
@@ -370,7 +359,7 @@ where
             monitor_signals,
             routing,
             input_stream,
-            output_handler,
+            output_writer,
             execution_policy,
         })
     }
@@ -391,7 +380,7 @@ where
             synchronization_strategy: SynchronizationStrategy::default(),
             variables: Variables::new(),
             input: None,
-            output: None,
+            output_writer: None,
             execution_policy: ExecutionPolicy::Buffered,
         }
     }
@@ -411,14 +400,14 @@ where
         self
     }
 
-    fn output(mut self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
-        self.output = Some(output);
+    fn output_writer(mut self, writer: OutputWriter<V>) -> Self {
+        self.output_writer = Some(writer);
         self
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
         Box::pin(async move {
-            let executor = self.executor.expect("MSTLO runtime executor must be set");
+            let executor = self.executor;
             let formulae = self.formula.expect("MSTLO formula/spec must be set");
             let input_vars = formulae.var_names().to_vec();
             let monitor_signals = formulae.formula_signals().clone();
@@ -433,7 +422,7 @@ where
             let synchronization_strategy = self.synchronization_strategy;
             let variables = self.variables;
             let input_stream = self.input.expect("MSTLO input stream must be set");
-            let output_handler = self.output.expect("MSTLO output handler must be set");
+            let output_writer = self.output_writer;
             let execution_policy = self.execution_policy;
 
             match semantics {
@@ -460,7 +449,7 @@ where
                         monitor_signals,
                         routing,
                         input_stream,
-                        output_handler,
+                        output_writer,
                         execution_policy,
                     )
                 }
@@ -487,7 +476,7 @@ where
                         monitor_signals,
                         routing,
                         input_stream,
-                        output_handler,
+                        output_writer,
                         execution_policy,
                     )
                 }
@@ -514,7 +503,7 @@ where
                         monitor_signals,
                         routing,
                         input_stream,
-                        output_handler,
+                        output_writer,
                         execution_policy,
                     )
                 }
@@ -541,7 +530,7 @@ where
                         monitor_signals,
                         routing,
                         input_stream,
-                        output_handler,
+                        output_writer,
                         execution_policy,
                     )
                 }
@@ -708,8 +697,7 @@ impl MstloStreamValue for MstloTimedValue {
 }
 
 impl TimedValue<MstloValue> {
-    /// Convert a typed MSTLO value to the backwards-compatible dynamic wire
-    /// representation used by the existing external output handlers.
+    /// Convert a typed MSTLO value to its dynamic [`Value`] representation.
     pub fn try_into_value(self) -> anyhow::Result<Value> {
         if matches!(self.value, MstloValue::NoVal) {
             return Ok(Value::NoVal);
@@ -749,76 +737,14 @@ pub fn value_input_stream(input: InputStream<Value>) -> InputStream<MstloTimedVa
     input::try_map_input_values(input, MstloTimedValue::try_from)
 }
 
-/// Convert typed MSTLO outputs for a dynamic `Value` output handler.
-pub struct MstloValueOutputAdapter {
-    inner: Box<dyn OutputHandler<Val = Value>>,
-    conversion_error_tx: Option<async_channel::Sender<anyhow::Error>>,
-    conversion_error_rx: async_channel::Receiver<anyhow::Error>,
-}
-
-impl MstloValueOutputAdapter {
-    pub fn new(inner: Box<dyn OutputHandler<Val = Value>>) -> Self {
-        let (conversion_error_tx, conversion_error_rx) = async_channel::unbounded();
-        Self {
-            inner,
-            conversion_error_tx: Some(conversion_error_tx),
-            conversion_error_rx,
-        }
-    }
-}
-
-impl OutputHandler for MstloValueOutputAdapter {
-    type Val = MstloTimedValue;
-
-    fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<MstloTimedValue>>) {
-        let error_tx = self
-            .conversion_error_tx
-            .take()
-            .expect("MSTLO output streams already provided");
-        let converted = streams
-            .into_iter()
-            .map(|(name, mut stream)| {
-                let error_tx = error_tx.clone();
-                let stream = async_stream::stream! {
-                    while let Some(value) = stream.next().await {
-                        match value.try_into_value() {
-                            Ok(value) => yield value,
-                            Err(error) => {
-                                let _ = error_tx.try_send(error);
-                                break;
-                            }
-                        }
-                    }
-                };
-                (name, Box::pin(stream) as OutputStream<Value>)
-            })
-            .collect();
-        drop(error_tx);
-        self.inner.provide_streams(converted);
-    }
-
-    fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-        let conversion_error = self.conversion_error_rx.clone();
-        let run = self.inner.run();
-        Box::pin(async move {
-            match futures::future::select(Box::pin(conversion_error.recv()), run).await {
-                Either::Left((Ok(error), _)) => Err(error),
-                Either::Left((Err(_), run)) => run.await,
-                Either::Right((result, _)) => result,
-            }
-        })
-    }
-}
-
 impl<'a, RS, V> MstloInputState<'a, RS, V>
 where
     RS: RobustnessSemantics + IntoMstloOutput + Debug + 'static,
     V: MstloStreamValue,
 {
-    fn new(
+    fn new_direct(
         signal_names: &'a BTreeMap<VarName, &'static str>,
         monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
-        mut outputs: BTreeMap<VarName, MstloOutputStream<V>>,
         mut monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
         routing: MstloRouting,
     ) -> anyhow::Result<Self> {
@@ -827,18 +753,11 @@ where
         let mut fanout_monitors = Vec::new();
         let mut clocked_monitors = Vec::new();
 
-        // `monitors` is a `BTreeMap`, so IDs are assigned in formula-name
-        // order. Every signal route is therefore sorted, allowing a linear
-        // merge when deciding whether its first sample is also the clock.
         for (formula_name, monitor) in monitors {
-            let output = outputs.remove(&formula_name).ok_or_else(|| {
-                anyhow!("Missing output stream for MSTLO formula `{formula_name}`")
-            })?;
             let signals = monitor_signals.remove(&formula_name).ok_or_else(|| {
-                anyhow!("Missing signal metadata for MSTLO formula `{formula_name}`")
+                anyhow!("Missing signal metadata for MSTLO formula `{formula_name}")
             })?;
             let monitor_id = monitor_slots.len();
-
             if signals.is_empty() || routing == MstloRouting::FanOut {
                 fanout_monitors.push(monitor_id);
             } else {
@@ -847,15 +766,12 @@ where
                 }
                 clocked_monitors.push(monitor_id);
             }
-
-            monitor_slots.push(MstloMonitorSlot { monitor, output });
+            monitor_slots.push(MstloMonitorSlot {
+                name: formula_name,
+                monitor,
+            });
         }
 
-        if let Some(formula_name) = outputs.keys().next() {
-            return Err(anyhow!(
-                "Missing MSTLO monitor for output stream `{formula_name}`"
-            ));
-        }
         if let Some(formula_name) = monitor_signals.keys().next() {
             return Err(anyhow!(
                 "Missing MSTLO monitor for signal metadata `{formula_name}`"
@@ -870,19 +786,22 @@ where
             clocked_monitors,
             routing,
             last_clock_timestamp: None,
+            direct_events: Vec::new(),
             blocked: false,
         })
     }
 
     fn deliver_monitor_step(
-        slot: &mut MstloMonitorSlot<RS, V>,
+        slot: &mut MstloMonitorSlot<RS>,
+        direct_events: &mut Vec<OutputUpdate<V>>,
         blocked: &mut bool,
         step: &Step<f64>,
     ) -> anyhow::Result<()> {
         let output = slot.monitor.update(step);
         for verdict in output.into_verdicts() {
             let value = V::output_value(verdict.timestamp, verdict.value)?;
-            *blocked |= slot.output.push(value);
+            direct_events.push(OutputUpdate::new(slot.name.clone(), value));
+            *blocked = true;
         }
         Ok(())
     }
@@ -893,6 +812,7 @@ where
                 for &monitor_id in &self.fanout_monitors {
                     Self::deliver_monitor_step(
                         &mut self.monitors[monitor_id],
+                        &mut self.direct_events,
                         &mut self.blocked,
                         step,
                     )?;
@@ -911,6 +831,7 @@ where
                     for &monitor_id in &self.clocked_monitors {
                         Self::deliver_monitor_step(
                             &mut self.monitors[monitor_id],
+                            &mut self.direct_events,
                             &mut self.blocked,
                             step,
                         )?;
@@ -938,6 +859,7 @@ where
                             }
                             Self::deliver_monitor_step(
                                 &mut self.monitors[monitor_id],
+                                &mut self.direct_events,
                                 &mut self.blocked,
                                 step,
                             )?;
@@ -949,6 +871,7 @@ where
                         for &monitor_id in monitor_ids {
                             Self::deliver_monitor_step(
                                 &mut self.monitors[monitor_id],
+                                &mut self.direct_events,
                                 &mut self.blocked,
                                 step,
                             )?;
@@ -962,6 +885,7 @@ where
                 for &monitor_id in &self.fanout_monitors {
                     Self::deliver_monitor_step(
                         &mut self.monitors[monitor_id],
+                        &mut self.direct_events,
                         &mut self.blocked,
                         step,
                     )?;
@@ -1004,19 +928,19 @@ where
         Ok(())
     }
 
-    async fn flush_pending(&mut self) -> bool {
-        if !self.blocked {
-            return true;
-        }
-        for slot in &mut self.monitors {
-            for value in slot.output.pending.drain(..) {
-                if slot.output.sender.send(value).await.is_err() {
-                    return false;
-                }
-            }
-        }
+    fn take_direct_events(&mut self) -> Vec<OutputUpdate<V>> {
         self.blocked = false;
-        true
+        mem::take(&mut self.direct_events)
+    }
+
+    async fn flush_direct(&mut self, writer: &mut OutputWriter<V>) -> Result<(), OutputError> {
+        let events = self.take_direct_events();
+        if events.is_empty() {
+            return Ok(());
+        }
+        let ticks = events.into_iter().map(|event| vec![event]).collect();
+        let batch = OutputBatch::from_ticks(ticks)?;
+        writer.send(batch).await
     }
 }
 
@@ -1029,93 +953,115 @@ where
     async fn run_boxed(mut self: Box<MstloRuntime<RS, V>>) -> anyhow::Result<()> {
         let signal_names = Self::signal_names(&self.input_vars);
 
-        let (outputs, output_streams): (
-            BTreeMap<VarName, MstloOutputStream<V>>,
-            BTreeMap<VarName, OutputStream<V>>,
-        ) = self
-            .monitors
-            .keys()
-            .cloned()
-            .map(|name| {
-                let (sender, receiver) = unsync::spsc::channel(MSTLO_OUTPUT_CHANNEL_SIZE);
-                let output_stream = stream_utils::channel_to_output_stream(receiver);
-                (
-                    (
-                        name.clone(),
-                        MstloOutputStream {
-                            sender,
-                            pending: Vec::new(),
-                        },
-                    ),
-                    (name, output_stream),
-                )
-            })
-            .unzip();
-        let input = MstloInputState::new(
-            &signal_names,
-            self.monitors,
-            outputs,
-            self.monitor_signals,
-            self.routing,
-        )?;
-        self.output_handler.provide_streams(output_streams);
-        let output_task = self._executor.spawn(self.output_handler.run());
-        let mut input_batches = self.input_stream;
+        let Some(mut writer) = self.output_writer.take() else {
+            return Err(anyhow!("MSTLO output writer must be set"));
+        };
+        {
+            let mut input = MstloInputState::new_direct(
+                &signal_names,
+                self.monitors,
+                self.monitor_signals,
+                self.routing,
+            )?;
+            let mut input_batches = self.input_stream;
+            let execution_policy = self.execution_policy;
+            let mut first_error = None;
+            let mut downstream_closed = false;
 
-        let execution_policy = self.execution_policy;
-        let input_task = Box::pin(async move {
-            let mut input = input;
-            while let Some(batch) = input_batches.next().await {
-                let batch = batch?;
+            'input: while let Some(batch) = input_batches.next().await {
+                let batch = match batch {
+                    Ok(batch) => batch,
+                    Err(error) => {
+                        first_error = Some(error);
+                        break;
+                    }
+                };
                 for tick in batch.ticks() {
-                    if tick.len() == 1 {
-                        if let Some(event) = tick.iter().next() {
-                            input.process_event(event)?;
-                            if execution_policy == ExecutionPolicy::Synchronous
-                                && !input.flush_pending().await
-                            {
-                                return Ok(());
-                            }
-                        }
+                    let process_result = if tick.len() == 1 {
+                        tick.iter()
+                            .next()
+                            .map_or(Ok(()), |event| input.process_event(event))
                     } else {
-                        input.process_step(&tick)?;
-                        let flush =
-                            execution_policy == ExecutionPolicy::Synchronous || input.blocked;
-                        if flush && !input.flush_pending().await {
-                            return Ok(());
+                        input.process_step(&tick)
+                    };
+                    if let Err(error) = process_result {
+                        first_error = Some(error);
+                        break 'input;
+                    }
+
+                    if execution_policy == ExecutionPolicy::Synchronous {
+                        match input.flush_direct(&mut writer).await {
+                            Ok(()) => {}
+                            Err(error) if error.is_closed() => {
+                                downstream_closed = true;
+                                break 'input;
+                            }
+                            Err(error) => {
+                                first_error = Some(anyhow::Error::new(error));
+                                break 'input;
+                            }
                         }
                     }
                 }
-                if execution_policy == ExecutionPolicy::Buffered && !input.flush_pending().await {
-                    return Ok(());
+                if execution_policy == ExecutionPolicy::Buffered {
+                    match input.flush_direct(&mut writer).await {
+                        Ok(()) => {}
+                        Err(error) if error.is_closed() => {
+                            downstream_closed = true;
+                            break;
+                        }
+                        Err(error) => {
+                            first_error = Some(anyhow::Error::new(error));
+                            break;
+                        }
+                    }
                 }
             }
-            let _ = input.flush_pending().await;
-            Ok::<_, anyhow::Error>(())
-        });
 
-        match futures::future::select(input_task, output_task).await {
-            Either::Left((input_result, output_task)) => {
-                input_result.context("Input stream/MSTLO processing failed")?;
-                output_task.await.context("OutputHandler failed")
+            // Preserve output produced before a source/evaluation failure, then
+            // make close the externally meaningful completion barrier.
+            if !downstream_closed {
+                match input.flush_direct(&mut writer).await {
+                    Ok(()) | Err(OutputError::Closed) => {}
+                    Err(error) if first_error.is_none() => {
+                        first_error = Some(anyhow::Error::new(error));
+                    }
+                    Err(_) => {}
+                }
             }
-            Either::Right((output_result, input_task)) => {
-                drop(input_task);
-                output_result.context("OutputHandler failed")
+
+            let cleanup = crate::runtime::output::finish_writer(&mut writer).await;
+            match first_error {
+                Some(primary) => match cleanup {
+                    Ok(()) => Err(primary.context("Input stream/MSTLO processing failed")),
+                    Err(cleanup) => Err(combine_errors(primary, cleanup)
+                        .context("Input stream/MSTLO processing failed")),
+                },
+                None => cleanup.map_err(|error| error.context("MSTLO output failed")),
             }
         }
+    }
+}
+
+fn combine_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::Error {
+    let primary_message = primary.to_string();
+    let additional_message = additional.to_string();
+    if primary_message == additional_message {
+        primary
+    } else {
+        anyhow::anyhow!("{primary_message}; additionally: {additional_message}")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InputBatch, InputStream};
+    use crate::{InputBatch, InputStream, OutputBatch, OutputError, OutputStream, OutputWriter};
 
     use crate::async_test;
-    use crate::io::testing::{ManualOutputHandler, NullOutputHandler};
+    use crate::io::testing::{manual_output, null_output};
     use crate::runtime::builder::RuntimeBuilder;
-    use futures::{StreamExt, stream};
+    use futures::{Sink, StreamExt, stream};
     use macro_rules_attribute::apply;
     use mstlo::{
         Algorithm, DelayedQualitative, DelayedQuantitative, EagerQualitative, FormulaDefinition,
@@ -1123,53 +1069,55 @@ mod tests {
     };
     use smol::LocalExecutor;
     use std::{
+        cell::Cell,
         collections::{BTreeMap, BTreeSet},
+        pin::Pin,
         rc::Rc,
+        task::{Context, Poll},
         time::Duration,
     };
     use tc_testutils::streams::with_timeout;
 
-    struct FailingTypedOutputHandler;
-
-    impl OutputHandler for FailingTypedOutputHandler {
-        type Val = MstloTimedValue;
-
-        fn provide_streams(&mut self, _streams: BTreeMap<VarName, OutputStream<MstloTimedValue>>) {}
-
-        fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-            Box::pin(async { anyhow::bail!("output failed") })
-        }
-    }
-
-    #[derive(Default)]
-    struct PendingValueOutputHandler {
-        streams: Option<BTreeMap<VarName, OutputStream<Value>>>,
-    }
-
-    impl OutputHandler for PendingValueOutputHandler {
-        type Val = Value;
-
-        fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<Value>>) {
-            self.streams = Some(streams);
-        }
-
-        fn run(&mut self) -> LocalBoxFuture<'static, anyhow::Result<()>> {
-            let mut stream = self
-                .streams
-                .take()
-                .expect("output streams not provided")
-                .into_values()
-                .next()
-                .expect("output stream missing");
-            Box::pin(async move {
-                let _ = stream.next().await;
-                futures::future::pending().await
-            })
-        }
-    }
-
     fn failing_input() -> InputStream<Value> {
         Box::pin(stream::iter([Err(anyhow::anyhow!("input failed"))]))
+    }
+
+    struct CleanupFailingSink {
+        flush_error: Option<OutputError>,
+        close_error: Option<OutputError>,
+        closes: Rc<Cell<usize>>,
+    }
+
+    impl Sink<OutputBatch<Value>> for CleanupFailingSink {
+        type Error = OutputError;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, _batch: OutputBatch<Value>) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let this = self.get_mut();
+            Poll::Ready(this.flush_error.take().map_or(Ok(()), Err))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let this = self.get_mut();
+            this.closes.set(this.closes.get() + 1);
+            Poll::Ready(this.close_error.take().map_or(Ok(()), Err))
+        }
     }
 
     fn static_input(inputs: BTreeMap<VarName, Vec<Value>>) -> anyhow::Result<InputStream<Value>> {
@@ -1240,37 +1188,22 @@ mod tests {
             .map(VarName::new)
             .collect::<Vec<_>>();
         let signal_names = MstloRuntime::<RS, MstloTimedValue>::signal_names(&input_vars);
-        let monitors = BTreeMap::from([(formula_name.clone(), build(formula))]);
-        let (sender, mut receiver) = unsync::spsc::unbounded();
-        let outputs = BTreeMap::from([(
-            formula_name,
-            MstloOutputStream {
-                sender,
-                pending: Vec::new(),
-            },
-        )]);
-
-        {
-            let mut state = MstloInputState::new(
-                &signal_names,
-                monitors,
-                outputs,
-                specification.formula_signals().clone(),
-                routing,
-            )
-            .unwrap();
-            for step in trace {
-                state.process_routed_step(step).unwrap();
-            }
+        let monitors = BTreeMap::from([(formula_name, build(formula))]);
+        let mut state = MstloInputState::new_direct(
+            &signal_names,
+            monitors,
+            specification.formula_signals().clone(),
+            routing,
+        )
+        .unwrap();
+        for step in trace {
+            state.process_routed_step(step).unwrap();
         }
-
-        smol::block_on(async move {
-            let mut outputs = Vec::new();
-            while let Some(value) = receiver.recv().await {
-                outputs.push(value);
-            }
-            outputs
-        })
+        state
+            .direct_events
+            .into_iter()
+            .map(|event| event.value)
+            .collect()
     }
 
     fn correctness_trace() -> Vec<Step<f64>> {
@@ -1422,38 +1355,20 @@ mod tests {
                 .build()
                 .unwrap(),
         )]);
-        let (sender, mut receiver) = unsync::spsc::unbounded::<MstloTimedValue>();
-        let outputs = BTreeMap::from([(
-            VarName::new("out"),
-            MstloOutputStream {
-                sender,
-                pending: Vec::new(),
-            },
-        )]);
-        {
-            let mut state = MstloInputState::new(
-                &signal_names,
-                monitors,
-                outputs,
-                formula.formula_signals().clone(),
-                MstloRouting::ReferencedWithClock,
-            )
-            .unwrap();
-            for step in [
-                Step::new("x", 1.0, Duration::ZERO),
-                Step::new("y", 2.0, Duration::ZERO),
-            ] {
-                state.process_routed_step(&step).unwrap();
-            }
+        let mut state = MstloInputState::<bool, MstloTimedValue>::new_direct(
+            &signal_names,
+            monitors,
+            formula.formula_signals().clone(),
+            MstloRouting::ReferencedWithClock,
+        )
+        .unwrap();
+        for step in [
+            Step::new("x", 1.0, Duration::ZERO),
+            Step::new("y", 2.0, Duration::ZERO),
+        ] {
+            state.process_routed_step(&step).unwrap();
         }
-        let outputs = smol::block_on(async move {
-            let mut values = Vec::new();
-            while let Some(value) = receiver.recv().await {
-                values.push(value);
-            }
-            values
-        });
-        assert_eq!(outputs.len(), 2);
+        assert_eq!(state.direct_events.len(), 2);
     }
 
     #[test]
@@ -1621,6 +1536,33 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn direct_typed_writer_reports_output_timestamp_conversion_errors(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let formula = MstloSpecification::single(
+            VarName::new("out"),
+            FormulaDefinition::GreaterThan("x", 5.0),
+        );
+        let input = static_typed_input(vec![MstloTimedValue::new(
+            Duration::from_millis(i64::MAX as u64 + 1),
+            MstloValue::Float(7.0),
+        )]);
+        let output_writer: OutputWriter<MstloTimedValue> =
+            null_output(BTreeSet::from([VarName::new("out")])).await;
+        let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
+            .executor(executor)
+            .model(formula)
+            .semantics(Semantics::EagerQualitative)
+            .input(input)
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        let error = runtime.run().await.unwrap_err();
+        assert!(format!("{error:#}").contains("does not fit in i64 milliseconds"));
+    }
+
+    #[apply(async_test)]
     async fn typed_builder_runs_formula(executor: Rc<LocalExecutor<'static>>) {
         let formula = MstloSpecification::single(
             VarName::new("out"),
@@ -1631,17 +1573,13 @@ mod tests {
             MstloTimedValue::new(Duration::from_millis(10), MstloValue::Float(4.0)),
         ]);
         let output_var = VarName::new("out");
-        let mut output_handler = Box::new(ManualOutputHandler::<MstloTimedValue>::new(
-            executor.clone(),
-            BTreeSet::from([output_var]),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var])).await;
 
         let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor)
             .model(formula)
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1671,17 +1609,13 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            BTreeSet::from([output_var.clone()]),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var.clone()])).await;
 
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1716,16 +1650,12 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            BTreeSet::from([output_var]),
-        ));
-        let mut outputs = output_handler.get_output();
+        let (output_writer, mut outputs) = manual_output(BTreeSet::from([output_var])).await;
         let (builder, controller) = MstloRuntimeBuilder::new()
             .executor(executor)
             .model(formula)
             .controlled_input(input);
-        let runtime = builder.output(output_handler).build().await;
+        let runtime = builder.output_writer(output_writer).build().await;
 
         let control = async move {
             controller.advance().await.unwrap();
@@ -1771,16 +1701,13 @@ mod tests {
                 .unwrap();
             drop(input);
 
-            let mut output_handler = Box::new(ManualOutputHandler::new(
-                executor.clone(),
-                BTreeSet::from([VarName::new("out")]),
-            ));
-            let outputs = output_handler.get_output();
+            let (output_writer, outputs) =
+                manual_output(BTreeSet::from([VarName::new("out")])).await;
             let runtime = MstloRuntimeBuilder::new()
                 .executor(executor)
                 .model(formula)
                 .input(input_stream)
-                .output(output_handler)
+                .output_writer(output_writer)
                 .build()
                 .await;
 
@@ -1797,71 +1724,139 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn runtime_propagates_output_errors_while_input_is_pending(
-        executor: Rc<LocalExecutor<'static>>,
-    ) {
-        let formula = MstloSpecification::single(
-            VarName::new("out"),
-            FormulaDefinition::GreaterThan("x", 5.0),
-        );
-        let input: InputStream<MstloTimedValue> = Box::pin(stream::pending());
-        let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
-            .executor(executor)
-            .model(formula)
-            .input(input)
-            .output(Box::new(FailingTypedOutputHandler))
-            .build()
-            .await;
-
-        let error = with_timeout(runtime.run(), 1, "MSTLO output failure")
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("output failed"));
-    }
-
-    #[test]
-    fn output_adapter_reports_conversion_errors_without_waiting_for_inner_handler() {
-        smol::block_on(async {
-            let mut adapter =
-                MstloValueOutputAdapter::new(Box::new(PendingValueOutputHandler::default()));
-            let invalid = MstloTimedValue::new(
-                Duration::from_millis(i64::MAX as u64 + 1),
-                MstloValue::Float(1.0),
-            );
-            adapter.provide_streams(BTreeMap::from([(
-                VarName::new("out"),
-                Box::pin(stream::iter([invalid])) as OutputStream<MstloTimedValue>,
-            )]));
-
-            let error = with_timeout(adapter.run(), 1, "MSTLO output conversion failure")
-                .await
-                .unwrap()
-                .unwrap_err();
-            assert!(format!("{error:#}").contains("does not fit in i64 milliseconds"));
-        });
-    }
-
-    #[apply(async_test)]
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
         let formula = MstloSpecification::single(
             VarName::new("out"),
             FormulaDefinition::GreaterThan("x", 5.0),
         );
-        let output = Box::new(NullOutputHandler::new(
-            executor.clone(),
-            BTreeSet::from([VarName::new("out")]),
-        ));
+        let output_writer = null_output(BTreeSet::from([VarName::new("out")])).await;
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor)
             .model(formula)
             .input(failing_input())
-            .output(output)
+            .output_writer(output_writer)
             .build()
             .await;
 
         let error = runtime.run().await.unwrap_err();
         assert!(format!("{error:#}").contains("input failed"));
+    }
+
+    #[apply(async_test)]
+    async fn runtime_preserves_input_error_when_cleanup_fails(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let closes = Rc::new(Cell::new(0));
+        let formula = MstloSpecification::single(
+            VarName::new("out"),
+            FormulaDefinition::GreaterThan("x", 5.0),
+        );
+        let output_writer = OutputWriter::from_sink(CleanupFailingSink {
+            flush_error: Some(OutputError::backend("MSTLO flush failed")),
+            close_error: Some(OutputError::backend("MSTLO close failed")),
+            closes: Rc::clone(&closes),
+        });
+        let runtime = MstloRuntimeBuilder::new()
+            .executor(executor)
+            .model(formula)
+            .input(failing_input())
+            .output_writer(output_writer)
+            .build()
+            .await;
+
+        let error = runtime.run().await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("input failed"));
+        assert!(message.contains("MSTLO flush failed"));
+        assert!(message.contains("MSTLO close failed"));
+        assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn direct_writer_emits_sparse_repeated_verdict_events(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let formula = MstloSpecification::new(BTreeMap::from([
+            (VarName::new("gt"), FormulaDefinition::GreaterThan("x", 5.0)),
+            (
+                VarName::new("gt_high"),
+                FormulaDefinition::GreaterThan("x", 6.0),
+            ),
+        ]));
+        let input_stream = static_input(BTreeMap::from([(
+            VarName::new("x"),
+            vec![timed_value(0, 7.0), timed_value(10, 4.0)],
+        )]))
+        .unwrap();
+        let captured = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let capture = Rc::clone(&captured);
+        let writer = crate::core::OutputWriter::from_sink(crate::io::output::local_batch_sink(
+            move |batch| {
+                let capture = Rc::clone(&capture);
+                async move {
+                    capture.borrow_mut().push(batch);
+                    Ok(())
+                }
+            },
+        ));
+
+        let runtime = MstloRuntimeBuilder::new()
+            .model(formula)
+            .input(input_stream)
+            .output_writer(writer)
+            .build()
+            .await;
+        runtime.run().await.unwrap();
+
+        let batches = Rc::try_unwrap(captured).unwrap().into_inner();
+        assert!(
+            batches
+                .iter()
+                .all(|batch| batch.ticks().all(|tick| tick.len() == 1))
+        );
+        let events = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .updates()
+                    .map(|event| (event.variable.clone(), event.value.clone()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            vec![
+                (VarName::new("gt"), timed_value(0, 2.0)),
+                (VarName::new("gt_high"), timed_value(0, 1.0)),
+                (VarName::new("gt"), timed_value(10, -1.0)),
+                (VarName::new("gt_high"), timed_value(10, -2.0)),
+            ]
+        );
+    }
+
+    #[apply(async_test)]
+    async fn direct_writer_propagates_sink_errors(_executor: Rc<LocalExecutor<'static>>) {
+        let formula = MstloSpecification::single(
+            VarName::new("out"),
+            FormulaDefinition::GreaterThan("x", 5.0),
+        );
+        let input_stream = static_input(BTreeMap::from([(
+            VarName::new("x"),
+            vec![timed_value(0, 7.0)],
+        )]))
+        .unwrap();
+        let writer =
+            crate::core::OutputWriter::from_sink(crate::io::output::local_batch_sink(|_| async {
+                Err(crate::core::OutputError::backend("direct sink failed"))
+            }));
+        let runtime = MstloRuntimeBuilder::new()
+            .model(formula)
+            .input(input_stream)
+            .output_writer(writer)
+            .build()
+            .await;
+
+        let error = runtime.run().await.unwrap_err();
+        assert!(format!("{error:#}").contains("direct sink failed"));
     }
 
     #[apply(async_test)]
@@ -1887,21 +1882,18 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            BTreeSet::from([
-                VarName::new("gt"),
-                VarName::new("gt_high"),
-                VarName::new("lt"),
-            ]),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(BTreeSet::from([
+            VarName::new("gt"),
+            VarName::new("gt_high"),
+            VarName::new("lt"),
+        ]))
+        .await;
 
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 
@@ -1917,13 +1909,13 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs.len(), 6);
         assert_eq!(output_value(&outputs[0], "gt"), (0, 2.0));
-        assert_eq!(output_value(&outputs[0], "gt_high"), (0, 1.0));
-        assert_eq!(output_value(&outputs[0], "lt"), (0, 1.0));
-        assert_eq!(output_value(&outputs[1], "gt"), (10, -1.0));
-        assert_eq!(output_value(&outputs[1], "gt_high"), (10, -2.0));
-        assert_eq!(output_value(&outputs[1], "lt"), (10, -2.0));
+        assert_eq!(output_value(&outputs[1], "gt_high"), (0, 1.0));
+        assert_eq!(output_value(&outputs[2], "lt"), (0, 1.0));
+        assert_eq!(output_value(&outputs[3], "gt"), (10, -1.0));
+        assert_eq!(output_value(&outputs[4], "gt_high"), (10, -2.0));
+        assert_eq!(output_value(&outputs[5], "lt"), (10, -2.0));
     }
 
     #[apply(async_test)]
@@ -1945,18 +1937,14 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let mut output_handler = Box::new(ManualOutputHandler::new(
-            executor.clone(),
-            BTreeSet::from([output_var.clone()]),
-        ));
-        let outputs = output_handler.get_output();
+        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var.clone()])).await;
 
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
             .variables(variables)
             .input(input_stream)
-            .output(output_handler)
+            .output_writer(output_writer)
             .build()
             .await;
 

@@ -16,7 +16,6 @@ mod integration_tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use async_stream::stream;
     use async_unsync::oneshot;
     use futures::FutureExt;
     use futures::StreamExt;
@@ -35,11 +34,40 @@ mod integration_tests {
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
-        InputBatch, OutputStream, Value, VarName,
-        core::{JsonStreamValue, OutputHandler, REDIS_HOSTNAME},
-        io::redis::{self as tc_redis, RedisOutputHandler},
+        InputBatch, OutputBatch, OutputWriter, Value, VarName,
+        core::{JsonStreamValue, REDIS_HOSTNAME},
+        io::redis::{self as tc_redis},
+        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
         runtime::mstlo::{MstloTimedValue, MstloValue},
     };
+
+    async fn open_redis_output<V: JsonStreamValue>(
+        port: u16,
+        routes: BTreeMap<VarName, String>,
+        outputs: Vec<VarName>,
+        auxiliary: Vec<VarName>,
+    ) -> anyhow::Result<OutputWriter<V>> {
+        let route_catalog = routes
+            .into_iter()
+            .map(|(variable, route)| {
+                (
+                    variable,
+                    Route::new(route.into_boxed_str(), None)
+                        .expect("test Redis output route should be valid"),
+                )
+            })
+            .collect();
+        OutputBackendBuilder::<V>::from_destination(
+            OutputDestination::new(
+                "redis",
+                OutputBackendConfig::redis(REDIS_HOSTNAME, Some(port)),
+            )
+            .with_route_catalog(route_catalog),
+        )
+        .build(outputs, auxiliary, None)
+        .await
+        .map_err(anyhow::Error::from)
+    }
 
     const X_TOPIC: &str = "x";
     const Y_TOPIC: &str = "y";
@@ -178,7 +206,7 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    async fn test_mstlo_redis_output(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
+    async fn test_mstlo_redis_output(_executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         let redis = start_redis().await;
         let port = redis.get_host_port_ipv4(6379).await?;
         let client = redis::Client::open(format!("redis://{REDIS_HOSTNAME}:{port}"))?;
@@ -186,14 +214,13 @@ mod integration_tests {
         pubsub.subscribe(X_TOPIC).await?;
         let mut messages = pubsub.into_on_message();
 
-        let mut handler = RedisOutputHandler::<MstloTimedValue>::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(port),
+        let mut writer = open_redis_output::<MstloTimedValue>(
+            port,
             BTreeMap::from([(VarName::new("x"), X_TOPIC.to_string())]),
+            vec![VarName::new("x")],
             vec![],
-        )?;
-        handler.connect().await?;
+        )
+        .await?;
         let expected = vec![
             MstloTimedValue::new(Duration::from_millis(1), MstloValue::Float(2.5)),
             MstloTimedValue::new(Duration::from_millis(2), MstloValue::Bool(true)),
@@ -202,9 +229,12 @@ mod integration_tests {
                 MstloValue::RobustnessInterval(-1.0, 2.0),
             ),
         ];
-        let output: OutputStream<MstloTimedValue> = Box::pin(stream::iter(expected.clone()));
-        handler.provide_streams(BTreeMap::from([(VarName::new("x"), output)]));
-        let task = executor.spawn(handler.run());
+        for value in expected.iter().cloned() {
+            writer
+                .send(OutputBatch::update(VarName::new("x"), value))
+                .await?;
+        }
+        writer.flush().await?;
 
         for expected in expected {
             let message = with_timeout(messages.next(), 5, "MSTLO Redis output")
@@ -214,7 +244,7 @@ mod integration_tests {
             let actual = MstloTimedValue::decode_json(payload.as_bytes())?;
             assert_eq!(actual, expected);
         }
-        task.await?;
+        writer.close().await?;
         Ok(())
     }
 
@@ -716,16 +746,6 @@ mod integration_tests {
         Ok(())
     }
 
-    // Helper function to create a simple output stream for testing
-    fn create_test_output_stream(values: Vec<Value>) -> OutputStream<Value> {
-        let stream = stream! {
-            for value in values {
-                yield value;
-            }
-        };
-        Box::pin(stream)
-    }
-
     // Helper function to consume messages from a Redis channel
     async fn consume_redis_messages(
         host: String,
@@ -785,23 +805,9 @@ mod integration_tests {
         var_topics.insert(var1.clone(), "topic1".to_string());
         var_topics.insert(var2.clone(), "topic2".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create test output streams
-        let stream1 = create_test_output_stream(vec![Value::Int(42), Value::Str("hello".into())]);
-        let stream2 = create_test_output_stream(vec![Value::Float(3.14), Value::Bool(true)]);
-
-        // Provide streams to handler
-        let streams = BTreeMap::from([(var1.clone(), stream1), (var2.clone(), stream2)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![var1.clone(), var2.clone()], vec![])
+                .await?;
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();
@@ -829,15 +835,22 @@ mod integration_tests {
         ready_rx1.await.unwrap();
         ready_rx2.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
+        writer
+            .send(OutputBatch::update(var1.clone(), Value::Int(42)))
+            .await?;
+        writer
+            .send(OutputBatch::update(var1, Value::Str("hello".into())))
+            .await?;
+        writer
+            .send(OutputBatch::update(var2.clone(), Value::Float(3.14)))
+            .await?;
+        writer
+            .send(OutputBatch::update(var2, Value::Bool(true)))
+            .await?;
+        writer.flush().await?;
 
-        // Wait for all tasks to complete
-        let (handler_result, messages1, messages2) =
-            futures::join!(handler_task, consumer1_task, consumer2_task);
-
-        // Verify handler completed successfully
-        handler_result?;
+        let (messages1, messages2) = futures::join!(consumer1_task, consumer2_task);
+        writer.close().await?;
 
         // Verify messages were received correctly
         let messages1 = messages1?;
@@ -868,28 +881,8 @@ mod integration_tests {
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "single_topic".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create test output stream with various data types
-        let stream = create_test_output_stream(vec![
-            Value::Int(123),
-            Value::Float(456.789),
-            Value::Str("test_string".into()),
-            Value::Bool(false),
-            Value::Unit,
-        ]);
-
-        // Provide stream to handler
-        let streams = BTreeMap::from([(var.clone(), stream)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![var.clone()], vec![]).await?;
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -907,15 +900,18 @@ mod integration_tests {
         // Wait for consumer to be ready
         ready_rx.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
-
-        // Wait for completion
-        let (handler_result, messages) = futures::join!(handler_task, consumer_task);
-
-        // Verify results
-        handler_result?;
-        let messages = messages?;
+        for value in [
+            Value::Int(123),
+            Value::Float(456.789),
+            Value::Str("test_string".into()),
+            Value::Bool(false),
+            Value::Unit,
+        ] {
+            writer.send(OutputBatch::update(var.clone(), value)).await?;
+        }
+        writer.flush().await?;
+        let messages = consumer_task.await?;
+        writer.close().await?;
 
         assert_eq!(messages.len(), 5);
         assert_eq!(messages[0], Value::Int(123));
@@ -941,22 +937,8 @@ mod integration_tests {
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "empty_topic".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create empty output stream
-        let stream = create_test_output_stream(vec![]);
-
-        // Provide stream to handler
-        let streams = BTreeMap::from([(var.clone(), stream)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![var.clone()], vec![]).await?;
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -974,15 +956,9 @@ mod integration_tests {
         // Wait for consumer to be ready
         ready_rx.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
-
-        // Wait for completion
-        let (handler_result, messages) = futures::join!(handler_task, consumer_task);
-
-        // Verify results
-        handler_result?;
-        let messages = messages?;
+        writer.flush().await?;
+        let messages = consumer_task.await?;
+        writer.close().await?;
 
         // Should receive no messages
         assert_eq!(messages.len(), 0);
@@ -1008,29 +984,13 @@ mod integration_tests {
         var_topics.insert(var2.clone(), "multi_topic2".to_string());
         var_topics.insert(var3.clone(), "multi_topic3".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
+        let mut writer = open_redis_output::<Value>(
+            host,
             var_topics,
+            vec![var1.clone(), var2.clone(), var3.clone()],
             vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create test output streams
-        let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
-        let stream2 =
-            create_test_output_stream(vec![Value::Str("a".into()), Value::Str("b".into())]);
-        let stream3 = create_test_output_stream(vec![Value::Bool(true), Value::Bool(false)]);
-
-        // Provide streams to handler
-        let streams = BTreeMap::from([
-            (var1.clone(), stream1),
-            (var2.clone(), stream2),
-            (var3.clone(), stream3),
-        ]);
-        handler.provide_streams(streams);
+        )
+        .await?;
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();
@@ -1068,15 +1028,21 @@ mod integration_tests {
         ready_rx2.await.unwrap();
         ready_rx3.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
+        for (variable, value) in [
+            (var1.clone(), Value::Int(1)),
+            (var1, Value::Int(2)),
+            (var2.clone(), Value::Str("a".into())),
+            (var2, Value::Str("b".into())),
+            (var3.clone(), Value::Bool(true)),
+            (var3, Value::Bool(false)),
+        ] {
+            writer.send(OutputBatch::update(variable, value)).await?;
+        }
+        writer.flush().await?;
 
-        // Wait for completion
-        let (handler_result, messages1, messages2, messages3) =
-            futures::join!(handler_task, consumer1_task, consumer2_task, consumer3_task);
-
-        // Verify results
-        handler_result?;
+        let (messages1, messages2, messages3) =
+            futures::join!(consumer1_task, consumer2_task, consumer3_task);
+        writer.close().await?;
         let messages1 = messages1?;
         let messages2 = messages2?;
         let messages3 = messages3?;
@@ -1109,25 +1075,8 @@ mod integration_tests {
         let mut var_topics = BTreeMap::new();
         var_topics.insert(var.clone(), "json_topic".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create test output stream with complex data
-        let stream = create_test_output_stream(vec![
-            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
-            Value::Str("special chars: àáâãäåæçèéêë".into()),
-        ]);
-
-        // Provide stream to handler
-        let streams = BTreeMap::from([(var.clone(), stream)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![var.clone()], vec![]).await?;
 
         // Create oneshot channel for coordination
         let ready_channel = oneshot::channel();
@@ -1145,13 +1094,21 @@ mod integration_tests {
         // Wait for consumer to be ready
         ready_rx.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
-
-        // Wait for both tasks to complete
-        let (handler_result, messages) = futures::join!(handler_task, consumer_task);
-        handler_result?;
-        let messages = messages?;
+        writer
+            .send(OutputBatch::update(
+                var.clone(),
+                Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
+            ))
+            .await?;
+        writer
+            .send(OutputBatch::update(
+                var,
+                Value::Str("special chars: àáâãäåæçèéêë".into()),
+            ))
+            .await?;
+        writer.flush().await?;
+        let messages = consumer_task.await?;
+        writer.close().await?;
 
         // Convert messages back to JSON strings for verification
         let raw_messages: Vec<String> = messages
@@ -1192,28 +1149,9 @@ mod integration_tests {
         var_topics.insert(var1.clone(), "concurrent_topic1".to_string());
         var_topics.insert(var2.clone(), "concurrent_topic2".to_string());
 
-        // Create RedisOutputHandler
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![],
-        )?;
-        handler.connect().await?;
-
-        // Create output streams with timing delays to test concurrency
-        let stream1 = create_test_output_stream(vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
-
-        let stream2 = create_test_output_stream(vec![
-            Value::Str("a".into()),
-            Value::Str("b".into()),
-            Value::Str("c".into()),
-        ]);
-
-        // Provide streams to handler
-        let streams = BTreeMap::from([(var1.clone(), stream1), (var2.clone(), stream2)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![var1.clone(), var2.clone()], vec![])
+                .await?;
 
         // Create oneshot channels for coordination
         let ready_channel1 = oneshot::channel();
@@ -1241,15 +1179,20 @@ mod integration_tests {
         ready_rx1.await.unwrap();
         ready_rx2.await.unwrap();
 
-        // Run handler
-        let handler_task = handler.run();
+        for (variable, value) in [
+            (var1.clone(), Value::Int(1)),
+            (var1.clone(), Value::Int(2)),
+            (var1, Value::Int(3)),
+            (var2.clone(), Value::Str("a".into())),
+            (var2.clone(), Value::Str("b".into())),
+            (var2, Value::Str("c".into())),
+        ] {
+            writer.send(OutputBatch::update(variable, value)).await?;
+        }
+        writer.flush().await?;
 
-        // Wait for completion
-        let (handler_result, messages1, messages2) =
-            futures::join!(handler_task, consumer1_task, consumer2_task);
-
-        // Verify results
-        handler_result?;
+        let (messages1, messages2) = futures::join!(consumer1_task, consumer2_task);
+        writer.close().await?;
         let messages1 = messages1?;
         let messages2 = messages2?;
 
@@ -1283,25 +1226,13 @@ mod integration_tests {
         var_topics.insert(main_var.clone(), "main_topic".to_string());
         var_topics.insert(aux_var.clone(), "aux_topic".to_string());
 
-        let aux_info = vec![aux_var.clone()];
-
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
+        let mut writer = open_redis_output::<Value>(
+            host,
             var_topics,
-            aux_info,
-        )?;
-        handler.connect().await?;
-
-        let main_stream = create_test_output_stream(vec![Value::Int(10), Value::Int(20)]);
-        let aux_stream = create_test_output_stream(vec![Value::Int(30), Value::Int(40)]);
-
-        let streams = BTreeMap::from([
-            (main_var.clone(), main_stream),
-            (aux_var.clone(), aux_stream),
-        ]);
-        handler.provide_streams(streams);
+            vec![main_var.clone()],
+            vec![aux_var.clone()],
+        )
+        .await?;
 
         let ready_channel1 = oneshot::channel();
         let (ready_tx1, ready_rx1) = ready_channel1.into_split();
@@ -1326,12 +1257,18 @@ mod integration_tests {
         ready_rx1.await.unwrap();
         ready_rx2.await.unwrap();
 
-        let handler_task = handler.run();
+        for (variable, value) in [
+            (main_var.clone(), Value::Int(10)),
+            (main_var, Value::Int(20)),
+            (aux_var.clone(), Value::Int(30)),
+            (aux_var, Value::Int(40)),
+        ] {
+            writer.send(OutputBatch::update(variable, value)).await?;
+        }
+        writer.flush().await?;
 
-        let (handler_result, main_messages, aux_messages) =
-            futures::join!(handler_task, main_consumer_task, aux_consumer_task);
-
-        handler_result?;
+        let (main_messages, aux_messages) = futures::join!(main_consumer_task, aux_consumer_task);
+        writer.close().await?;
         let main_messages = main_messages?;
         let aux_messages = aux_messages?;
 
@@ -1354,18 +1291,8 @@ mod integration_tests {
         let mut var_topics = BTreeMap::new();
         var_topics.insert(aux_var.clone(), "aux_only_topic".to_string());
 
-        let mut handler = RedisOutputHandler::new(
-            executor.clone(),
-            REDIS_HOSTNAME,
-            Some(host),
-            var_topics,
-            vec![aux_var.clone()],
-        )?;
-        handler.connect().await?;
-
-        let aux_stream = create_test_output_stream(vec![Value::Int(1), Value::Int(2)]);
-        let streams = BTreeMap::from([(aux_var.clone(), aux_stream)]);
-        handler.provide_streams(streams);
+        let mut writer =
+            open_redis_output::<Value>(host, var_topics, vec![], vec![aux_var.clone()]).await?;
 
         let ready_channel = oneshot::channel();
         let (ready_tx, ready_rx) = ready_channel.into_split();
@@ -1380,11 +1307,15 @@ mod integration_tests {
 
         ready_rx.await.unwrap();
 
-        let handler_task = handler.run();
-        let (handler_result, aux_messages) = futures::join!(handler_task, aux_consumer_task);
-
-        handler_result?;
-        let aux_messages = aux_messages?;
+        writer
+            .send(OutputBatch::update(aux_var.clone(), Value::Int(1)))
+            .await?;
+        writer
+            .send(OutputBatch::update(aux_var, Value::Int(2)))
+            .await?;
+        writer.flush().await?;
+        let aux_messages = aux_consumer_task.await?;
+        writer.close().await?;
         assert_eq!(
             aux_messages.len(),
             0,
@@ -1395,25 +1326,23 @@ mod integration_tests {
     }
 
     #[apply(smol_test)]
-    async fn test_redis_output_handler_error_handling(
-        executor: Rc<LocalExecutor<'static>>,
+    async fn test_redis_output_configuration_is_resource_free(
+        _executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        // Test with invalid Redis host
-        let var = VarName::new("error_var");
-
-        let mut var_topics = BTreeMap::new();
-        var_topics.insert(var.clone(), "error_topic".to_string());
-
-        // Creating the handler should succeed even with invalid host
-        let result = RedisOutputHandler::<Value>::new(
-            executor.clone(),
-            "invalid-host",
-            Some(9999),
-            var_topics,
-            vec![],
+        let variable = VarName::new("error_var");
+        let route = Route::new("error_topic", None)?;
+        let builder = OutputBackendBuilder::<Value>::from_destination(
+            OutputDestination::new(
+                "redis",
+                OutputBackendConfig::redis("invalid-host", Some(9999)),
+            )
+            .with_route_catalog(BTreeMap::from([(variable.clone(), route)])),
         );
-        assert!(result.is_ok());
-
+        assert!(
+            builder
+                .resolve([variable], std::iter::empty::<VarName>(), None)
+                .is_ok()
+        );
         Ok(())
     }
 }

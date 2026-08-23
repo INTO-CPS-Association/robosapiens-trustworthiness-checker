@@ -59,20 +59,41 @@ while direct-only and selection-only are incomparable.
 
 ## Rust construction
 
-The simplest construction selects the reference pair:
+The simplest construction selects the reference pair. Runtimes receive an
+already-open `OutputWriter`; open that writer from a backend before building the
+runtime. For an embedding or test, the manual backend exposes the causal rows to
+the caller:
 
 ```rust,ignore
-use trustworthiness_checker::causal::CausalSet;
+use trustworthiness_checker::causal::{CausalSet, CausalValue};
+use trustworthiness_checker::core::{OutputBackend, OutputInterface};
+use trustworthiness_checker::io::output::ManualOutputBackend;
 use trustworthiness_checker::semantics::CausalRuntimeBuilder;
+
+let (backend, mut causal_rows) =
+    ManualOutputBackend::<CausalValue<CausalSet>>::channel(16);
+let output_writer = backend
+    .open(OutputInterface::outputs(spec.output_vars().iter().cloned())?)
+    .await?;
 
 let runtime = CausalRuntimeBuilder::<CausalSet>::new()
     .executor(executor)
     .model(spec)
     .input(ordinary_input)
-    .output(causal_output_handler)
+    .output_writer(output_writer)
     .build()
-    .await;
+    .await?;
 ```
+
+`causal_rows` receives one `BTreeMap<VarName, CausalValue<CausalSet>>` per
+logical output tick. Other backends can be opened in the same way when they
+accept the selected causal value type; the runtime-facing input is always the
+resulting `OutputWriter`.
+
+`CausalJsonlOutputHandler` is retained as a compatibility name for the
+standalone adapter that writes named causal streams to JSONL. It is not passed to
+the runtime builder; use `.output_writer(...)` with a writer opened from a
+backend as above.
 
 Role-aware construction uses `CausalRuntimeBuilder::<RoleCausalSet>::role_new()`
 or `CausalRuntimeBuilder::<RoleCausalAntichain>::role_new()`. The checked
@@ -160,6 +181,13 @@ each alternative. Cause, role, and alternative ordering is deterministic.
 For lossless serialization of reports containing non-finite floats, use
 `report_batch_json` or `report_batch_json_line`; direct `serde_json`
 serialization only supports the strict-JSON subset.
+
+The JSONL adapter has an equal-row contract: every declared causal stream must
+yield exactly one value for each report row and all streams must end together.
+If one stream reaches EOF while another stream has already completed the row or
+is still pending, the adapter returns an actionable error naming the EOF,
+completed, and pending variables. It does not write a partial row, and pending
+sibling `next()` operations are cancelled rather than awaited indefinitely.
 
 The scalar fragment includes Boolean, integer, floating-point, string, and unit
 values; scalar operators; `if`, `sindex`, `default`, `init`, `update`,

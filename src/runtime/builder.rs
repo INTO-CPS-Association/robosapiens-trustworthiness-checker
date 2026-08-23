@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use std::rc::Rc;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,11 +19,11 @@ use crate::{
         args::{MstloAlgorithm, MstloSynchronizationStrategy},
     },
     core::{
-        JsonStreamValue, OutputHandler, RosStreamValue, RuntimeSpec, Semantics, StreamData,
+        JsonStreamValue, OutputWriter, RosStreamValue, RuntimeSpec, Semantics, StreamData,
         StreamType,
     },
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputPipeline, OutputHandlerBuilder},
+    io::{InputPipeline, OutputBackendBuilder},
     lang::dsrv::{
         DsrvPipelineError, TypeCheckOptions,
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
@@ -177,18 +178,7 @@ pub trait RuntimeBuilder<M, V: StreamData> {
 
     fn input(self, input: InputStream<V>) -> Self;
 
-    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self;
-
-    fn maybe_output(self, output: Option<Box<dyn OutputHandler<Val = V>>>) -> Self
-    where
-        Self: Sized,
-    {
-        if let Some(output) = output {
-            self.output(output)
-        } else {
-            self
-        }
-    }
+    fn output_writer(self, writer: OutputWriter<V>) -> Self;
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime>;
 }
@@ -216,15 +206,7 @@ pub trait RuntimeBuilderDyn<M, V: StreamData>: 'static {
 
     fn input(self: Box<Self>, input: crate::InputStream<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn output(
-        self: Box<Self>,
-        output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
-
-    fn maybe_output(
-        self: Box<Self>,
-        output: Option<Box<dyn OutputHandler<Val = V>>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+    fn output_writer(self: Box<Self>, writer: OutputWriter<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
     fn build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>>;
 }
@@ -264,18 +246,8 @@ impl<
         Box::new(MonBuilder::input(*self, input))
     }
 
-    fn output(
-        self: Box<Self>,
-        output: Box<dyn OutputHandler<Val = V>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
-        Box::new(MonBuilder::output(*self, output))
-    }
-
-    fn maybe_output(
-        self: Box<Self>,
-        output: Option<Box<dyn OutputHandler<Val = V>>>,
-    ) -> Box<dyn RuntimeBuilderDyn<M, V>> {
-        Box::new(MonBuilder::maybe_output(*self, output))
+    fn output_writer(self: Box<Self>, writer: OutputWriter<V>) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+        Box::new(MonBuilder::output_writer(*self, writer))
     }
 
     fn build(self: Box<Self>) -> LocalBoxFuture<'static, Box<dyn Runtime>> {
@@ -322,7 +294,7 @@ fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecif
 fn configure_reconfigurable_builder<AC, MS>(
     builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     input_pipeline: InputPipeline<Value>,
-    output_builder: OutputHandlerBuilder<Value>,
+    output_builder: OutputBackendBuilder<Value>,
     reconf_topic: Option<String>,
     use_context_transfer: bool,
 ) -> ReconfSemiSyncRuntimeBuilder<AC, MS>
@@ -369,8 +341,8 @@ impl<
         Self(self.0.input(input))
     }
 
-    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
-        Self(self.0.output(output))
+    fn output_writer(self, writer: OutputWriter<V>) -> Self {
+        Self(self.0.output_writer(writer))
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
@@ -405,8 +377,8 @@ impl<
         Self(self.0.input(input))
     }
 
-    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
-        Self(self.0.output(output))
+    fn output_writer(self, writer: OutputWriter<V>) -> Self {
+        Self(self.0.output_writer(writer))
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
@@ -621,13 +593,58 @@ impl Debug for DistributionMode {
     }
 }
 
+fn distributed_constraint_scheduler_only(
+    runtime: RuntimeSpec,
+    distribution_mode: &DistributionMode,
+) -> bool {
+    if runtime != RuntimeSpec::Distributed {
+        return false;
+    }
+
+    match distribution_mode {
+        DistributionMode::DistributedOptimizedStatic(_, constraints)
+        | DistributionMode::DistributedOptimizedDynamic(_, constraints)
+        | DistributionMode::DistributedOptimizedStaticSat(_, constraints)
+        | DistributionMode::DistributedOptimizedDynamicSat(_, constraints)
+        | DistributionMode::DistributedPredefinedOptimized(_, constraints)
+        | DistributionMode::DistributedPredefinedOptimizedSat(_, constraints) => {
+            !constraints.is_empty()
+        }
+        DistributionMode::DistributedRosOptimizedStatic(_, constraints, _)
+        | DistributionMode::DistributedRosOptimizedDynamic(_, constraints, _)
+        | DistributionMode::DistributedRosOptimizedStaticSat(_, constraints, _)
+        | DistributionMode::DistributedRosOptimizedDynamicSat(_, constraints, _) => {
+            !constraints.is_empty()
+        }
+        _ => false,
+    }
+}
+
+async fn reject_simultaneous_output_sources<V>(mut writer: OutputWriter<V>) -> anyhow::Error {
+    let configuration_error =
+        "output_writer and output_pipeline_builder cannot be configured together";
+    match writer.close().await {
+        Ok(()) => anyhow::anyhow!(configuration_error),
+        Err(close_error) => anyhow::anyhow!(
+            "{configuration_error}; additionally failed to close the supplied output writer: {close_error}"
+        ),
+    }
+}
+
+async fn close_scheduler_only_output_writer<V>(mut writer: OutputWriter<V>) -> anyhow::Result<()> {
+    writer
+        .close()
+        .await
+        .map_err(|error| anyhow::anyhow!("scheduler-only output writer close failed: {error}"))
+}
+
 pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
     input: Option<InputStream<V>>,
     input_pipeline: Option<InputPipeline<V>>,
-    pub output: Option<Box<dyn OutputHandler<Val = V>>>,
-    pub output_handler_builder: Option<OutputHandlerBuilder<V>>,
+    pub output_writer: Option<OutputWriter<V>>,
+    pub output_pipeline_builder: Option<OutputBackendBuilder<V>>,
     pub runtime: RuntimeSpec,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
@@ -643,6 +660,75 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
 }
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
+    pub fn new() -> Self {
+        Self::with_defaults(RuntimeSpec::Async)
+    }
+
+    fn with_defaults(runtime: RuntimeSpec) -> Self {
+        Self {
+            executor: None,
+            model: None,
+            input: None,
+            input_pipeline: None,
+            output_writer: None,
+            output_pipeline_builder: None,
+            runtime,
+            semantics: Semantics::GradualTypedUntimed,
+            distribution_mode: DistributionMode::CentralMonitor,
+            distribution_mode_builder: None,
+            scheduler_mode: SchedulerCommunication::Null,
+            reconf_topic: None,
+            use_context_transfer: true,
+            var_msg_types: None,
+            topic_mapping: None,
+            mstlo_algorithm: Algorithm::default(),
+            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
+            mstlo_variables: Variables::new(),
+        }
+    }
+
+    pub fn executor(self, executor: Rc<LocalExecutor<'static>>) -> Self {
+        Self {
+            executor: Some(executor),
+            ..self
+        }
+    }
+
+    pub fn maybe_executor(self, executor: Option<Rc<LocalExecutor<'static>>>) -> Self {
+        match executor {
+            Some(executor) => self.executor(executor),
+            None => self,
+        }
+    }
+
+    pub fn model(self, model: M) -> Self {
+        Self {
+            model: Some(model),
+            ..self
+        }
+    }
+
+    pub fn maybe_model(self, model: Option<M>) -> Self {
+        match model {
+            Some(model) => self.model(model),
+            None => self,
+        }
+    }
+
+    pub fn input(self, input: InputStream<V>) -> Self {
+        Self {
+            input: Some(input),
+            ..self
+        }
+    }
+
+    pub fn output_writer(self, writer: OutputWriter<V>) -> Self {
+        Self {
+            output_writer: Some(writer),
+            ..self
+        }
+    }
+
     pub fn runtime(self, runtime: RuntimeSpec) -> Self {
         Self { runtime, ..self }
     }
@@ -668,9 +754,9 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
-    pub fn output_handler_builder(self, builder: OutputHandlerBuilder<V>) -> Self {
+    pub fn output_pipeline_builder(self, builder: OutputBackendBuilder<V>) -> Self {
         Self {
-            output_handler_builder: Some(builder),
+            output_pipeline_builder: Some(builder),
             ..self
         }
     }
@@ -793,107 +879,57 @@ impl From<MstloSynchronizationStrategy> for SynchronizationStrategy {
     }
 }
 
-impl RuntimeBuilder<LangSpecification, Value> for GeneralRuntimeBuilder<LangSpecification, Value> {
-    type Runtime = Box<dyn Runtime>;
-
-    fn new() -> Self {
-        Self {
-            executor: None,
-            model: None,
-            input: None,
-            input_pipeline: None,
-            output: None,
-            output_handler_builder: None,
-            distribution_mode: DistributionMode::CentralMonitor,
-            distribution_mode_builder: None,
-            runtime: RuntimeSpec::Async,
-            semantics: Semantics::GradualTypedUntimed,
-            var_msg_types: None,
-            topic_mapping: None,
-            scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: None,
-            use_context_transfer: true,
-            mstlo_algorithm: Algorithm::default(),
-            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
-            mstlo_variables: Variables::new(),
-        }
-    }
-
-    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self {
-            executor: Some(ex),
-            ..self
-        }
-    }
-
-    fn model(self, model: LangSpecification) -> Self {
-        Self {
-            model: Some(model),
-            ..self
-        }
-    }
-
-    fn input(self, input: crate::InputStream<Value>) -> Self {
-        Self {
-            input: Some(input),
-            ..self
-        }
-    }
-
-    fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
-        Self {
-            output: Some(output),
-            ..self
-        }
-    }
-
-    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(
-            async move { GeneralRuntimeBuilder::<LangSpecification, Value>::build(self).await },
-        )
-    }
-}
-
 impl GeneralRuntimeBuilder<LangSpecification, Value> {
-    pub async fn build(self) -> Box<dyn Runtime> {
-        match self.model.expect("Model/spec must be set") {
-            LangSpecification::Dsrv(spec) => {
-                GeneralRuntimeBuilder::<DsrvSpecification, Value> {
-                    executor: self.executor,
-                    model: Some(spec),
-                    input: self.input,
-                    input_pipeline: self.input_pipeline,
-                    output: self.output,
-                    output_handler_builder: self.output_handler_builder,
-                    runtime: self.runtime,
-                    semantics: self.semantics,
-                    distribution_mode: self.distribution_mode,
-                    distribution_mode_builder: self.distribution_mode_builder,
-                    scheduler_mode: self.scheduler_mode,
-                    reconf_topic: self.reconf_topic,
-                    use_context_transfer: self.use_context_transfer,
-                    var_msg_types: self.var_msg_types,
-                    topic_mapping: self.topic_mapping,
-                    mstlo_algorithm: self.mstlo_algorithm,
-                    mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
-                    mstlo_variables: self.mstlo_variables,
-                }
-                .build()
-                .await
+    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
+        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+            let writer = self
+                .output_writer
+                .expect("output writer exists after simultaneous-output check");
+            return Err(reject_simultaneous_output_sources(writer).await);
+        }
+        let model = self
+            .model
+            .ok_or_else(|| anyhow::anyhow!("Model/spec must be set"))?;
+        match model {
+            LangSpecification::Dsrv(spec) => GeneralRuntimeBuilder::<DsrvSpecification, Value> {
+                executor: self.executor,
+                model: Some(spec),
+                input: self.input,
+                input_pipeline: self.input_pipeline,
+                output_writer: self.output_writer,
+                output_pipeline_builder: self.output_pipeline_builder,
+                runtime: self.runtime,
+                semantics: self.semantics,
+                distribution_mode: self.distribution_mode,
+                distribution_mode_builder: self.distribution_mode_builder,
+                scheduler_mode: self.scheduler_mode,
+                reconf_topic: self.reconf_topic,
+                use_context_transfer: self.use_context_transfer,
+                var_msg_types: self.var_msg_types,
+                topic_mapping: self.topic_mapping,
+                mstlo_algorithm: self.mstlo_algorithm,
+                mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
+                mstlo_variables: self.mstlo_variables,
             }
+            .build()
+            .await
+            .context("DSRV runtime could not be built"),
             LangSpecification::Mstlo(spec) => {
+                let runtime = match self.runtime {
+                    RuntimeSpec::Mstlo(policy) => RuntimeSpec::Mstlo(policy),
+                    RuntimeSpec::Async => RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
+                    runtime => {
+                        anyhow::bail!("MSTLO specification cannot use {runtime:?}");
+                    }
+                };
                 GeneralRuntimeBuilder::<MstloSpecification, Value> {
                     executor: self.executor,
                     model: Some(spec),
                     input: self.input,
                     input_pipeline: self.input_pipeline,
-                    output: self.output,
-                    output_handler_builder: self.output_handler_builder,
-                    runtime: match self.runtime {
-                        RuntimeSpec::Mstlo(policy) => RuntimeSpec::Mstlo(policy),
-                        RuntimeSpec::Async => RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
-                        runtime => panic!("MSTLO specification cannot use {runtime:?}"),
-                    },
+                    output_writer: self.output_writer,
+                    output_pipeline_builder: self.output_pipeline_builder,
+                    runtime,
                     semantics: self.semantics,
                     distribution_mode: DistributionMode::CentralMonitor,
                     distribution_mode_builder: None,
@@ -908,133 +944,9 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                 }
                 .build()
                 .await
+                .context("MSTLO runtime could not be built")
             }
         }
-    }
-}
-
-impl RuntimeBuilder<DsrvSpecification, Value> for GeneralRuntimeBuilder<DsrvSpecification, Value> {
-    type Runtime = Box<dyn Runtime>;
-
-    // TODO: Refactor. This needs to either reuse defaults used within the CLI parser, or not allow
-    // constructing without args.
-    fn new() -> Self {
-        Self {
-            executor: None,
-            model: None,
-            input: None,
-            input_pipeline: None,
-            output: None,
-            output_handler_builder: None,
-            distribution_mode: DistributionMode::CentralMonitor,
-            distribution_mode_builder: None,
-            runtime: RuntimeSpec::Async,
-            semantics: Semantics::GradualTypedUntimed,
-            var_msg_types: None,
-            topic_mapping: None,
-            scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: None,
-            use_context_transfer: true,
-            mstlo_algorithm: Algorithm::default(),
-            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
-            mstlo_variables: Variables::new(),
-        }
-    }
-
-    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self {
-            executor: Some(ex),
-            ..self
-        }
-    }
-
-    fn model(self, model: DsrvSpecification) -> Self {
-        Self {
-            model: Some(model),
-            ..self
-        }
-    }
-
-    fn input(self, input: crate::InputStream<Value>) -> Self {
-        Self {
-            input: Some(input),
-            ..self
-        }
-    }
-
-    fn output(self, output: Box<dyn OutputHandler<Val = Value>>) -> Self {
-        Self {
-            output: Some(output),
-            ..self
-        }
-    }
-
-    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(
-            async move { GeneralRuntimeBuilder::<DsrvSpecification, Value>::build(self).await },
-        )
-    }
-}
-
-impl<V> RuntimeBuilder<MstloSpecification, V> for GeneralRuntimeBuilder<MstloSpecification, V>
-where
-    V: MstloStreamValue + JsonStreamValue + RosStreamValue,
-{
-    type Runtime = Box<dyn Runtime>;
-
-    fn new() -> Self {
-        Self {
-            executor: None,
-            model: None,
-            input: None,
-            input_pipeline: None,
-            output: None,
-            output_handler_builder: None,
-            distribution_mode: DistributionMode::CentralMonitor,
-            distribution_mode_builder: None,
-            runtime: RuntimeSpec::Mstlo(ExecutionPolicy::Buffered),
-            semantics: Semantics::GradualTypedUntimed,
-            var_msg_types: None,
-            topic_mapping: None,
-            scheduler_mode: SchedulerCommunication::Null,
-            reconf_topic: None,
-            use_context_transfer: true,
-            mstlo_algorithm: Algorithm::default(),
-            mstlo_synchronization_strategy: SynchronizationStrategy::default(),
-            mstlo_variables: Variables::new(),
-        }
-    }
-
-    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self {
-            executor: Some(ex),
-            ..self
-        }
-    }
-
-    fn model(self, model: MstloSpecification) -> Self {
-        Self {
-            model: Some(model),
-            ..self
-        }
-    }
-
-    fn input(self, input: crate::InputStream<V>) -> Self {
-        Self {
-            input: Some(input),
-            ..self
-        }
-    }
-
-    fn output(self, output: Box<dyn OutputHandler<Val = V>>) -> Self {
-        Self {
-            output: Some(output),
-            ..self
-        }
-    }
-
-    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        Box::pin(async move { GeneralRuntimeBuilder::<MstloSpecification, V>::build(self).await })
     }
 }
 
@@ -1054,41 +966,63 @@ where
         }
     }
 
-    pub async fn build(self) -> Box<dyn Runtime> {
-        assert!(
-            self.input_pipeline.is_none(),
-            "InputPipeline is only supported by ReconfigurableSemiSync DSRV runtimes"
-        );
-        let RuntimeSpec::Mstlo(execution_policy) = self.runtime else {
-            panic!("MSTLO builder requires RuntimeSpec::Mstlo")
+    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
+        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+            let writer = self
+                .output_writer
+                .expect("output writer exists after simultaneous-output check");
+            return Err(reject_simultaneous_output_sources(writer).await);
+        }
+        if self.input_pipeline.is_some() {
+            anyhow::bail!(
+                "InputPipeline is only supported by ReconfigurableSemiSync DSRV runtimes"
+            );
+        }
+        let execution_policy = match self.runtime {
+            RuntimeSpec::Mstlo(execution_policy) => execution_policy,
+            RuntimeSpec::Async => ExecutionPolicy::Buffered,
+            runtime => anyhow::bail!("MSTLO builder cannot use {runtime:?}"),
         };
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("MSTLO model was not set"))?;
+        let executor = self
+            .executor
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("MSTLO executor was not set"))?;
+        let input = self
+            .input
+            .ok_or_else(|| anyhow::anyhow!("MSTLO input stream was not set"))?;
+        let output_names = model.output_vars();
+        let auxiliary_names = model.aux_vars();
         let mut builder = MstloRuntimeBuilder::<V>::new()
-            .maybe_executor(self.executor)
-            .maybe_model(self.model)
+            .executor(executor.clone())
+            .model(
+                self.model
+                    .ok_or_else(|| anyhow::anyhow!("MSTLO model was not set"))?,
+            )
             .execution_policy(execution_policy)
             .algorithm(self.mstlo_algorithm)
             .semantics(Self::mstlo_semantics(self.semantics))
             .synchronization_strategy(self.mstlo_synchronization_strategy)
-            .variables(self.mstlo_variables);
+            .variables(self.mstlo_variables)
+            .input(input);
 
-        builder = match self.input {
-            Some(input) => builder.input(input),
-            None => builder,
-        };
-
-        builder = if let Some(output_handler_builder) = self.output_handler_builder {
-            let output = output_handler_builder
-                .build()
+        builder = if let Some(output_backend_builder) = self.output_pipeline_builder {
+            let writer = output_backend_builder
+                .executor(executor)
+                .build(&output_names, &auxiliary_names, None)
                 .await
-                .expect("MSTLO output handler could not be built");
-            builder.output(output)
-        } else if let Some(output) = self.output {
-            builder.output(output)
+                .context("MSTLO output pipeline could not be opened")?;
+            builder.output_writer(writer)
+        } else if let Some(writer) = self.output_writer {
+            builder.output_writer(writer)
         } else {
-            builder
+            anyhow::bail!("MSTLO output writer was not set");
         };
 
-        builder.build().await
+        Ok(builder.build().await)
     }
 }
 
@@ -1102,12 +1036,12 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_pipeline: Option<InputPipeline>,
-        output_handler_builder: Option<OutputHandlerBuilder>,
+        output_pipeline_builder: Option<OutputBackendBuilder>,
         reconf_topic: Option<String>,
         use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
         var_msg_types: Option<MsgTypeMapping>,
-    ) -> Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> {
+    ) -> anyhow::Result<Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
@@ -1150,53 +1084,66 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::Untimed) => {
                     let builder = configure_reconfigurable_builder(
-                        ReconfSemiSyncRuntimeBuilder::<
-                            SemiSyncValueConfig,
-                            UntimedDsrvSemantics,
-                        >::new()
-                        .parse_spec(parse_unchecked_spec),
-                        input_pipeline
-                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
-                        output_handler_builder.expect(
-                            "Output handler builder required for ReconfigurableSemiSync runtime",
-                        ),
-                        reconf_topic,
-                        use_context_transfer,
-                    );
+                    ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new(
+                    )
+                    .parse_spec(parse_unchecked_spec),
+                    input_pipeline.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Input pipeline required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    output_pipeline_builder.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    reconf_topic,
+                    use_context_transfer,
+                );
                     Box::new(builder)
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::TypedUntimed) => {
                     let builder = configure_reconfigurable_builder(
-                        ReconfSemiSyncRuntimeBuilder::<
-                            CheckedSemiSyncValueConfig,
-                            CheckedUntimedDsrvSemantics,
-                        >::new()
-                        .parse_spec(parse_checked_spec),
-                        input_pipeline
-                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
-                        output_handler_builder.expect(
-                            "Output handler builder required for ReconfigurableSemiSync runtime",
-                        ),
-                        reconf_topic,
-                        use_context_transfer,
-                    );
+                    ReconfSemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()
+                    .parse_spec(parse_checked_spec),
+                    input_pipeline.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Input pipeline required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    output_pipeline_builder.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    reconf_topic,
+                    use_context_transfer,
+                );
                     Box::new(TypeCheckingBuilder(builder))
                 }
                 (RuntimeSpec::ReconfSemiSync, Semantics::GradualTypedUntimed) => {
                     let builder = configure_reconfigurable_builder(
-                        ReconfSemiSyncRuntimeBuilder::<
-                            CheckedSemiSyncValueConfig,
-                            CheckedUntimedDsrvSemantics,
-                        >::new()
-                        .parse_spec(parse_gradually_checked_spec),
-                        input_pipeline
-                            .expect("Input pipeline required for ReconfigurableSemiSync runtime"),
-                        output_handler_builder.expect(
-                            "Output handler builder required for ReconfigurableSemiSync runtime",
-                        ),
-                        reconf_topic,
-                        use_context_transfer,
-                    );
+                    ReconfSemiSyncRuntimeBuilder::<
+                        CheckedSemiSyncValueConfig,
+                        CheckedUntimedDsrvSemantics,
+                    >::new()
+                    .parse_spec(parse_gradually_checked_spec),
+                    input_pipeline.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Input pipeline required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    output_pipeline_builder.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                        )
+                    })?,
+                    reconf_topic,
+                    use_context_transfer,
+                );
                     Box::new(GradualTypeCheckingBuilder(builder))
                 }
                 (RuntimeSpec::Async, Semantics::TypedUntimed) => {
@@ -1224,7 +1171,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     let builder = match distribution_mode {
                         DistributionMode::CentralMonitor => builder,
                         DistributionMode::LocalMonitor(_) => {
-                            todo!("Local monitor not implemented here yet")
+                            anyhow::bail!("Local monitor is not implemented here yet")
                         }
                         DistributionMode::DistributedCentralised(locations) => {
                             let locations = locations
@@ -1375,10 +1322,11 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     Box::new(builder)
                 }
                 (runtime, semantics) => {
-                    panic!(
+                    anyhow::bail!(
                         "Unsupported runtime: {:?} and semantics: {:?} combination",
-                        runtime, semantics
-                    );
+                        runtime,
+                        semantics
+                    )
                 }
             };
 
@@ -1390,18 +1338,24 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             Some(model) => builder.model(model),
             None => builder,
         };
-        builder
+        Ok(builder)
     }
 
-    pub async fn build(self) -> Box<dyn Runtime> {
+    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
+        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+            let writer = self
+                .output_writer
+                .expect("output writer exists after simultaneous-output check");
+            return Err(reject_simultaneous_output_sources(writer).await);
+        }
+
         let distribution_mode = match self.distribution_mode_builder {
-            // TODO: add error handling to this method
             Some(distribution_mode_builder) => {
                 debug!("Building with distribution_mode_builder");
                 distribution_mode_builder
                     .build()
                     .await
-                    .expect("Failed to build distribution mode")
+                    .context("Failed to build distribution mode")?
             }
             None => {
                 debug!(
@@ -1411,23 +1365,42 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.distribution_mode
             }
         };
+        let output_names = self
+            .model
+            .as_ref()
+            .map(Specification::output_vars)
+            .unwrap_or_default();
+        let auxiliary_names = self
+            .model
+            .as_ref()
+            .map(Specification::aux_vars)
+            .unwrap_or_default();
+        let mut configured_output_writer = self.output_writer;
+        let configured_output_pipeline_builder = self.output_pipeline_builder;
+        let output_executor = self.executor.clone();
+        let output_pipeline_builder = configured_output_pipeline_builder.map(|builder| {
+            if let Some(executor) = output_executor.as_ref() {
+                builder.executor(executor.clone())
+            } else {
+                builder
+            }
+        });
+        let scheduler_only =
+            distributed_constraint_scheduler_only(self.runtime, &distribution_mode);
         let (input_pipeline, input) = if self.runtime == RuntimeSpec::ReconfSemiSync {
-            assert!(
-                self.input.is_none(),
-                "ReconfigurableSemiSync runtime requires an InputPipeline"
-            );
+            if self.input.is_some() {
+                anyhow::bail!("ReconfigurableSemiSync runtime requires an InputPipeline");
+            }
             (
-                Some(
-                    self.input_pipeline
-                        .expect("ReconfigurableSemiSync runtime requires an InputPipeline"),
-                ),
+                Some(self.input_pipeline.ok_or_else(|| {
+                    anyhow::anyhow!("ReconfigurableSemiSync runtime requires an InputPipeline")
+                })?),
                 None,
             )
         } else {
-            assert!(
-                self.input_pipeline.is_none(),
-                "InputPipeline is only supported by ReconfigurableSemiSync runtime"
-            );
+            if self.input_pipeline.is_some() {
+                anyhow::bail!("InputPipeline is only supported by ReconfigurableSemiSync runtime");
+            }
             (None, self.input)
         };
         let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
@@ -1439,35 +1412,291 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 distribution_mode,
                 self.scheduler_mode,
                 input_pipeline,
-                self.output_handler_builder.clone(),
+                if scheduler_only {
+                    None
+                } else {
+                    output_pipeline_builder.clone()
+                },
                 self.reconf_topic.clone(),
                 self.use_context_transfer,
                 self.topic_mapping.clone(),
                 self.var_msg_types.clone(),
-            );
-        // Construct inputs and outputs:
-        // Skip this for ReconfigurableSemiSync runtime since we handle builders directly in the match above
+            )?;
+        // Construct the complete output pipeline before the runtime starts.
+        // Runtimes receive one writer and retain their native logical tick shape.
         let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
             builder
         } else {
-            let builder = match input {
+            match input {
                 Some(input) => builder.input(input),
                 None => builder,
-            };
-
-            if let Some(output_handler_builder) = self.output_handler_builder {
-                let output = output_handler_builder
-                    .build()
-                    .await
-                    .expect("DSRV output handler could not be built");
-                builder.output(output)
-            } else if let Some(output) = self.output {
-                builder.output(output)
-            } else {
-                builder
             }
         };
 
-        builder.build().await
+        if scheduler_only {
+            // The direct constraint scheduler has no local monitor and therefore cannot emit
+            // model output. Do not open a configured pipeline in this branch. A writer supplied
+            // by an embedding caller is already open, so close it explicitly and surface a close
+            // failure rather than dropping it.
+            if let Some(writer) = configured_output_writer.take() {
+                close_scheduler_only_output_writer(writer).await?;
+            }
+            return Ok(builder.build().await);
+        }
+
+        let builder = if self.runtime == RuntimeSpec::ReconfSemiSync {
+            builder
+        } else if let Some(output_backend_builder) = output_pipeline_builder {
+            let writer = output_backend_builder
+                .build(&output_names, &auxiliary_names, None)
+                .await
+                .context("DSRV output pipeline could not be opened")?;
+            builder.output_writer(writer)
+        } else if let Some(writer) = configured_output_writer {
+            builder.output_writer(writer)
+        } else {
+            builder
+        };
+
+        Ok(builder.build().await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, collections::BTreeMap};
+
+    use async_trait::async_trait;
+    use petgraph::graph::DiGraph;
+
+    use super::*;
+    use crate::core::{
+        OutputBackend, OutputError, OutputInterface, OutputWriter, empty_input_stream,
+    };
+    use crate::distributed::distribution_graphs::{
+        DistributionGraph, GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
+    };
+    use crate::io::output::{AsyncFnSink, OutputBackendConfig};
+    use crate::lang::mstlo::parse_named_properties;
+
+    struct FailingOutputBackend;
+
+    #[async_trait(?Send)]
+    impl OutputBackend for FailingOutputBackend {
+        type Val = Value;
+
+        async fn open(
+            &self,
+            _interface: OutputInterface,
+        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+            Err(OutputError::backend("intentional output open failure"))
+        }
+    }
+
+    fn failing_output_builder() -> OutputBackendBuilder<Value> {
+        OutputBackendBuilder::new(OutputBackendConfig::custom(FailingOutputBackend))
+    }
+
+    #[derive(Clone)]
+    struct CountingOutputBackend {
+        opens: Rc<Cell<usize>>,
+        closes: Rc<Cell<usize>>,
+    }
+
+    #[async_trait(?Send)]
+    impl OutputBackend for CountingOutputBackend {
+        type Val = Value;
+
+        async fn open(
+            &self,
+            _interface: OutputInterface,
+        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+            self.opens.set(self.opens.get() + 1);
+            let closes = self.closes.clone();
+            let sink = AsyncFnSink::with_close(
+                |_batch: crate::OutputBatch<Value>| async { Ok::<(), OutputError>(()) },
+                move || {
+                    closes.set(closes.get() + 1);
+                    async { Ok::<(), OutputError>(()) }
+                },
+            );
+            Ok(OutputWriter::from_sink(sink))
+        }
+    }
+
+    fn labelled_test_graph() -> LabelledDistributionGraph {
+        let mut graph = DiGraph::new();
+        let a = graph.add_node(NodeName::new("A"));
+        let b = graph.add_node(NodeName::new("B"));
+        graph.add_edge(a, b, 1);
+        graph.add_edge(b, a, 1);
+        GenericLabelledDistributionGraph {
+            dist_graph: Rc::new(DistributionGraph {
+                central_monitor: a,
+                graph,
+            }),
+            var_names: Vec::new(),
+            node_labels: BTreeMap::new(),
+        }
+    }
+
+    fn distributed_constraint_builder(
+        output_writer: Option<OutputWriter<Value>>,
+        output_pipeline_builder: Option<OutputBackendBuilder<Value>>,
+    ) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
+        let spec = "in x\nout c\nc = monitored_at(x, A)"
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let mut builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+            .executor(Rc::new(LocalExecutor::new()))
+            .model(spec)
+            .input(empty_input_stream())
+            .distribution_mode(DistributionMode::DistributedPredefinedOptimized(
+                labelled_test_graph(),
+                vec![VarName::new("c")],
+            ))
+            .runtime(RuntimeSpec::Distributed)
+            .semantics(Semantics::Untimed)
+            .var_msg_types(BTreeMap::new());
+        if let Some(writer) = output_writer {
+            builder = builder.output_writer(writer);
+        }
+        if let Some(output_pipeline_builder) = output_pipeline_builder {
+            builder = builder.output_pipeline_builder(output_pipeline_builder);
+        }
+        builder
+    }
+
+    #[test]
+    fn dsrv_output_open_failure_is_returned_from_build() {
+        let executor = Rc::new(LocalExecutor::new());
+        let spec = "out z\nz = 1".parse::<DsrvSpecification>().unwrap();
+        let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+            .executor(executor)
+            .model(spec)
+            .input(empty_input_stream())
+            .output_pipeline_builder(failing_output_builder())
+            .runtime(RuntimeSpec::SemiSync)
+            .semantics(Semantics::Untimed);
+
+        let result = smol::block_on(builder.build());
+        let error = match result {
+            Ok(_) => panic!("a failing output backend must make build fail"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("DSRV output pipeline could not be opened"));
+        assert!(
+            message.contains("intentional output open failure"),
+            "unexpected DSRV build error: {message}"
+        );
+    }
+
+    #[test]
+    fn mstlo_output_open_failure_is_returned_from_build() {
+        let executor = Rc::new(LocalExecutor::new());
+        let spec = parse_named_properties("out: x > 0").unwrap();
+        let builder = GeneralRuntimeBuilder::<MstloSpecification, Value>::new()
+            .executor(executor)
+            .model(spec)
+            .input(empty_input_stream())
+            .output_pipeline_builder(failing_output_builder())
+            .runtime(RuntimeSpec::Mstlo(ExecutionPolicy::Buffered));
+
+        let result = smol::block_on(builder.build());
+        let error = match result {
+            Ok(_) => panic!("a failing output backend must make build fail"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("MSTLO output pipeline could not be opened"));
+        assert!(
+            message.contains("intentional output open failure"),
+            "unexpected MSTLO build error: {message}"
+        );
+    }
+
+    fn counted_writer(closes: Rc<Cell<usize>>) -> OutputWriter<Value> {
+        let sink = AsyncFnSink::with_close(
+            |_batch: crate::OutputBatch<Value>| async { Ok::<(), OutputError>(()) },
+            move || {
+                closes.set(closes.get() + 1);
+                async { Ok::<(), OutputError>(()) }
+            },
+        );
+        OutputWriter::from_sink(sink)
+    }
+
+    #[test]
+    fn scheduler_only_distribution_does_not_open_local_output_pipeline() {
+        let opens = Rc::new(Cell::new(0));
+        let closes = Rc::new(Cell::new(0));
+        let output_builder =
+            OutputBackendBuilder::new(OutputBackendConfig::custom(CountingOutputBackend {
+                opens: opens.clone(),
+                closes: closes.clone(),
+            }));
+
+        let runtime =
+            smol::block_on(distributed_constraint_builder(None, Some(output_builder)).build())
+                .expect("scheduler-only distributed runtime should build without local output");
+
+        assert_eq!(
+            opens.get(),
+            0,
+            "scheduler-only mode must not open local output"
+        );
+        assert_eq!(closes.get(), 0, "no output writer was opened");
+        drop(runtime);
+    }
+
+    #[test]
+    fn scheduler_only_distribution_closes_an_already_open_writer() {
+        let closes = Rc::new(Cell::new(0));
+        let runtime = smol::block_on(
+            distributed_constraint_builder(Some(counted_writer(closes.clone())), None).build(),
+        )
+        .expect("scheduler-only distributed runtime should build");
+
+        assert_eq!(
+            closes.get(),
+            1,
+            "unused supplied writer must be closed once"
+        );
+        drop(runtime);
+    }
+
+    #[test]
+    fn simultaneous_output_sources_are_rejected_without_opening_the_pipeline() {
+        let opens = Rc::new(Cell::new(0));
+        let closes = Rc::new(Cell::new(0));
+        let output_builder =
+            OutputBackendBuilder::new(OutputBackendConfig::custom(CountingOutputBackend {
+                opens: opens.clone(),
+                closes: closes.clone(),
+            }));
+        let result = smol::block_on(
+            distributed_constraint_builder(
+                Some(counted_writer(closes.clone())),
+                Some(output_builder),
+            )
+            .build(),
+        );
+
+        let error = match result {
+            Ok(_) => panic!("two output sources must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("output_writer and output_pipeline_builder")
+        );
+        assert_eq!(opens.get(), 0);
+        assert_eq!(
+            closes.get(),
+            1,
+            "the supplied writer must be closed on rejection"
+        );
     }
 }

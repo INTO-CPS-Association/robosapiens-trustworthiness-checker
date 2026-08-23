@@ -1,9 +1,49 @@
-mod manual_output_handler;
-pub use manual_output_handler::ManualOutputHandler;
-mod null_output_handler;
-pub use null_output_handler::{LimitedNullOutputHandler, NullOutputHandler};
+//! Test input helpers and resource-free output backend constructors.
 mod manual_input;
 pub(crate) use manual_input::from_streams;
+
+#[cfg(test)]
+pub(crate) async fn manual_output<V: crate::core::StreamData>(
+    variables: std::collections::BTreeSet<crate::VarName>,
+) -> (
+    crate::core::OutputWriter<V>,
+    crate::core::OutputStream<std::collections::BTreeMap<crate::VarName, V>>,
+) {
+    use crate::core::{OutputBackend, OutputInterface};
+    let (backend, receiver) = crate::io::output::ManualOutputBackend::<V>::channel(1024);
+    let writer = backend
+        .open(OutputInterface::outputs(variables).expect("test output interface is valid"))
+        .await
+        .expect("manual output backend opens");
+    let stream = Box::pin(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move { receiver.recv().await.map(|row| (row, receiver)) },
+    ));
+    (writer, stream)
+}
+
+#[cfg(test)]
+pub(crate) async fn null_output<V: crate::core::StreamData>(
+    variables: std::collections::BTreeSet<crate::VarName>,
+) -> crate::core::OutputWriter<V> {
+    use crate::core::{OutputBackend, OutputInterface};
+    crate::io::output::NullOutputBackend::<V>::new()
+        .open(OutputInterface::outputs(variables).expect("test output interface is valid"))
+        .await
+        .expect("null output backend opens")
+}
+
+#[cfg(test)]
+pub(crate) async fn limited_null_output<V: crate::core::StreamData>(
+    variables: std::collections::BTreeSet<crate::VarName>,
+    limit: usize,
+) -> crate::core::OutputWriter<V> {
+    use crate::core::{OutputBackend, OutputInterface};
+    crate::io::output::LimitedNullOutputBackend::<V>::new(limit)
+        .open(OutputInterface::outputs(variables).expect("test output interface is valid"))
+        .await
+        .expect("limited null output backend opens")
+}
 pub use manual_input::{ManualInputController, channel};
 
 /// Construct a reusable manual step source for tests and benchmarks.

@@ -72,7 +72,7 @@
 //! described in the language's original publication [[1]]. [`DataflowMonitor`] is the synchronous
 //! row interface;
 //! [`crate::runtime::dataflow::DataflowRuntimeBuilder`] adapts it to [`crate::core::InputStream`] and
-//! [`crate::core::OutputHandler`].
+//! the runtime-facing [`crate::core::OutputWriter`].
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/pipeline.svg")]

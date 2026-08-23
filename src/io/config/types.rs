@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, num::NonZeroUsize, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    time::Duration,
+};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -7,6 +11,375 @@ use crate::{VarName, core::REDIS_HOSTNAME};
 
 pub type TopicMapping = BTreeMap<VarName, String>;
 pub type MsgTypeMapping = BTreeMap<VarName, String>;
+
+/// Stable identifier for a configured output destination.
+pub type DestinationId = String;
+
+/// Backend names used by the resource-free output configuration file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DestinationKind {
+    Stdout,
+    Null,
+    LimitedNull,
+    Mqtt,
+    Redis,
+    Ros,
+}
+
+/// A serializable output stage. Runtime code turns this into an
+/// [`crate::io::output::OutputStage`]
+/// after validating its numeric bounds. Keeping this wire type independent of
+/// executors and opened backends makes output reconfiguration resource-free.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum OutputStageConfig {
+    Buffer {
+        max_batches: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_updates: Option<usize>,
+    },
+    Coalesce {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_delay_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tick_limit: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        update_limit: Option<usize>,
+    },
+}
+
+impl OutputStageConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Buffer {
+                max_batches,
+                max_updates,
+            } => {
+                anyhow::ensure!(
+                    *max_batches > 0,
+                    "output buffer max_batches must be greater than zero"
+                );
+                if let Some(max_updates) = max_updates {
+                    anyhow::ensure!(
+                        *max_updates > 0,
+                        "output buffer max_updates must be greater than zero"
+                    );
+                }
+                Ok(())
+            }
+            Self::Coalesce {
+                max_delay_ms,
+                tick_limit,
+                update_limit,
+            } => {
+                anyhow::ensure!(
+                    max_delay_ms.is_some() || tick_limit.is_some() || update_limit.is_some(),
+                    "output coalescing requires a delay, tick_limit, or update_limit"
+                );
+                if let Some(tick_limit) = tick_limit {
+                    anyhow::ensure!(
+                        *tick_limit > 0,
+                        "output coalescing tick_limit must be greater than zero"
+                    );
+                }
+                if let Some(update_limit) = update_limit {
+                    anyhow::ensure!(
+                        *update_limit > 0,
+                        "output coalescing update_limit must be greater than zero"
+                    );
+                }
+                let _ = max_delay_ms;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Resource-free configuration for one named output destination.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestinationConfig {
+    pub kind: DestinationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub routes: BTreeMap<VarName, Route>,
+    /// Legacy alias for a route-free partition, primarily for local destinations.
+    /// It is mutually exclusive with `partition` and `mirror`; new configs may
+    /// use `partition` instead. `None` means that the selector is absent;
+    /// present selections must not be empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variables: Option<BTreeSet<VarName>>,
+    /// Variables assigned to this destination as a disjoint partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<BTreeSet<VarName>>,
+    /// Mirror all model outputs assigned to a primary destination.
+    #[serde(default)]
+    pub mirror: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<OutputStageConfig>,
+}
+
+impl DestinationConfig {
+    pub fn stdout() -> Self {
+        Self::new(DestinationKind::Stdout)
+    }
+
+    pub fn null() -> Self {
+        Self::new(DestinationKind::Null)
+    }
+
+    pub fn mqtt() -> Self {
+        Self::new(DestinationKind::Mqtt)
+    }
+
+    pub fn redis() -> Self {
+        Self::new(DestinationKind::Redis)
+    }
+
+    pub fn ros() -> Self {
+        Self::new(DestinationKind::Ros)
+    }
+
+    pub fn new(kind: DestinationKind) -> Self {
+        Self {
+            kind,
+            host: None,
+            port: None,
+            limit: None,
+            routes: BTreeMap::new(),
+            variables: None,
+            partition: None,
+            mirror: false,
+            stages: Vec::new(),
+        }
+    }
+
+    fn establishes_role(&self) -> bool {
+        !self.routes.is_empty()
+            || self.variables.is_some()
+            || self.partition.is_some()
+            || self.mirror
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self.kind {
+            DestinationKind::Mqtt | DestinationKind::Redis => {
+                if let Some(host) = &self.host {
+                    anyhow::ensure!(
+                        !host.trim().is_empty(),
+                        "output destination host cannot be empty"
+                    );
+                }
+                anyhow::ensure!(
+                    self.limit.is_none(),
+                    "output destination kind {:?} does not support `limit`; `limit` is only valid for `limited-null`",
+                    self.kind
+                );
+            }
+            DestinationKind::LimitedNull => {
+                anyhow::ensure!(
+                    self.host.is_none(),
+                    "output destination kind {:?} does not support `host`",
+                    self.kind
+                );
+                anyhow::ensure!(
+                    self.port.is_none(),
+                    "output destination kind {:?} does not support `port`",
+                    self.kind
+                );
+                let limit = self.limit.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "limited-null output destination requires a `limit` greater than zero"
+                    )
+                })?;
+                anyhow::ensure!(
+                    limit > 0,
+                    "limited-null output destination `limit` must be greater than zero"
+                );
+            }
+            DestinationKind::Stdout | DestinationKind::Null | DestinationKind::Ros => {
+                anyhow::ensure!(
+                    self.host.is_none(),
+                    "output destination kind {:?} does not support `host`",
+                    self.kind
+                );
+                anyhow::ensure!(
+                    self.port.is_none(),
+                    "output destination kind {:?} does not support `port`",
+                    self.kind
+                );
+                anyhow::ensure!(
+                    self.limit.is_none(),
+                    "output destination kind {:?} does not support `limit`; `limit` is only valid for `limited-null`",
+                    self.kind
+                );
+            }
+        }
+
+        let selector_count = usize::from(self.variables.is_some())
+            + usize::from(self.partition.is_some())
+            + usize::from(self.mirror);
+        anyhow::ensure!(
+            selector_count <= 1,
+            "output destination selector fields `variables`, `partition`, and `mirror` are mutually exclusive"
+        );
+        if let Some(variables) = &self.variables {
+            anyhow::ensure!(
+                !variables.is_empty(),
+                "output destination `variables` cannot be empty"
+            );
+            anyhow::ensure!(
+                self.routes
+                    .keys()
+                    .all(|variable| variables.contains(variable)),
+                "output destination `variables` must include every declared route variable"
+            );
+        }
+        if let Some(partition) = &self.partition {
+            anyhow::ensure!(
+                !partition.is_empty(),
+                "output destination partition cannot be empty"
+            );
+            for variable in partition {
+                anyhow::ensure!(
+                    !variable.name().trim().is_empty(),
+                    "output destination partition variable cannot be empty"
+                );
+            }
+        }
+        for (variable, route) in &self.routes {
+            anyhow::ensure!(
+                !variable.name().trim().is_empty(),
+                "output route variable cannot be empty"
+            );
+            let route = Route::new(route.route.clone(), route.codec.clone())?;
+            match self.kind {
+                DestinationKind::Mqtt | DestinationKind::Redis => {
+                    if let Some(codec) = &route.codec {
+                        anyhow::ensure!(
+                            matches!(codec.0.as_ref(), "json" | "json5"),
+                            "output codec `{codec}` is not supported by {:?}",
+                            self.kind
+                        );
+                    }
+                }
+                DestinationKind::Ros => anyhow::ensure!(
+                    route.codec.is_some(),
+                    "ROS output route for `{variable}` requires a codec"
+                ),
+                DestinationKind::Stdout | DestinationKind::Null | DestinationKind::LimitedNull => {
+                    anyhow::ensure!(
+                        route.codec.is_none(),
+                        "output backend {:?} does not support a codec",
+                        self.kind
+                    )
+                }
+            }
+        }
+        if let Some(variables) = &self.variables {
+            for variable in variables {
+                anyhow::ensure!(
+                    !variable.name().trim().is_empty(),
+                    "output destination variable cannot be empty"
+                );
+            }
+        }
+        for stage in &self.stages {
+            stage.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Durable local output configuration. It contains backend parameters but no
+/// opened network clients, ROS nodes, or worker tasks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<DestinationId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_stages: Vec<OutputStageConfig>,
+    #[serde(default)]
+    pub destinations: BTreeMap<DestinationId, DestinationConfig>,
+}
+
+impl OutputConfigFile {
+    pub fn new(destinations: BTreeMap<DestinationId, DestinationConfig>) -> Self {
+        Self {
+            default: None,
+            shared_stages: Vec::new(),
+            destinations,
+        }
+    }
+
+    pub fn single(id: impl Into<DestinationId>, destination: DestinationConfig) -> Self {
+        Self::new(BTreeMap::from([(id.into(), destination)]))
+    }
+
+    pub fn from_json(payload: &str) -> anyhow::Result<Self> {
+        let config: Self = json5::from_str(payload)
+            .map_err(|error| anyhow::anyhow!("invalid output configuration: {error}"))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub(crate) fn inferred_default(&self) -> Option<DestinationId> {
+        if self.default.is_some() || self.destinations.len() <= 1 {
+            return None;
+        }
+        let mut unqualified = self
+            .destinations
+            .iter()
+            .filter(|(_, destination)| !destination.establishes_role());
+        let (id, _) = unqualified.next()?;
+        unqualified.next().is_none().then(|| id.clone())
+    }
+
+    pub(crate) fn effective_default(&self) -> Option<DestinationId> {
+        self.default.clone().or_else(|| self.inferred_default())
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.destinations.is_empty(),
+            "output configuration must contain at least one destination"
+        );
+        if let Some(default) = &self.default {
+            anyhow::ensure!(
+                self.destinations.contains_key(default),
+                "output config default destination `{default}` does not exist"
+            );
+        }
+        for (id, destination) in &self.destinations {
+            anyhow::ensure!(!id.is_empty(), "output destination ID cannot be empty");
+            destination.validate().map_err(|error| {
+                anyhow::anyhow!("output destination `{id}` is invalid: {error}")
+            })?;
+        }
+        if self.destinations.len() > 1 {
+            let inferred_default = self.inferred_default();
+            for (id, destination) in &self.destinations {
+                let is_configured_default = self.default.as_ref() == Some(id);
+                let is_inferred_default = inferred_default.as_ref() == Some(id);
+                anyhow::ensure!(
+                    is_configured_default || is_inferred_default || destination.establishes_role(),
+                    "non-default output destination `{id}` in a multi-destination config must explicitly declare a role with `partition`, `variables`, `mirror`, or `routes`; only the configured or unique inferred default may use primary `All`"
+                );
+            }
+        }
+        for stage in &self.shared_stages {
+            stage.validate()?;
+        }
+        Ok(())
+    }
+}
 
 /// Stable identifier for a configured local input source.
 pub type SourceId = String;
@@ -63,6 +436,14 @@ pub enum WireRoute {
     RouteAndCodec(String, String),
 }
 
+impl<'de> Deserialize<'de> for Route {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        WireRoute::deserialize(deserializer)?
+            .into_route()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 impl WireRoute {
     pub fn into_route(self) -> anyhow::Result<Route> {
         match self {
@@ -93,6 +474,10 @@ pub struct MonitorConfig {
     pub sources: Option<BTreeMap<SourceId, BTreeMap<VarName, Route>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outputs: Option<BTreeMap<VarName, Route>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<DestinationId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destinations: Option<BTreeMap<DestinationId, BTreeMap<VarName, Route>>>,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +488,8 @@ struct WireMonitorConfig {
     inputs: Option<BTreeMap<VarName, WireRoute>>,
     sources: Option<BTreeMap<SourceId, BTreeMap<VarName, WireRoute>>>,
     outputs: Option<BTreeMap<VarName, WireRoute>>,
+    destination: Option<DestinationId>,
+    destinations: Option<BTreeMap<DestinationId, BTreeMap<VarName, WireRoute>>>,
 }
 
 impl<'de> Deserialize<'de> for MonitorConfig {
@@ -130,12 +517,25 @@ impl<'de> Deserialize<'de> for MonitorConfig {
             })
             .transpose()?;
         let outputs = wire.outputs.map(convert).transpose()?;
+        let destinations = wire
+            .destinations
+            .map(|groups| {
+                groups
+                    .into_iter()
+                    .map(|(destination, routes)| {
+                        convert(routes).map(|routes| (destination, routes))
+                    })
+                    .collect::<Result<BTreeMap<_, _>, _>>()
+            })
+            .transpose()?;
         let config = Self {
             spec: wire.spec,
             source: wire.source,
             inputs,
             sources,
             outputs,
+            destination: wire.destination,
+            destinations,
         };
         config
             .validate_structure()
@@ -166,6 +566,32 @@ impl MonitorConfig {
             self.source.is_none() || self.sources.is_none(),
             "monitor configuration cannot contain `source` together with `sources`"
         );
+        anyhow::ensure!(
+            !(self.outputs.is_some() && self.destinations.is_some()),
+            "monitor configuration cannot contain both `outputs` and `destinations`"
+        );
+        anyhow::ensure!(
+            self.destination.is_none() || self.outputs.is_some(),
+            "monitor configuration `destination` requires `outputs`"
+        );
+        anyhow::ensure!(
+            self.destination.is_none() || self.destinations.is_none(),
+            "monitor configuration cannot contain `destination` together with `destinations`"
+        );
+        if let Some(destination) = &self.destination {
+            anyhow::ensure!(
+                !destination.trim().is_empty(),
+                "monitor output destination ID cannot be empty"
+            );
+        }
+        if let Some(destinations) = &self.destinations {
+            for destination in destinations.keys() {
+                anyhow::ensure!(
+                    !destination.trim().is_empty(),
+                    "monitor output destination ID cannot be empty"
+                );
+            }
+        }
         if let Some(source) = &self.source {
             anyhow::ensure!(
                 !source.trim().is_empty(),
@@ -186,6 +612,14 @@ impl MonitorConfig {
                         );
                     }
                 }
+            }
+        }
+        if let Some(outputs) = &self.outputs {
+            validate_output_routes(outputs)?;
+        }
+        if let Some(destinations) = &self.destinations {
+            for routes in destinations.values() {
+                validate_output_routes(routes)?;
             }
         }
         Ok(())
@@ -212,6 +646,17 @@ impl MonitorConfig {
             })
             .collect()
     }
+}
+
+fn validate_output_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<()> {
+    for (variable, route) in routes {
+        anyhow::ensure!(
+            !variable.name().trim().is_empty(),
+            "monitor output variable cannot be empty"
+        );
+        Route::new(route.route.clone(), route.codec.clone())?;
+    }
+    Ok(())
 }
 
 fn default_redis_knowledge_database() -> u32 {
@@ -813,5 +1258,190 @@ mod tests {
         );
         let error = config.validate().unwrap_err();
         assert!(error.to_string().contains("appears in both source"));
+    }
+
+    #[test]
+    fn output_config_round_trips_compact_routes_and_stages() {
+        let config = OutputConfigFile::from_json(
+            r#"{
+                default: "telemetry",
+                shared_stages: [{kind:"buffer",max_batches:4}],
+                destinations: {
+                    telemetry: {
+                        kind: "mqtt",
+                        host: "broker",
+                        routes: {pressure: "/pressure", pose: ["/pose", "json"]},
+                        stages: [{kind:"coalesce",tick_limit:3,max_delay_ms:25}]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.destinations[&DestinationId::from("telemetry")]
+                .routes
+                .len(),
+            2
+        );
+        assert_eq!(
+            serde_json::to_value(&config).unwrap()["destinations"]["telemetry"]["routes"]["pose"],
+            serde_json::json!(["/pose", "json"])
+        );
+    }
+
+    #[test]
+    fn output_config_rejects_zero_stage_bounds_and_bad_defaults() {
+        let cases = [
+            (
+                r#"{destinations:{out:{kind:"stdout",stages:[{kind:"buffer",max_batches:0}]}}}"#,
+                "max_batches",
+            ),
+            (
+                r#"{default:"missing",destinations:{out:{kind:"stdout"}}}"#,
+                "default destination",
+            ),
+            (
+                r#"{destinations:{out:{kind:"stdout",routes:{x:["/x",""]}}}}"#,
+                "codec",
+            ),
+            (
+                r#"{destinations:{out:{kind:"mqtt",routes:{x:["/x","ros"]}}}}"#,
+                "not supported",
+            ),
+        ];
+        for (payload, expected) in cases {
+            let error = OutputConfigFile::from_json(payload).unwrap_err();
+            assert!(error.to_string().contains(expected), "{payload}: {error}");
+        }
+    }
+
+    #[test]
+    fn output_config_requires_explicit_roles_for_non_default_destinations() {
+        for payload in [
+            r#"{default:"primary",destinations:{primary:{kind:"null"},secondary:{kind:"stdout"}}}"#,
+            r#"{destinations:{primary:{kind:"null"},secondary:{kind:"stdout"}}}"#,
+            r#"{destinations:{first:{kind:"stdout"},second:{kind:"null"}}}"#,
+        ] {
+            let error = OutputConfigFile::from_json(payload).unwrap_err();
+            assert!(
+                error.to_string().contains("must explicitly declare a role"),
+                "{payload}: {error}"
+            );
+        }
+
+        let config = OutputConfigFile::from_json(
+            r#"{
+                default: "primary",
+                destinations: {
+                    primary: {kind: "null"},
+                    partitioned: {kind: "stdout", partition: ["x"]},
+                    legacy: {kind: "stdout", variables: ["y"]},
+                    mirrored: {kind: "stdout", mirror: true},
+                    routed: {kind: "stdout", routes: {z: "/z"}}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config.destinations.len(), 5);
+
+        let inferred_default = OutputConfigFile::from_json(
+            r#"{
+                destinations: {
+                    primary: {kind: "null"},
+                    secondary: {kind: "stdout", partition: ["y"]}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(inferred_default.default.is_none());
+    }
+
+    #[test]
+    fn output_config_rejects_empty_variables_and_presence_conflicts() {
+        let error =
+            OutputConfigFile::from_json(r#"{destinations:{out:{kind:"stdout",variables:[]}}}"#)
+                .unwrap_err();
+        assert!(error.to_string().contains("variables") && error.to_string().contains("empty"));
+
+        for payload in [
+            r#"{destinations:{out:{kind:"stdout",variables:[],partition:["x"]}}}"#,
+            r#"{destinations:{out:{kind:"stdout",variables:[],mirror:true}}}"#,
+            r#"{destinations:{out:{kind:"stdout",variables:[],partition:["x"],mirror:true}}}"#,
+        ] {
+            let error = OutputConfigFile::from_json(payload).unwrap_err();
+            assert!(
+                error.to_string().contains("variables")
+                    && error.to_string().contains("partition")
+                    && error.to_string().contains("mirror"),
+                "{payload}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_config_rejects_conflicting_selectors() {
+        for payload in [
+            r#"{destinations:{out:{kind:"stdout",variables:["x"],partition:["x"]}}}"#,
+            r#"{destinations:{out:{kind:"stdout",variables:["x"],mirror:true}}}"#,
+            r#"{destinations:{out:{kind:"stdout",partition:["x"],mirror:true}}}"#,
+        ] {
+            let error = OutputConfigFile::from_json(payload).unwrap_err();
+            assert!(
+                error.to_string().contains("variables")
+                    && error.to_string().contains("partition")
+                    && error.to_string().contains("mirror"),
+                "{payload}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_config_rejects_manual_and_irrelevant_backend_fields() {
+        let cases = [
+            (r#"{destinations:{out:{kind:"manual"}}}"#, "manual"),
+            (
+                r#"{destinations:{out:{kind:"stdout",host:"broker"}}}"#,
+                "host",
+            ),
+            (r#"{destinations:{out:{kind:"null",port:1234}}}"#, "port"),
+            (r#"{destinations:{out:{kind:"mqtt",limit:1}}}"#, "limit"),
+            (
+                r#"{destinations:{out:{kind:"limited-null",host:"broker",limit:1}}}"#,
+                "host",
+            ),
+            (
+                r#"{destinations:{out:{kind:"limited-null",port:1234,limit:1}}}"#,
+                "port",
+            ),
+            (
+                r#"{destinations:{out:{kind:"limited-null"}}}"#,
+                "greater than zero",
+            ),
+            (
+                r#"{destinations:{out:{kind:"limited-null",limit:0}}}"#,
+                "greater than zero",
+            ),
+        ];
+        for (payload, expected) in cases {
+            let error = OutputConfigFile::from_json(payload).unwrap_err();
+            assert!(error.to_string().contains(expected), "{payload}: {error}");
+        }
+    }
+
+    #[test]
+    fn output_config_preserves_mqtt_and_redis_defaults() {
+        let config = OutputConfigFile::from_json(
+            r#"{
+                destinations: {
+                    mqtt: {kind: "mqtt", routes: {x: "/x"}},
+                    redis: {kind: "redis", routes: {y: "/y"}}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert!(config.destinations["mqtt"].host.is_none());
+        assert!(config.destinations["mqtt"].port.is_none());
+        assert!(config.destinations["redis"].host.is_none());
+        assert!(config.destinations["redis"].port.is_none());
     }
 }

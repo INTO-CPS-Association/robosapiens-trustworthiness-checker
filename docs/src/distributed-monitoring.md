@@ -11,7 +11,7 @@ Distributed monitoring splits a single DSRV specification into multiple *localis
 In distributed monitoring:
 
 1. A **distribution graph** defines which streams are computed on which nodes. This may be either static, or dynamically determined via a central node.
-2. Each **local node** runs an separate, node-specialized instance of the monitor
+2. Each **local node** runs a separate, node-specialized instance of the monitor
 3. Nodes communicate via **MQTT** to exchange intermediate results
 4. The specification is split automatically based on the distribution graph
 
@@ -40,11 +40,25 @@ For custom routes, use the compact variable-to-route files described in
 The distributed monitoring system can be used in multiple configurations:
 1. Static: nodes run independently and are assigned work following a predefined *distribution graph* which labels each node with a work assignment consisting of a list of streams from the specification.
 2. Centralised, random: the nodes run at each location and an additional centralised node assigns random work to each node.
-3. Centralised, constraints: the nodes run at each location and an additional centralised node generates a work assignment which optimised for a number of *distribution constraints* which limit where each stream of the specification 
+3. Centralised, constraints: the nodes run at each location and an additional centralised node generates a work assignment optimized for *distribution constraints* that limit where each stream of the specification can run.
+
+## Output delivery in distributed runs
+
+Distributed runtimes emit independent singleton output ticks in observed merge
+order; a destination does not turn them into rows. Use `--output-config` when a
+node must publish to more than one local destination. The `default` destination
+is the primary for otherwise-unassigned values; partitioning and mirroring must
+be explicit, and every secondary needs a partition, `variables`, `mirror: true`,
+or route role. The router waits for every destination's readiness and scans/clones
+selected values per destination, so local destination stages are not full
+pressure isolation. See [Output Architecture](./output.md) for the complete
+pipeline semantics. There is no cross-broker transaction or cross-node
+observation-order guarantee. A batch may reach one external destination before
+another destination fails.
 
 ## Static distribution
 
-In this section we will set up a static distribution of a specification across two nodes. 
+In this section we will set up a static distribution of a specification across two nodes.
 
 ### Step 1: Create the Specification
 
@@ -168,7 +182,7 @@ mosquitto_sub -t v
 
 ## Dynamic distribution
 
-In this section we will set up a dynamic distribution of a specification based on a central coordination node. 
+In this section we will set up a dynamic distribution of a specification based on a central coordination node.
 
 This will use the same specification as before (`simple_add_distributable.dsrv`) but with a dynamic distribution graph.
 
@@ -283,12 +297,23 @@ locality v: dist(source(z)) + dist(monitor(w))
 
 ```bash
 cargo run -- examples/simple_add_dist_constraints.dsrv \
-  --mqtt-input --mqtt-output \
+  --mqtt-input \
   --mqtt-static-optimized A B \
   --distribution-constraints w v
 ```
 
-The coordinator analyzes the constraints for streams `w` and `v`, computes optimal assignments to minimize locality scores while satisfying `can_run` conditions, and distributes work to nodes A and B. Use `--mqtt-dynamic-optimized` for dynamic reconfiguration.
+Constraint-optimized distributed modes are scheduler-only on the coordinating
+runtime. They evaluate candidate assignments with an internal programmatic
+sink; they do not run a local monitor or publish local configured output. Omit
+`--mqtt-output` and do not expect `--output-config` to publish candidate results.
+Candidate open, input, runtime, and incomplete-row failures propagate through
+candidate evaluation and stop planning rather than being treated as a satisfying
+candidate.
+
+The coordinator analyzes the constraints for streams `w` and `v`, computes
+optimal assignments to minimize locality scores while satisfying `can_run`
+conditions, and distributes work to nodes A and B. Use
+`--mqtt-dynamic-optimized` for dynamic reconfiguration.
 
 ### Step 4: Send Inputs
 

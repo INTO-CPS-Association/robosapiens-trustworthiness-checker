@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -15,28 +14,26 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{
     DistributionModeBuilder, RedisKnowledgeOverrides, apply_redis_knowledge_overrides,
-    input_source, output_handler_spec, redis_knowledge_config_from_cli, route_mappings,
+    input_source, output_pipeline_builder, redis_knowledge_config_from_cli,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
     InputConfigFile, InputPipeline, InputReduction, InputSource, InputSources, InputStage,
-    InputWindow, OutputHandlerBuilder, RedisKnowledgeConfig,
+    InputWindow, RedisKnowledgeConfig,
 };
 use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
+use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
-use trustworthiness_checker::runtime::{GeneralRuntimeBuilder, RuntimeBuilder};
 use trustworthiness_checker::semantics::distributed::localisation::Localisable;
 use trustworthiness_checker::{self as tc, Specification};
 use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
-use trustworthiness_checker::cli::args::{
-    Cli, InputWindowMode, Language, OutputMode, resolve_runtime,
-};
+use trustworthiness_checker::cli::args::{Cli, InputWindowMode, Language, resolve_runtime};
 
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -74,10 +71,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         return run_mstlo(executor, cli, runtime).await;
     }
 
-    let builder = <GeneralRuntimeBuilder<LangSpecification, Value> as RuntimeBuilder<
-        LangSpecification,
-        Value,
-    >>::new();
+    let builder = GeneralRuntimeBuilder::<LangSpecification, Value>::new();
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -129,17 +123,6 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         (_, model) => model,
     };
 
-    // Filtered output variable names excluding distribution constraints
-    let output_var_names: BTreeSet<_> = model
-        .output_vars()
-        .into_iter()
-        .filter(|var_name| {
-            !dist_constraints
-                .clone()
-                .map_or(false, |c| c.contains(&var_name.into()))
-        })
-        .collect();
-    let aux_info = model.aux_vars().into_iter().collect();
     let builder = builder.model(model.clone());
 
     // Restrict distributed input subscriptions to constraint variables and their
@@ -190,37 +173,17 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         )
     };
 
-    // Create the output handler
-    let output_handler_builder = OutputHandlerBuilder::new(cli.output_mode.clone())
-        .executor(executor.clone())
-        .output_var_names(output_var_names)
-        .mqtt_port(mqtt_port)
-        .redis_port(redis_port)
-        .aux_info(aux_info);
-
-    // Keep the compact ROS route catalog available to the output/runtime
-    // builder without reparsing the legacy nested format.
-    let (var_msg_types, topic_mapping) = match &cli.output_mode {
-        OutputMode {
-            output_ros_file: Some(path),
-            ..
-        } => {
-            let contents = std::fs::read_to_string(path)
-                .with_context(|| format!("Output route catalog {path:?} could not be read"))?;
-            let routes =
-                trustworthiness_checker::io::config::deserialisation::json_to_routes(&contents)?;
-            let (topics, codecs) = route_mappings(routes, true)?;
-            (Some(codecs), Some(topics))
-        }
-        _ => (None, None),
-    };
-    let builder = builder.maybe_var_msg_types(var_msg_types);
-    let builder = builder.maybe_topic_mapping(topic_mapping);
-
-    let builder = builder.output_handler_builder(output_handler_builder);
+    let output_builder = output_pipeline_builder::<Value>(
+        cli.output_selection.clone(),
+        executor.clone(),
+        mqtt_port,
+        redis_port,
+    )?;
+    let output_builder = output_builder.executor(executor.clone());
+    let builder = builder.output_pipeline_builder(output_builder);
 
     // Create the runtime
-    let monitor = builder.build().await;
+    let monitor = builder.build().await?;
 
     monitor.run().await
 }
@@ -253,34 +216,26 @@ async fn run_mstlo(
         .build(model.input_vars())
         .await
         .context("MSTLO input stream could not be built")?;
-    let output_vars = model.output_vars();
-    let aux_info = model.aux_vars().into_iter().collect::<Vec<_>>();
-    let output_spec = output_handler_spec::<MstloTimedValue>(cli.output_mode.clone())?;
-    let output_handler = OutputHandlerBuilder::<MstloTimedValue>::new(output_spec)
-        .executor(executor.clone())
-        .output_var_names(output_vars)
-        .mqtt_port(cli.mqtt_port)
-        .redis_port(cli.redis_port)
-        .aux_info(aux_info)
-        .build()
-        .await
-        .context("MSTLO output handler could not be built")?;
+    let output_backend_builder = output_pipeline_builder::<MstloTimedValue>(
+        cli.output_selection.clone(),
+        executor.clone(),
+        cli.mqtt_port,
+        cli.redis_port,
+    )?;
+    let output_backend_builder = output_backend_builder.executor(executor.clone());
 
-    let builder = <GeneralRuntimeBuilder<MstloSpecification, MstloTimedValue> as RuntimeBuilder<
-        MstloSpecification,
-        MstloTimedValue,
-    >>::new()
-    .executor(executor)
-    .model(model)
-    .input(input)
-    .output(output_handler)
-    .runtime(RuntimeSpec::Mstlo(execution_policy))
-    .semantics(cli.semantics)
-    .mstlo_algorithm(cli.mstlo_algorithm)
-    .mstlo_synchronization_strategy(cli.mstlo_synchronization)
-    .mstlo_variables(parse_mstlo_variables(cli.mstlo_vars.as_deref())?);
+    let builder = GeneralRuntimeBuilder::<MstloSpecification, MstloTimedValue>::new()
+        .executor(executor)
+        .model(model)
+        .input(input)
+        .output_pipeline_builder(output_backend_builder)
+        .runtime(RuntimeSpec::Mstlo(execution_policy))
+        .semantics(cli.semantics)
+        .mstlo_algorithm(cli.mstlo_algorithm)
+        .mstlo_synchronization_strategy(cli.mstlo_synchronization)
+        .mstlo_variables(parse_mstlo_variables(cli.mstlo_vars.as_deref())?);
 
-    let monitor = builder.build().await;
+    let monitor = builder.build().await?;
     monitor.run().await
 }
 
