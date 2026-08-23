@@ -12,6 +12,7 @@ mod stages;
 
 #[cfg(feature = "mqtt")]
 mod mqtt;
+#[cfg(feature = "redis")]
 mod redis;
 #[cfg(feature = "ros")]
 mod ros;
@@ -33,6 +34,7 @@ pub use stages::{OutputBuffer, OutputCoalescing, OutputStage};
 #[cfg(feature = "mqtt")]
 pub use mqtt::{MQTT_MAX_RETRIES, MqttOutputBackend};
 pub use pump::OutputPump;
+#[cfg(feature = "redis")]
 pub use redis::RedisOutputBackend;
 #[cfg(feature = "ros")]
 pub use ros::RosOutputBackend;

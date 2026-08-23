@@ -3,6 +3,7 @@ use std::{any::Any, collections::BTreeMap, fmt::Debug, fmt::Display, rc::Rc};
 use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
 
+#[cfg(feature = "redis")]
 use redis::{FromRedisValue, ToRedisArgs, ToSingleRedisArg};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -272,6 +273,7 @@ impl DeferrableStreamData for Value {
     }
 }
 
+#[cfg(feature = "redis")]
 impl ToRedisArgs for Value {
     fn write_redis_args<W>(&self, out: &mut W)
     where
@@ -288,8 +290,10 @@ impl ToRedisArgs for Value {
 // serialized into exactly one value, otherwise the compiler can't ensure
 // the correctness of some commands."
 // This currently holds for the implementation of Value, but we should keep an eye out.
+#[cfg(feature = "redis")]
 impl ToSingleRedisArg for Value {}
 
+#[cfg(feature = "redis")]
 impl FromRedisValue for Value {
     fn from_redis_value(v: redis::Value) -> Result<Self, redis::ParsingError> {
         match v {

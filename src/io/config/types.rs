@@ -6,7 +6,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::io::redis::{RedisKnowledgeConfig, RedisKnowledgeRetry};
+use crate::io::{RedisKnowledgeConfig, RedisKnowledgeRetry};
 use crate::{VarName, core::REDIS_HOSTNAME};
 
 pub type TopicMapping = BTreeMap<VarName, String>;

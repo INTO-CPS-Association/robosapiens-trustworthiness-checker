@@ -1,5 +1,5 @@
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
@@ -13,6 +13,7 @@ use crate::core::{
     FileInputValue, InputBatch, InputStream, MQTT_HOSTNAME, REDIS_HOSTNAME, RosStreamValue, Value,
     VarName, input,
 };
+use crate::io::RedisKnowledgeConfig;
 use crate::io::config::{
     CodecId, InputConfigFile, MonitorConfig, ResolvedBinding, ResolvedInput, ResolvedSource, Route,
     SourceId,
@@ -21,9 +22,10 @@ use crate::io::mqtt::MqttInputBackend;
 use crate::io::reconfigurable_input::{
     ReconfigurableInputItem, ReconfigurableInputStream, ReconfigurationControl,
 };
-use crate::io::redis::RedisKnowledgeConfig;
 use crate::stream_utils::Fanout;
 use ::core::cfg_select;
+#[cfg(feature = "redis")]
+use std::any::Any;
 
 use super::super::config::InputStage;
 
@@ -93,20 +95,28 @@ where
         "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
     );
 
-    let mut values = crate::io::redis::open_value_redis_knowledge(config, bindings).await?;
-    Ok(Box::pin(async_stream::try_stream! {
-        while let Some(batch) = values.next().await {
-            let batch = batch?;
-            let batch = batch.try_map_values(|value| {
-                let value: Box<dyn Any> = Box::new(value);
-                value
-                    .downcast::<V>()
-                    .map(|value| *value)
-                    .map_err(|_| anyhow!("Redis knowledge value-domain conversion failed"))
-            })?;
-            yield batch;
-        }
-    }))
+    cfg_select! {
+        feature = "redis" => {
+            let mut values = crate::io::redis::open_value_redis_knowledge(config, bindings).await?;
+            Ok(Box::pin(async_stream::try_stream! {
+                while let Some(batch) = values.next().await {
+                    let batch = batch?;
+                    let batch = batch.try_map_values(|value| {
+                        let value: Box<dyn Any> = Box::new(value);
+                        value
+                            .downcast::<V>()
+                            .map(|value| *value)
+                            .map_err(|_| anyhow!("Redis knowledge value-domain conversion failed"))
+                    })?;
+                    yield batch;
+                }
+            }))
+        },
+        _ => {
+            let _ = (config, bindings);
+            anyhow::bail!("Redis support not enabled")
+        },
+    }
 }
 
 /// An owned local source set containing source-owned catalogs and
@@ -892,11 +902,19 @@ impl<V> InputSource<V> {
                 backend.open_data::<V>(&host, port, topics, u32::MAX).await
             }
             InputSourceKind::Redis { host, port, .. } => {
-                let topics = routes
-                    .into_iter()
-                    .map(|(variable, route)| (variable, route.route.to_string()))
-                    .collect();
-                crate::io::redis::input_stream::<V>(&host, port, topics).await
+                cfg_select! {
+                    feature = "redis" => {
+                        let topics = routes
+                            .into_iter()
+                            .map(|(variable, route)| (variable, route.route.to_string()))
+                            .collect();
+                        crate::io::redis::input_stream::<V>(&host, port, topics).await
+                    },
+                    _ => {
+                        let _ = (host, port, routes);
+                        anyhow::bail!("Redis support not enabled")
+                    },
+                }
             }
             InputSourceKind::RedisKnowledge(config) => {
                 let keys = routes
@@ -978,27 +996,35 @@ impl<V> InputSource<V> {
                 })))
             }
             InputSourceKind::Redis { host, port, .. } => {
-                let topics = routes
-                    .into_iter()
-                    .map(|(variable, route)| (variable, route.route.to_string()))
-                    .collect();
-                let stream = crate::io::redis::input_stream_items(
-                    &host,
-                    port,
-                    topics,
-                    Some(control_route.to_string()),
-                )
-                .await?;
-                Ok(Box::pin(stream.map(|item| {
-                    item.map(|item| match item {
-                        crate::io::redis::RedisInputItem::Data(batch) => {
-                            ReconfigurableInputItem::Data(batch)
-                        }
-                        crate::io::redis::RedisInputItem::Control(config) => {
-                            ReconfigurableInputItem::Reconfigure(config)
-                        }
-                    })
-                })))
+                cfg_select! {
+                    feature = "redis" => {
+                        let topics = routes
+                            .into_iter()
+                            .map(|(variable, route)| (variable, route.route.to_string()))
+                            .collect();
+                        let stream = crate::io::redis::input_stream_items(
+                            &host,
+                            port,
+                            topics,
+                            Some(control_route.to_string()),
+                        )
+                        .await?;
+                        Ok(Box::pin(stream.map(|item| {
+                            item.map(|item| match item {
+                                crate::io::redis::RedisInputItem::Data(batch) => {
+                                    ReconfigurableInputItem::Data(batch)
+                                }
+                                crate::io::redis::RedisInputItem::Control(config) => {
+                                    ReconfigurableInputItem::Reconfigure(config)
+                                }
+                            })
+                        })))
+                    },
+                    _ => {
+                        let _ = (host, port, routes, control_route);
+                        anyhow::bail!("Redis support not enabled")
+                    },
+                }
             }
             InputSourceKind::Ros { executor, .. } => {
                 validate_ros_control_route(&routes, control_route.as_ref())?;
@@ -1948,7 +1974,7 @@ mod resolution_tests {
                 (VarName::new("current"), "knowledge:current".to_owned()),
                 (VarName::new("future"), "knowledge:future".to_owned()),
             ]),
-            retry: crate::io::redis::RedisKnowledgeRetry::default(),
+            retry: crate::io::RedisKnowledgeRetry::default(),
         });
         let pipeline = InputPipeline::new(source);
         let resolved = pipeline
@@ -1977,7 +2003,7 @@ mod resolution_tests {
                 database: 2,
                 publish_initial: false,
                 keys: BTreeMap::from([(VarName::new("x"), "catalog:x".to_owned())]),
-                retry: crate::io::redis::RedisKnowledgeRetry::default(),
+                retry: crate::io::RedisKnowledgeRetry::default(),
             },
         ));
         let config = MonitorConfig::from_json(

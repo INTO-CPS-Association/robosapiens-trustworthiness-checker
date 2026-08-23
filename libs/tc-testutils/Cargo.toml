@@ -10,7 +10,12 @@ path = "src/lib.rs"
 bench = false
 
 [features]
-testcontainers = ["testcontainers-modules", "async-compat"]
+testcontainers = [
+    "testcontainers-modules",
+    "async-compat",
+    "dep:redis",
+    "dep:redis-macros",
+]
 ros = ["r2r"]
 
 [dependencies]
@@ -28,7 +33,7 @@ tracing = { version = "0.1.44", features = [
     "release_max_level_warn",
 ] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-trustworthiness_checker = { path = "../../" }
+trustworthiness_checker = { path = "../../", default-features = false }
 futures = "0.3.32"
 serde_json = "1.0.150"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -38,8 +43,8 @@ paho-mqtt = { version = "0.14.0", default-features = false, features = [
     "bundled",
     "ssl",
 ] }
-redis = { version = "1.2.3", features = ["smol-comp"] }
-redis-macros = "1.0.1"
+redis = { version = "1.2.3", optional = true, features = ["smol-comp"] }
+redis-macros = { version = "1.0.1", optional = true }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 # unsync = "0.1.2"
 smol = "2.0.2"

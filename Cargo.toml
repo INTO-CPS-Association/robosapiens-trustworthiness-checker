@@ -83,7 +83,7 @@ rand = "0.10.1"
 unsync = "0.2.0"
 itertools = "0.15.0"
 sat-solver = { version = "0.2.1", optional = true }
-redis = { version = "1.2.3", default-features = false, features = ["smol-comp"] }
+redis = { version = "1.2.3", optional = true, default-features = false, features = ["smol-comp"] }
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 fs2 = "0.4.3"
 event-listener = "5.4.1"
@@ -114,12 +114,13 @@ lto = false
 codegen-units = 16
 
 [features]
-default = ["jemalloc", "mqtt", "sat"]
+default = ["jemalloc", "mqtt", "redis", "sat"]
 jemalloc = ["dep:tikv-jemallocator"]
 mqtt = ["dep:paho-mqtt"]
+redis = ["dep:redis"]
 sat = ["dep:sat-solver"]
 ros = ["dep:r2r", "tc-testutils/ros", "mqtt"]
-testcontainers = ["tc-testutils/testcontainers"]
+testcontainers = ["redis", "tc-testutils/testcontainers"]
 span-tracing = []
 extended-proptests = []
 jit = [

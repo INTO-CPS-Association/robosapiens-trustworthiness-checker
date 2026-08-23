@@ -12,6 +12,8 @@ use super::{
 
 #[cfg(feature = "mqtt")]
 use super::MqttOutputBackend;
+#[cfg(feature = "redis")]
+use super::RedisOutputBackend;
 
 /// The MQTT client implementation used by output destinations.
 ///
@@ -244,9 +246,17 @@ where
                 }
             }
             Self::Redis { host, port } => {
-                super::RedisOutputBackend::<V>::new(host.clone(), *port)
-                    .open(interface)
-                    .await
+                #[cfg(feature = "redis")]
+                {
+                    RedisOutputBackend::<V>::new(host.clone(), *port)
+                        .open(interface)
+                        .await
+                }
+                #[cfg(not(feature = "redis"))]
+                {
+                    let _ = (host, port, interface);
+                    Err(OutputError::backend("Redis support not enabled"))
+                }
             }
             #[cfg(feature = "ros")]
             Self::Ros {
@@ -278,5 +288,17 @@ mod tests {
     fn mqtt_constructor_selects_the_paho_output_backend() {
         let backend = OutputBackendConfig::<crate::Value>::mqtt("broker", None);
         assert!(format!("{backend:?}").contains("Paho"));
+    }
+
+    #[cfg(not(feature = "redis"))]
+    #[test]
+    fn redis_backend_reports_that_support_is_disabled_when_opened() {
+        let backend = OutputBackendConfig::<crate::Value>::redis("localhost", None);
+        let interface = OutputInterface::new(Vec::new()).unwrap();
+        let error = match smol::block_on(backend.open(interface)) {
+            Ok(_) => panic!("Redis backend unexpectedly opened without Redis support"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Redis support not enabled"));
     }
 }
