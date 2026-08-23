@@ -100,7 +100,7 @@ def main() -> None:
                 requested.append("maple-dataflow")
 
             pipeline = [
-                "compilation_phases/lalr_parse/1024",
+                "compilation_phases/parse_and_validate_specification/1024",
                 "compilation_phases/strict_type_check/1024",
                 "compilation_phases/typed_dependency_graph/1024",
                 "compilation_phases/parse_typecheck_dependency_compile_typed/1024",

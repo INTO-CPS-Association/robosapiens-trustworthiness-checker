@@ -36,7 +36,7 @@ HARD_DYNAMIC_DEFER = [
     "hard_dynamic_defer/explicit_components_semisync/1024",
 ]
 PIPELINE = [
-    "compilation_phases/lalr_parse/1024",
+    "compilation_phases/parse_and_validate_specification/1024",
     "compilation_phases/strict_type_check/1024",
     "compilation_phases/typed_dependency_graph/1024",
     "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
@@ -96,6 +96,13 @@ def run(executable: Path, cpu: str, benchmark_filter: str, repo: Path) -> bool:
     return True
 
 
+RESULT_NAME_ALIASES = {
+    "compilation_phases/lalr_parse/1024": (
+        "compilation_phases/parse_and_validate_specification/1024"
+    ),
+}
+
+
 def read_results(repo: Path, expected: set[str]) -> list[dict[str, Any]]:
     results = []
     for estimate_path in (repo / "target/criterion").glob("**/new/estimates.json"):
@@ -103,7 +110,8 @@ def read_results(repo: Path, expected: set[str]) -> list[dict[str, Any]]:
         if not benchmark_path.is_file():
             continue
         benchmark = json.loads(benchmark_path.read_text())
-        name = benchmark["full_id"]
+        source_name = benchmark["full_id"]
+        name = RESULT_NAME_ALIASES.get(source_name, source_name)
         if name not in expected:
             continue
         estimates = json.loads(estimate_path.read_text())
