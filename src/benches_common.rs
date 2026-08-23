@@ -89,9 +89,11 @@ pub async fn monitor_runtime_outputs(
     input_stream: InputStream<Value>,
     output_limit: Option<usize>,
 ) {
-    let output_backend = match output_limit {
-        Some(limit) => OutputBackendConfig::limited_null(limit),
-        None => OutputBackendConfig::null(),
+    let output_backend = match (output_limit, runtime) {
+        // Dataflow treats a closed writer as a terminal output failure. Its benchmark inputs are
+        // finite, so input EOF—not an intentionally closed limited sink—terminates these runs.
+        (Some(_), RuntimeSpec::Dataflow(_)) | (None, _) => OutputBackendConfig::null(),
+        (Some(limit), _) => OutputBackendConfig::limited_null(limit),
     };
     let output_builder = OutputBackendBuilder::new(output_backend);
 
@@ -276,13 +278,13 @@ pub async fn monitor_outputs_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
-    limit: usize,
+    _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
     let writer = output_builder
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
-        .expect("limited dataflow output pipeline should open");
+        .expect("dataflow output pipeline should open");
     let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .quickening(false)
@@ -322,13 +324,13 @@ pub async fn monitor_outputs_quickened_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
-    limit: usize,
+    _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
     let writer = output_builder
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
-        .expect("limited quickened dataflow output pipeline should open");
+        .expect("quickened dataflow output pipeline should open");
     let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor)
@@ -374,13 +376,13 @@ pub async fn monitor_outputs_jit_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
-    limit: usize,
+    _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::limited_null(limit));
+    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
     let writer = output_builder
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
-        .expect("limited JIT dataflow output pipeline should open");
+        .expect("JIT dataflow output pipeline should open");
     let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .jit(crate::dataflow::JitConfig::after_events(
