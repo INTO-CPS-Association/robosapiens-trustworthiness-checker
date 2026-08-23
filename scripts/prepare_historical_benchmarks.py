@@ -62,6 +62,9 @@ def ensure_dataflow_helpers(repo: Path) -> None:
     # already finite, so input EOF must terminate them instead.
     source = source.replace(
         "OutputBackendConfig::limited_null(limit)", "OutputBackendConfig::null()"
+    ).replace(
+        "Some(limit) => OutputBackendConfig::null()",
+        "Some(_limit) => OutputBackendConfig::null()",
     )
     path.write_text(source)
 
