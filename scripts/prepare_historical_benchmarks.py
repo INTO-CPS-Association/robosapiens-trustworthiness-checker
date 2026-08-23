@@ -56,6 +56,13 @@ def ensure_dataflow_helpers(repo: Path) -> None:
             1,
         )
         source = source[:end] + "\n\n" + block + source[end:]
+
+    # Recent runtimes correctly treat a closed output writer as terminal. Historical limited-null
+    # benchmark sinks close intentionally at the requested row count, but these backfill inputs are
+    # already finite, so input EOF must terminate them instead.
+    source = source.replace(
+        "OutputBackendConfig::limited_null(limit)", "OutputBackendConfig::null()"
+    )
     path.write_text(source)
 
 
