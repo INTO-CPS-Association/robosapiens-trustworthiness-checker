@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use async_stream::stream;
 use futures::{StreamExt, future::join_all};
-use futures_timeout::TimeoutExt;
+use futures_timeout::TimeoutFutureExt;
 use smol::LocalExecutor;
 use std::{rc::Rc, time::Duration};
 use unsync::spsc::Sender as SpscSender;

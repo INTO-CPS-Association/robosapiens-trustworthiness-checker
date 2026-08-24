@@ -12,7 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 fmu = [
-    "protobuf==5.27.3",
+    "protobuf==5.29.6",
     "pyzmq==27.1.0",
 ]
 
