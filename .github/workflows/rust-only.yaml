@@ -1,161 +1,161 @@
 name: Rust only workflow
 
 on:
-    push:
-        branches: ["main"]
-    pull_request:
-        branches: ["main"]
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
 
 permissions:
-    contents: write
+  contents: write
 
 concurrency:
-    group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main-benchmarks' || github.run_id }}
-    # Main benchmark writers must serialize with history backfills. A normal push
-    # may wait for a migration, but must never cancel one already in progress.
-    cancel-in-progress: false
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main-benchmarks' || github.run_id }}
+  # Main benchmark writers must serialize with history backfills. A normal push
+  # may wait for a migration, but must never cancel one already in progress.
+  cancel-in-progress: false
 
 jobs:
-    workflow-default-settings:
-        name: workflow default settings
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v5
-            - uses: actions-rust-lang/setup-rust-toolchain@v1
-            - name: Install dependencies
-              run: |
-                  sudo apt-get update &&
-                  sudo apt-get install -y libssl-dev cmake build-essential # Used by paho-mqtt
+  workflow-default-settings:
+    name: workflow default settings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update &&
+          sudo apt-get install -y libssl-dev cmake build-essential # Used by paho-mqtt
 
-              # Do all the building first to fail early - sometimes we push without building specific settings:
-            - name: Build project
-              run: cargo build
-            - name: Build project for testing
-              run: cargo test --no-run
-            - name: Select key dashboard benchmarks
-              run: |
-                  cat > benchmark-targets.tsv <<'EOF'
-                  maple_sequence	^maple_sequence/(maple_sequence_dataflow_untyped|maple_sequence_dataflow|maple_sequence_dataflow_quickened|maple_sequence_dataflow_jit|maple_sequence_untyped_semisync|maple_sequence_untyped_async)/25000$
-                  dyn_paper	^dyn_paper/(dyn_paper_50_dataflow_untyped|dyn_paper_50_dataflow|dyn_paper_50_dataflow_quickened|dyn_paper_50_dataflow_jit|dyn_paper_50_semisync|dyn_paper_50)/100000$
-                  dup_defer	^(dup_defer/(dup_defer_dataflow_untyped|dup_defer_dataflow|dup_defer_dataflow_quickened|dup_defer_dataflow_jit|dup_defer_untyped_semisync|dup_defer_untyped_async)/25000|hard_dynamic_defer/(automatic_scope|explicit_components)_(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync)/1024)$
-                  arithmetic_heavy	^arithmetic_heavy/(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync_untyped|semisync_typed)/25000$
-                  dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened)_reconf_ct_(on|off)_percent_10/1000$
-                  dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit)_reconf_ct_on_percent_0/1000$
-                  dataflow_runtime	^dataflow/(runtime_reconfiguration/(candidate_compile_and_transfer|state_transfer_only)/16|dynamic_transitions/schedule_repair)$
-                  parsing	^parse_small_varied_inputs/parsing_lalrpop/10000$
-                  compilation_phases	^compilation_phases/(parse_and_validate_specification|strict_type_check|typed_dependency_graph|parse_typecheck_dependency_compile_typed)/1024$
-                  threshold_property	^threshold_property/(dsrv_dataflow_untyped|dsrv_dataflow|dsrv_dataflow_quickened|dsrv_dataflow_jit|dsrv_semisync|mstlo_runtime_qual|mstlo_direct_qual)/10000$
-                  time_dependent_property	^time_dependent_property/(dsrv_default_window_dataflow_untyped|dsrv_default_window_dataflow|dsrv_default_window_dataflow_quickened|dsrv_default_window_dataflow_jit|dsrv_default_window_semisync|mstlo_globally_window_qual|mstlo_direct_globally_window_qual)/10000$
-                  EOF
-            - name: Build project for benching
-              run: |
-                  cut -f1 benchmark-targets.tsv | while read -r benchmark; do
-                    cargo bench --profile bench-fast --features jit --package trustworthiness_checker --bench "$benchmark" --no-run
-                  done
+        # Do all the building first to fail early - sometimes we push without building specific settings:
+      - name: Build project
+        run: cargo build
+      - name: Build project for testing
+        run: cargo test --no-run
+      - name: Select key dashboard benchmarks
+        run: |
+          cat > benchmark-targets.tsv <<'EOF'
+          maple_sequence	^maple_sequence/(maple_sequence_dataflow_untyped|maple_sequence_dataflow|maple_sequence_dataflow_quickened|maple_sequence_dataflow_jit|maple_sequence_untyped_semisync|maple_sequence_untyped_async)/25000$
+          dyn_paper	^dyn_paper/(dyn_paper_50_dataflow_untyped|dyn_paper_50_dataflow|dyn_paper_50_dataflow_quickened|dyn_paper_50_dataflow_jit|dyn_paper_50_semisync|dyn_paper_50)/100000$
+          dup_defer	^(dup_defer/(dup_defer_dataflow_untyped|dup_defer_dataflow|dup_defer_dataflow_quickened|dup_defer_dataflow_jit|dup_defer_untyped_semisync|dup_defer_untyped_async)/25000|hard_dynamic_defer/(automatic_scope|explicit_components)_(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync)/1024)$
+          arithmetic_heavy	^arithmetic_heavy/(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync_untyped|semisync_typed)/25000$
+          dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened)_reconf_ct_(on|off)_percent_10/1000$
+          dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit)_reconf_ct_on_percent_0/1000$
+          dataflow_runtime	^dataflow/(runtime_reconfiguration/(candidate_compile_and_transfer|state_transfer_only)/16|dynamic_transitions/schedule_repair)$
+          parsing	^parse_small_varied_inputs/parsing_lalrpop/10000$
+          compilation_phases	^compilation_phases/(parse_and_validate_specification|strict_type_check|typed_dependency_graph|parse_typecheck_dependency_compile_typed)/1024$
+          threshold_property	^threshold_property/(dsrv_dataflow_untyped|dsrv_dataflow|dsrv_dataflow_quickened|dsrv_dataflow_jit|dsrv_semisync|mstlo_runtime_qual|mstlo_direct_qual)/10000$
+          time_dependent_property	^time_dependent_property/(dsrv_default_window_dataflow_untyped|dsrv_default_window_dataflow|dsrv_default_window_dataflow_quickened|dsrv_default_window_dataflow_jit|dsrv_default_window_semisync|mstlo_globally_window_qual|mstlo_direct_globally_window_qual)/10000$
+          EOF
+      - name: Build project for benching
+        run: |
+          cut -f1 benchmark-targets.tsv | while read -r benchmark; do
+            cargo bench --profile bench-fast --features jit,jemalloc --package trustworthiness_checker --bench "$benchmark" --no-run
+          done
 
-              # Then run the tests and benches
-            - name: Test project
-              run: cargo test
-            - name: Bench project
-              run: |
-                  set -o pipefail
-                  : > benchmark-output.txt
-                  while IFS=$'\t' read -r benchmark filter; do
-                    cargo bench --profile bench-fast --features jit --package trustworthiness_checker --bench "$benchmark" -- "$filter" --output-format bencher 2>&1 |
-                      tee -a benchmark-output.txt
-                  done < benchmark-targets.tsv
+        # Then run the tests and benches
+      - name: Test project
+        run: cargo test
+      - name: Bench project
+        run: |
+          set -o pipefail
+          : > benchmark-output.txt
+          while IFS=$'\t' read -r benchmark filter; do
+            cargo bench --profile bench-fast --features jit,jemalloc --package trustworthiness_checker --bench "$benchmark" -- "$filter" --output-format bencher 2>&1 |
+              tee -a benchmark-output.txt
+          done < benchmark-targets.tsv
 
-            - name: Validate required benchmark output
-              run: |
-                  while read -r benchmark; do
-                    if ! grep -Fq "test $benchmark ... bench:" benchmark-output.txt; then
-                      echo "::error::Missing required pipeline benchmark: $benchmark"
-                      exit 1
-                    fi
-                  done <<'EOF'
-                  compilation_phases/parse_and_validate_specification/1024
-                  compilation_phases/strict_type_check/1024
-                  compilation_phases/typed_dependency_graph/1024
-                  compilation_phases/parse_typecheck_dependency_compile_typed/1024
-                  maple_sequence/maple_sequence_dataflow_untyped/25000
-                  maple_sequence/maple_sequence_dataflow/25000
-                  maple_sequence/maple_sequence_dataflow_quickened/25000
-                  maple_sequence/maple_sequence_dataflow_jit/25000
-                  dyn_paper/dyn_paper_50_dataflow_untyped/100000
-                  dyn_paper/dyn_paper_50_dataflow/100000
-                  dyn_paper/dyn_paper_50_dataflow_quickened/100000
-                  dyn_paper/dyn_paper_50_dataflow_jit/100000
-                  dup_defer/dup_defer_dataflow_untyped/25000
-                  dup_defer/dup_defer_dataflow/25000
-                  dup_defer/dup_defer_dataflow_quickened/25000
-                  dup_defer/dup_defer_dataflow_jit/25000
-                  arithmetic_heavy/dataflow_untyped/25000
-                  arithmetic_heavy/dataflow/25000
-                  arithmetic_heavy/dataflow_quickened/25000
-                  arithmetic_heavy/dataflow_jit/25000
-                  arithmetic_heavy/semisync_untyped/25000
-                  arithmetic_heavy/semisync_typed/25000
-                  rec_moving_average/semisync_reconf_ct_on_percent_10/1000
-                  rec_moving_average/semisync_reconf_ct_off_percent_10/1000
-                  rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000
-                  rec_moving_average/dataflow_untyped_reconf_ct_off_percent_10/1000
-                  rec_moving_average/dataflow_reconf_ct_on_percent_10/1000
-                  rec_moving_average/dataflow_reconf_ct_off_percent_10/1000
-                  rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000
-                  rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000
-                  rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000
-                  dataflow/runtime_reconfiguration/candidate_compile_and_transfer/16
-                  dataflow/runtime_reconfiguration/state_transfer_only/16
-                  dataflow/dynamic_transitions/schedule_repair
-                  hard_dynamic_defer/automatic_scope_dataflow_untyped/1024
-                  hard_dynamic_defer/automatic_scope_dataflow/1024
-                  hard_dynamic_defer/automatic_scope_dataflow_quickened/1024
-                  hard_dynamic_defer/automatic_scope_dataflow_jit/1024
-                  hard_dynamic_defer/automatic_scope_semisync/1024
-                  hard_dynamic_defer/explicit_components_dataflow_untyped/1024
-                  hard_dynamic_defer/explicit_components_dataflow/1024
-                  hard_dynamic_defer/explicit_components_dataflow_quickened/1024
-                  hard_dynamic_defer/explicit_components_dataflow_jit/1024
-                  hard_dynamic_defer/explicit_components_semisync/1024
-                  threshold_property/dsrv_dataflow_untyped/10000
-                  threshold_property/dsrv_dataflow/10000
-                  threshold_property/dsrv_dataflow_quickened/10000
-                  threshold_property/dsrv_dataflow_jit/10000
-                  time_dependent_property/dsrv_default_window_dataflow_untyped/10000
-                  time_dependent_property/dsrv_default_window_dataflow/10000
-                  time_dependent_property/dsrv_default_window_dataflow_quickened/10000
-                  time_dependent_property/dsrv_default_window_dataflow_jit/10000
-                  EOF
+      - name: Validate required benchmark output
+        run: |
+          while read -r benchmark; do
+            if ! grep -Fq "test $benchmark ... bench:" benchmark-output.txt; then
+              echo "::error::Missing required pipeline benchmark: $benchmark"
+              exit 1
+            fi
+          done <<'EOF'
+          compilation_phases/parse_and_validate_specification/1024
+          compilation_phases/strict_type_check/1024
+          compilation_phases/typed_dependency_graph/1024
+          compilation_phases/parse_typecheck_dependency_compile_typed/1024
+          maple_sequence/maple_sequence_dataflow_untyped/25000
+          maple_sequence/maple_sequence_dataflow/25000
+          maple_sequence/maple_sequence_dataflow_quickened/25000
+          maple_sequence/maple_sequence_dataflow_jit/25000
+          dyn_paper/dyn_paper_50_dataflow_untyped/100000
+          dyn_paper/dyn_paper_50_dataflow/100000
+          dyn_paper/dyn_paper_50_dataflow_quickened/100000
+          dyn_paper/dyn_paper_50_dataflow_jit/100000
+          dup_defer/dup_defer_dataflow_untyped/25000
+          dup_defer/dup_defer_dataflow/25000
+          dup_defer/dup_defer_dataflow_quickened/25000
+          dup_defer/dup_defer_dataflow_jit/25000
+          arithmetic_heavy/dataflow_untyped/25000
+          arithmetic_heavy/dataflow/25000
+          arithmetic_heavy/dataflow_quickened/25000
+          arithmetic_heavy/dataflow_jit/25000
+          arithmetic_heavy/semisync_untyped/25000
+          arithmetic_heavy/semisync_typed/25000
+          rec_moving_average/semisync_reconf_ct_on_percent_10/1000
+          rec_moving_average/semisync_reconf_ct_off_percent_10/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_off_percent_10/1000
+          rec_moving_average/dataflow_reconf_ct_on_percent_10/1000
+          rec_moving_average/dataflow_reconf_ct_off_percent_10/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000
+          rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000
+          dataflow/runtime_reconfiguration/candidate_compile_and_transfer/16
+          dataflow/runtime_reconfiguration/state_transfer_only/16
+          dataflow/dynamic_transitions/schedule_repair
+          hard_dynamic_defer/automatic_scope_dataflow_untyped/1024
+          hard_dynamic_defer/automatic_scope_dataflow/1024
+          hard_dynamic_defer/automatic_scope_dataflow_quickened/1024
+          hard_dynamic_defer/automatic_scope_dataflow_jit/1024
+          hard_dynamic_defer/automatic_scope_semisync/1024
+          hard_dynamic_defer/explicit_components_dataflow_untyped/1024
+          hard_dynamic_defer/explicit_components_dataflow/1024
+          hard_dynamic_defer/explicit_components_dataflow_quickened/1024
+          hard_dynamic_defer/explicit_components_dataflow_jit/1024
+          hard_dynamic_defer/explicit_components_semisync/1024
+          threshold_property/dsrv_dataflow_untyped/10000
+          threshold_property/dsrv_dataflow/10000
+          threshold_property/dsrv_dataflow_quickened/10000
+          threshold_property/dsrv_dataflow_jit/10000
+          time_dependent_property/dsrv_default_window_dataflow_untyped/10000
+          time_dependent_property/dsrv_default_window_dataflow/10000
+          time_dependent_property/dsrv_default_window_dataflow_quickened/10000
+          time_dependent_property/dsrv_default_window_dataflow_jit/10000
+          EOF
 
-            - name: Validate benchmark history
-              if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-              run: |
-                  git fetch origin benchmark-data
-                  git show FETCH_HEAD:benchmarks/data.js > /tmp/benchmark-data.js
-                  python scripts/validate_benchmark_data.py /tmp/benchmark-data.js
+      - name: Validate benchmark history
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git fetch origin benchmark-data
+          git show FETCH_HEAD:benchmarks/data.js > /tmp/benchmark-data.js
+          python scripts/validate_benchmark_data.py /tmp/benchmark-data.js
 
-            - name: Update benchmark history
-              if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-              # github-action-benchmark v1.22.1
-              uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba
-              with:
-                  name: RoboSAPIENS Criterion benchmarks
-                  tool: cargo
-                  output-file-path: benchmark-output.txt
-                  github-token: ${{ secrets.GITHUB_TOKEN }}
-                  gh-pages-branch: benchmark-data
-                  benchmark-data-dir-path: benchmarks
-                  auto-push: true
-                  alert-threshold: "120%"
-                  comment-on-alert: true
-                  fail-on-alert: false
+      - name: Update benchmark history
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # github-action-benchmark v1.22.1
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba
+        with:
+          name: RoboSAPIENS Criterion benchmarks
+          tool: cargo
+          output-file-path: benchmark-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: benchmarks
+          auto-push: true
+          alert-threshold: "120%"
+          comment-on-alert: true
+          fail-on-alert: false
 
-            - name: Upload benchmark report
-              uses: actions/upload-artifact@v4
-              with:
-                  name: Benchmark report
-                  path: target/criterion/
-                  retention-days: 30
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Benchmark report
+          path: target/criterion/
+          retention-days: 30
