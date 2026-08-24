@@ -1,0 +1,4 @@
+[environment]
+python = "integrations/python/.venv"
+extra-paths = ["integrations/fmu/adapter"]
+python-version = "3.12"

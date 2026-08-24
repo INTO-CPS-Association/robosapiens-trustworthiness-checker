@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from trustworthiness_checker import DeferredValue, NoValue, TcRuntime
 
 _RESOURCES = Path(__file__).resolve().parent
+
+
+class Variable(TypedDict):
+    name: str
+    value_reference: int
+    fmi_type: str
+    causality: str
+    start: Any
+
+
+class Interface(TypedDict):
+    variables: list[Variable]
 
 
 class Fmi2Status:
@@ -22,12 +35,12 @@ class Fmi2Status:
 class Model:
     """Mapping-driven UniFMU adapter for a packaged DSRV checker."""
 
-    def __init__(self, _log_callback=None) -> None:
+    def __init__(self, _log_callback: object | None = None) -> None:
         self._log_callback = _log_callback
         self.output_timeout = 0.1
         with (_RESOURCES / "interface.json").open(encoding="utf-8") as interface_file:
-            self.interface = json.load(interface_file)
-        self.variables = {
+            self.interface = cast(Interface, json.load(interface_file))
+        self.variables: dict[int, Variable] = {
             variable["value_reference"]: variable
             for variable in self.interface["variables"]
         }
@@ -47,9 +60,7 @@ class Model:
         }
         causal_log = os.environ.get("TC_CAUSAL_LOG")
         self.causal_log = Path(causal_log) if causal_log else None
-        self.causal_semantics = os.environ.get(
-            "TC_CAUSAL_SEMANTICS", "causal-set"
-        )
+        self.causal_semantics = os.environ.get("TC_CAUSAL_SEMANTICS", "causal-set")
         self.causal_failure_limit = int(os.environ.get("TC_CAUSAL_FAILURE_LIMIT", "10"))
         self._causal_failure_counts: dict[str, int] = {}
         self.start_time = 0.0
@@ -103,16 +114,20 @@ class Model:
         del state
         return Fmi2Status.error
 
-    def _get(self, references, fmi_type):
+    def _get(self, references: Sequence[int], fmi_type: str) -> tuple[int, list[Any]]:
         try:
             variables = [self.variables[reference] for reference in references]
             if any(variable["fmi_type"] != fmi_type for variable in variables):
                 return Fmi2Status.error, []
-            return Fmi2Status.ok, [self.values[variable["name"]] for variable in variables]
+            return Fmi2Status.ok, [
+                self.values[variable["name"]] for variable in variables
+            ]
         except KeyError:
             return Fmi2Status.error, []
 
-    def _set(self, references, values, fmi_type) -> int:
+    def _set(
+        self, references: Sequence[int], values: Sequence[Any], fmi_type: str
+    ) -> int:
         if len(references) != len(values):
             return Fmi2Status.error
         try:
@@ -128,31 +143,33 @@ class Model:
         except (KeyError, TypeError, ValueError):
             return Fmi2Status.error
 
-    def fmi2GetReal(self, references):
+    def fmi2GetReal(self, references: Sequence[int]) -> tuple[int, list[Any]]:
         return self._get(references, "Real")
 
-    def fmi2SetReal(self, references, values) -> int:
+    def fmi2SetReal(self, references: Sequence[int], values: Sequence[Any]) -> int:
         return self._set(references, values, "Real")
 
-    def fmi2GetInteger(self, references):
+    def fmi2GetInteger(self, references: Sequence[int]) -> tuple[int, list[Any]]:
         return self._get(references, "Integer")
 
-    def fmi2SetInteger(self, references, values) -> int:
+    def fmi2SetInteger(self, references: Sequence[int], values: Sequence[Any]) -> int:
         return self._set(references, values, "Integer")
 
-    def fmi2GetBoolean(self, references):
+    def fmi2GetBoolean(self, references: Sequence[int]) -> tuple[int, list[Any]]:
         return self._get(references, "Boolean")
 
-    def fmi2SetBoolean(self, references, values) -> int:
+    def fmi2SetBoolean(self, references: Sequence[int], values: Sequence[Any]) -> int:
         return self._set(references, values, "Boolean")
 
-    def fmi2GetString(self, references):
+    def fmi2GetString(self, references: Sequence[int]) -> tuple[int, list[Any]]:
         return self._get(references, "String")
 
-    def fmi2SetString(self, references, values) -> int:
+    def fmi2SetString(self, references: Sequence[int], values: Sequence[Any]) -> int:
         return self._set(references, values, "String")
 
-    def fmi2DoStep(self, current_time: float, step_size: float, no_step_prior: bool) -> int:
+    def fmi2DoStep(
+        self, current_time: float, step_size: float, no_step_prior: bool
+    ) -> int:
         del no_step_prior
         return self._evaluate(
             fmi_time=float(current_time) + float(step_size),
@@ -168,7 +185,10 @@ class Model:
         phase: str,
     ) -> int:
         self.runtime.provide_inputs(
-            {variable["name"]: self.values[variable["name"]] for variable in self.inputs}
+            {
+                variable["name"]: self.values[variable["name"]]
+                for variable in self.inputs
+            }
         )
         output = self.runtime.next_output(timeout=self.output_timeout)
         if output is None:

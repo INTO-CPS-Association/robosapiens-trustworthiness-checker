@@ -6,8 +6,11 @@ import importlib.util
 import json
 import sys
 from collections import deque
+from collections.abc import Mapping
+from os import PathLike
 from pathlib import Path
 from types import ModuleType
+from typing import ClassVar
 from uuid import uuid4
 
 import pytest
@@ -22,34 +25,41 @@ class NoValue:
 
 
 class FakeRuntime:
-    instances: list["FakeRuntime"] = []
-    initial_outputs: list[dict[str, object] | None] = []
+    instances: ClassVar[list[FakeRuntime]] = []
+    initial_outputs: ClassVar[list[dict[str, object] | None]] = []
 
-    def __init__(self, model, *, semantics) -> None:
+    def __init__(self, model: str | PathLike[str], *, semantics: str) -> None:
         self.model = Path(model)
         self.semantics = semantics
         self.provided_inputs: list[dict[str, object]] = []
         self.requested_timeouts: list[float | None] = []
-        self.outputs = deque(type(self).initial_outputs)
-        type(self).instances.append(self)
+        self.outputs: deque[dict[str, object] | None] = deque(
+            type(self).initial_outputs
+        )
+        FakeRuntime.instances.append(self)
 
-    def provide_inputs(self, inputs=None, **kwargs) -> None:
+    def provide_inputs(
+        self, inputs: Mapping[str, object] | None = None, **kwargs: object
+    ) -> None:
         values = dict(inputs or {})
         values.update(kwargs)
         self.provided_inputs.append(values)
 
-    def next_output(self, timeout=None):
+    def next_output(self, timeout: float | None = None) -> dict[str, object] | None:
         self.requested_timeouts.append(timeout)
         return self.outputs.popleft() if self.outputs else None
+
+
+class FakeExtension(ModuleType):
+    DeferredValue: type[DeferredValue]
+    NoValue: type[NoValue]
+    TcRuntime: type[FakeRuntime]
 
 
 def causal_output(values: dict[str, object]) -> dict[str, object]:
     return {
         "values": values,
-        "causality": {
-            name: {"alternatives": []}
-            for name in values
-        },
+        "causality": {name: {"alternatives": []} for name in values},
     }
 
 
@@ -57,7 +67,9 @@ def causal_output(values: dict[str, object]) -> dict[str, object]:
     "semantics",
     ["causal", "causal-set", "role-causal-set", "role-causal-antichain"],
 )
-def test_adapter_accepts_canonical_causal_selectors(adapter, monkeypatch, semantics) -> None:
+def test_adapter_accepts_canonical_causal_selectors(
+    adapter, monkeypatch, semantics
+) -> None:
     monkeypatch.setenv("TC_CAUSAL_SEMANTICS", semantics)
     model = adapter.Model()
     assert model.causal_semantics == semantics
@@ -68,7 +80,7 @@ def test_adapter_accepts_canonical_causal_selectors(adapter, monkeypatch, semant
 def adapter(monkeypatch, tmp_path):
     FakeRuntime.instances.clear()
     FakeRuntime.initial_outputs = []
-    fake_extension = ModuleType("trustworthiness_checker")
+    fake_extension = FakeExtension("trustworthiness_checker")
     fake_extension.DeferredValue = DeferredValue
     fake_extension.NoValue = NoValue
     fake_extension.TcRuntime = FakeRuntime
@@ -85,9 +97,27 @@ def adapter(monkeypatch, tmp_path):
     interface = {
         "model_name": "velocity_safety_checker",
         "variables": [
-            {"name": "velocity", "value_reference": 0, "fmi_type": "Real", "causality": "input", "start": 0.0},
-            {"name": "emergency_stop", "value_reference": 1, "fmi_type": "Boolean", "causality": "input", "start": False},
-            {"name": "verdict", "value_reference": 2, "fmi_type": "Boolean", "causality": "output", "start": False},
+            {
+                "name": "velocity",
+                "value_reference": 0,
+                "fmi_type": "Real",
+                "causality": "input",
+                "start": 0.0,
+            },
+            {
+                "name": "emergency_stop",
+                "value_reference": 1,
+                "fmi_type": "Boolean",
+                "causality": "input",
+                "start": False,
+            },
+            {
+                "name": "verdict",
+                "value_reference": 2,
+                "fmi_type": "Boolean",
+                "causality": "output",
+                "start": False,
+            },
         ],
     }
     (tmp_path / "interface.json").write_text(json.dumps(interface), encoding="utf-8")
@@ -116,7 +146,9 @@ def test_adapter_forwards_observations_and_publishes_boolean_verdict(adapter) ->
     assert model.fmi2GetBoolean([2]) == (adapter.Fmi2Status.ok, [True])
 
 
-def test_adapter_retains_flat_outputs_for_ordinary_semantics(adapter, monkeypatch) -> None:
+def test_adapter_retains_flat_outputs_for_ordinary_semantics(
+    adapter, monkeypatch
+) -> None:
     monkeypatch.setenv("TC_CAUSAL_SEMANTICS", "typed-untimed")
     FakeRuntime.initial_outputs = [{"verdict": True}]
     model = adapter.Model()
@@ -125,7 +157,9 @@ def test_adapter_retains_flat_outputs_for_ordinary_semantics(adapter, monkeypatc
     assert model.fmi2GetBoolean([2]) == (adapter.Fmi2Status.ok, [True])
 
 
-def test_adapter_writes_fmi_timed_causal_side_channel(adapter, monkeypatch, tmp_path) -> None:
+def test_adapter_writes_fmi_timed_causal_side_channel(
+    adapter, monkeypatch, tmp_path
+) -> None:
     causal_log = tmp_path / "results" / "causal-semantics.jsonl"
     monkeypatch.setenv("TC_CAUSAL_LOG", str(causal_log))
     FakeRuntime.initial_outputs = [
@@ -168,7 +202,9 @@ def test_adapter_writes_fmi_timed_causal_side_channel(adapter, monkeypatch, tmp_
 
 
 @pytest.mark.parametrize("absent", [DeferredValue(), NoValue()])
-def test_adapter_retains_previous_verdict_when_output_is_absent(adapter, absent) -> None:
+def test_adapter_retains_previous_verdict_when_output_is_absent(
+    adapter, absent
+) -> None:
     FakeRuntime.initial_outputs = [causal_output({"verdict": absent})]
     model = adapter.Model()
     model.values["verdict"] = True
