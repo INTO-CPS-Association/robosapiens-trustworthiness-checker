@@ -39,20 +39,20 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             |(lhs, rhs, condition, shape)| match shape % 4 {
                 0 => Expr::Var(VarName::new("i")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
-                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
+                    Box::new(Expr::Val(i64::from(lhs))),
+                    Box::new(Expr::Val(i64::from(rhs))),
                     BinaryOperator::Add,
                 )
                 .into(),
                 2 => Expr::If(
-                    Box::new(Expr::Val(Value::Bool(condition))),
-                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
+                    Box::new(Expr::Val(condition)),
+                    Box::new(Expr::Val(i64::from(lhs))),
                     Box::new(Expr::Var(VarName::new("i"))),
                 )
                 .into(),
                 _ => Expr::Default(
                     Box::new(Expr::Var(VarName::new("i"))),
-                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
+                    Box::new(Expr::Val(i64::from(rhs))),
                 )
                 .into(),
             },
@@ -67,8 +67,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             match shape % 3 {
                 0 => Expr::Var(VarName::new("f")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Float(lhs))),
-                    Box::new(Expr::Val(Value::Float(rhs))),
+                    Box::new(Expr::Val(lhs)),
+                    Box::new(Expr::Val(rhs)),
                     BinaryOperator::Add,
                 )
                 .into(),
@@ -82,8 +82,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         (any::<bool>(), any::<bool>(), any::<u8>()).prop_map(|(lhs, rhs, shape)| match shape % 3 {
             0 => Expr::Var(VarName::new("b")).into(),
             1 => Expr::BinOp(
-                Box::new(Expr::Val(Value::Bool(lhs))),
-                Box::new(Expr::Val(Value::Bool(rhs))),
+                Box::new(Expr::Val(lhs)),
+                Box::new(Expr::Val(rhs)),
                 BinaryOperator::And,
             )
             .into(),
@@ -97,15 +97,15 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             match shape % 3 {
                 0 => Expr::Var(VarName::new("s")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Str(lhs.into()))),
-                    Box::new(Expr::Val(Value::Str(rhs.into()))),
+                    Box::new(Expr::Val(lhs)),
+                    Box::new(Expr::Val(rhs)),
                     BinaryOperator::Concatenate,
                 )
                 .into(),
                 _ => Expr::If(
-                    Box::new(Expr::Val(Value::Bool(true))),
+                    Box::new(Expr::Val(true)),
                     Box::new(Expr::Var(VarName::new("s"))),
-                    Box::new(Expr::Val(Value::Str(rhs.into()))),
+                    Box::new(Expr::Val(rhs)),
                 )
                 .into(),
             }
@@ -119,7 +119,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             expr: Expr::List(
                 values
                     .into_iter()
-                    .map(|value| Expr::Val(Value::Int(i64::from(value))).into())
+                    .map(|value| Expr::Val(i64::from(value)).into())
                     .collect(),
             )
             .into(),
@@ -133,7 +133,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             expr: Expr::Map(
                 values
                     .into_iter()
-                    .map(|(key, value)| (key.into(), Expr::Val(Value::Bool(value)).into())),
+                    .map(|(key, value)| (key.into(), Expr::Val(value).into())),
             )
             .into(),
             expected: StreamType::Map(Box::new(StreamType::Bool)),
@@ -143,9 +143,9 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let tuples = (any::<i16>(), any::<bool>(), "[a-z]{0,8}")
         .prop_map(|(integer, boolean, string)| TypeDirectedCase {
             expr: Expr::Tuple(eco_vec![
-                Expr::Val(Value::Int(i64::from(integer))).into(),
-                Expr::Val(Value::Bool(boolean)).into(),
-                Expr::Val(Value::Str(string.into())).into(),
+                Expr::Val(i64::from(integer)).into(),
+                Expr::Val(boolean).into(),
+                Expr::Val(string).into(),
             ])
             .into(),
             expected: StreamType::Tuple(eco_vec![
@@ -160,11 +160,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let structs = (any::<i16>(), any::<bool>())
         .prop_map(|(count, enabled)| TypeDirectedCase {
             expr: Expr::Struct(BTreeMap::from([
-                (
-                    "count".into(),
-                    Expr::Val(Value::Int(i64::from(count))).into(),
-                ),
-                ("enabled".into(), Expr::Val(Value::Bool(enabled)).into()),
+                ("count".into(), Expr::Val(i64::from(count)).into()),
+                ("enabled".into(), Expr::Val(enabled).into()),
             ]))
             .into(),
             expected: StreamType::Struct(
@@ -185,7 +182,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                     eco_vec![(VarName::new("x"), StreamType::Int)],
                     Box::new(Expr::Var(VarName::new("x"))),
                 )),
-                eco_vec![Expr::Val(Value::Int(i64::from(argument))).into()],
+                eco_vec![Expr::Val(i64::from(argument)).into()],
             )
             .into(),
             expected: StreamType::Int,
@@ -194,7 +191,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         })
         .boxed();
     let unit = Just(TypeDirectedCase {
-        expr: Expr::Val(Value::Unit).into(),
+        expr: Expr::Val(()).into(),
         expected: StreamType::Unit,
         inputs: BTreeMap::new(),
         may_widen_without_annotation: false,

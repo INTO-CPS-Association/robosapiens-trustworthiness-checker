@@ -89,7 +89,7 @@ fn arb_valid_dataflow_program_and_inputs()
                                 Box::new(var(name.clone())),
                                 u64::from(second % 4) + 1,
                             )),
-                            Box::new(Expr::Val(Value::Int(0))),
+                            Box::new(Expr::Val(0)),
                         )),
                         Box::new(var(VarName::new("x"))),
                         BinaryOperator::Add,
@@ -102,7 +102,7 @@ fn arb_valid_dataflow_program_and_inputs()
                         BinaryOperator::Subtract,
                     ),
                     10 => Expr::Default(Box::new(var(lhs)), Box::new(var(rhs))),
-                    _ => Expr::Val(Value::Int(i64::from(first))),
+                    _ => Expr::Val(i64::from(first)),
                 };
                 exprs.insert(name.clone(), expression.into());
                 annotations.insert(name, StreamType::Int);
@@ -351,7 +351,7 @@ proptest! {
             .keys()
             .map(|name| (name.clone(), augmented_spec.exprs.get_owned(name).unwrap()))
             .collect::<BTreeMap<_, _>>();
-        exprs.insert(unused.clone(), Expr::Val(Value::Int(0)).into());
+        exprs.insert(unused.clone(), Expr::Val(0).into());
         augmented_spec.type_annotations.insert(unused, StreamType::Int);
         augmented_spec = DsrvSpecification::new(
             augmented_spec.input_vars,

@@ -58,9 +58,9 @@ impl DataflowMonitor {
     where
         S: Specification,
     {
-        let input_variables = specification.input_vars().into_iter().collect::<Vec<_>>();
-        let output_variables = specification.output_vars().into_iter().collect::<Vec<_>>();
-        let stream_variables = specification.stream_vars();
+        let input_variables = specification.input_vars_in_order();
+        let output_variables = specification.output_vars_in_order();
+        let stream_variables = specification.stream_vars_in_order();
         let dataflow = LoweredDataflow::build(&input_variables, &stream_variables, |variable| {
             specification.var_expr(variable).map(&build_graph)
         })?;
@@ -73,6 +73,7 @@ pub(in crate::dataflow) type NamedDependencies = BTreeMap<VarName, BTreeSet<VarN
 struct LoweredDataflow {
     graphs: BTreeMap<VarName, UnboundEvaluationGraph>,
     static_dependencies: NamedDependencies,
+    stream_order: Vec<VarName>,
 }
 
 struct OrderedDataflow {
@@ -88,12 +89,13 @@ struct LoweredStream {
 impl LoweredDataflow {
     fn build(
         input_variables: &[VarName],
-        stream_variables: &BTreeSet<VarName>,
+        stream_variables: &[VarName],
         mut build_graph: impl FnMut(&VarName) -> Option<UnboundEvaluationGraph>,
     ) -> Result<Self, DataflowCompilationError> {
+        let stream_variable_set = stream_variables.iter().cloned().collect::<BTreeSet<_>>();
         let available_variables = input_variables
             .iter()
-            .chain(stream_variables)
+            .chain(stream_variables.iter())
             .cloned()
             .collect::<BTreeSet<_>>();
         let mut graphs = BTreeMap::new();
@@ -101,7 +103,7 @@ impl LoweredDataflow {
         for variable in stream_variables {
             let mut graph = build_graph(variable)
                 .ok_or_else(|| DataflowCompilationError::MissingExpression(variable.clone()))?;
-            graph.resolve_automatic_dynamic_scopes(variable, input_variables, stream_variables);
+            graph.resolve_automatic_dynamic_scopes(variable, input_variables, &stream_variable_set);
             let unavailable_variables = graph
                 .free_vars(Some(variable))
                 .into_iter()
@@ -119,17 +121,22 @@ impl LoweredDataflow {
         Ok(Self {
             graphs,
             static_dependencies,
+            stream_order: stream_variables.to_vec(),
         })
     }
 
     fn into_static_order(self) -> Result<OrderedDataflow, DataflowCompilationError> {
-        let stream_variables = self.graphs.keys().cloned().collect::<BTreeSet<_>>();
-        let ordered_names =
-            NamedDependencyGraph::from_dependencies(self.static_dependencies.clone())
-                .topological_streams(&stream_variables)
-                .map_err(DataflowCompilationError::DependencyCycle)?;
-        debug_assert_eq!(ordered_names.len(), self.graphs.len());
-        let mut graphs = self.graphs;
+        let LoweredDataflow {
+            graphs,
+            static_dependencies,
+            stream_order,
+        } = self;
+        let stream_variables = stream_order.iter().cloned().collect::<BTreeSet<_>>();
+        let ordered_names = NamedDependencyGraph::from_dependencies(static_dependencies.clone())
+            .topological_streams_in_order(&stream_variables, &stream_order)
+            .map_err(DataflowCompilationError::DependencyCycle)?;
+        debug_assert_eq!(ordered_names.len(), graphs.len());
+        let mut graphs = graphs;
         let streams = ordered_names
             .into_iter()
             .map(|name| {
@@ -142,7 +149,7 @@ impl LoweredDataflow {
         debug_assert!(graphs.is_empty());
         Ok(OrderedDataflow {
             streams,
-            static_dependencies: self.static_dependencies,
+            static_dependencies,
         })
     }
 

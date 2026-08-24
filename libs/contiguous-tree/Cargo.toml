@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+thread-safe = []
 serde = ["dep:serde", "contiguous-tree-macros/serde"]
 
 [dependencies]

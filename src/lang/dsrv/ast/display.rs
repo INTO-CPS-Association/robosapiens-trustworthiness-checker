@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Error};
 
-use crate::core::{BinaryOperator, StreamTypeAscription, VarName};
+use crate::core::{BinaryOperator, StreamTypeAscription};
 
 use super::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr, ExprRef,
@@ -194,33 +194,32 @@ fn binary_operator_symbol(operator: BinaryOperator) -> &'static str {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let aux_vars = self.aux_vars();
-        let out_vars = self.output_vars().iter().cloned().collect::<Vec<VarName>>();
         if self.type_annotations.is_empty() {
-            for v in &self.input_vars {
+            for v in &self.input_order {
                 writeln!(f, "in {v}")?;
             }
-            for v in &out_vars {
+            for v in &self.output_order {
                 writeln!(f, "out {v}")?;
             }
-            for v in aux_vars {
+            for v in &self.aux_order {
                 writeln!(f, "aux {v}")?;
             }
         } else {
-            for v in &self.input_vars {
-                let typ = self.type_annotations.get(&v).ok_or(Error)?;
+            for v in &self.input_order {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "in {v}: {typ}")?;
             }
-            for v in &out_vars {
+            for v in &self.output_order {
                 let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "out {v}: {typ}")?;
             }
-            for v in aux_vars {
-                let typ = self.type_annotations.get(&v).ok_or(Error)?;
+            for v in &self.aux_order {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "aux {v}: {typ}")?;
             }
         }
-        for (v, expression) in self.exprs.iter() {
+        for v in &self.assignment_order {
+            let expression = self.exprs.get(v).ok_or(Error)?;
             writeln!(f, "{v} = {expression}")?;
         }
         Ok(())

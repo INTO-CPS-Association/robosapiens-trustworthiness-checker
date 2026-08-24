@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use contiguous_tree::TreeCursorExt;
 use petgraph::algo::toposort;
@@ -104,9 +104,73 @@ impl DepGraph {
         &self,
         stream_vars: &BTreeSet<VarName>,
     ) -> Result<Vec<VarName>, VarName> {
-        let mut ordered =
-            toposort(&self.graph, None).map_err(|cycle| self.graph[cycle.node_id()].clone())?;
-        ordered.reverse();
+        self.topological_streams_in_order(stream_vars, &[])
+    }
+
+    /// Topologically orders streams while using an explicit order to break ties.
+    ///
+    /// Variable identity ordering is intentionally not used for this tie-break:
+    /// callers that have syntax or declaration order must provide it explicitly.
+    pub fn topological_streams_in_order(
+        &self,
+        stream_vars: &BTreeSet<VarName>,
+        preferred_order: &[VarName],
+    ) -> Result<Vec<VarName>, VarName> {
+        // Preserve the existing cycle error and identify a representative cycle
+        // node before applying the stable ready-node traversal below.
+        toposort(&self.graph, None).map_err(|cycle| self.graph[cycle.node_id()].clone())?;
+
+        let preferred = preferred_order
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.clone(), index))
+            .collect::<HashMap<_, _>>();
+        let mut remaining = self.graph.node_indices().collect::<HashSet<_>>();
+        let mut ready = remaining
+            .iter()
+            .copied()
+            .filter(|node| {
+                self.graph
+                    .neighbors_directed(*node, petgraph::Direction::Outgoing)
+                    .all(|dependency| !remaining.contains(&dependency))
+            })
+            .collect::<Vec<_>>();
+        let mut ordered = Vec::with_capacity(remaining.len());
+
+        while let Some(ready_index) = ready
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, node)| {
+                preferred
+                    .get(&self.graph[**node])
+                    .map(|index| (1u8, *index, node.index()))
+                    .unwrap_or((0u8, 0, node.index()))
+            })
+            .map(|(index, _)| index)
+        {
+            let node = ready.swap_remove(ready_index);
+            if !remaining.remove(&node) {
+                continue;
+            }
+            ordered.push(node);
+
+            for consumer in self
+                .graph
+                .neighbors_directed(node, petgraph::Direction::Incoming)
+            {
+                if remaining.contains(&consumer)
+                    && self
+                        .graph
+                        .neighbors_directed(consumer, petgraph::Direction::Outgoing)
+                        .all(|dependency| !remaining.contains(&dependency))
+                    && !ready.contains(&consumer)
+                {
+                    ready.push(consumer);
+                }
+            }
+        }
+
+        debug_assert!(remaining.is_empty());
         Ok(ordered
             .into_iter()
             .map(|node| self.graph[node].clone())
@@ -399,7 +463,7 @@ mod tests {
     use crate::lang::dsrv::ast::Expr;
 
     fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
-        (*input).parse().map_err(anyhow::Error::from)
+        (*input).parse().map_err(|error| anyhow::anyhow!("{error}"))
     }
 
     fn specs() -> BTreeMap<&'static str, &'static str> {

@@ -406,7 +406,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
 ) {
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
         ReconfSemiSyncRuntimeBuilder::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
             .executor(executor)
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
@@ -431,7 +431,7 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
         ContextTransferPolicy::None
     };
     let builder = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
         .executor(executor)
         .model(spec)
         .input_pipeline(input_pipeline)
@@ -461,7 +461,7 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
         .parse::<CheckedDsrvSpecification>()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -491,7 +491,7 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
         .parse::<CheckedDsrvSpecification>()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -521,7 +521,7 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
         .parse::<CheckedDsrvSpecification>()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)

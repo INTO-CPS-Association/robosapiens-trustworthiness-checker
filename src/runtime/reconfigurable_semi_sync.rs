@@ -643,7 +643,7 @@ mod tests {
     const FINITE_FIRST_OUTPUT_MODEL: &str = "in x: Int\nout z: Int\nz = 1";
 
     fn parse_spec(source: &str) -> anyhow::Result<DsrvSpecification> {
-        source.parse().map_err(anyhow::Error::from)
+        source.parse().map_err(|error| anyhow::anyhow!("{error}"))
     }
 
     fn manual_input() -> (

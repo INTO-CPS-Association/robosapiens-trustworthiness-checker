@@ -309,14 +309,14 @@ impl<Builder> GradualTypeCheckingBuilder<Builder> {
 }
 
 fn parse_unchecked_spec(input: &str) -> anyhow::Result<DsrvSpecification> {
-    input.parse().map_err(anyhow::Error::from)
+    input.parse().map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn parse_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecification> {
     CheckedDsrvSpecification::parse_with(input, TypeCheckOptions::STRICT).map_err(|error| {
         match error {
             DsrvPipelineError::Parse(error) => {
-                anyhow::Error::new(error).context("Failed to parse reconfigured specification")
+                anyhow::anyhow!("Failed to parse reconfigured specification: {error}")
             }
             DsrvPipelineError::TypeCheck(errors) => {
                 anyhow::anyhow!("Reconfigured spec failed type checking: {errors:?}")
@@ -329,7 +329,7 @@ fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecif
     CheckedDsrvSpecification::parse_with(input, TypeCheckOptions::GRADUAL).map_err(|error| {
         match error {
             DsrvPipelineError::Parse(error) => {
-                anyhow::Error::new(error).context("Failed to parse reconfigured specification")
+                anyhow::anyhow!("Failed to parse reconfigured specification: {error}")
             }
             DsrvPipelineError::TypeCheck(errors) => {
                 anyhow::anyhow!("Reconfigured spec failed gradual type checking: {errors:?}")

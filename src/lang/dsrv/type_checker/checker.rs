@@ -4,20 +4,18 @@
 //! Postorder validation verifies that every reachable expression has a type
 //! before the immutable results are attached to checked expression cursors.
 
-use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
-
 use contiguous_tree::TreeCursorExt;
 use ecow::EcoVec;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{SemanticError, SemanticResult, TypeErrorKind};
 use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
-use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription, Value};
+use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::ast::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr,
-    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView,
+    AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr,
+    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, SyntaxLiteral,
 };
 
 struct TypeContext<'types> {
@@ -84,7 +82,7 @@ pub fn check_specification(
 pub(crate) fn check_expression(
     expr: Expr,
     expected: &TCType,
-    environment: &Rc<StreamTypeEnvironment>,
+    environment: &AstShared<StreamTypeEnvironment>,
 ) -> SemanticResult<CheckedExpr> {
     let mut context = TypeContext {
         environment: Cow::Borrowed(environment.as_ref()),
@@ -100,7 +98,11 @@ pub(crate) fn check_expression(
         .expect("expression checking records expression types")
         .finish()
         .expect("successful checking typed every expression");
-    Ok(CheckedExpr::new(expr, expr_types, Rc::clone(environment)))
+    Ok(CheckedExpr::new(
+        expr,
+        expr_types,
+        AstShared::clone(environment),
+    ))
 }
 
 /// Check a standalone expression against an expected stream type.
@@ -112,7 +114,7 @@ pub fn type_check_expression(
     check_expression(
         expr.clone(),
         &TCType::from_stream_type(expected),
-        &Rc::new(environment.clone()),
+        &AstShared::new(environment.clone()),
     )
     .map(|_| ())
 }
@@ -201,7 +203,7 @@ fn check(
     use ExprView::*;
 
     let (typ, _resolved_operator) = match expr.view() {
-        Val(Value::Deferred | Value::NoVal) => {
+        Val(SyntaxLiteral::NoVal) => {
             return Err(SemanticError::UnsupportedLiteral(
                 "Deferred and NoVal are runtime states, not source literals".to_owned(),
                 Some(expr.span()),
@@ -845,14 +847,14 @@ fn check_fields<'arena>(
     Ok(result.unwrap_or(TCType::Unknown))
 }
 
-fn value_type(value: &Value, expected: Option<&TCType>) -> Result<TCType, SemanticError> {
+fn value_type(value: &SyntaxLiteral, expected: Option<&TCType>) -> Result<TCType, SemanticError> {
     Ok(match value {
-        Value::Int(_) => TCType::Int,
-        Value::Float(_) => TCType::Float,
-        Value::Str(_) => TCType::Str,
-        Value::Bool(_) => TCType::Bool,
-        Value::Unit => TCType::Unit,
-        Value::List(values) => {
+        SyntaxLiteral::Int(_) => TCType::Int,
+        SyntaxLiteral::Float(_) => TCType::Float,
+        SyntaxLiteral::Str(_) => TCType::Str,
+        SyntaxLiteral::Bool(_) => TCType::Bool,
+        SyntaxLiteral::Unit => TCType::Unit,
+        SyntaxLiteral::List(values) => {
             let inner = expected
                 .and_then(TCType::list_element_type)
                 .cloned()
@@ -864,17 +866,23 @@ fn value_type(value: &Value, expected: Option<&TCType>) -> Result<TCType, Semant
                 .unwrap_or(TCType::Unknown);
             TCType::list(inner)
         }
-        Value::Tuple(values) => TCType::Tuple(
+        SyntaxLiteral::Tuple(values) => TCType::Tuple(
             values
                 .iter()
                 .map(|value| value_type(value, None).unwrap_or(TCType::Any))
                 .collect(),
         ),
-        Value::Map(_) => expected
+        SyntaxLiteral::Map(_) => expected
             .cloned()
             .unwrap_or_else(|| TCType::map(TCType::Any)),
-        Value::Function(_) => expected.cloned().unwrap_or(TCType::Any),
-        Value::Deferred | Value::NoVal => expected.cloned().unwrap_or(TCType::Unknown),
+        SyntaxLiteral::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, value)| (name.clone(), value_type(value, None).unwrap_or(TCType::Any)))
+                .collect();
+            TCType::Struct(fields, false)
+        }
+        SyntaxLiteral::NoVal => expected.cloned().unwrap_or(TCType::Unknown),
     })
 }
 

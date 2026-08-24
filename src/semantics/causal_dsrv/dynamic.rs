@@ -3,7 +3,7 @@ use futures::StreamExt;
 
 use crate::causal::{CausalDomain, CausalRole, CausalValue};
 use crate::lang::core::DependencyGraphExpr;
-use crate::lang::dsrv::ast::{CheckedExpr, DynamicExprScope, Expr};
+use crate::lang::dsrv::ast::{AstShared, CheckedExpr, DynamicExprScope, Expr};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{OutputStream, Value, VarName};
@@ -17,7 +17,7 @@ type CheckedEvaluator<AC, D> =
 enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
     Unchecked(Evaluator<AC, D>),
     Checked {
-        environment: std::rc::Rc<StreamTypeEnvironment>,
+        environment: AstShared<StreamTypeEnvironment>,
         expected: TCType,
         evaluator: CheckedEvaluator<AC, D>,
     },
@@ -93,7 +93,7 @@ pub fn dynamic_checked<AC, D>(
     scope: DynamicExprScope,
     owner: Option<VarName>,
     expected: TCType,
-    environment: std::rc::Rc<StreamTypeEnvironment>,
+    environment: AstShared<StreamTypeEnvironment>,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>
 where
@@ -247,7 +247,7 @@ pub fn defer_checked<AC, D>(
     scope: DynamicExprScope,
     owner: Option<VarName>,
     expected: TCType,
-    environment: std::rc::Rc<StreamTypeEnvironment>,
+    environment: AstShared<StreamTypeEnvironment>,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>
 where

@@ -1,9 +1,11 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 
-use crate::lang::dsrv::ast::{ExprBuilder, DynamicExprScope, ExprKind, ExprId, VarOrNodeName};
+use crate::lang::dsrv::ast::{
+    DynamicExprScope, ExprBuilder, ExprId, ExprKind, SyntaxLiteral, VarOrNodeName,
+};
 use crate::lang::dsrv::parser::Declaration;
-use crate::core::{BinaryOperator, Value, VarName, StreamType, StreamTypeAscription};
+use crate::core::{BinaryOperator, StreamType, StreamTypeAscription, VarName};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
@@ -100,13 +102,13 @@ LambdaParam: (VarName, StreamType) = {
 // Terminals / simple expressions
 // -----------------------------------------------------------------------------
 
-// Literal values mapped to Value
-LiteralVal: Value = {
-    Int => Value::Int(<>),
-    Float => Value::Float(<>),
-    Bool => Value::Bool(<>),
-    String => Value::Str(<>),
-    "(" ")" => Value::Unit,
+// Literal values mapped to syntax literals
+LiteralVal: SyntaxLiteral = {
+    Int => SyntaxLiteral::Int(<>),
+    Float => SyntaxLiteral::Float(<>),
+    Bool => SyntaxLiteral::Bool(<>),
+    String => SyntaxLiteral::Str(<>),
+    "(" ")" => SyntaxLiteral::Unit,
 }
 
 // Literal expression wrapper

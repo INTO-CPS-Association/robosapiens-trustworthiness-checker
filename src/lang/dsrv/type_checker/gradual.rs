@@ -165,9 +165,9 @@ pub fn type_check_gradual(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VarName;
     use crate::core::BinaryOperator;
     use crate::lang::dsrv::ast::Expr;
-    use crate::{Value, VarName};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;
@@ -190,7 +190,7 @@ mod tests {
             y.clone(),
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
-                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(1)),
                 BinaryOperator::Add,
             ),
         );
@@ -218,7 +218,7 @@ mod tests {
             y.clone(),
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
-                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(1)),
                 BinaryOperator::Add,
             ),
         );
@@ -271,7 +271,7 @@ mod tests {
     fn test_strict_type_check_still_requires_output_annotation() {
         let y: VarName = "y_strict_missing".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
+        exprs.insert(y.clone(), Expr::Val(1));
         let spec = DsrvSpecification::new(
             BTreeSet::new(),
             BTreeSet::from([y]),
@@ -298,7 +298,7 @@ mod tests {
             z.clone(),
             Expr::BinOp(
                 Box::new(Expr::Var(y.clone())),
-                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(1)),
                 BinaryOperator::Add,
             ),
         );
@@ -306,7 +306,7 @@ mod tests {
             y.clone(),
             Expr::BinOp(
                 Box::new(Expr::Var(x.clone())),
-                Box::new(Expr::Val(Value::Int(1))),
+                Box::new(Expr::Val(1)),
                 BinaryOperator::Add,
             ),
         );
@@ -366,7 +366,10 @@ mod tests {
     fn test_gradual_rejects_noval_literal_ast() {
         let x: VarName = "gradual_noval_x".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(x.clone(), Expr::Val(Value::NoVal));
+        exprs.insert(
+            x.clone(),
+            Expr::Val(crate::lang::dsrv::ast::SyntaxLiteral::NoVal),
+        );
         let spec = DsrvSpecification::new(
             BTreeSet::new(),
             BTreeSet::from([x]),
@@ -389,7 +392,7 @@ mod tests {
         // deferred to a runtime cast that can never succeed.
         let y: VarName = "gradual_mismatch_y".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), Expr::Val(Value::Int(1)));
+        exprs.insert(y.clone(), Expr::Val(1));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Bool);
         let spec = DsrvSpecification::new(
@@ -409,7 +412,7 @@ mod tests {
         let mut exprs = BTreeMap::new();
         exprs.insert(
             xs.clone(),
-            Expr::List(EcoVec::from(vec![Expr::Val(Value::Str("a".into())).into()])),
+            Expr::List(EcoVec::from(vec![Expr::Val("a").into()])),
         );
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(xs.clone(), StreamType::List(Box::new(StreamType::Int)));
@@ -428,7 +431,7 @@ mod tests {
     fn test_gradual_any_annotation_accepts_any_expression() {
         let y: VarName = "gradual_any_annot_y".into();
         let mut exprs = BTreeMap::new();
-        exprs.insert(y.clone(), Expr::Val(Value::Str("hello".into())));
+        exprs.insert(y.clone(), Expr::Val("hello"));
         let mut type_annotations = BTreeMap::new();
         type_annotations.insert(y.clone(), StreamType::Any);
         let spec = DsrvSpecification::new(
@@ -454,8 +457,8 @@ mod tests {
         exprs.insert(
             z.clone(),
             Expr::BinOp(
-                Box::new(Expr::Val(Value::Int(1))),
-                Box::new(Expr::Val(Value::Str("a".into()))),
+                Box::new(Expr::Val(1)),
+                Box::new(Expr::Val("a")),
                 BinaryOperator::Add,
             ),
         );
@@ -482,8 +485,8 @@ mod tests {
         exprs.insert(
             z.clone(),
             Expr::BinOp(
-                Box::new(Expr::Val(Value::Int(1))),
-                Box::new(Expr::Val(Value::Str("a".into()))),
+                Box::new(Expr::Val(1)),
+                Box::new(Expr::Val("a")),
                 BinaryOperator::Add,
             ),
         );
@@ -508,8 +511,8 @@ mod tests {
         exprs.insert(
             xs.clone(),
             Expr::List(EcoVec::from(vec![
-                Expr::Val(Value::Int(1)).into(),
-                Expr::Val(Value::Str("a".into())).into(),
+                Expr::Val(1).into(),
+                Expr::Val("a").into(),
             ])),
         );
         let spec = DsrvSpecification::new(
@@ -533,8 +536,8 @@ mod tests {
         exprs.insert(
             xs.clone(),
             Expr::List(EcoVec::from(vec![
-                Expr::Val(Value::Int(1)).into(),
-                Expr::Val(Value::Str("a".into())).into(),
+                Expr::Val(1).into(),
+                Expr::Val("a").into(),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -561,8 +564,8 @@ mod tests {
         exprs.insert(
             m.clone(),
             Expr::Map(BTreeMap::from([
-                ("x".into(), Expr::Val(Value::Int(1)).into()),
-                ("y".into(), Expr::Val(Value::Str("a".into())).into()),
+                ("x".into(), Expr::Val(1).into()),
+                ("y".into(), Expr::Val("a").into()),
             ])),
         );
         let spec = DsrvSpecification::new(
@@ -585,8 +588,8 @@ mod tests {
         exprs.insert(
             m.clone(),
             Expr::Map(BTreeMap::from([
-                ("x".into(), Expr::Val(Value::Int(1)).into()),
-                ("y".into(), Expr::Val(Value::Str("a".into())).into()),
+                ("x".into(), Expr::Val(1).into()),
+                ("y".into(), Expr::Val("a").into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -611,8 +614,8 @@ mod tests {
         exprs.insert(
             robot.clone(),
             Expr::Struct(BTreeMap::from([
-                ("id".into(), Expr::Val(Value::Int(1)).into()),
-                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
+                ("id".into(), Expr::Val(1).into()),
+                ("name".into(), Expr::Val("r2d2").into()),
             ])),
         );
         let spec = DsrvSpecification::new(
@@ -654,8 +657,8 @@ mod tests {
         exprs.insert(
             robot.clone(),
             Expr::Struct(BTreeMap::from([
-                ("id".into(), Expr::Val(Value::Int(1)).into()),
-                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
+                ("id".into(), Expr::Val(1).into()),
+                ("name".into(), Expr::Val("r2d2").into()),
             ])),
         );
         exprs.insert(
@@ -683,11 +686,8 @@ mod tests {
         exprs.insert(
             robot.clone(),
             Expr::Struct(BTreeMap::from([
-                (
-                    "id".into(),
-                    Expr::Val(Value::Str("not an int".into())).into(),
-                ),
-                ("name".into(), Expr::Val(Value::Str("r2d2".into())).into()),
+                ("id".into(), Expr::Val("not an int").into()),
+                ("name".into(), Expr::Val("r2d2").into()),
             ])),
         );
         let mut type_annotations = BTreeMap::new();
@@ -726,8 +726,8 @@ mod tests {
             z.clone(),
             Expr::If(
                 Box::new(Expr::Var(c.clone())),
-                Box::new(Expr::Val(Value::Int(1))),
-                Box::new(Expr::Val(Value::Str("a".into()))),
+                Box::new(Expr::Val(1)),
+                Box::new(Expr::Val("a")),
             ),
         );
         let mut type_annotations = BTreeMap::new();

@@ -1,8 +1,8 @@
 //! Complete node annotations bound to one storage range.
 
-use std::{fmt, rc::Rc};
+use std::fmt;
 
-use crate::{ArenaId, TreeCursor, TreeStorage};
+use crate::{ArenaId, Shared, TreeCursor, TreeStorage};
 
 /// A failure while constructing storage-bound node annotations.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,13 +28,13 @@ impl std::error::Error for AnnotationError {}
 
 /// Mutable construction of complete storage-bound node annotations.
 pub struct NodeAnnotationsBuilder<Storage: TreeStorage, T> {
-    storage: Rc<Storage>,
+    storage: Shared<Storage>,
     start: usize,
     values: Vec<Option<T>>,
 }
 
 impl<Storage: TreeStorage, T> NodeAnnotationsBuilder<Storage, T> {
-    pub(crate) fn new(storage: Rc<Storage>, start: usize, len: usize) -> Self {
+    pub(crate) fn new(storage: Shared<Storage>, start: usize, len: usize) -> Self {
         Self {
             storage,
             start,
@@ -101,7 +101,7 @@ impl<Storage: TreeStorage, T> NodeAnnotationsBuilder<Storage, T> {
 /// Immutable node annotations bound to one shared storage range.
 #[derive(Clone)]
 pub struct NodeAnnotations<Storage: TreeStorage, T> {
-    storage: Rc<Storage>,
+    storage: Shared<Storage>,
     start: usize,
     values: Box<[T]>,
 }

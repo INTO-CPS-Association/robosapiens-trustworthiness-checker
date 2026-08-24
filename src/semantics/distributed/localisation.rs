@@ -143,6 +143,15 @@ fn prune_to_dependency_closure(
     spec.exprs.retain(|var| reachable.contains(var));
     spec.type_annotations
         .retain(|var, _| reachable.contains(var));
+    spec.input_order.retain(|var| spec.input_vars.contains(var));
+    spec.output_order
+        .retain(|var| spec.output_vars.contains(var));
+    spec.aux_order.retain(|var| spec.aux_vars.contains(var));
+    spec.stream_order
+        .retain(|var| spec.output_vars.contains(var) || spec.aux_vars.contains(var));
+    spec.stream_vars = spec.stream_order.iter().cloned().collect();
+    spec.assignment_order
+        .retain(|var| spec.exprs.contains_key(var));
     spec
 }
 
@@ -187,13 +196,31 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         .into_iter()
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
+    let input_order = spec.input_order.clone();
+    let output_order: Vec<VarName> = spec
+        .output_order
+        .iter()
+        .filter(|name| !aux_vars.contains(*name))
+        .cloned()
+        .collect();
+    let stream_order = output_order.clone();
+    let assignment_order = spec
+        .assignment_order
+        .iter()
+        .filter(|name| exprs.contains_key(*name))
+        .cloned()
+        .collect();
 
-    Ok(DsrvSpecification::from_expression_forest(
+    Ok(DsrvSpecification::from_expression_forest_with_orders(
         spec.input_vars,
         output_vars,
         exprs,
         type_annotations,
         std::iter::empty(),
+        input_order,
+        output_order,
+        stream_order,
+        assignment_order,
     ))
 }
 
@@ -213,27 +240,28 @@ fn finish_localisation(
         .values()
         .flat_map(|expression| expression.stream_dependencies())
         .collect::<HashSet<_>>();
-    spec.input_vars = original
-        .input_vars
+    let input_order = original
+        .input_order
         .iter()
-        .chain(
-            original
-                .output_vars
-                .iter()
-                .chain(original.aux_vars.iter())
-                .filter(|var| !local_set.contains(*var)),
-        )
-        .filter(|var| needed_inputs.contains(*var))
+        .chain(original.output_order.iter())
+        .chain(original.aux_order.iter())
+        .filter(|var| !local_set.contains(*var))
+        .filter(|var| needed_inputs.contains(var))
         .cloned()
-        .collect();
+        .collect::<Vec<_>>();
+    spec.input_vars = input_order.iter().cloned().collect();
+    spec.input_order = input_order;
+
     spec.output_vars.retain(|var| local_set.contains(var));
+    spec.output_order
+        .retain(|var| spec.output_vars.contains(var));
     spec.aux_vars.retain(|var| local_set.contains(var));
-    spec.stream_vars = spec
-        .output_vars
-        .iter()
-        .cloned()
-        .chain(spec.aux_vars.iter().cloned())
-        .collect();
+    spec.aux_order.retain(|var| spec.aux_vars.contains(var));
+    spec.stream_order
+        .retain(|var| spec.output_vars.contains(var) || spec.aux_vars.contains(var));
+    spec.stream_vars = spec.stream_order.iter().cloned().collect();
+    spec.assignment_order
+        .retain(|var| spec.exprs.contains_key(var));
 
     debug!("Local expression inputs: {:?}", needed_inputs);
     spec

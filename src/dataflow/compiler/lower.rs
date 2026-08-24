@@ -6,7 +6,7 @@
 use super::super::ir::*;
 use super::super::*;
 use crate::core::UnaryOperator;
-use crate::lang::dsrv::ast::{CheckedExpr, ExprCursor, ExprView};
+use crate::lang::dsrv::ast::{AstShared, CheckedExpr, ExprCursor, ExprView};
 use crate::lang::dsrv::type_checker::TCType;
 
 struct EvaluationGraphBuilder {
@@ -69,7 +69,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
 
     let result_kind = scalar_kind(expr.typ());
     match expr.view() {
-        Val(value) => UnboundRef::Const(value.clone()),
+        Val(value) => UnboundRef::Const(value.clone().into_runtime_value()),
         Var(var) => UnboundRef::External(var.clone()),
         BinOp(lhs, rhs, op) => {
             let signature = scalar_binary_signature(lhs.typ(), rhs.typ(), result_kind);
@@ -219,7 +219,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             expr.shared_type_environment()
                 .zip(expr.typ())
                 .map(|(environment, expected_type)| DynamicExpressionTyping {
-                    environment: Rc::clone(environment),
+                    environment: AstShared::clone(environment),
                     expected_type: expected_type.clone(),
                 }),
         ),
@@ -231,7 +231,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             expr.shared_type_environment()
                 .zip(expr.typ())
                 .map(|(environment, expected_type)| DynamicExpressionTyping {
-                    environment: Rc::clone(environment),
+                    environment: AstShared::clone(environment),
                     expected_type: expected_type.clone(),
                 }),
         ),

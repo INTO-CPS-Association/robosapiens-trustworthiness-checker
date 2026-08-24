@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::collections::BTreeMap;
 
 use super::combinators as mc;
 use super::core_evaluation;
@@ -15,7 +15,7 @@ use crate::core::{
     BinaryOperator, BinaryOperatorKind, OutputStream, PartialStreamValue,
     from_typed_partial_stream, to_typed_partial_stream,
 };
-use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprRef, ExprView};
+use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView, SyntaxLiteral};
 use crate::lang::dsrv::type_checker::TCType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
@@ -121,7 +121,7 @@ where
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
                     .shared_type_environment()
-                    .map(|info| (Rc::clone(info), expected))
+                    .map(|info| (AstShared::clone(info), expected))
             });
             let e = evaluate(source);
             dynamic::dynamic_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
@@ -130,7 +130,7 @@ where
             let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
                 expression
                     .shared_type_environment()
-                    .map(|info| (Rc::clone(info), expected))
+                    .map(|info| (AstShared::clone(info), expected))
             });
             let e = evaluate(source);
             dynamic::defer_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
@@ -215,7 +215,7 @@ where
 
     let node = expression.as_ref();
     match node.view() {
-        Val(Value::Float(value)) => typed::val(*value),
+        Val(SyntaxLiteral::Float(value)) => typed::val(*value),
         Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)
@@ -280,7 +280,7 @@ where
 
     let node = expression.as_ref();
     match node.view() {
-        Val(Value::Int(value)) => typed::val(*value),
+        Val(SyntaxLiteral::Int(value)) => typed::val(*value),
         Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)
@@ -341,7 +341,7 @@ where
 
     let node = expression.as_ref();
     match node.view() {
-        Val(Value::Bool(value)) => typed::val(*value),
+        Val(SyntaxLiteral::Bool(value)) => typed::val(*value),
         Var(name) => {
             if let Some(stream) = expression.resolve_stream(name) {
                 crate::core::to_typed_stream(stream)

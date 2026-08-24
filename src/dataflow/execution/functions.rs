@@ -36,7 +36,7 @@ pub(in crate::dataflow) fn evaluate_function(
                 evaluator
                     .borrow_mut()
                     .evaluate_and_commit(&values, None)
-                    .map_err(anyhow::Error::from)
+                    .map_err(|error| anyhow::anyhow!("{error}"))
             })
         })
     });

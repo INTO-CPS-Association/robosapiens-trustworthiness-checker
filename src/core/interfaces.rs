@@ -106,6 +106,33 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
 
     fn aux_vars(&self) -> BTreeSet<VarName>;
 
+    /// Input variables in the order used by positional runtime layouts.
+    ///
+    /// Implementations with syntax-level declaration order should override this;
+    /// the set-based fallback preserves the historical arbitrary ordering for
+    /// specifications that do not retain an explicit order.
+    fn input_vars_in_order(&self) -> Vec<VarName> {
+        self.input_vars().into_iter().collect()
+    }
+
+    /// Output variables in declaration/layout order.
+    fn output_vars_in_order(&self) -> Vec<VarName> {
+        self.output_vars().into_iter().collect()
+    }
+
+    /// Auxiliary variables in declaration/layout order.
+    fn aux_vars_in_order(&self) -> Vec<VarName> {
+        self.aux_vars().into_iter().collect()
+    }
+
+    /// Computed variables in the order used by runtime layouts.
+    fn stream_vars_in_order(&self) -> Vec<VarName> {
+        self.output_vars_in_order()
+            .into_iter()
+            .chain(self.aux_vars_in_order())
+            .collect()
+    }
+
     fn stream_vars(&self) -> BTreeSet<VarName> {
         self.output_vars()
             .into_iter()

@@ -123,6 +123,7 @@ codegen-units = 16
 
 [features]
 default = ["mqtt", "redis"]
+thread-safe-ast = ["contiguous-tree/thread-safe"]
 jemalloc = ["dep:tikv-jemallocator"]
 mqtt = ["dep:paho-mqtt"]
 redis = ["dep:redis"]

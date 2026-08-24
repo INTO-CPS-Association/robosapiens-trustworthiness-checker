@@ -423,7 +423,9 @@ where
 
             let mut compiled = match compile_model(model) {
                 Ok(compiled) => compiled,
-                Err(error) => return failed_dataflow_runtime(policy, error.into()),
+                Err(error) => {
+                    return failed_dataflow_runtime(policy, anyhow::anyhow!("{error}"));
+                }
             };
             compiled.monitor.set_quickening(self.quickening);
             #[cfg(feature = "jit")]
@@ -454,7 +456,8 @@ where
             let quickening = self.quickening;
             let compiler: ReconfigurationCompiler = Rc::new(move |source| {
                 let model = parse_spec(source)?;
-                let mut compiled = compile_model(model).map_err(anyhow::Error::from)?;
+                let mut compiled =
+                    compile_model(model).map_err(|error| anyhow::anyhow!("{error}"))?;
                 compiled.monitor.set_quickening(quickening);
                 #[cfg(feature = "jit")]
                 apply_jit_config(&mut compiled, jit_config);
@@ -533,7 +536,9 @@ where
             let execution_policy = self.execution_policy;
             let mut startup_error = None;
             let mut monitor = match self.model {
-                Some(model) => DataflowMonitor::try_from(model).map_err(anyhow::Error::from),
+                Some(model) => {
+                    DataflowMonitor::try_from(model).map_err(|error| anyhow::anyhow!("{error}"))
+                }
                 None => Err(anyhow::anyhow!("dataflow runtime model is not configured")),
             };
             if let Ok(monitor) = &mut monitor {
@@ -956,10 +961,13 @@ async fn replace_root(
 
     let mut next_monitor = if semantic_changed {
         if state.transfer_policy != ContextTransferPolicy::None {
-            let context = active_monitor.export_context()?;
+            let context = active_monitor
+                .export_context()
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
             compiled
                 .monitor
-                .import_context(&context, state.transfer_policy)?;
+                .import_context(&context, state.transfer_policy)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
         }
         compiled.monitor
     } else {
@@ -1106,7 +1114,7 @@ impl DirectDataflowEngine {
         for &slot in &self.cached_layout_slots {
             self.input_row[slot] = Value::NoVal;
         }
-        result?;
+        result.map_err(|error| anyhow::anyhow!("{error}"))?;
         self.push_output_row();
         Ok(())
     }
@@ -1140,7 +1148,7 @@ impl DirectDataflowEngine {
         for &slot in &self.cached_layout_slots {
             self.input_row[slot] = Value::NoVal;
         }
-        result?;
+        result.map_err(|error| anyhow::anyhow!("{error}"))?;
         self.push_output_row();
         Ok(())
     }
@@ -1358,7 +1366,7 @@ mod tests {
         .with_reconfiguration_route("control")
         .unwrap();
         let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
             .executor(executor)
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1436,7 +1444,7 @@ mod tests {
             bounded::channel::<ReconfigurationAck>(1).into_split();
 
         let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .parse_spec(|source| source.parse().map_err(|error| anyhow::anyhow!("{error}")))
             .executor(executor.clone())
             .model(model)
             .input_pipeline(input_pipeline)
@@ -1479,10 +1487,7 @@ mod tests {
                 .await
                 .expect("strict nested dynamic transfer runtime should terminate")
                 .expect_err("incompatible nested dynamic transfer should fail the runtime");
-        assert!(matches!(
-            error.downcast_ref::<crate::dataflow::DataflowEvaluationError>(),
-            Some(crate::dataflow::DataflowEvaluationError::IncompatibleRegionTransfer(_))
-        ));
+        assert!(error.to_string().contains("cannot transfer its state"));
         assert_eq!(outputs.recv().await, None);
     }
 

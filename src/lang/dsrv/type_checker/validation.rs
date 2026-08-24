@@ -7,7 +7,7 @@ use contiguous_tree::TreeCursorExt;
 use super::{SemanticError, SemanticResult, TCType, TypeErrorKind};
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
-    DsrvSpecification, DynamicExprScope, ExprFieldRefs, ExprRef, ExprView,
+    DsrvSpecification, DynamicExprScope, ExprFieldRefs, ExprRef, ExprView, SyntaxLiteral,
 };
 use crate::{Value, VarName};
 use ecow::EcoVec;
@@ -65,7 +65,7 @@ fn validate_expression(
     use ExprView::*;
 
     match expression.view() {
-        Val(Value::Deferred | Value::NoVal) => Err(SemanticError::UnsupportedLiteral(
+        Val(SyntaxLiteral::NoVal) => Err(SemanticError::UnsupportedLiteral(
             "Deferred and NoVal are runtime states, not source literals".to_owned(),
             Some(expression.span()),
         )),

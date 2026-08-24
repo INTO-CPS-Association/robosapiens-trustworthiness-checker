@@ -1,7 +1,7 @@
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
-use crate::lang::dsrv::ast::DynamicExprScope;
+use crate::lang::dsrv::ast::{AstShared, DynamicExprScope};
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
 
@@ -1322,7 +1322,7 @@ pub(super) fn ops_equal(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct DynamicExpressionTyping {
-    pub(super) environment: Rc<StreamTypeEnvironment>,
+    pub(super) environment: AstShared<StreamTypeEnvironment>,
     pub(super) expected_type: TCType,
 }
 

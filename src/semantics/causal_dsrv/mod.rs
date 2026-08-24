@@ -144,7 +144,7 @@ where
     let child = |node: ExprRef<'_>| evaluate_ref::<AC, D>(node, ctx, owner.clone());
 
     match node.view() {
-        Val(value) => combinators::constant(value.clone()),
+        Val(value) => combinators::constant(value.clone().into_runtime_value()),
         Var(name) => ctx
             .var(name)
             .unwrap_or_else(|| panic!("causal DSRV variable `{name}` was not declared")),
@@ -236,7 +236,7 @@ where
     let child = |node: CheckedExprRef<'_>| evaluate_checked_ref::<AC, D>(node, ctx, owner.clone());
 
     match node.view() {
-        Val(value) => combinators::constant(value.clone()),
+        Val(value) => combinators::constant(value.clone().into_runtime_value()),
         Var(name) => ctx
             .var(name)
             .unwrap_or_else(|| panic!("causal DSRV variable `{name}` was not declared")),
@@ -316,6 +316,32 @@ mod tests {
         CausalDsrvSemantics, CausalSemiSyncConfig, RoleCausalDsrvSemantics, annotate_input,
     };
 
+    fn canonical_support(support: &crate::causal::AtomSet) -> Vec<(String, u64)> {
+        let mut atoms = support
+            .iter()
+            .map(|atom| (atom.input.name(), atom.logical_tick))
+            .collect::<Vec<_>>();
+        atoms.sort();
+        atoms
+    }
+
+    fn canonical_causes(
+        causes: &[crate::causal::RoleCause],
+    ) -> Vec<(String, u64, Vec<CausalRole>)> {
+        let mut causes = causes
+            .iter()
+            .map(|cause| {
+                (
+                    cause.atom.input.name(),
+                    cause.atom.logical_tick,
+                    cause.roles.iter().collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        causes.sort();
+        causes
+    }
+
     #[test]
     fn default_causal_builders_select_reference_domain() {
         let _unchecked = crate::semantics::CausalRuntimeBuilder::new();
@@ -392,31 +418,20 @@ mod tests {
         )
         .await;
         assert_eq!(
-            reference.explanation.support().iter().collect::<Vec<_>>(),
-            [
-                &crate::causal::TimedAtom::new("guard".into(), 0),
-                &crate::causal::TimedAtom::new("x".into(), 0),
-            ]
+            canonical_support(reference.explanation.support()),
+            vec![("guard".to_owned(), 0), ("x".to_owned(), 0)]
         );
 
         let role = unchecked_output::<RoleCausalSet, RoleCausalDsrvSemantics<RoleCausalSet>>(
             source, input, executor,
         )
         .await;
-        let causes = role.explanation.causes();
-        assert_eq!(causes.len(), 2);
         assert_eq!(
-            causes[0].atom,
-            crate::causal::TimedAtom::new("guard".into(), 0)
-        );
-        assert_eq!(
-            causes[0].roles.iter().collect::<Vec<_>>(),
-            [CausalRole::Selection]
-        );
-        assert_eq!(causes[1].atom, crate::causal::TimedAtom::new("x".into(), 0));
-        assert_eq!(
-            causes[1].roles.iter().collect::<Vec<_>>(),
-            [CausalRole::Direct]
+            canonical_causes(role.explanation.causes()),
+            vec![
+                ("guard".to_owned(), 0, vec![CausalRole::Selection]),
+                ("x".to_owned(), 0, vec![CausalRole::Direct]),
+            ]
         );
     }
 
@@ -508,17 +523,10 @@ mod tests {
         .await;
         assert_eq!(role.value, Value::Int(5));
         assert_eq!(
-            role.explanation
-                .causes()
-                .iter()
-                .map(|cause| (
-                    cause.atom.input.to_string(),
-                    cause.roles.iter().collect::<Vec<_>>()
-                ))
-                .collect::<Vec<_>>(),
+            canonical_causes(role.explanation.causes()),
             vec![
-                ("x".to_owned(), vec![CausalRole::Direct]),
-                ("property".to_owned(), vec![CausalRole::Activation]),
+                ("property".to_owned(), 0, vec![CausalRole::Activation]),
+                ("x".to_owned(), 0, vec![CausalRole::Direct]),
             ]
         );
     }
@@ -552,18 +560,11 @@ mod tests {
             .unwrap();
         assert_eq!(result.value, Value::Int(5));
         assert_eq!(
-            result.explanation.causes()[0]
-                .roles
-                .iter()
-                .collect::<Vec<_>>(),
-            [CausalRole::Activation]
-        );
-        assert_eq!(
-            result.explanation.causes()[1]
-                .roles
-                .iter()
-                .collect::<Vec<_>>(),
-            [CausalRole::Direct]
+            canonical_causes(result.explanation.causes()),
+            vec![
+                ("property".to_owned(), 0, vec![CausalRole::Activation]),
+                ("x".to_owned(), 0, vec![CausalRole::Direct]),
+            ]
         );
         assert!(rows.next().await.is_none());
         task.await.unwrap();

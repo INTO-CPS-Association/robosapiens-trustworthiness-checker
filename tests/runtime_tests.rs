@@ -178,7 +178,7 @@ async fn run_typed_lalr_runtime_with_spec(
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
     let spec_input = spec_str;
-    let spec = parse_str(spec_input)?;
+    let spec = parse_str(spec_input).map_err(|error| anyhow::anyhow!("{error}"))?;
     let input_stream = map::input_stream(input_stream);
     let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
@@ -205,7 +205,7 @@ async fn run_untyped_lalr_runtime_with_spec(
     timeout_label: &'static str,
 ) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
     let spec_input = spec_str;
-    let spec = parse_str(spec_input)?;
+    let spec = parse_str(spec_input).map_err(|error| anyhow::anyhow!("{error}"))?;
     let input_stream = map::input_stream(input_stream);
     let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
 
@@ -4789,7 +4789,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -4914,7 +4914,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5029,7 +5029,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5131,7 +5131,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5232,7 +5232,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5338,7 +5338,7 @@ mod reconf_tests {
         let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| parse_str(source).map_err(|error| anyhow::anyhow!("{error}")))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5453,7 +5453,9 @@ mod reconf_tests {
             let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                    .parse_spec(|source| {
+                        parse_str(source).map_err(|error| anyhow::anyhow!("{error}"))
+                    })
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -5571,7 +5573,9 @@ mod reconf_tests {
             let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                    .parse_spec(|source| {
+                        parse_str(source).map_err(|error| anyhow::anyhow!("{error}"))
+                    })
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))

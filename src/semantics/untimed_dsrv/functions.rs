@@ -8,7 +8,7 @@ use crate::core::OutputStream;
 use crate::core::RuntimeFunction;
 use crate::core::StreamType;
 use crate::core::Value;
-use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprRef, ExprView};
+use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView};
 use crate::semantics::{AsyncConfig, StreamContext};
 use async_stream::stream;
 use contiguous_tree::TreeCursorExt;
@@ -162,7 +162,7 @@ impl ScopedExpr {
 
     pub(super) fn shared_type_environment(
         &self,
-    ) -> Option<&Rc<crate::lang::dsrv::type_checker::StreamTypeEnvironment>> {
+    ) -> Option<&AstShared<crate::lang::dsrv::type_checker::StreamTypeEnvironment>> {
         match &self.phase {
             ExprPhase::Unchecked => None,
             ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_environment()),
@@ -195,6 +195,39 @@ impl ScopedExpr {
             .iter()
             .zip(args)
             .map(|((name, _), argument)| (name.clone(), EvalBinding::Expression(argument)))
+            .collect();
+        Ok(Self {
+            expr: self.expr,
+            phase: self.phase,
+            environment: Some(Rc::new(EvalBindingFrame {
+                parent: self.environment,
+                bindings,
+            })),
+            owner: self.owner,
+        })
+    }
+
+    pub(super) fn bind_values(
+        self,
+        params: &EcoVec<(VarName, StreamType)>,
+        values: EcoVec<Value>,
+    ) -> anyhow::Result<Self> {
+        if params.len() != values.len() {
+            return Err(anyhow::anyhow!(
+                "Function expected {} arguments, got {}",
+                params.len(),
+                values.len()
+            ));
+        }
+        let bindings = params
+            .iter()
+            .zip(values)
+            .map(|((name, _), value)| {
+                (
+                    name.clone(),
+                    EvalBinding::Stream(SharedOutput::new(mc::val(value))),
+                )
+            })
             .collect();
         Ok(Self {
             expr: self.expr,
@@ -286,15 +319,6 @@ pub(crate) fn bind_expression_for_benchmark(
     framed.environment.as_ref().map_or(0, Rc::strong_count)
 }
 
-fn value_expression(value: Value, template: &ScopedExpr) -> ScopedExpr {
-    ScopedExpr {
-        expr: Expr::value_with_span(value, template.expr.as_ref().span()),
-        phase: ExprPhase::Unchecked,
-        environment: template.environment.clone(),
-        owner: template.owner.clone(),
-    }
-}
-
 fn eval_function_once(
     function: RuntimeFunction,
     args: EcoVec<Value>,
@@ -352,11 +376,7 @@ where
         context: Rc::clone(&callable_ctx),
     });
     let runtime_function = RuntimeFunction::native(display, move |args| {
-        let arguments = args
-            .into_iter()
-            .map(|value| value_expression(value, &body))
-            .collect();
-        let body = body.clone().bind(&params, arguments)?;
+        let body = body.clone().bind_values(&params, args)?;
         Ok(evaluate_scope::<AC>(body, &callable_ctx))
     })
     .with_language_payload(definition);
