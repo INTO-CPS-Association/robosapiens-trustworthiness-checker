@@ -1,7 +1,7 @@
 use crate::testcontainers::ContainerAsync;
 use async_compat::Compat as TokioCompat;
 use futures::StreamExt;
-use futures_timeout::TimeoutExt;
+use futures_timeout::TimeoutFutureExt;
 use serde::ser::Serialize;
 use std::fmt::Debug;
 use testcontainers_modules::{
