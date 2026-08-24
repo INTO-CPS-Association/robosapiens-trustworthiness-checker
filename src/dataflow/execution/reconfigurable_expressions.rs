@@ -7,6 +7,7 @@ use super::environment_projection::EnvironmentProjection;
 use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::evaluator_state::*;
 use super::lifting::retain_last_value;
+use crate::lang::dsrv::ast::AstShared;
 use crate::lang::dsrv::{parser::parse_expr, type_checker::check_expression};
 
 pub(in crate::dataflow) fn evaluate_reconfigurable_expression(
@@ -114,7 +115,7 @@ impl SharedReconfigurableExpressionCacheEntry {
             && match (&self.typing, &spec.typing) {
                 (None, None) => true,
                 (Some(cached), Some(requested)) => {
-                    Rc::ptr_eq(&cached.environment, &requested.environment)
+                    AstShared::ptr_eq(&cached.environment, &requested.environment)
                         && cached.expected_type == requested.expected_type
                 }
                 _ => false,
@@ -678,11 +679,11 @@ mod tests {
         let different_environment = cache_template(&mut cache, "x", &untyped_spec, &environment_b);
         assert!(!Rc::ptr_eq(&first, &different_environment));
 
-        let type_environment_a = Rc::new(std::collections::BTreeMap::from([(
+        let type_environment_a = AstShared::new(std::collections::BTreeMap::from([(
             VarName::new("x"),
             crate::core::StreamType::Int,
         )]));
-        let type_environment_b = Rc::new(std::collections::BTreeMap::from([(
+        let type_environment_b = AstShared::new(std::collections::BTreeMap::from([(
             VarName::new("x"),
             crate::core::StreamType::Int,
         )]));
@@ -690,7 +691,7 @@ mod tests {
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
             Some(ReconfigurableExpressionTyping {
-                environment: Rc::clone(&type_environment_a),
+                environment: AstShared::clone(&type_environment_a),
                 expected_type: crate::lang::dsrv::type_checker::TCType::Int,
             }),
         );
@@ -698,7 +699,7 @@ mod tests {
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
             Some(ReconfigurableExpressionTyping {
-                environment: Rc::clone(&type_environment_b),
+                environment: AstShared::clone(&type_environment_b),
                 expected_type: crate::lang::dsrv::type_checker::TCType::Int,
             }),
         );
@@ -712,7 +713,7 @@ mod tests {
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
             Some(ReconfigurableExpressionTyping {
-                environment: Rc::clone(&type_environment_a),
+                environment: AstShared::clone(&type_environment_a),
                 expected_type: crate::lang::dsrv::type_checker::TCType::Any,
             }),
         );

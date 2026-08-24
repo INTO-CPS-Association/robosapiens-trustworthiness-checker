@@ -11,7 +11,7 @@ pub(crate) fn evaluate<'a>(
     use ExprView::*;
 
     let stream = match node.view() {
-        Val(value) => mc::val(value.clone()),
+        Val(value) => mc::val(value.clone().into_runtime_value()),
         BinOp(left, right, operator) => {
             let left = evaluate(left);
             let right = evaluate(right);

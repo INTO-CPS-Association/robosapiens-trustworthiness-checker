@@ -235,7 +235,7 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
 
 // ANCHOR: dsrv_numeric_literals
 fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
-    use trustworthiness_checker::lang::dsrv::ast::ExprView;
+    use trustworthiness_checker::lang::dsrv::ast::{ExprView, SyntaxLiteral};
     use trustworthiness_checker::lang::dsrv::parser::parse_expr;
     use trustworthiness_checker::{CheckedDsrvSpecification, Value};
 
@@ -250,8 +250,10 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
     for (source, expected) in literals {
         let expression = parse_expr(source)?;
         let matches_expected = match (&expected, expression.as_ref().view()) {
-            (Value::Int(expected), ExprView::Val(Value::Int(actual))) => *actual == *expected,
-            (Value::Float(expected), ExprView::Val(Value::Float(actual))) => {
+            (Value::Int(expected), ExprView::Val(SyntaxLiteral::Int(actual))) => {
+                *actual == *expected
+            }
+            (Value::Float(expected), ExprView::Val(SyntaxLiteral::Float(actual))) => {
                 actual.to_bits() == expected.to_bits()
             }
             _ => false,

@@ -2,9 +2,9 @@ use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 use lalrpop_util::ParseError;
 
-use crate::lang::dsrv::ast::{ExprBuilder, ReconfigurableExprScope, ExprKind, ExprId, VarOrNodeName};
+use crate::lang::dsrv::ast::{ExprBuilder, ReconfigurableExprScope, ExprKind, ExprId, SyntaxLiteral, VarOrNodeName};
 use crate::lang::dsrv::parser::Declaration;
-use crate::core::{BinaryOperator, Value, VarName, StreamType, StreamTypeAscription};
+use crate::core::{BinaryOperator, StreamType, StreamTypeAscription, VarName};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
@@ -40,7 +40,7 @@ Int: i64 = <l:@L> <s:r"[0-9]+"> =>? i64::from_str(s)
         *user_error_location = Some(l);
         ParseError::User { error: "integer literal is out of range" }
     });
-MalformedFloat: Value = <l:@L> <_s:r"[0-9]+\.[0-9]*(?:\.[0-9]+)+"> =>?
+MalformedFloat: SyntaxLiteral = <l:@L> <_s:r"[0-9]+\.[0-9]*(?:\.[0-9]+)+"> =>?
     {
         *user_error_location = Some(l);
         Err(ParseError::User { error: "invalid float literal" })
@@ -139,14 +139,14 @@ TrailingComma: () = {
 // Terminals / simple expressions
 // -----------------------------------------------------------------------------
 
-// Literal values mapped to Value
-LiteralVal: Value = {
+// Literal values mapped to syntax literals
+LiteralVal: SyntaxLiteral = {
     MalformedFloat,
-    Int => Value::Int(<>),
-    Float => Value::Float(<>),
-    Bool => Value::Bool(<>),
-    String => Value::Str(<>),
-    "(" ")" => Value::Unit,
+    Int => SyntaxLiteral::Int(<>),
+    Float => SyntaxLiteral::Float(<>),
+    Bool => SyntaxLiteral::Bool(<>),
+    String => SyntaxLiteral::Str(<>),
+    "(" ")" => SyntaxLiteral::Unit,
 }
 
 // Literal expression wrapper

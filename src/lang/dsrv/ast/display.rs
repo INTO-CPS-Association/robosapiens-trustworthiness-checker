@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Display, Error};
 
-use crate::core::{BinaryOperator, StreamTypeAscription, Value, VarName};
+use crate::core::{BinaryOperator, StreamTypeAscription};
 
 use super::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
-    ReconfigurableExprScope,
+    ReconfigurableExprScope, SyntaxLiteral,
 };
 
 impl Debug for CheckedExpr {
@@ -41,8 +41,8 @@ impl Display for ExprRef<'_> {
             BinOp(lhs, rhs, operator) => {
                 let negative_base = match lhs.view() {
                     super::ExprView::Neg(_) => true,
-                    super::ExprView::Val(Value::Int(value)) => *value < 0,
-                    super::ExprView::Val(Value::Float(value)) => value.is_sign_negative(),
+                    super::ExprView::Val(SyntaxLiteral::Int(value)) => *value < 0,
+                    super::ExprView::Val(SyntaxLiteral::Float(value)) => value.is_sign_negative(),
                     _ => false,
                 };
                 if operator == BinaryOperator::Power && negative_base {
@@ -186,33 +186,32 @@ impl Display for ExprRef<'_> {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let aux_vars = self.aux_vars();
-        let out_vars = self.output_vars().iter().cloned().collect::<Vec<VarName>>();
         if self.type_annotations.is_empty() {
-            for v in &self.input_vars {
+            for v in &self.input_order {
                 writeln!(f, "in {v}")?;
             }
-            for v in &out_vars {
+            for v in &self.output_order {
                 writeln!(f, "out {v}")?;
             }
-            for v in aux_vars {
+            for v in &self.aux_order {
                 writeln!(f, "aux {v}")?;
             }
         } else {
-            for v in &self.input_vars {
-                let typ = self.type_annotations.get(&v).ok_or(Error)?;
+            for v in &self.input_order {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "in {v}: {typ}")?;
             }
-            for v in &out_vars {
+            for v in &self.output_order {
                 let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "out {v}: {typ}")?;
             }
-            for v in aux_vars {
-                let typ = self.type_annotations.get(&v).ok_or(Error)?;
+            for v in &self.aux_order {
+                let typ = self.type_annotations.get(v).ok_or(Error)?;
                 writeln!(f, "aux {v}: {typ}")?;
             }
         }
-        for (v, expression) in self.exprs.iter() {
+        for v in &self.assignment_order {
+            let expression = self.exprs.get(v).ok_or(Error)?;
             writeln!(f, "{v} = {expression}")?;
         }
         Ok(())
@@ -227,14 +226,14 @@ mod tests {
     #[test]
     fn power_display_parenthesizes_direct_negative_value_bases() {
         for value in [
-            Value::Int(-2),
-            Value::Float(-2.0),
-            Value::Float(f64::NEG_INFINITY),
-            Value::Float(-0.0),
+            SyntaxLiteral::Int(-2),
+            SyntaxLiteral::Float(-2.0),
+            SyntaxLiteral::Float(f64::NEG_INFINITY),
+            SyntaxLiteral::Float(-0.0),
         ] {
             let expression = Expr::BinOp(
                 Box::new(Expr::Val(value)),
-                Box::new(Expr::Val(Value::Int(2))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(2))),
                 BinaryOperator::Power,
             );
             let displayed = expression.to_string();

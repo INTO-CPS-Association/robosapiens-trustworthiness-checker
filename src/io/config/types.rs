@@ -11,6 +11,27 @@ use crate::io::PipelineGeneration;
 use crate::io::{RedisKnowledgeConfig, RetryPolicy};
 use crate::{VarName, core::REDIS_HOSTNAME};
 
+#[cfg(feature = "thread-safe-ast")]
+static EMPTY_ROUTES: std::sync::OnceLock<BTreeMap<VarName, Route>> = std::sync::OnceLock::new();
+
+#[cfg(not(feature = "thread-safe-ast"))]
+thread_local! {
+    static EMPTY_ROUTES: std::cell::OnceCell<&'static BTreeMap<VarName, Route>> =
+        const { std::cell::OnceCell::new() };
+}
+
+fn empty_routes() -> &'static BTreeMap<VarName, Route> {
+    #[cfg(feature = "thread-safe-ast")]
+    {
+        EMPTY_ROUTES.get_or_init(BTreeMap::new)
+    }
+
+    #[cfg(not(feature = "thread-safe-ast"))]
+    {
+        EMPTY_ROUTES.with(|routes| *routes.get_or_init(|| Box::leak(Box::new(BTreeMap::new()))))
+    }
+}
+
 pub type TopicMapping = BTreeMap<VarName, String>;
 pub type MsgTypeMapping = BTreeMap<VarName, String>;
 
@@ -728,11 +749,7 @@ impl SourceConfig {
             Self::Mqtt { routes, .. } | Self::Redis { routes, .. } | Self::Ros { routes, .. } => {
                 routes
             }
-            Self::RedisKnowledge { .. } => {
-                static EMPTY_ROUTES: std::sync::OnceLock<BTreeMap<VarName, Route>> =
-                    std::sync::OnceLock::new();
-                EMPTY_ROUTES.get_or_init(BTreeMap::new)
-            }
+            Self::RedisKnowledge { .. } => empty_routes(),
         }
     }
 

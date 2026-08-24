@@ -2,7 +2,7 @@ use super::*;
 use crate::core::BinaryOperator;
 use crate::core::{StreamType, Value};
 use crate::dataflow::DataflowMonitor;
-use crate::lang::dsrv::ast::Expr;
+use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use crate::lang::dsrv::test_support::arb_dsrv_spec;
 use crate::{DsrvSpecification, VarName};
 use ::core::cfg_select;
@@ -39,20 +39,20 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             |(lhs, rhs, condition, shape)| match shape % 4 {
                 0 => Expr::Var(VarName::new("i")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
-                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
+                    Box::new(Expr::Val(i64::from(lhs))),
+                    Box::new(Expr::Val(i64::from(rhs))),
                     BinaryOperator::Add,
                 )
                 .into(),
                 2 => Expr::If(
-                    Box::new(Expr::Val(Value::Bool(condition))),
-                    Box::new(Expr::Val(Value::Int(i64::from(lhs)))),
+                    Box::new(Expr::Val(condition)),
+                    Box::new(Expr::Val(i64::from(lhs))),
                     Box::new(Expr::Var(VarName::new("i"))),
                 )
                 .into(),
                 _ => Expr::Default(
                     Box::new(Expr::Var(VarName::new("i"))),
-                    Box::new(Expr::Val(Value::Int(i64::from(rhs)))),
+                    Box::new(Expr::Val(i64::from(rhs))),
                 )
                 .into(),
             },
@@ -67,8 +67,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             match shape % 3 {
                 0 => Expr::Var(VarName::new("f")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Float(lhs))),
-                    Box::new(Expr::Val(Value::Float(rhs))),
+                    Box::new(Expr::Val(lhs)),
+                    Box::new(Expr::Val(rhs)),
                     BinaryOperator::Add,
                 )
                 .into(),
@@ -82,8 +82,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         (any::<bool>(), any::<bool>(), any::<u8>()).prop_map(|(lhs, rhs, shape)| match shape % 3 {
             0 => Expr::Var(VarName::new("b")).into(),
             1 => Expr::BinOp(
-                Box::new(Expr::Val(Value::Bool(lhs))),
-                Box::new(Expr::Val(Value::Bool(rhs))),
+                Box::new(Expr::Val(lhs)),
+                Box::new(Expr::Val(rhs)),
                 BinaryOperator::And,
             )
             .into(),
@@ -97,15 +97,15 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             match shape % 3 {
                 0 => Expr::Var(VarName::new("s")).into(),
                 1 => Expr::BinOp(
-                    Box::new(Expr::Val(Value::Str(lhs.into()))),
-                    Box::new(Expr::Val(Value::Str(rhs.into()))),
+                    Box::new(Expr::Val(lhs)),
+                    Box::new(Expr::Val(rhs)),
                     BinaryOperator::Concatenate,
                 )
                 .into(),
                 _ => Expr::If(
-                    Box::new(Expr::Val(Value::Bool(true))),
+                    Box::new(Expr::Val(true)),
                     Box::new(Expr::Var(VarName::new("s"))),
-                    Box::new(Expr::Val(Value::Str(rhs.into()))),
+                    Box::new(Expr::Val(rhs)),
                 )
                 .into(),
             }
@@ -119,7 +119,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             expr: Expr::List(
                 values
                     .into_iter()
-                    .map(|value| Expr::Val(Value::Int(i64::from(value))).into())
+                    .map(|value| Expr::Val(i64::from(value)).into())
                     .collect(),
             )
             .into(),
@@ -133,7 +133,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
             expr: Expr::Map(
                 values
                     .into_iter()
-                    .map(|(key, value)| (key.into(), Expr::Val(Value::Bool(value)).into())),
+                    .map(|(key, value)| (key.into(), Expr::Val(value).into())),
             )
             .into(),
             expected: StreamType::Map(Box::new(StreamType::Bool)),
@@ -143,9 +143,9 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let tuples = (any::<i16>(), any::<bool>(), "[a-z]{0,8}")
         .prop_map(|(integer, boolean, string)| TypeDirectedCase {
             expr: Expr::Tuple(eco_vec![
-                Expr::Val(Value::Int(i64::from(integer))).into(),
-                Expr::Val(Value::Bool(boolean)).into(),
-                Expr::Val(Value::Str(string.into())).into(),
+                Expr::Val(i64::from(integer)).into(),
+                Expr::Val(boolean).into(),
+                Expr::Val(string).into(),
             ])
             .into(),
             expected: StreamType::Tuple(eco_vec![
@@ -160,11 +160,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let structs = (any::<i16>(), any::<bool>())
         .prop_map(|(count, enabled)| TypeDirectedCase {
             expr: Expr::Struct(BTreeMap::from([
-                (
-                    "count".into(),
-                    Expr::Val(Value::Int(i64::from(count))).into(),
-                ),
-                ("enabled".into(), Expr::Val(Value::Bool(enabled)).into()),
+                ("count".into(), Expr::Val(i64::from(count)).into()),
+                ("enabled".into(), Expr::Val(enabled).into()),
             ]))
             .into(),
             expected: StreamType::Struct(
@@ -185,7 +182,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
                     eco_vec![(VarName::new("x"), StreamType::Int)],
                     Box::new(Expr::Var(VarName::new("x"))),
                 )),
-                eco_vec![Expr::Val(Value::Int(i64::from(argument))).into()],
+                eco_vec![Expr::Val(i64::from(argument)).into()],
             )
             .into(),
             expected: StreamType::Int,
@@ -194,7 +191,7 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         })
         .boxed();
     let unit = Just(TypeDirectedCase {
-        expr: Expr::Val(Value::Unit).into(),
+        expr: Expr::Val(()).into(),
         expected: StreamType::Unit,
         inputs: BTreeMap::new(),
         may_widen_without_annotation: false,
@@ -203,8 +200,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let powers = prop_oneof![
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Int(i64::from(base)))),
-                Box::new(Expr::Val(Value::Int(i64::from(exponent)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(base)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(exponent)))),
                 BinaryOperator::Power,
             )
             .into(),
@@ -214,8 +211,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Int(i64::from(base)))),
-                Box::new(Expr::Val(Value::Float(f64::from(exponent)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(base)))),
+                Box::new(Expr::Val(SyntaxLiteral::Float(f64::from(exponent)))),
                 BinaryOperator::Power,
             )
             .into(),
@@ -225,8 +222,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Float(f64::from(base)))),
-                Box::new(Expr::Val(Value::Int(i64::from(exponent)))),
+                Box::new(Expr::Val(SyntaxLiteral::Float(f64::from(base)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(exponent)))),
                 BinaryOperator::Power,
             )
             .into(),
@@ -236,8 +233,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         }),
         (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Float(f64::from(base)))),
-                Box::new(Expr::Val(Value::Float(f64::from(exponent)))),
+                Box::new(Expr::Val(SyntaxLiteral::Float(f64::from(base)))),
+                Box::new(Expr::Val(SyntaxLiteral::Float(f64::from(exponent)))),
                 BinaryOperator::Power,
             )
             .into(),
@@ -250,8 +247,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
     let inequalities = prop_oneof![
         (any::<i16>(), any::<i16>()).prop_map(|(left, right)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Int(i64::from(left)))),
-                Box::new(Expr::Val(Value::Int(i64::from(right)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(left)))),
+                Box::new(Expr::Val(SyntaxLiteral::Int(i64::from(right)))),
                 BinaryOperator::NotEqual,
             )
             .into(),
@@ -261,8 +258,8 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         }),
         (any::<bool>(), any::<bool>()).prop_map(|(left, right)| TypeDirectedCase {
             expr: Expr::BinOp(
-                Box::new(Expr::Val(Value::Bool(left))),
-                Box::new(Expr::Val(Value::Bool(right))),
+                Box::new(Expr::Val(SyntaxLiteral::Bool(left))),
+                Box::new(Expr::Val(SyntaxLiteral::Bool(right))),
                 BinaryOperator::NotEqual,
             )
             .into(),

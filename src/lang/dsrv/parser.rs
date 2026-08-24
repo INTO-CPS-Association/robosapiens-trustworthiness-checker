@@ -104,6 +104,10 @@ pub(crate) fn create_dsrv_spec(
 ) -> Result<DsrvSpecification, DsrvAstError> {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
+    let mut input_order = Vec::with_capacity(stmts.len());
+    let mut output_order = Vec::with_capacity(stmts.len());
+    let mut stream_order = Vec::with_capacity(stmts.len());
+    let mut stream_names = BTreeSet::new();
     let mut aux_vars = Vec::with_capacity(stmts.len());
     let mut assignments = Vec::with_capacity(stmts.len());
     let mut roots = Vec::with_capacity(stmts.len());
@@ -115,17 +119,27 @@ pub(crate) fn create_dsrv_spec(
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ);
                 }
-                inputs.insert(var);
+                if inputs.insert(var.clone()) {
+                    input_order.push(var);
+                }
             }
             Declaration::Output(var, typ, _) => {
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ);
                 }
-                outputs.insert(var);
+                if outputs.insert(var.clone()) {
+                    output_order.push(var.clone());
+                }
+                if stream_names.insert(var.clone()) {
+                    stream_order.push(var);
+                }
             }
             Declaration::Aux(var, typ, _) => {
                 if let Some(typ) = typ {
                     type_annotations.insert(var.clone(), typ);
+                }
+                if stream_names.insert(var.clone()) {
+                    stream_order.push(var.clone());
                 }
                 aux_vars.push(var);
             }
@@ -140,6 +154,9 @@ pub(crate) fn create_dsrv_spec(
     UnvalidatedDsrvSpecification::new(
         inputs,
         outputs,
+        input_order,
+        output_order,
+        stream_order,
         aux_vars,
         expressions,
         assignments,
@@ -206,7 +223,7 @@ mod tests {
 
     use crate::VarName;
     use crate::core::BinaryOperator;
-    use crate::lang::dsrv::ast::{Expr, ExprView};
+    use crate::lang::dsrv::ast::{Expr, ExprView, SyntaxLiteral};
     use crate::lang::dsrv::span::Span;
 
     use crate::core::StreamTypeAscription;
@@ -236,7 +253,7 @@ mod tests {
         assert_eq!(operand.span(), Span::new(1, source.len() as u32));
         assert!(matches!(
             operand.view(),
-            ExprView::Val(crate::Value::Int(42))
+            ExprView::Val(SyntaxLiteral::Int(42))
         ));
     }
 
@@ -249,7 +266,7 @@ mod tests {
         };
         assert!(matches!(
             operand.view(),
-            ExprView::Val(crate::Value::Int(i64::MAX))
+            ExprView::Val(SyntaxLiteral::Int(i64::MAX))
         ));
 
         for source in [
@@ -1656,7 +1673,7 @@ mod tests {
         }
         assert!(matches!(
             parse_expr("\"and or not\"").unwrap().as_ref().view(),
-            ExprView::Val(crate::Value::Str(value)) if value == "and or not"
+            ExprView::Val(SyntaxLiteral::Str(value)) if value == "and or not"
         ));
         for source in [
             r#"\and: Bool -> and"#,
@@ -1684,7 +1701,7 @@ mod tests {
             parse_expr("x ** -1").unwrap().as_ref().view(),
             ExprView::BinOp(_, rhs, BinaryOperator::Power)
                 if matches!(rhs.view(), ExprView::Neg(inner)
-                    if matches!(inner.view(), ExprView::Val(crate::Value::Int(1))))
+                    if matches!(inner.view(), ExprView::Val(SyntaxLiteral::Int(1))))
         ));
         for source in [
             "x ** +1",
@@ -1701,10 +1718,10 @@ mod tests {
     #[test]
     fn numeric_literal_matrix_and_full_input_consumption() {
         for (source, expected) in [
-            ("0", crate::Value::Int(0)),
-            ("00", crate::Value::Int(0)),
-            ("00042", crate::Value::Int(42)),
-            ("9223372036854775807", crate::Value::Int(i64::MAX)),
+            ("0", SyntaxLiteral::Int(0)),
+            ("00", SyntaxLiteral::Int(0)),
+            ("00042", SyntaxLiteral::Int(42)),
+            ("9223372036854775807", SyntaxLiteral::Int(i64::MAX)),
         ] {
             assert!(matches!(
                 parse_expr(source).unwrap().as_ref().view(),
@@ -1724,7 +1741,7 @@ mod tests {
             let expression = parse_expr(source).unwrap();
             assert!(matches!(
                 expression.as_ref().view(),
-                ExprView::Val(crate::Value::Float(value))
+                ExprView::Val(SyntaxLiteral::Float(value))
                     if value.to_bits() == expected.to_bits()
             ));
         }
@@ -1736,7 +1753,7 @@ mod tests {
         assert_eq!(negative.as_ref().span(), Span::new(0, 5));
         assert_eq!(operand.span(), Span::new(1, 5));
         assert!(
-            matches!(operand.view(), ExprView::Val(crate::Value::Float(value))
+            matches!(operand.view(), ExprView::Val(SyntaxLiteral::Float(value))
             if value.to_bits() == (1e-6_f64).to_bits())
         );
 
@@ -1767,9 +1784,9 @@ mod tests {
         for source in ["1e-4000", "-1e-4000"] {
             let expression = parse_expr(source).unwrap();
             let value = match expression.as_ref().view() {
-                ExprView::Val(crate::Value::Float(value)) => *value,
+                ExprView::Val(SyntaxLiteral::Float(value)) => *value,
                 ExprView::Neg(operand) => match operand.view() {
-                    ExprView::Val(crate::Value::Float(value)) => -*value,
+                    ExprView::Val(SyntaxLiteral::Float(value)) => -*value,
                     _ => panic!("expected a float operand"),
                 },
                 _ => panic!("expected a float literal"),
@@ -2013,9 +2030,9 @@ mod tests {
         fn valid_integer_literal_sources_roundtrip((source, value) in arb_valid_integer_literal_source()) {
             let expression = parse_expr(&source).expect("generated integer source should parse");
             let actual = match expression.as_ref().view() {
-                ExprView::Val(crate::Value::Int(actual)) => *actual,
+                ExprView::Val(SyntaxLiteral::Int(actual)) => *actual,
                 ExprView::Neg(operand) => match operand.view() {
-                    ExprView::Val(crate::Value::Int(actual)) => -*actual,
+                    ExprView::Val(SyntaxLiteral::Int(actual)) => -*actual,
                     _ => panic!("expected an integer operand"),
                 },
                 _ => panic!("expected an integer expression"),
@@ -2036,7 +2053,7 @@ mod tests {
         #[test]
         fn finite_float_literal_sources_match_rust_and_roundtrip((source, expected) in arb_finite_float_literal_source()) {
             let expression = parse_expr(&source).expect("generated float source should parse");
-            let ExprView::Val(crate::Value::Float(actual)) = expression.as_ref().view() else {
+            let ExprView::Val(SyntaxLiteral::Float(actual)) = expression.as_ref().view() else {
                 panic!("expected a float literal");
             };
             prop_assert_eq!(actual.to_bits(), expected.to_bits());
@@ -2294,27 +2311,27 @@ mod spec_tests {
     fn simple_add_typed() -> (&'static str, &'static str) {
         (
             "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
         )
     }
 
     fn simple_add_aux() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_monitor(),
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add)}, type_annotations: {} })",
         )
     }
     fn simple_add_aux_typed() -> (&'static str, &'static str) {
         (
             crate::dsrv_fixtures::spec_simple_add_aux_typed_monitor(),
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add), VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\"))}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {VarName::new(\"u\"), VarName::new(\"w\")}, stream_vars: {VarName::new(\"z\"), VarName::new(\"u\"), VarName::new(\"w\")}, exprs: {VarName::new(\"u\"): Var(VarName::new(\"x\")), VarName::new(\"w\"): Var(VarName::new(\"y\")), VarName::new(\"z\"): BinOp(Var(VarName::new(\"u\")), Var(VarName::new(\"w\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int, VarName::new(\"u\"): Int, VarName::new(\"w\"): Int} })",
         )
     }
 
     fn simple_add_typed_start_and_end_comment() -> (&'static str, &'static str) {
         (
             "// Begin\nin x: Int\nin y: Int\nout z: Int\nz = x + y// End",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"z\"): Int, VarName::new(\"y\"): Int} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add)}, type_annotations: {VarName::new(\"x\"): Int, VarName::new(\"y\"): Int, VarName::new(\"z\"): Int} })",
         )
     }
 

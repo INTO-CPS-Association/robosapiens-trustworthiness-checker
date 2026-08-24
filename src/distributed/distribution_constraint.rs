@@ -377,7 +377,7 @@ impl Lowerer<'_> {
         let span = expression.span();
         let display = format!("{expression}");
         let kind = match expression.view() {
-            Val(value) => ConstraintExprKind::Value(value.clone()),
+            Val(value) => ConstraintExprKind::Value(value.clone().into_runtime_value()),
             Var(variable) => {
                 if self.spec.input_vars().contains(variable) {
                     self.input_dependencies.insert(variable.clone());

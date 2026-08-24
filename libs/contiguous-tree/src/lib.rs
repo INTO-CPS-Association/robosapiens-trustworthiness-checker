@@ -49,6 +49,11 @@
 
 extern crate self as contiguous_tree;
 
+#[cfg(feature = "thread-safe")]
+pub(crate) type Shared<T> = std::sync::Arc<T>;
+#[cfg(not(feature = "thread-safe"))]
+pub(crate) type Shared<T> = std::rc::Rc<T>;
+
 mod annotations;
 mod arena;
 mod builder;

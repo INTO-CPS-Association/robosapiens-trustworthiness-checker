@@ -118,6 +118,7 @@ codegen-units = 16
 
 [features]
 default = ["redis"]
+thread-safe-ast = ["contiguous-tree/thread-safe"]
 jemalloc = ["dep:tikv-jemallocator"]
 redis = ["dep:redis"]
 sat = ["dep:sat-solver", "jemalloc"]

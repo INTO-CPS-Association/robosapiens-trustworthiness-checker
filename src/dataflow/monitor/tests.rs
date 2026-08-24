@@ -39,7 +39,7 @@ use crate::dataflow::{
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
-use crate::lang::dsrv::ast::Expr;
+use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use crate::{CheckedDsrvSpecification, DsrvSpecification};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -2613,26 +2613,47 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         "integer", "boolean", "string", "list", "tuple", "map", "unit", "absent", "waiting",
     ];
     let expressions = BTreeMap::from([
-        (VarName::new("integer"), Expr::Val(Value::Int(7))),
-        (VarName::new("boolean"), Expr::Val(Value::Bool(true))),
-        (VarName::new("string"), Expr::Val(Value::Str("a".into()))),
+        (VarName::new("integer"), Expr::Val(SyntaxLiteral::Int(7))),
+        (
+            VarName::new("boolean"),
+            Expr::Val(SyntaxLiteral::Bool(true)),
+        ),
+        (
+            VarName::new("string"),
+            Expr::Val(SyntaxLiteral::Str("a".into())),
+        ),
         (
             VarName::new("list"),
-            Expr::List(vec![Expr::Val(Value::Int(1)), Expr::Val(Value::Int(2))].into()),
+            Expr::List(
+                vec![
+                    Expr::Val(SyntaxLiteral::Int(1)),
+                    Expr::Val(SyntaxLiteral::Int(2)),
+                ]
+                .into(),
+            ),
         ),
         (
             VarName::new("tuple"),
-            Expr::Tuple(vec![Expr::Val(Value::Int(1)), Expr::Val(Value::Bool(false))].into()),
+            Expr::Tuple(
+                vec![
+                    Expr::Val(SyntaxLiteral::Int(1)),
+                    Expr::Val(SyntaxLiteral::Bool(false)),
+                ]
+                .into(),
+            ),
         ),
         (
             VarName::new("map"),
-            Expr::Map(BTreeMap::from([("k".into(), Expr::Val(Value::Int(3)))])),
+            Expr::Map(BTreeMap::from([(
+                "k".into(),
+                Expr::Val(SyntaxLiteral::Int(3)),
+            )])),
         ),
-        (VarName::new("unit"), Expr::Val(Value::Unit)),
-        (VarName::new("absent"), Expr::Val(Value::NoVal)),
+        (VarName::new("unit"), Expr::Val(SyntaxLiteral::Unit)),
+        (VarName::new("absent"), Expr::Val(SyntaxLiteral::NoVal)),
         (
             VarName::new("waiting"),
-            Expr::SIndex(Box::new(Expr::Val(Value::Int(1))), 1),
+            Expr::SIndex(Box::new(Expr::Val(SyntaxLiteral::Int(1))), 1),
         ),
     ]);
     let specification = DsrvSpecification::new(
@@ -3070,10 +3091,12 @@ fn lifecycle_transfer_is_stateful_before_reset_but_reset_is_cold_and_no_transfer
         report.context_transfer.streams[0].outcome,
         StreamStateTransferOutcome::Transferred
     );
+    // Positional rows follow declaration order, so the new `a` is absent and
+    // `x` receives 3: the transferred `z` state continues accumulating.
     monitor
         .evaluate(&[Value::NoVal, Value::Int(3)], &mut output)
         .unwrap();
-    assert_eq!(output, [Value::Int(5)]);
+    assert_eq!(output, [Value::Int(6)]);
     assert_eq!(
         monitor.configuration.reconfiguration_transfer_policy,
         ContextTransferPolicy::MatchingStreamState
@@ -3137,11 +3160,11 @@ fn lifecycle_reset_restores_original_root_and_interface_after_replacement() {
     );
     assert_eq!(
         monitor.input_vars(),
-        &[VarName::new("x"), VarName::new("y")]
+        &[VarName::new("y"), VarName::new("x")]
     );
     assert_eq!(
         monitor.output_vars(),
-        &[VarName::new("z"), VarName::new("other")]
+        &[VarName::new("other"), VarName::new("z")]
     );
     monitor.reset();
     assert_eq!(monitor.definition_key(), &base_key);

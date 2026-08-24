@@ -9,7 +9,7 @@ use crate::dataflow::{JitConfig, JitPlan};
 use crate::dsrv_fixtures::TestConfig;
 use crate::io::map;
 use crate::io::testing::channel_output;
-use crate::lang::dsrv::ast::Expr;
+use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
 use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 use ::core::cfg_select;
@@ -95,7 +95,7 @@ fn arb_valid_dataflow_program_and_inputs()
                                 Box::new(var(name.clone())),
                                 u64::from(second % 4) + 1,
                             )),
-                            Box::new(Expr::Val(Value::Int(0))),
+                            Box::new(Expr::Val(0)),
                         )),
                         Box::new(var(VarName::new("x"))),
                         BinaryOperator::Add,
@@ -110,10 +110,10 @@ fn arb_valid_dataflow_program_and_inputs()
                     10 => Expr::Default(Box::new(var(lhs)), Box::new(var(rhs))),
                     11 => Expr::BinOp(
                         Box::new(var(lhs)),
-                        Box::new(Expr::Val(Value::Int(1))),
+                        Box::new(Expr::Val(SyntaxLiteral::Int(1))),
                         BinaryOperator::Power,
                     ),
-                    _ => Expr::Val(Value::Int(i64::from(first))),
+                    _ => Expr::Val(i64::from(first)),
                 };
                 exprs.insert(name.clone(), expression.into());
                 annotations.insert(name, StreamType::Int);
@@ -203,7 +203,7 @@ fn arb_specialized_runtime_program_and_inputs()
                     2 => Expr::Abs(Box::new(Expr::Var(lhs))),
                     3 => Expr::BinOp(
                         Box::new(Expr::Var(lhs)),
-                        Box::new(Expr::Val(Value::Int(1))),
+                        Box::new(Expr::Val(SyntaxLiteral::Int(1))),
                         BinaryOperator::Power,
                     ),
                     _ => Expr::If(
@@ -368,7 +368,7 @@ proptest! {
             .keys()
             .map(|name| (name.clone(), augmented_spec.exprs.get_owned(name).unwrap()))
             .collect::<BTreeMap<_, _>>();
-        exprs.insert(unused.clone(), Expr::Val(Value::Int(0)).into());
+        exprs.insert(unused.clone(), Expr::Val(0).into());
         augmented_spec.type_annotations.insert(unused, StreamType::Int);
         augmented_spec = DsrvSpecification::new(
             augmented_spec.input_vars,

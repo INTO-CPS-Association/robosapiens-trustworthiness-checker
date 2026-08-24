@@ -1,9 +1,7 @@
-use std::rc::Rc;
-
 use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
 use crate::core::Value;
-use crate::lang::dsrv::ast::ReconfigurableExprScope;
+use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{LocalStream, VarName};
@@ -30,7 +28,7 @@ pub(crate) fn dynamic_checked<AC>(
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-    checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
+    checked: Option<(AstShared<StreamTypeEnvironment>, TCType)>,
 ) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
@@ -163,7 +161,7 @@ pub(crate) fn defer_checked<AC>(
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-    checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
+    checked: Option<(AstShared<StreamTypeEnvironment>, TCType)>,
 ) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,

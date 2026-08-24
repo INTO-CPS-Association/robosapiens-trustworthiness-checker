@@ -17,8 +17,8 @@ pub fn type_check(
 mod tests {
     use super::*;
     use crate::VarName;
-    use crate::core::{BinaryOperator, StreamType, Value};
-    use crate::lang::dsrv::ast::Expr;
+    use crate::core::{BinaryOperator, StreamType};
+    use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
     use crate::lang::dsrv::span::Span;
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
@@ -108,8 +108,8 @@ mod tests {
             BTreeMap::from([(
                 z.clone(),
                 Expr::BinOp(
-                    Box::new(Expr::Val(Value::Int(2))),
-                    Box::new(Expr::Val(Value::Int(-1))),
+                    Box::new(Expr::Val(SyntaxLiteral::Int(2))),
+                    Box::new(Expr::Val(SyntaxLiteral::Int(-1))),
                     BinaryOperator::Power,
                 ),
             )]),
@@ -118,9 +118,9 @@ mod tests {
         );
         for errors in [
             type_check(direct_negative_exponent.clone(), false)
-                .expect_err("strict must reject a direct negative literal Value"),
+                .expect_err("strict must reject a direct negative integer literal"),
             type_check_gradual(direct_negative_exponent, false)
-                .expect_err("gradual must reject a direct negative literal Value"),
+                .expect_err("gradual must reject a direct negative integer literal"),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,

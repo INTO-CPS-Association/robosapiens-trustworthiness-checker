@@ -1,13 +1,13 @@
 //! Checked and unchecked DSRV specifications.
 
+use contiguous_tree::TreeCursorExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::rc::Rc;
-
-use contiguous_tree::TreeCursorExt;
 
 use super::checked::{CheckedTypes, ExprTypes};
-use super::{CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef};
+use super::{
+    AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
+};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::span::Span;
 
@@ -43,6 +43,9 @@ pub(crate) struct UnvalidatedAssignment {
 pub(crate) struct UnvalidatedDsrvSpecification {
     input_vars: BTreeSet<VarName>,
     output_vars: BTreeSet<VarName>,
+    input_order: Vec<VarName>,
+    output_order: Vec<VarName>,
+    stream_order: Vec<VarName>,
     aux_vars: Vec<VarName>,
     expressions: ExprForest,
     assignments: Vec<UnvalidatedAssignment>,
@@ -53,6 +56,9 @@ impl UnvalidatedDsrvSpecification {
     pub(crate) fn new(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
+        input_order: Vec<VarName>,
+        output_order: Vec<VarName>,
+        stream_order: Vec<VarName>,
         aux_vars: Vec<VarName>,
         expressions: ExprForest,
         assignments: Vec<UnvalidatedAssignment>,
@@ -66,6 +72,9 @@ impl UnvalidatedDsrvSpecification {
         Self {
             input_vars,
             output_vars,
+            input_order,
+            output_order,
+            stream_order,
             aux_vars,
             expressions,
             assignments,
@@ -74,6 +83,11 @@ impl UnvalidatedDsrvSpecification {
     }
 
     pub(crate) fn validate(self) -> Result<DsrvSpecification, DsrvAstError> {
+        let assignment_order = self
+            .assignments
+            .iter()
+            .map(|assignment| assignment.name.clone())
+            .collect::<Vec<_>>();
         let names = self
             .assignments
             .iter()
@@ -102,12 +116,16 @@ impl UnvalidatedDsrvSpecification {
             return Err(DsrvAstError::DuplicateExpressionField { field });
         }
 
-        Ok(DsrvSpecification::from_expression_forest(
+        Ok(DsrvSpecification::from_expression_forest_with_orders(
             self.input_vars,
             self.output_vars,
             exprs,
             self.type_annotations,
             self.aux_vars,
+            self.input_order,
+            self.output_order,
+            self.stream_order,
+            assignment_order,
         ))
     }
 }
@@ -121,17 +139,81 @@ pub struct DsrvSpecification {
     pub(crate) stream_vars: BTreeSet<VarName>,
     pub(crate) exprs: ExprForestMap<VarName>,
     pub(crate) type_annotations: BTreeMap<VarName, StreamType>,
+    /// Syntax-derived layout order. These fields are intentionally not serialized:
+    /// the set/map fields above remain the compatibility representation, while
+    /// parsed specifications retain the order required by positional runtimes.
+    #[serde(skip)]
+    pub(crate) input_order: Vec<VarName>,
+    #[serde(skip)]
+    pub(crate) output_order: Vec<VarName>,
+    #[serde(skip)]
+    pub(crate) aux_order: Vec<VarName>,
+    #[serde(skip)]
+    pub(crate) stream_order: Vec<VarName>,
+    #[serde(skip)]
+    pub(crate) assignment_order: Vec<VarName>,
+}
+
+struct OrderedVars<'a>(&'a [VarName]);
+
+impl Debug for OrderedVars<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0).finish()
+    }
+}
+
+struct OrderedExprs<'a>(&'a DsrvSpecification);
+
+impl Debug for OrderedExprs<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(
+                self.0
+                    .assignment_order
+                    .iter()
+                    .filter_map(|name| self.0.exprs.get(name).map(|expression| (name, expression))),
+            )
+            .finish()
+    }
+}
+
+struct OrderedAnnotations<'a>(&'a DsrvSpecification);
+
+impl Debug for OrderedAnnotations<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let declaration_order = self
+            .0
+            .input_order
+            .iter()
+            .chain(self.0.output_order.iter())
+            .chain(self.0.aux_order.iter());
+        let mut seen = BTreeSet::new();
+        let mut entries = Vec::new();
+        for name in declaration_order {
+            if seen.insert(name.clone())
+                && let Some(annotation) = self.0.type_annotations.get(name)
+            {
+                entries.push((name, annotation));
+            }
+        }
+        for (name, annotation) in &self.0.type_annotations {
+            if seen.insert(name.clone()) {
+                entries.push((name, annotation));
+            }
+        }
+        f.debug_map().entries(entries).finish()
+    }
 }
 
 impl Debug for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DsrvSpecification")
-            .field("input_vars", &self.input_vars)
-            .field("output_vars", &self.output_vars)
-            .field("aux_vars", &self.aux_vars)
-            .field("stream_vars", &self.stream_vars)
-            .field("exprs", &self.exprs)
-            .field("type_annotations", &self.type_annotations)
+            .field("input_vars", &OrderedVars(&self.input_order))
+            .field("output_vars", &OrderedVars(&self.output_order))
+            .field("aux_vars", &OrderedVars(&self.aux_order))
+            .field("stream_vars", &OrderedVars(&self.stream_order))
+            .field("exprs", &OrderedExprs(self))
+            .field("type_annotations", &OrderedAnnotations(self))
             .finish()
     }
 }
@@ -140,13 +222,13 @@ impl Debug for DsrvSpecification {
 #[derive(Clone, Debug)]
 pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
-    checked: Rc<CheckedTypes>,
+    checked: AstShared<CheckedTypes>,
 }
 
 impl CheckedDsrvSpecification {
     pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
-        let environment = Rc::new(spec.type_annotations().clone());
-        let checked = Rc::new(CheckedTypes::new(expr_types, environment));
+        let environment = AstShared::new(spec.type_annotations().clone());
+        let checked = AstShared::new(CheckedTypes::new(expr_types, environment));
         Self { spec, checked }
     }
 
@@ -170,14 +252,26 @@ impl CheckedDsrvSpecification {
     pub fn input_vars(&self) -> &BTreeSet<VarName> {
         self.spec.input_vars()
     }
+    pub fn input_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.input_vars_in_order()
+    }
     pub fn output_vars(&self) -> &BTreeSet<VarName> {
         self.spec.output_vars()
+    }
+    pub fn output_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.output_vars_in_order()
     }
     pub fn aux_vars(&self) -> &BTreeSet<VarName> {
         self.spec.aux_vars()
     }
+    pub fn aux_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.aux_vars_in_order()
+    }
     pub fn stream_vars(&self) -> &BTreeSet<VarName> {
         self.spec.stream_vars()
+    }
+    pub fn stream_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.stream_vars_in_order()
     }
     pub fn type_annotations(&self) -> &BTreeMap<VarName, StreamType> {
         self.spec.type_annotations()
@@ -194,14 +288,26 @@ impl Specification for CheckedDsrvSpecification {
     fn input_vars(&self) -> BTreeSet<VarName> {
         self.spec.input_vars().clone()
     }
+    fn input_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.input_vars_in_order()
+    }
     fn output_vars(&self) -> BTreeSet<VarName> {
         self.spec.output_vars().clone()
+    }
+    fn output_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.output_vars_in_order()
     }
     fn aux_vars(&self) -> BTreeSet<VarName> {
         self.spec.aux_vars().clone()
     }
+    fn aux_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.aux_vars_in_order()
+    }
     fn stream_vars(&self) -> BTreeSet<VarName> {
         self.spec.stream_vars().clone()
+    }
+    fn stream_vars_in_order(&self) -> Vec<VarName> {
+        self.spec.stream_vars_in_order()
     }
     fn var_expr(&self, var: &VarName) -> Option<CheckedExpr> {
         CheckedDsrvSpecification::var_expr(self, var)
@@ -209,6 +315,18 @@ impl Specification for CheckedDsrvSpecification {
     fn type_annotations(&self) -> BTreeMap<VarName, StreamType> {
         self.spec.type_annotations().clone()
     }
+}
+
+fn complete_order(order: Vec<VarName>, members: &BTreeSet<VarName>) -> Vec<VarName> {
+    let mut seen = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(members.len());
+    for name in order {
+        if members.contains(&name) && seen.insert(name.clone()) {
+            ordered.push(name);
+        }
+    }
+    ordered.extend(members.iter().filter(|name| !seen.contains(*name)).cloned());
+    ordered
 }
 
 impl DsrvSpecification {
@@ -228,19 +346,64 @@ impl DsrvSpecification {
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
     ) -> Self {
-        let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
-        let stream_vars = output_vars
+        let input_order = input_vars.iter().cloned().collect();
+        let output_order: Vec<VarName> = output_vars.iter().cloned().collect();
+        let aux_vars = aux_vars.into_iter().collect::<Vec<_>>();
+        let stream_order = output_order
             .iter()
+            .chain(aux_vars.iter())
             .cloned()
-            .chain(aux_vars.iter().cloned())
             .collect();
+        let assignment_order = exprs.keys().cloned().collect();
+        Self::from_expression_forest_with_orders(
+            input_vars,
+            output_vars,
+            exprs,
+            type_annotations,
+            aux_vars,
+            input_order,
+            output_order,
+            stream_order,
+            assignment_order,
+        )
+    }
+
+    pub(crate) fn from_expression_forest_with_orders(
+        input_vars: BTreeSet<VarName>,
+        output_vars: BTreeSet<VarName>,
+        exprs: ExprForestMap<VarName>,
+        type_annotations: BTreeMap<VarName, StreamType>,
+        aux_vars: impl IntoIterator<Item = VarName>,
+        input_order: Vec<VarName>,
+        output_order: Vec<VarName>,
+        stream_order: Vec<VarName>,
+        assignment_order: Vec<VarName>,
+    ) -> Self {
+        let aux_order = aux_vars.into_iter().collect::<Vec<_>>();
+        let aux_vars = aux_order.iter().cloned().collect::<BTreeSet<_>>();
+        let input_order = complete_order(input_order, &input_vars);
+        let output_order = complete_order(output_order, &output_vars);
+        let aux_order = complete_order(aux_order, &aux_vars);
+        let stream_members = output_vars
+            .iter()
+            .chain(aux_vars.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let stream_order = complete_order(stream_order, &stream_members);
+        let expr_names = exprs.keys().cloned().collect::<BTreeSet<_>>();
+        let assignment_order = complete_order(assignment_order, &expr_names);
         Self {
             input_vars,
             output_vars,
             aux_vars,
-            stream_vars,
+            stream_vars: stream_order.iter().cloned().collect(),
             exprs,
             type_annotations,
+            input_order,
+            output_order,
+            aux_order,
+            stream_order,
+            assignment_order,
         }
     }
 
@@ -280,14 +443,26 @@ impl DsrvSpecification {
     pub fn input_vars(&self) -> &BTreeSet<VarName> {
         &self.input_vars
     }
+    pub fn input_vars_in_order(&self) -> Vec<VarName> {
+        self.input_order.clone()
+    }
     pub fn output_vars(&self) -> &BTreeSet<VarName> {
         &self.output_vars
+    }
+    pub fn output_vars_in_order(&self) -> Vec<VarName> {
+        self.output_order.clone()
     }
     pub fn aux_vars(&self) -> &BTreeSet<VarName> {
         &self.aux_vars
     }
+    pub fn aux_vars_in_order(&self) -> Vec<VarName> {
+        self.aux_order.clone()
+    }
     pub fn stream_vars(&self) -> &BTreeSet<VarName> {
         &self.stream_vars
+    }
+    pub fn stream_vars_in_order(&self) -> Vec<VarName> {
+        self.stream_order.clone()
     }
     pub fn type_annotations(&self) -> &BTreeMap<VarName, StreamType> {
         &self.type_annotations
@@ -304,16 +479,32 @@ impl Specification for DsrvSpecification {
         DsrvSpecification::input_vars(self).clone()
     }
 
+    fn input_vars_in_order(&self) -> Vec<VarName> {
+        DsrvSpecification::input_vars_in_order(self)
+    }
+
     fn output_vars(&self) -> BTreeSet<VarName> {
         DsrvSpecification::output_vars(self).clone()
+    }
+
+    fn output_vars_in_order(&self) -> Vec<VarName> {
+        DsrvSpecification::output_vars_in_order(self)
     }
 
     fn aux_vars(&self) -> BTreeSet<VarName> {
         DsrvSpecification::aux_vars(self).clone()
     }
 
+    fn aux_vars_in_order(&self) -> Vec<VarName> {
+        DsrvSpecification::aux_vars_in_order(self)
+    }
+
     fn stream_vars(&self) -> BTreeSet<VarName> {
         DsrvSpecification::stream_vars(self).clone()
+    }
+
+    fn stream_vars_in_order(&self) -> Vec<VarName> {
+        DsrvSpecification::stream_vars_in_order(self)
     }
 
     fn var_expr(&self, var: &VarName) -> Option<Expr> {
@@ -357,6 +548,34 @@ mod tests {
             .unwrap()
             .var_expr(&VarName::new("y"))
             .unwrap()
+    }
+
+    #[cfg(feature = "thread-safe-ast")]
+    #[test]
+    fn specification_moves_and_traverses_on_another_thread() {
+        let input = VarName::new("thread_safe_ast_input");
+        let output = VarName::new("thread_safe_ast_output");
+        let specification = "in thread_safe_ast_input\nout thread_safe_ast_output\nthread_safe_ast_output = thread_safe_ast_input + thread_safe_ast_input"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+
+        let joined = std::thread::spawn(move || {
+            let expression = specification.var_expr_ref(&output).unwrap();
+            let ExprView::BinOp(left, right, _) = expression.view() else {
+                panic!("expected a binary expression");
+            };
+            let ExprView::Var(left_name) = left.view() else {
+                panic!("expected the left operand to be a variable");
+            };
+            let ExprView::Var(right_name) = right.view() else {
+                panic!("expected the right operand to be a variable");
+            };
+            assert_eq!(left_name.name(), "thread_safe_ast_input");
+            assert_eq!(right_name.name(), "thread_safe_ast_input");
+            assert_eq!(expression.free_variables(), BTreeSet::from([input]));
+        });
+
+        joined.join().unwrap();
     }
 
     #[test]

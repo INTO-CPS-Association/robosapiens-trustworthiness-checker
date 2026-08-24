@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::core::BinaryOperator;
-use crate::lang::dsrv::ast::Expr;
+use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -217,7 +217,7 @@ fn specification_from_recipes(recipes: &[LifecycleRecipe]) -> DsrvSpecification 
         };
         let var = |name| Expr::Var(name);
         let expression = match recipe {
-            LifecycleRecipe::Constant(value) => Expr::Val(Value::Int(i64::from(*value))),
+            LifecycleRecipe::Constant(value) => Expr::Val(SyntaxLiteral::Int(i64::from(*value))),
             LifecycleRecipe::Absolute { source } => Expr::Abs(Box::new(var(dependency(*source)))),
             LifecycleRecipe::Add { left, right } => Expr::BinOp(
                 Box::new(var(dependency(*left))),
@@ -248,7 +248,7 @@ fn specification_from_recipes(recipes: &[LifecycleRecipe]) -> DsrvSpecification 
                         Box::new(var(name.clone())),
                         offset.get().max(1),
                     )),
-                    Box::new(Expr::Val(Value::Int(0))),
+                    Box::new(Expr::Val(SyntaxLiteral::Int(0))),
                 )),
                 Box::new(var(x.clone())),
                 BinaryOperator::Add,

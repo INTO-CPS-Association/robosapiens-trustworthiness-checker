@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
-use crate::{DsrvSpecification, Value, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
+use crate::{DsrvSpecification, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
 
 /// A generated integer-power input and its independent checked-arithmetic oracle.
 ///
@@ -438,7 +438,7 @@ pub fn arb_float_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
 
 pub fn arb_string_sexpr(vars: Vec<VarName>) -> impl Strategy<Value = Expr> {
     let leaf = prop_oneof![
-        "[a-zA-Z0-9 _-]{1,24}".prop_map(|s| Expr::Val(Value::Str(s.into()))),
+        "[a-zA-Z0-9 _-]{1,24}".prop_map(|s| Expr::Val(s)),
         proptest::sample::select(vars.clone()).prop_map(|x| Expr::Var(x.clone())),
     ];
 

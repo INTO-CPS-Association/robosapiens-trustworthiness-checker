@@ -1,26 +1,26 @@
 //! Shared owning roots and ordered forests.
 
-use std::{iter::FusedIterator, ops::Range, rc::Rc};
+use std::{iter::FusedIterator, ops::Range};
 
-use crate::{ArenaId, ForestError, NodeAnnotationsBuilder, TreeCursor, TreeStorage};
+use crate::{ArenaId, ForestError, NodeAnnotationsBuilder, Shared, TreeCursor, TreeStorage};
 
 /// An owning root into shared tree storage.
 pub struct TreeHandle<Storage: TreeStorage> {
-    storage: Rc<Storage>,
+    storage: Shared<Storage>,
     root: Storage::Id,
 }
 
 impl<Storage: TreeStorage> Clone for TreeHandle<Storage> {
     fn clone(&self) -> Self {
         Self {
-            storage: Rc::clone(&self.storage),
+            storage: Shared::clone(&self.storage),
             root: self.root,
         }
     }
 }
 
 impl<Storage: TreeStorage> TreeHandle<Storage> {
-    pub(crate) fn from_shared(storage: Rc<Storage>, root: Storage::Id) -> Self {
+    pub(crate) fn from_shared(storage: Shared<Storage>, root: Storage::Id) -> Self {
         Self { storage, root }
     }
 
@@ -38,7 +38,7 @@ impl<Storage: TreeStorage> TreeHandle<Storage> {
             "subtree root is not a descendant of the owning root"
         );
         Self {
-            storage: Rc::clone(&self.storage),
+            storage: Shared::clone(&self.storage),
             root: cursor.id(),
         }
     }
@@ -52,15 +52,15 @@ impl<Storage: TreeStorage> TreeHandle<Storage> {
     }
 
     pub fn same_root(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.storage, &other.storage) && self.root.index() == other.root.index()
+        Shared::ptr_eq(&self.storage, &other.storage) && self.root.index() == other.root.index()
     }
 
     pub fn shares_storage_with(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.storage, &other.storage)
+        Shared::ptr_eq(&self.storage, &other.storage)
     }
 
     pub fn strong_count(&self) -> usize {
-        Rc::strong_count(&self.storage)
+        Shared::strong_count(&self.storage)
     }
 
     pub fn annotations_builder<T>(&self) -> NodeAnnotationsBuilder<Storage, T> {
@@ -70,28 +70,28 @@ impl<Storage: TreeStorage> TreeHandle<Storage> {
             .next()
             .expect("an owning tree always contains its root")
             .index();
-        NodeAnnotationsBuilder::new(Rc::clone(&self.storage), start, len)
+        NodeAnnotationsBuilder::new(Shared::clone(&self.storage), start, len)
     }
 
     pub fn into_storage_and_root(self) -> (Storage, Storage::Id)
     where
         Storage: Clone,
     {
-        let storage = Rc::try_unwrap(self.storage).unwrap_or_else(|shared| (*shared).clone());
+        let storage = Shared::try_unwrap(self.storage).unwrap_or_else(|shared| (*shared).clone());
         (storage, self.root)
     }
 }
 
 /// An ordered, unkeyed forest owning one shared storage allocation.
 pub struct Forest<Storage: TreeStorage> {
-    pub(crate) storage: Rc<Storage>,
+    pub(crate) storage: Shared<Storage>,
     pub(crate) roots: Box<[Storage::Id]>,
 }
 
 impl<Storage: TreeStorage> Clone for Forest<Storage> {
     fn clone(&self) -> Self {
         Self {
-            storage: Rc::clone(&self.storage),
+            storage: Shared::clone(&self.storage),
             roots: self.roots.clone(),
         }
     }
@@ -100,7 +100,7 @@ impl<Storage: TreeStorage> Clone for Forest<Storage> {
 impl<Storage: TreeStorage> Forest<Storage> {
     pub(crate) fn from_validated_parts(storage: Storage, roots: Box<[Storage::Id]>) -> Self {
         Self {
-            storage: Rc::new(storage),
+            storage: Shared::new(storage),
             roots,
         }
     }
@@ -149,7 +149,7 @@ impl<Storage: TreeStorage> Forest<Storage> {
     }
 
     pub fn handle(&self, index: usize) -> TreeHandle<Storage> {
-        TreeHandle::from_shared(Rc::clone(&self.storage), self.roots[index])
+        TreeHandle::from_shared(Shared::clone(&self.storage), self.roots[index])
     }
 
     pub fn handles(
@@ -157,11 +157,11 @@ impl<Storage: TreeStorage> Forest<Storage> {
     ) -> impl DoubleEndedIterator<Item = TreeHandle<Storage>> + ExactSizeIterator + '_ {
         self.roots
             .iter()
-            .map(|&root| TreeHandle::from_shared(Rc::clone(&self.storage), root))
+            .map(|&root| TreeHandle::from_shared(Shared::clone(&self.storage), root))
     }
 
     pub fn annotations_builder<T>(&self) -> NodeAnnotationsBuilder<Storage, T> {
-        NodeAnnotationsBuilder::new(Rc::clone(&self.storage), 0, self.storage.node_count())
+        NodeAnnotationsBuilder::new(Shared::clone(&self.storage), 0, self.storage.node_count())
     }
 
     pub fn into_handles(self) -> ForestHandles<Storage> {
@@ -175,7 +175,7 @@ impl<Storage: TreeStorage> Forest<Storage> {
 
     pub fn try_into_storage_and_roots(self) -> Result<(Storage, Box<[Storage::Id]>), Self> {
         let Self { storage, roots } = self;
-        match Rc::try_unwrap(storage) {
+        match Shared::try_unwrap(storage) {
             Ok(storage) => Ok((storage, roots)),
             Err(storage) => Err(Self { storage, roots }),
         }
@@ -186,14 +186,14 @@ impl<Storage: TreeStorage> Forest<Storage> {
         Storage: Clone,
     {
         let Self { storage, roots } = self;
-        let storage = Rc::try_unwrap(storage).unwrap_or_else(|shared| (*shared).clone());
+        let storage = Shared::try_unwrap(storage).unwrap_or_else(|shared| (*shared).clone());
         (storage, roots)
     }
 }
 
 /// A non-allocating consuming iterator over the handles of a [`Forest`].
 pub struct ForestHandles<Storage: TreeStorage> {
-    storage: Rc<Storage>,
+    storage: Shared<Storage>,
     roots: Box<[Storage::Id]>,
     range: Range<usize>,
 }
@@ -204,7 +204,7 @@ impl<Storage: TreeStorage> Iterator for ForestHandles<Storage> {
     fn next(&mut self) -> Option<Self::Item> {
         self.range
             .next()
-            .map(|index| TreeHandle::from_shared(Rc::clone(&self.storage), self.roots[index]))
+            .map(|index| TreeHandle::from_shared(Shared::clone(&self.storage), self.roots[index]))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -216,7 +216,7 @@ impl<Storage: TreeStorage> DoubleEndedIterator for ForestHandles<Storage> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.range
             .next_back()
-            .map(|index| TreeHandle::from_shared(Rc::clone(&self.storage), self.roots[index]))
+            .map(|index| TreeHandle::from_shared(Shared::clone(&self.storage), self.roots[index]))
     }
 }
 

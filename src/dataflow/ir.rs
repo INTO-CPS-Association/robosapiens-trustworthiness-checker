@@ -2,7 +2,7 @@ use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
-use crate::lang::dsrv::ast::ReconfigurableExprScope;
+use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -960,7 +960,7 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ReconfigurableExpressionTyping {
-    pub(super) environment: Rc<StreamTypeEnvironment>,
+    pub(super) environment: AstShared<StreamTypeEnvironment>,
     pub(super) expected_type: TCType,
 }
 
