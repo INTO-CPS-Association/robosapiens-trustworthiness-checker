@@ -266,6 +266,66 @@ mod tests {
     }
 
     #[test]
+    fn typed_expression_sources_determine_dynamic_and_defer_results() {
+        for operator in ["dynamic", "defer"] {
+            let source = format!(
+                "in property: Expr<List<Int>>\nout result: List<Int>\nresult = {operator}(property)"
+            );
+            let checked = type_check(source.parse().unwrap(), false)
+                .unwrap_or_else(|errors| panic!("{operator} should accept Expr<T>: {errors:?}"));
+            let result = checked.var_expr_ref(&VarName::new("result")).unwrap();
+            assert_eq!(result.typ(), &TCType::list(TCType::Int));
+            let runtime_source = match result.view() {
+                crate::lang::dsrv::ast::ExprView::Dynamic(source, _, _)
+                | crate::lang::dsrv::ast::ExprView::Defer(source, _, _) => source,
+                _ => panic!("expected runtime expression"),
+            };
+            assert_eq!(
+                runtime_source.typ(),
+                &TCType::Expr(Box::new(TCType::list(TCType::Int)))
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_string_sources_require_local_ascriptions() {
+        for operator in ["dynamic", "defer"] {
+            let accepted =
+                format!("in property: Str\nout result: Int\nresult = {operator}(property: Int)");
+            type_check(accepted.parse().unwrap(), false).unwrap_or_else(|errors| {
+                panic!("legacy {operator} source should pass: {errors:?}")
+            });
+
+            let rejected =
+                format!("in property: Str\nout result: Int\nresult = {operator}(property)");
+            let errors = type_check(rejected.parse().unwrap(), false)
+                .expect_err("an unascribed Str source must fail strict checking");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::ExpectedExpressionSource
+            )));
+        }
+    }
+
+    #[test]
+    fn expression_source_type_must_match_the_result_type() {
+        for expression in ["dynamic(property)", "defer(property: Int)"] {
+            let source = format!("in property: Expr<Bool>\nout result: Int\nresult = {expression}");
+            type_check(source.parse().unwrap(), false)
+                .expect_err("an Expr<Bool> source cannot produce Int");
+        }
+    }
+
+    #[test]
+    fn string_literals_can_initialize_typed_expression_streams() {
+        let source = "aux property: Expr<Int>\nout result: Int\n\
+                      property = \"1 + 1\"\nresult = dynamic(property)";
+        type_check(source.parse().unwrap(), false)
+            .expect("a string literal should initialize an explicitly typed Expr<T> stream");
+    }
+
+    #[test]
     fn recursive_function_application_type_checks() {
         let source = "in n: Int\nin bias: Int\nout z: Int\n\
                       z = fix(\\self: (Int -> Int), k: Int -> \

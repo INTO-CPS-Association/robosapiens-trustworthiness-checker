@@ -724,6 +724,31 @@ mod tests {
     }
 
     #[test]
+    fn checked_expression_typed_source_uses_string_runtime_values() {
+        let specification = "in x: Int\nin property: Expr<Int>\nout result: Int\n\
+                             result = dynamic(property)"
+            .parse::<CheckedDsrvSpecification>()
+            .expect("Expr<T> source should type-check");
+        let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+        let mut output = [Value::NoVal];
+
+        monitor
+            .evaluate(
+                &input_row(
+                    &monitor,
+                    &[
+                        ("x", Value::Int(41)),
+                        ("property", Value::Str("x + 1".into())),
+                    ],
+                ),
+                &mut output,
+            )
+            .unwrap();
+
+        assert_eq!(output, [Value::Int(42)]);
+    }
+
+    #[test]
     fn definition_keys_follow_normalized_semantics_not_source_formatting() {
         let compact =
             DataflowMonitor::compile_untyped("in x: Int\nout z: Int\nz = x + 1".parse().unwrap())

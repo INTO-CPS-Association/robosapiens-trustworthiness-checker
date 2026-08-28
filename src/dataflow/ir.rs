@@ -820,6 +820,11 @@ fn append_tc_type(descriptor: &mut String, type_: &crate::lang::dsrv::type_check
             append_tc_type(descriptor, value);
             descriptor.push('>');
         }
+        TCType::Expr(value) => {
+            descriptor.push_str("expr<");
+            append_tc_type(descriptor, value);
+            descriptor.push('>');
+        }
         TCType::Tuple(values) => {
             descriptor.push_str("tuple<");
             for value in values {
@@ -882,6 +887,11 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
         }
         StreamType::Map(value) => {
             descriptor.push_str("map<");
+            append_stream_type(descriptor, value);
+            descriptor.push('>');
+        }
+        StreamType::Expr(value) => {
+            descriptor.push_str("expr<");
             append_stream_type(descriptor, value);
             descriptor.push('>');
         }

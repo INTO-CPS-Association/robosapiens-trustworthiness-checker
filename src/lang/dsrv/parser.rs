@@ -427,6 +427,18 @@ mod tests {
             )
         );
 
+        let input = "in property: Expr<List<Bool>>";
+        assert_eq!(
+            parse_declaration(input).unwrap().1,
+            Declaration::Input(
+                "property".into(),
+                Some(StreamType::Expr(Box::new(StreamType::List(Box::new(
+                    StreamType::Bool
+                ))))),
+                Span::new(0, input.len() as u32),
+            )
+        );
+
         let input = "in robot: Struct<id: Int, label: Str>";
         assert_eq!(
             parse_declaration(input).unwrap().1,

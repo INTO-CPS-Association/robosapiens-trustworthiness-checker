@@ -20,6 +20,7 @@ pub enum TCType {
     Bool,
     Unit,
     Map(Box<TCType>),
+    Expr(Box<TCType>),
     Tuple(EcoVec<TCType>),
     List(Box<TCType>),
     /// Struct specified as a list of field/type pairs and whether extra fields are allowed.
@@ -71,6 +72,7 @@ impl TCType {
                 TCType::Tuple(inner.iter().map(TCType::from_stream_type).collect())
             }
             StreamType::Map(inner) => TCType::Map(Box::new(TCType::from_stream_type(inner))),
+            StreamType::Expr(inner) => TCType::Expr(Box::new(TCType::from_stream_type(inner))),
             StreamType::Struct(inner, allow_extra) => TCType::Struct(
                 inner
                     .iter()
@@ -103,6 +105,9 @@ impl TCType {
                 .collect::<Option<EcoVec<_>>>()
                 .map(StreamType::Tuple),
             TCType::Map(inner) => inner.to_stream_type().map(|x| StreamType::Map(Box::new(x))),
+            TCType::Expr(inner) => inner
+                .to_stream_type()
+                .map(|x| StreamType::Expr(Box::new(x))),
             TCType::Struct(inner, allow_extra) => inner
                 .iter()
                 .map(|(k, v)| v.to_stream_type().map(|v| (k.into(), v)))
@@ -149,6 +154,7 @@ impl std::fmt::Display for TCType {
                 }
             }
             TCType::Map(typ) => write!(f, "Map<{}>", typ),
+            TCType::Expr(typ) => write!(f, "Expr<{}>", typ),
             TCType::Struct(inner, allow_extra) => {
                 let mut fields = inner
                     .iter()

@@ -16,6 +16,7 @@ pub enum TypeErrorKind {
     NumericArgumentTypeMismatch,
     ExpectedBooleanCondition,
     ExpectedDynamicString,
+    ExpectedExpressionSource,
     StructMissingField,
     StructUnknownField,
     StructFieldTypeMismatch,

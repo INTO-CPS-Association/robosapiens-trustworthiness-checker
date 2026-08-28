@@ -25,6 +25,7 @@ struct TypeContext<'types> {
     local_bindings: Vec<(VarName, StreamType)>,
     expr_types: Option<ExprTypesBuilder>,
     owner: Option<VarName>,
+    strict_runtime_sources: bool,
 }
 
 impl TypeContext<'_> {
@@ -52,6 +53,7 @@ pub fn check_specification(
         local_bindings: Vec::new(),
         expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
+        strict_runtime_sources: true,
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -91,6 +93,7 @@ pub(crate) fn check_expression(
         local_bindings: Vec::new(),
         expr_types: Some(expr.annotations_builder()),
         owner: None,
+        strict_runtime_sources: true,
     };
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
     #[cfg(debug_assertions)]
@@ -147,6 +150,7 @@ pub(crate) fn infer_expression(
         local_bindings: Vec::new(),
         expr_types: None,
         owner: None,
+        strict_runtime_sources: false,
     };
     check(expr, expected, &mut context)
 }
@@ -161,6 +165,7 @@ pub(crate) fn check_gradual_expr_types(
         local_bindings: Vec::new(),
         expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
+        strict_runtime_sources: false,
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -243,14 +248,36 @@ fn check(
         SIndex(value, _) => (check(value, expected, context)?, None),
         Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
             validate_runtime_scope(expr, scope, context)?;
-            require(
-                check(source, Some(&TCType::Str), context)?,
-                &TCType::Str,
-                expr,
-            )?;
-            let typ = match result_type {
-                StreamTypeAscription::Ascribed(typ) => TCType::from_stream_type(typ),
-                StreamTypeAscription::Unascribed => expected.cloned().unwrap_or(TCType::Any),
+            let ascribed = match result_type {
+                StreamTypeAscription::Ascribed(typ) => Some(TCType::from_stream_type(typ)),
+                StreamTypeAscription::Unascribed => None,
+            };
+            let source_type = check(source, None, context)?;
+            let typ = match source_type {
+                TCType::Expr(inner) => {
+                    let inner = *inner;
+                    if let Some(ascribed) = ascribed {
+                        require(inner, &ascribed, source)?;
+                        ascribed
+                    } else {
+                        inner
+                    }
+                }
+                TCType::Str if ascribed.is_some() => {
+                    ascribed.expect("checked local runtime-expression ascription")
+                }
+                TCType::Str | TCType::Any if !context.strict_runtime_sources => ascribed
+                    .or_else(|| expected.cloned())
+                    .unwrap_or(TCType::Any),
+                actual => {
+                    return Err(error(
+                        source,
+                        TypeErrorKind::ExpectedExpressionSource,
+                        format!(
+                            "runtime expression source must have type Expr<T>, or Str with a local : T ascription; got {actual}"
+                        ),
+                    ));
+                }
             };
             (typ, None)
         }
@@ -849,7 +876,10 @@ fn value_type(value: &Value, expected: Option<&TCType>) -> Result<TCType, Semant
     Ok(match value {
         Value::Int(_) => TCType::Int,
         Value::Float(_) => TCType::Float,
-        Value::Str(_) => TCType::Str,
+        Value::Str(_) => match expected {
+            Some(TCType::Expr(inner)) => TCType::Expr(inner.clone()),
+            _ => TCType::Str,
+        },
         Value::Bool(_) => TCType::Bool,
         Value::Unit => TCType::Unit,
         Value::List(values) => {
@@ -970,6 +1000,8 @@ fn validate_runtime_scope(
 fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
     if a == b {
         Some(a.clone())
+    } else if let (TCType::Expr(a_inner), TCType::Expr(b_inner)) = (a, b) {
+        unify(a_inner, b_inner).map(|inner| TCType::Expr(Box::new(inner)))
     } else if let (TCType::Struct(a_fields, a_extra), TCType::Struct(b_fields, b_extra)) = (a, b) {
         let compatible = |required: &EcoVec<_>, actual: &EcoVec<_>| {
             required.iter().all(|(name, required_type)| {

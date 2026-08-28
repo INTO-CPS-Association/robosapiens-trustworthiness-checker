@@ -15,6 +15,7 @@ fn gradual_fallback_type(typ: TCType) -> StreamType {
         TCType::Unknown | TCType::Any => StreamType::Any,
         TCType::List(inner) => StreamType::List(Box::new(gradual_fallback_type(*inner))),
         TCType::Map(inner) => StreamType::Map(Box::new(gradual_fallback_type(*inner))),
+        TCType::Expr(inner) => StreamType::Expr(Box::new(gradual_fallback_type(*inner))),
         TCType::Struct(fields, allow_extra) => StreamType::Struct(
             fields
                 .iter()
@@ -51,6 +52,7 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
                     .all(|(e, a)| gradual_consistent(e, a))
         }
         (StreamType::Map(e), TCType::Map(a)) => gradual_consistent(e, a),
+        (StreamType::Expr(e), TCType::Expr(a)) => gradual_consistent(e, a),
         (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
             ef.len() == af.len()
                 && ef
@@ -179,6 +181,29 @@ mod tests {
             checked.type_annotations().get(&VarName::new("z")),
             Some(&StreamType::Int)
         );
+    }
+
+    #[test]
+    fn typed_expression_sources_infer_runtime_expression_results() {
+        for operator in ["dynamic", "defer"] {
+            let source =
+                format!("in property: Expr<Int>\nout result\nresult = {operator}(property)");
+            let checked =
+                type_check_gradual(source.parse().unwrap(), false).unwrap_or_else(|errors| {
+                    panic!("{operator} should infer from Expr<T>: {errors:?}")
+                });
+            assert_eq!(
+                checked.type_annotations().get(&VarName::new("result")),
+                Some(&StreamType::Int)
+            );
+        }
+    }
+
+    #[test]
+    fn gradual_checking_keeps_unascribed_string_sources_compatible() {
+        let source = "in property: Str\nout result: Int\nresult = dynamic(property)";
+        type_check_gradual(source.parse().unwrap(), false)
+            .expect("gradual checking should continue to accept an unascribed Str source");
     }
 
     #[test]

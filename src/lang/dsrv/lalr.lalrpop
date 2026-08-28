@@ -423,6 +423,7 @@ StreamTyp: StreamType = {
     "Any" => StreamType::Any,
     "List" "<" <inner: StreamTyp> ">" => StreamType::List(Box::new(inner)),
     "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
+    "Expr" "<" <inner: StreamTyp> ">" => StreamType::Expr(Box::new(inner)),
     "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),
     "Struct" "<" <fields: SepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
     "(" <first: StreamTyp> "," ")" => {

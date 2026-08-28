@@ -554,6 +554,7 @@ pub enum StreamType {
     List(Box<StreamType>),
     Tuple(EcoVec<StreamType>),
     Map(Box<StreamType>),
+    Expr(Box<StreamType>),
     Struct(EcoVec<(EcoString, StreamType)>, bool), // ordered typed fields, true allows extra fields
     Function(EcoVec<StreamType>, Box<StreamType>),
     /// Gradual/dynamic stream type. Values are represented as `Value` and checked at runtime when
@@ -584,6 +585,7 @@ impl Display for StreamType {
                 }
             }
             StreamType::Map(inner) => write!(f, "Map<{}>", inner),
+            StreamType::Expr(inner) => write!(f, "Expr<{}>", inner),
             StreamType::Struct(inner, allow_extra) => {
                 let mut fields = inner
                     .iter()
@@ -1195,6 +1197,18 @@ mod tests {
         let v = "\"⊥\"";
         let json: Value = from_str(&v).unwrap();
         assert_eq!(json, Value::Deferred);
+    }
+
+    #[test]
+    fn test_format_expression_type() {
+        assert_eq!(
+            StreamType::Expr(Box::new(StreamType::Bool)).to_string(),
+            "Expr<Bool>"
+        );
+        assert_eq!(
+            StreamType::List(Box::new(StreamType::Expr(Box::new(StreamType::Int)))).to_string(),
+            "List<Expr<Int>>"
+        );
     }
 
     #[test]
