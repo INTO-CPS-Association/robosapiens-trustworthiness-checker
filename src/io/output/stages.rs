@@ -191,7 +191,13 @@ impl OutputStage {
                 })?;
                 crate::io::output::OutputPump::new(writer, executor, config.max_batches.get())
             }
-            Self::Buffer(config) => Ok(OutputWriter::from_sink(BufferSink::new(writer, config))),
+            Self::Buffer(config) => {
+                let interface_reconfiguration = writer.interface_reconfiguration();
+                Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+                    BufferSink::new(writer, config),
+                    interface_reconfiguration,
+                ))
+            }
             Self::Coalesce(config) if config.max_delay.is_some() => {
                 config.validate()?;
                 let executor = executor.ok_or_else(|| {
@@ -199,13 +205,19 @@ impl OutputStage {
                         "timed output coalescing requires a runtime local executor",
                     )
                 })?;
-                Ok(OutputWriter::from_sink(TimedCoalescingSink::new(
-                    writer, config, executor,
-                )))
+                let interface_reconfiguration = writer.interface_reconfiguration();
+                Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+                    TimedCoalescingSink::new(writer, config, executor),
+                    interface_reconfiguration,
+                ))
             }
             Self::Coalesce(config) => {
                 config.validate()?;
-                Ok(OutputWriter::from_sink(CoalescingSink::new(writer, config)))
+                let interface_reconfiguration = writer.interface_reconfiguration();
+                Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+                    CoalescingSink::new(writer, config),
+                    interface_reconfiguration,
+                ))
             }
         }
     }

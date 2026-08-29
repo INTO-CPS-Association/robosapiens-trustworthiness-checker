@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
 
+use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::dataflow::environment::EnvironmentSlot;
@@ -46,15 +47,33 @@ pub(in crate::dataflow) struct ScheduledExecutionPlan {
     pub(in crate::dataflow) source_stream_count: usize,
     pub(in crate::dataflow) commit_streams: Box<[StreamId]>,
     pub(in crate::dataflow) environment_len: usize,
+    pub(in crate::dataflow) metadata: Rc<PlanMetadata>,
+}
+
+pub(in crate::dataflow) struct PlanMetadata {
+    pub(in crate::dataflow) streams: Box<[Rc<StreamMetadata>]>,
+    pub(in crate::dataflow) environment_len: usize,
+}
+
+pub(in crate::dataflow) struct StreamMetadata {
+    pub(in crate::dataflow) output: PlanValueSlot,
+    pub(in crate::dataflow) program: Rc<StreamProgram>,
+    pub(in crate::dataflow) temporal: TemporalPlan,
+    pub(in crate::dataflow) effects: PlanEffects,
 }
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct PlannedStream {
     pub(in crate::dataflow) stream: StreamId,
-    pub(in crate::dataflow) output: PlanValueSlot,
-    pub(in crate::dataflow) program: Rc<StreamProgram>,
-    pub(in crate::dataflow) temporal: TemporalPlan,
-    pub(in crate::dataflow) effects: PlanEffects,
+    metadata: Rc<StreamMetadata>,
+}
+
+impl Deref for PlannedStream {
+    type Target = StreamMetadata;
+
+    fn deref(&self) -> &Self::Target {
+        &self.metadata
+    }
 }
 
 #[derive(Clone, Default)]
@@ -92,50 +111,17 @@ pub(in crate::dataflow) enum TemporalCommit {
     },
 }
 
-impl ScheduledExecutionPlan {
-    pub(in crate::dataflow) fn new(
-        id: PlanId,
-        programs: &[Rc<StreamProgram>],
-        stream_slots: StreamSlots,
-        source_order: &[StreamId],
-        main_order: &[StreamId],
-        commit_streams: &[StreamId],
-    ) -> Self {
-        assert_eq!(
-            source_order.len() + main_order.len(),
-            programs.len(),
-            "a scheduled plan must contain every logical stream exactly once"
-        );
-        let mut seen = vec![false; programs.len()];
-        for stream in source_order.iter().chain(main_order) {
-            assert!(
-                stream.index() < programs.len()
-                    && !std::mem::replace(&mut seen[stream.index()], true),
-                "a scheduled plan must contain every logical stream exactly once"
-            );
-        }
-
-        let streams = source_order
+impl PlanMetadata {
+    fn new(programs: &[Rc<StreamProgram>], stream_slots: StreamSlots) -> Self {
+        let streams = programs
             .iter()
-            .chain(main_order)
-            .copied()
-            .map(|stream| {
-                let program = Rc::clone(&programs[stream.index()]);
-                let temporal = TemporalPlan::new(stream, &program);
-                PlannedStream {
-                    stream,
-                    output: PlanValueSlot(stream_slots.slot(stream)),
-                    effects: PlanEffects {
-                        may_fail: !program.is_infallible(),
-                        reads_temporal_state: !temporal.operations.is_empty(),
-                        writes_temporal_state: !temporal.commits.is_empty()
-                            || temporal.operations.iter().any(|operation| {
-                                matches!(operation, TemporalOperation::Default { .. })
-                            }),
-                    },
+            .enumerate()
+            .map(|(index, program)| {
+                Rc::new(StreamMetadata::new(
+                    StreamId::new(index),
                     program,
-                    temporal,
-                }
+                    stream_slots.slot(StreamId::new(index)),
+                ))
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -145,12 +131,96 @@ impl ScheduledExecutionPlan {
                 program.environment_layout.len()
             });
         Self {
+            streams,
+            environment_len,
+        }
+    }
+}
+
+impl StreamMetadata {
+    fn new(stream: StreamId, program: &Rc<StreamProgram>, output: EnvironmentSlot) -> Self {
+        let temporal = TemporalPlan::new(stream, program);
+        let effects = PlanEffects {
+            may_fail: !program.is_infallible(),
+            reads_temporal_state: !temporal.operations.is_empty(),
+            writes_temporal_state: !temporal.commits.is_empty()
+                || temporal
+                    .operations
+                    .iter()
+                    .any(|operation| matches!(operation, TemporalOperation::Default { .. })),
+        };
+        Self {
+            output: PlanValueSlot(output),
+            program: Rc::clone(program),
+            temporal,
+            effects,
+        }
+    }
+}
+
+impl ScheduledExecutionPlan {
+    pub(in crate::dataflow) fn new(
+        id: PlanId,
+        programs: &[Rc<StreamProgram>],
+        stream_slots: StreamSlots,
+        source_order: &[StreamId],
+        main_order: &[StreamId],
+        commit_streams: &[StreamId],
+    ) -> Self {
+        let metadata = Rc::new(PlanMetadata::new(programs, stream_slots));
+        Self::from_metadata(
+            id,
+            metadata,
+            stream_slots,
+            source_order,
+            main_order,
+            commit_streams,
+        )
+    }
+
+    pub(in crate::dataflow) fn from_metadata(
+        id: PlanId,
+        metadata: Rc<PlanMetadata>,
+        stream_slots: StreamSlots,
+        source_order: &[StreamId],
+        main_order: &[StreamId],
+        commit_streams: &[StreamId],
+    ) -> Self {
+        debug_assert_eq!(
+            source_order.len() + main_order.len(),
+            metadata.streams.len(),
+            "a scheduled plan must contain every logical stream exactly once"
+        );
+        #[cfg(debug_assertions)]
+        {
+            let mut seen = vec![false; metadata.streams.len()];
+            for stream in source_order.iter().chain(main_order) {
+                debug_assert!(
+                    stream.index() < metadata.streams.len()
+                        && !std::mem::replace(&mut seen[stream.index()], true),
+                    "a scheduled plan must contain every logical stream exactly once"
+                );
+            }
+        }
+
+        let streams = source_order
+            .iter()
+            .chain(main_order)
+            .copied()
+            .map(|stream| PlannedStream {
+                stream,
+                metadata: Rc::clone(&metadata.streams[stream.index()]),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
             id,
             stream_slots,
             streams,
             source_stream_count: source_order.len(),
             commit_streams: commit_streams.to_vec().into_boxed_slice(),
-            environment_len,
+            environment_len: metadata.environment_len,
+            metadata,
         }
     }
 

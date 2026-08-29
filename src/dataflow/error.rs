@@ -31,23 +31,29 @@ pub enum DataflowEvaluationError {
     DynamicExpressionContext(Vec<VarName>),
     #[error("dynamic/defer expected a string property, got {0}")]
     InvalidExpressionSource(String),
+
     #[error("invalid dynamically compiled stream program: {0}")]
     InvalidDynamicProgram(StreamProgramError),
     #[error("runtime dependency cycle contains stream `{0}`")]
     DynamicDependencyCycle(VarName),
     #[error("nested dynamic dependency reconfiguration is not supported")]
     UnsupportedNestedReconfiguration,
-    #[error("nested replacement of region `{region}` is invalid: {source}")]
-    InvalidRegionReplacement {
-        region: super::reconfiguration::RegionAddress,
-        source: super::reconfiguration::ReconfigurationError,
-    },
-    #[error("nested region `{0}` cannot transfer its state into the replacement body")]
-    IncompatibleRegionTransfer(super::reconfiguration::RegionAddress),
-    #[error("dataflow semantic revision overflow during nested replacement")]
+
+    #[error("dataflow semantic revision overflow during nested reconfiguration")]
     RevisionOverflow,
     #[error("dataflow monitor cannot continue after a previous evaluation failure")]
     MonitorFailed,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DataflowStateError {
+    #[error("cannot transfer dataflow context while a tick is in progress")]
+    TickInProgress,
+    #[error("dataflow monitor revision overflow during root reconfiguration")]
+    RevisionOverflow,
+
+    #[error("dataflow reconfiguration is invalid: {0}")]
+    InvalidReconfiguration(String),
 }
 
 #[derive(Debug, thiserror::Error)]

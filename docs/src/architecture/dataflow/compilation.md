@@ -2,11 +2,10 @@
 
 [← Previous: Execution model](model.md) · [Next: Runtime ownership](runtime-ownership.md) →
 
-Compilation turns a typed or untyped DSRV specification into immutable expression programs plus a fixed monitor plan. It freezes semantic identity and the statically visible dependency structure while deliberately leaving active runtime dependencies and schedule-specific execution routes to the runtime.
+Compilation turns a typed or untyped DSRV specification into an immutable `DataflowProgram`. The program contains immutable expression programs, layout, history requirements, semantic identity, and a fixed monitor plan. It deliberately leaves active runtime dependencies and schedule-specific execution routes to a stateful `DataflowMonitor`.
 
 ## Pipeline
 
-![Compilation pipeline from specification AST to bound programs and monitor plan](../../assets/dataflow/architecture-compilation-pipeline.svg)
 
 **What to notice.** Lowering and dependency discovery still use variable names. A single environment layout is allocated only after the static graph has been ordered; binding then replaces external names with stable slots. `StreamProgram` captures per-expression semantics, while `MonitorPlan` captures monitor-wide dependencies, reconfiguration metadata, source closure, and temporal commit membership.
 
@@ -17,7 +16,7 @@ The two public compilation paths differ only in what semantic information the in
 - `compile_untyped` accepts a `DsrvSpecification` and lowers untyped expressions directly.
 - `compile_checked` accepts a `CheckedDsrvSpecification`; checked result types, scalar signatures, and the shared type environment remain available to later runtime compilation of `dynamic` and `defer` source strings.
 
-Both paths collect the declared inputs, outputs, and computed stream names before processing equations. Inputs need stable row locations but no evaluator program. Every computed stream must have an expression, and every declared output must ultimately resolve to an input or computed-stream location.
+Both paths collect the declared inputs, outputs, and computed stream names before processing equations. Inputs need stable row locations but no evaluator program. Every computed stream must have an expression, and every declared output must ultimately resolve to an input or computed-stream location. `DataflowProgram::compile_checked` and `DataflowProgram::compile_untyped` return this immutable result; `DataflowMonitor::from_program` is the separate step that allocates evaluator, scheduler, environment, and `HistoryStore` state.
 
 Parsing an untyped specification does not implicitly select the checked path. The chosen specification type determines whether runtime-defined expressions receive runtime type checking.
 
@@ -33,7 +32,7 @@ An unbound reference has one of three forms:
 | `External(VarName)` | A name resolved outside the current graph body. |
 | `Node(NodeId)` | The result of an earlier operation in this graph. |
 
-Branches and function bodies are lowered recursively into their own graphs. Their node identities are local to those graphs. Dynamic and deferred expressions become explicit reconfiguration nodes whose source operand, scope, mode, and—on the checked path—runtime typing information are retained.
+Branches and function bodies are lowered recursively into their own graphs. Their node identities are local to those graphs. Dynamic and deferred expressions become explicit reconfiguration nodes whose source operand, `ReconfigurableExpressionScope`, kind, and—on the checked path—`ReconfigurableExpressionTyping` are retained.
 
 Lowering also attaches `ScalarSignature` metadata where checked operand and result types prove that a unary or binary node is eligible for typed scalar execution. This metadata is an optimization hint beside the canonical operation; it does not replace the operation or change its `NodeId`.
 
@@ -53,7 +52,7 @@ A direct positive delay does not add an edge for its delayed operand because its
 
 Dependency discovery includes both branches of a conditional. Ordinary branch state advances on every outer tick, and schedule safety cannot depend on which value the condition selects at runtime.
 
-Automatic dynamic scopes are resolved before these checks. At the top level, the allowed set contains declared inputs and streams except the containing stream itself; explicit scopes remain restrictions on that set. This scope is an authorization boundary for a future runtime expression, not a conservative dependency edge to every allowed name.
+Automatic reconfigurable scopes are resolved before these checks. At the top level, the allowed set contains declared inputs and streams except the containing stream itself; explicit scopes remain restrictions on that set. This scope is an authorization boundary for a future runtime expression, not a conservative dependency edge to every allowed name.
 
 ## 4. Reject static cycles and choose the initial order
 
@@ -69,7 +68,7 @@ Compilation creates one `EnvironmentLayout` from all inputs followed by computed
 
 Binding consumes each unbound graph and replaces every external `VarName` with its `EnvironmentSlot`. It also:
 
-- restricts dynamic scopes to names present in the actual environment;
+- restricts reconfigurable scopes to names present in the actual environment;
 - validates nested branch and function restrictions;
 - resolves function captures and local captures-plus-parameters layouts;
 - rejects unsupported temporal function contexts;
@@ -91,7 +90,7 @@ A bound graph becomes an immutable, reference-counted `StreamProgram`. It contai
 - an `EvaluationMode` classification derived from whether graph evaluation can return a runtime error; and
 - `requires_temporal_commit`, computed recursively through delays, branches, direct persistent calls, and reconfiguration nodes.
 
-The program owns no mutable node values or language state. Multiple evaluator contexts may safely share a program because each evaluator creates its own `StreamState`. Program sharing is therefore independent from state sharing.
+The program owns no mutable node values or language state. Multiple evaluator contexts may safely share a program because each evaluator creates its own canonical `EvaluatorState` within `EvaluatorTierStates`. Program sharing is therefore independent from state sharing.
 
 The fallibility and temporal flags are semantic summaries used by planning and execution tiers. An optimization may derive a faster physical representation, but it must preserve the bound graph's publication, failure, and commit behavior.
 
@@ -103,14 +102,14 @@ The fallibility and temporal flags are semantic summaries used by planning and e
 |---|---|
 | `StreamSlots` | Maps each stable `StreamId` to its canonical environment output slot. |
 | `DependencyGraph` | Retains static same-tick dependencies and identifies streams containing reconfiguration points. |
-| `ReconfigurationPlan` | Records each point, its source, containing stream and node, initial resolution set, and source prerequisites. |
+| `ReconfigurableExpressionPlan` | Records each expression, its source, containing stream and node, initial resolution set, and source prerequisites. |
 | `temporal_streams` | Lists every stream whose evaluator must participate in the logical commit traversal. |
 
 The temporary named topological graph can now be discarded. The compact static dependency sets remain because the runtime scheduler must combine them with exact dependencies learned from active runtime expressions.
 
 ### Source-prerequisite closure
 
-A `dynamic` or unsealed `defer` source must be known before its containing stream advances. The reconfiguration plan classifies each bound source as:
+A `dynamic` or unsealed `defer` source must be known before its containing stream advances. The reconfigurable-expression plan classifies each bound source as:
 
 - a constant, which needs no source-range stream;
 - an input slot, already loaded before execution; or
@@ -124,28 +123,28 @@ The plan rejects source operands that are node-local intermediates or otherwise 
 
 **What to notice.** Source prerequisites answer “what must run to obtain the source text?” They are distinct from the active dependencies of the expression described by that text. The former are fixed at compilation; the latter are exact runtime edges that may change on activation.
 
-## 8. Save output projection and construct the runtime
+## 8. Finish the immutable `DataflowProgram`
 
 Declared outputs are resolved to stable `EnvironmentSlot` values and saved in API output order. Output production is therefore a projection from the completed environment row, not another expression pass.
 
-The finished monitor receives:
+`LoweredDataflow::into_program` packages the immutable result:
 
-- immutable stream programs and the `MonitorPlan`;
-- stable input, stream, and output metadata;
-- one persistent evaluator per computed stream;
-- initial source and main schedule ranges; and
-- fixed-size current-row storage, plus retained-row storage only when reconfiguration exists.
+- input, output, and computed-stream names;
+- bound `StreamProgram` values and their shared `EnvironmentLayout`;
+- the monitor-wide `MonitorPlan`;
+- statically analysed history requirements; and
+- the canonical `DefinitionKey`.
 
-At this boundary compilation is complete. Active dynamic dependencies, repaired orders, schedule-specific quick plans, and native artifacts are runtime concerns.
+No evaluator, scheduler, current-row values, active expression state, or history storage is part of this compilation result. `DataflowMonitor::from_program` later creates those per-monitor objects and chooses its initial execution route. Active dynamic dependencies, repaired orders, schedule-specific quick plans, and native artifacts remain runtime concerns.
 
 ## What compilation establishes
 
-By the time compilation finishes, four things are fixed for the monitor's lifetime:
+By the time compilation finishes, four things are fixed in the `DataflowProgram`:
 
 - **Order within a graph.** Operands precede consumers, and each `NodeId` indexes matching operation, value, and state entries.
 - **The two dependency sets.** All free variables are validated for availability, but only same-tick free variables become edges — so a positive historical read never creates a false cycle, and an automatic scope authorizes names without over-approximating dependencies.
 - **Identity.** Environment and stream identities are assigned once and survive every later schedule change.
-- **Summaries the runtime relies on.** `StreamProgram` records nested fallibility and temporal commit requirements; the source closure records the computed source producer and its transitive static prerequisites.
+- **Summaries the runtime relies on.** `StreamProgram` records nested fallibility and temporal commit requirements; the source closure records the computed source producer and its transitive static prerequisites. Reconfigurable-expression source, scope, kind, and checked typing metadata remain in the immutable programs and monitor plan; active bodies and dependencies are stateful monitor data.
 
 Output ordering is a slot projection, independent of the order evaluators actually run in.
 

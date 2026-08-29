@@ -2,7 +2,10 @@ use crate::core::{DeferrableStreamData, OutputWriter, Runtime, Specification, in
 use crate::io::reconfigurable_input::{
     ReconfigurableInput, ReconfigurableInputItem, ReconfigurableInputStream,
 };
-use crate::io::{InputPipeline, MonitorConfig, OutputBackendBuilder};
+use crate::io::{
+    InputConfiguration, InputPipeline, OutputBackendBuilder, OutputConfiguration,
+    ReconfigurationRequest,
+};
 use crate::lang::core::{DependencyGraphExpr, DependencyGraphSpec};
 use crate::runtime::{
     RuntimeBuilder,
@@ -39,7 +42,7 @@ where
     output_builder: Option<OutputBackendBuilder<AC::Val>>,
     resolved_output: Option<crate::io::output::ResolvedOutput>,
     reconf_topic: Option<String>,
-    input_config: Option<MonitorConfig>,
+    input_config: Option<InputConfiguration>,
     use_context_transfer: bool,
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
     parse_spec: Option<fn(&str) -> anyhow::Result<AC::Spec>>,
@@ -103,7 +106,7 @@ where
             builder.resolved_input = resolved_input;
 
             // Resolution is deliberately resource-free. Resolve the complete
-            // initial generation before opening either input or output; the
+            // initial monitor before opening either input or output; the
             // same ordering is used by replacement builders below.
             if setup_error.is_none()
                 && builder.setup_error.is_none()
@@ -251,7 +254,7 @@ where
         self
     }
 
-    pub fn input_config(mut self, input_config: MonitorConfig) -> Self {
+    pub fn input_config(mut self, input_config: InputConfiguration) -> Self {
         self.input_config = Some(input_config);
         self
     }
@@ -395,21 +398,21 @@ where
         }
     }
 
-    fn resolve_output_generation(
+    fn resolve_output(
         &self,
         builder: &OutputBackendBuilder<AC::Val>,
         model: &AC::Spec,
-        request: Option<&MonitorConfig>,
+        request: Option<&OutputConfiguration>,
     ) -> anyhow::Result<crate::io::output::ResolvedOutput> {
         builder.resolve(model.output_vars(), model.aux_vars(), request)
     }
 
-    /// Parse, validate, resolve, transfer, and prepare the next generation.
+    /// Parse, validate, resolve, transfer, and prepare the replacement monitor.
     /// This method is the semantic center of monitor reconfiguration.
     async fn handle_reconfig_input(
         &mut self,
         input: &ReconfigurableInput<AC::Val>,
-        request: MonitorConfig,
+        request: ReconfigurationRequest,
         context: &mut SemiSyncContext<AC>,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
         request.validate_structure()?;
@@ -417,7 +420,7 @@ where
             .builder
             .parse_spec
             .ok_or_else(|| anyhow!("reconfiguration parser is not configured"))?;
-        let next_model = parse_spec(&request.spec)
+        let next_model = parse_spec(&request.specification)
             .map_err(|error| anyhow!("failed to parse reconfiguration command: {error}"))?;
         let old_model = self.builder.model_ref()?.clone();
         self.log_model_changes(&old_model, &next_model);
@@ -425,16 +428,13 @@ where
         let mut next_builder = self.builder.clone().model(next_model.clone());
         let resolved_input = input
             .pipeline()
-            .resolve(&next_model.input_vars(), Some(&request))?;
+            .resolve(&next_model.input_vars(), Some(&request.input))?;
         next_builder.resolved_input = Some(resolved_input);
-        next_builder.input_config = Some(request.clone());
+        next_builder.input_config = Some(request.input.clone());
 
         if let Some(output_builder) = next_builder.output_builder.as_ref() {
-            next_builder.resolved_output = Some(self.resolve_output_generation(
-                output_builder,
-                &next_model,
-                Some(&request),
-            )?);
+            next_builder.resolved_output =
+                Some(self.resolve_output(output_builder, &next_model, Some(&request.output))?);
         }
 
         next_builder.starting_history = Some(self.transfer_context(context, &next_model));
@@ -494,10 +494,10 @@ where
         }
     }
 
-    /// Own all resources of one generation locally. The replacement builder is
+    /// Own all resources of the active monitor locally. The replacement builder is
     /// returned only after input, context, evaluators, output, and processing
     /// futures have left this scope.
-    async fn run_current_generation(
+    async fn run_active_monitor(
         &mut self,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
         if let Some(error) = self.setup_error.take() {
@@ -535,7 +535,7 @@ where
             .build()
             .await;
         let (output, mut context, mut expr_evals) = Self::setup_inner_monitor(monitor).await?;
-        let generation_cancellation = context.cancellation_token();
+        let active_cancellation = context.cancellation_token();
         let mut output_future = Box::pin(output.run().fuse());
         let mut output_completed = false;
         let pending_builder = {
@@ -550,10 +550,10 @@ where
             );
             loop {
                 if output_completed {
-                    // Output completion is terminal for this generation. The
+                    // Output completion is terminal for the active monitor. The
                     // processing future is cancellation-aware, so a pending
                     // input cannot keep the runtime alive indefinitely.
-                    generation_cancellation.cancel();
+                    active_cancellation.cancel();
                     break process.await;
                 }
                 futures::select! {
@@ -563,7 +563,7 @@ where
                         // Cancel before awaiting processing. This covers both
                         // normal output EOF and an intentional downstream
                         // close, while preserving a ready replacement request.
-                        generation_cancellation.cancel();
+                        active_cancellation.cancel();
                         if let Err(error) = output.context("reconfigurable output failed") {
                             break Err(error);
                         }
@@ -572,7 +572,7 @@ where
             }
         };
 
-        // Cancellation stops the current generation's producers, but the
+        // Cancellation stops the active monitor's producers, but the
         // output future remains owned here until its flush/close barrier has
         // completed. This drains coalescers and buffers before any old input
         // resources are dropped or the replacement is built.
@@ -601,7 +601,7 @@ where
 {
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         loop {
-            let pending_update = self.run_current_generation().await?;
+            let pending_update = self.run_active_monitor().await?;
             let Some(builder) = pending_update else {
                 return Ok(());
             };
@@ -847,13 +847,13 @@ mod tests {
             };
             assert!(
                 result.is_ok(),
-                "closed output should end the generation: {result:?}"
+                "closed output should end the active monitor: {result:?}"
             );
         });
     }
 
     #[test]
-    fn healthy_generation_forwards_immediate_input() {
+    fn healthy_monitor_forwards_immediate_input() {
         smol::block_on(async {
             let executor = Rc::new(smol::LocalExecutor::new());
             let (input, data_sender, _data_fanout, _control_sender, _control_fanout) =
@@ -865,7 +865,7 @@ mod tests {
 
             // Queue the tick before the runtime is polled. A healthy build must
             // already own its input subscription, otherwise the fan-out drops
-            // this value and the generation waits forever for its first tick.
+            // this value and the monitor waits forever for its first tick.
             data_sender.send(Value::Int(7)).await;
             let first = Box::pin(futures::future::select(
                 Box::pin(output_receiver.recv()),
@@ -882,10 +882,10 @@ mod tests {
                     panic!("healthy output channel closed")
                 }
                 Either::Left((Either::Right((result, _output)), _timeout)) => {
-                    panic!("healthy generation ended before output: {result:?}")
+                    panic!("healthy monitor ended before output: {result:?}")
                 }
                 Either::Right((_timeout, _first)) => {
-                    panic!("healthy generation did not forward immediate input")
+                    panic!("healthy monitor did not forward immediate input")
                 }
             };
             assert_eq!(output.get(&VarName::new("z")), Some(&Value::Int(7)));
@@ -964,7 +964,7 @@ mod tests {
             let backend = CountingBackend::new(Some(1), None);
             let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
             let request = async move {
-                let payload = serde_json::json!({ "spec": PENDING_MODEL }).to_string();
+                let payload = serde_json::json!({ "specification": PENDING_MODEL }).to_string();
                 control_sender.send(Value::Str(payload.into())).await;
             };
             let run = Box::pin(runtime.run());

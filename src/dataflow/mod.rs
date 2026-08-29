@@ -51,28 +51,27 @@
 //! | **1. Read the model** | `DsrvSpecification` or `CheckedDsrvSpecification` | Supply untyped expressions or expressions with checked types. |
 //! | **2. Lower expressions** | `UnboundEvaluationGraph` | Convert syntax into ordered operations whose external references are still `VarName` values. |
 //! | **3. Order and bind streams** | `BoundEvaluationGraph` | Topologically order same-tick dependencies and replace names with stable `EnvironmentSlot` values. |
-//! | **4. Build executables** | `StreamProgram` and `MonitorPlan` | Record immutable programs, dependencies, reconfiguration points, and temporal streams. |
-//! | **5. Schedule execution** | `MonitorExecution` and `Scheduler` | Keep persistent evaluators and follow the active dependency order. |
+//! | **4. Build the definition** | `DataflowProgram`, `StreamProgram`, and `MonitorPlan` | Bind immutable programs, fixed layout metadata, reconfigurable expressions, dependencies, and temporal effects. |
+//! | **5. Schedule execution** | `MonitorExecution` and `Scheduler` | Run the evaluator arena in the active dependency order. |
 //! | **6. Run ticks** | `DataflowMonitor` | Load input rows, evaluate streams, commit temporal state, and project output rows. |
 //!
-//! The monitor is compiled once and evaluated many times. Compilation lowers each equation into a
-//! `compiler::pipeline::LoweredDataflow`, derives a temporary [`crate::lang::core::DepGraph`] from
-//! same-tick free variables, topologically orders the streams, assigns environment slots, validates
-//! and binds references, and creates one stateful evaluator per computed stream. It
-//! also builds an immutable `execution_plan::MonitorPlan`: stable stream slots, static dependencies, the
-//! reconfiguration points and prerequisite source streams, the streams requiring a temporal commit,
-//! and the initial order. The monitor separately owns the mutable `scheduler::Scheduler`, whose
-//! cached order, active dynamic edges, and iterative-DFS workspace are reused across ticks.
+//! The definition is compiled once and evaluated many times. Compilation lowers each equation into a
+//! `LoweredDataflow`, derives a temporary [`crate::lang::core::DepGraph`] from same-tick free
+//! variables, topologically orders the streams, assigns environment slots, validates and binds
+//! references, and creates immutable `StreamProgram`s. It also builds a `DataflowProgram` containing
+//! stable stream slots, static dependencies, `ReconfigurableExpressionKind` metadata,
+//! source-prerequisite closures, the temporal commit set, and the initial order. A
+//! [`DataflowMonitor`] created from that program owns the mutable `Scheduler` and `MonitorExecution`; the
+//! latter keeps the evaluator arena while the former maintains the active dependency order across ticks.
 //!
 //! Evaluation repeats the right-hand side of the figure for every logical tick: load the input row,
-//! resolve runtime definitions and their exact dependencies, execute stream programs in dependency
-//! order while filling stable environment slots, commit temporal writes, and project outputs. This
-//! compile-once translation from synchronous stream equations to a dependency-ordered sequential
+//! resolve each active reconfigurable expression and its exact dependencies, execute `Evaluator`s in
+//! dependency order through `EvaluationEnvironment`, commit temporal writes, and project outputs.
+//! This compile-once translation from synchronous stream equations to a dependency-ordered sequential
 //! machine follows the approach of Lustre [[2]], applied to the DSRV dynamic-property semantics
-//! described in the language's original publication [[1]]. [`DataflowMonitor`] is the synchronous
-//! row interface;
-//! [`crate::runtime::dataflow::DataflowRuntimeBuilder`] adapts it to [`crate::core::InputStream`] and
-//! the runtime-facing [`crate::core::OutputWriter`].
+//! described in the language's original publication [[1]]. [`DataflowMonitor`] is the synchronous row
+//! interface; [`crate::runtime::dataflow::DataflowRuntimeBuilder`] adapts it to
+//! [`crate::core::InputStream`] and the runtime-facing [`crate::core::OutputWriter`].
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/pipeline.svg")]
@@ -154,14 +153,14 @@
 //! self-references and direct mutually delayed stream cycles belong to persistent history rather
 //! than this graph.
 //!
-//! `LoweredDataflow::into_monitor` consumes the named graphs. It assigns a slot to every declared
-//! input followed by every computed stream in the initial dependency order, binds each graph,
-//! creates the monitor plan and persistent evaluator state, and returns the monitor. The temporary
-//! named dependency graph is discarded, but its per-stream static dependency sets are retained in
-//! the plan so the scheduler can merge them with active runtime dependencies.
+//! `LoweredDataflow::into_program` consumes the named graphs. It assigns a slot to every declared
+//! input followed by every computed stream in the initial dependency order, binds each graph, and
+//! creates the immutable `DataflowProgram`. The temporary named dependency graph is discarded, but
+//! its per-stream static dependency sets are retained in the plan so a monitor's scheduler can merge
+//! them with active runtime dependencies.
 //! `EnvironmentLayout` maps each `VarName` to an `EnvironmentSlot` used during binding.
 //! `DataflowMonitor::environment_values` is the matching fixed-size row: input values occupy its
-//! initial slots and each stream evaluator writes its result to its assigned slot.
+//! initial slots and each `Evaluator` writes its result to its assigned slot.
 //!
 //! In the example, tick 2 begins with the API input row `[x = 8]`. Evaluation fills that row in
 //! dependency order to `[x = 8, scaled = 16, total = 24, alert = true]`. The output API has its own
@@ -184,13 +183,14 @@
 //! function bodies use a local captures-then-parameters layout, and runtime-compiled dynamic programs
 //! bind against the outer layout after scope validation.
 //!
-//! `DataflowMonitor` owns the mutable row as `environment_values: Vec<Value>`, the immutable
-//! `MonitorPlan`, the mutable `Scheduler`, a `MonitorExecution`, and the output projection in
-//! `output_slots`. `MonitorExecution` owns the persistent stream evaluators. During one program,
-//! `EvaluationContext` borrows the complete row and resolves bound `DataRef::External` directly
-//! against it. Dependency scheduling guarantees that a computed slot is filled before a same-tick
-//! read. The shared environment layout, persistent evaluator state, and bound slots never change
-//! when the scheduler repairs evaluation order.
+//! `DataflowProgram` owns the immutable monitor definition, including the fixed `MonitorPlan` and
+//! output projection. `DataflowMonitor` owns the mutable row as `environment_values: Vec<Value>`, the
+//! mutable `Scheduler`, and a `MonitorExecution`. `MonitorExecution` owns the persistent `Evaluator`s.
+//! During one program, `EvaluationEnvironment` borrows the row and layout, carries retained values
+//! when a reconfigurable expression needs them, and supplies the optional recursive-call closure. It
+//! resolves bound `DataRef::External` values directly from the row. Dependency scheduling guarantees
+//! that a computed slot is filled before a same-tick read; evaluator state and bound slots do not
+//! depend on the order chosen by the scheduler.
 //!
 //! ## Bind and validate
 //!
@@ -199,7 +199,7 @@
 //! occurrence of the current output is accepted only as the operand of a positive `Delay` (the
 //! lowered form of `sindex`); `compiler::bind::bind_op` replaces that operation with
 //! `RecursiveDelay`. Direct or zero-delay recursion returns a [`StreamProgramError`], so a bound
-//! recursive delay stores a `NonZeroU64`. Binding also resolves dynamic scopes, prepares function
+//! recursive delay stores a `NonZeroU64`. Binding also resolves reconfigurable scopes, prepares function
 //! capture layouts, and records the exact recursive-delay node IDs used by the post-output commit.
 //!
 //! The program figure shows the bound body for `total`. The semantic contents of an
@@ -207,8 +207,8 @@
 //! `Vec<StreamOp>`, a `DataRef` identifying its result, and the IDs of recursive delays. `NodeId`
 //! is an index into that operation vector and its matching value/state vectors. The positive
 //! self-reference has become `RecursiveDelay`; it reads previous-output history during the forward
-//! pass. Only after `Add` produces the body output does `execution::interpreter::stage_recursive_delays`
-//! retain that output as a pending write. A positive ordinary `SIndex` similarly marks its current
+//! pass. Only after `Add` produces the body output does `stage_recursive_delays` retain that output as
+//! a pending write. A positive ordinary `SIndex` similarly marks its current
 //! operand for capture. The monitor applies both kinds of pending writes after every stream has
 //! produced its current-tick value.
 //!
@@ -218,17 +218,21 @@
 //! </figure>
 //!
 //! The bound graph becomes an `ir::StreamProgram`. Its canonical execution data is the graph, an
-//! `Rc<EnvironmentLayout>`, an `EvaluationMode::{Infallible, Fallible}` classification, and a cached
-//! `requires_temporal_commit` flag. Sharing the program is important for function call sites and
-//! runtime-compiled programs: each evaluator can own state without cloning operation vectors or
-//! layouts. The later [execution layouts and type quickening](#execution-layouts-and-type-quickening)
-//! section describes the optional metadata stored beside these semantic fields.
+//! `Rc<EnvironmentLayout>`, an
+//! `EvaluationMode::{Infallible, Fallible}` classification, and a cached `requires_temporal_commit`
+//! flag. Sharing the program is important for function call sites and runtime-compiled programs:
+//! each `Evaluator` can own state without cloning operation vectors or layouts. The later
+//! [scheduled plans and native execution](#scheduled-plans-quickening-and-native-execution) section
+//! describes the optional metadata stored beside these semantic fields.
 //!
 //! ## Execute one tick
 //!
-//! The canonical state owned by `execution::stream_evaluator::StreamEvaluator` is one mutable
-//! `execution::stream_state::StreamState` paired with an `Rc<StreamProgram>`. `StreamState` has two
-//! vectors indexed by `NodeId`:
+//! `Evaluator` owns one `Rc<StreamProgram>` and one `EvaluatorTierStates`. The evaluator tier states keep canonical
+//! `EvaluatorState`, optional quickening state, and an evaluator-local adaptive plan together so an
+//! exact context handoff cannot separate a derived representation from its semantic owner. State is
+//! local and mutable; root and nested transfer move selected owners destructively rather than using
+//! monitor-wide snapshots, transactions, or copy-on-write state. `EvaluatorState` has two vectors
+//! indexed by `NodeId`:
 //!
 //! - `node_values: Vec<Value>` is the current result of each operation. A forward pass overwrites
 //!   these slots on every evaluation, so later nodes can resolve `DataRef::Node` in constant time.
@@ -259,35 +263,36 @@
 //! <figcaption>Both delay forms read history committed before tick n. A recursive self-delay feeds an earlier stream output into the body and stages the completed output back to its ring; both delay forms commit their new samples after row n completes.</figcaption>
 //! </figure>
 //!
-//! The canonical path uses `execution::interpreter::evaluate_nodes` for infallible programs.
-//! Fallible programs use `execution::interpreter::try_evaluate_nodes`, which handles dynamic nodes
-//! and delegates ordinary operations to the same canonical evaluator. `EvaluationContext` contains
-//! the environment row, its layout, and an optional recursive-call callback. After traversal the
-//! evaluator reads `EvaluationGraph::output`, stages recursive self-delays, and returns one stream
-//! value.
-//! `evaluate_and_commit` is used where a nested invocation owns its complete tick; top-level stream
-//! evaluators stage writes for the monitor's common commit phase.
+//! The canonical path uses `evaluate_nodes` for infallible programs. Fallible programs use
+//! `try_evaluate_nodes`, which handles dynamic nodes and delegates ordinary operations to the same
+//! evaluator. `EvaluationEnvironment` contains the environment row, its layout, retained values when
+//! needed, and an optional recursive-call closure. After traversal the evaluator reads
+//! `EvaluationGraph::output`, records recursive self-delay writes, and returns one stream value.
+//! `evaluate_and_commit` is used where a nested invocation owns its complete tick; top-level
+//! `Evaluator`s record temporal writes for the monitor's common commit phase.
 //!
 //! `DataflowMonitor::execute_tick` has these logical phases:
 //!
-//! 1. Load the complete input slice. A monitor with reconfiguration first clears the whole
-//!    environment row to `NoVal`; a static monitor can overwrite in place because every stream slot
-//!    will be recomputed.
-//! 2. Evaluate, once and in static order, the infallible prerequisite streams needed to produce
+//! 1. Load the complete input slice. A monitor with reconfiguration clears the environment row to
+//!    `NoVal` and updates retained input values; a static monitor can overwrite input slots in place.
+//! 2. Evaluate, once and in static order, the transitive source-prerequisite closure needed to produce
 //!    `dynamic`/`defer` source values.
-//! 3. Resolve every reconfiguration point without evaluating its active expression, collecting
-//!    the active expression's same-tick dependency slots.
+//! 3. At the source barrier, resolve every active reconfigurable expression without evaluating its new
+//!    body. Changed `Dynamic` bodies are installed in their owning evaluator, and their active
+//!    same-tick dependency slots are collected.
 //! 4. Ask `Scheduler` to retain its cached order when valid or repair it with iterative DFS; reject
 //!    a same-tick runtime cycle.
-//! 5. Evaluate every stream not already consumed as a source prerequisite exactly once in the
-//!    active dependency order, and write each result to its stable slot.
-//! 6. Commit staged temporal state only for streams marked by `MonitorPlan::temporal_streams`.
+//! 5. Evaluate every stream not already consumed as a source prerequisite exactly once in the active
+//!    dependency order, and write each result to its stable slot.
+//! 6. Commit temporal state only for streams marked by `MonitorPlan::temporal_streams`; a deferred
+//!    deferred expression releases its source prerequisites after the successful main evaluation.
 //! 7. Back in `evaluate`, project `output_slots` into the caller's output slice.
 //!
 //! The common commit lets mutually delayed streams capture each other's completed current values
 //! without creating a same-tick scheduling cycle. Runtime-compiled programs and persistent direct
-//! function applications participate through nested state. Dynamic dependencies are resolved before
-//! stateful execution, so no stream advances twice merely because the order changed.
+//! function applications participate through nested `EvaluatorState`. Dynamic dependencies are
+//! resolved at the barrier before stateful execution, so no stream advances twice merely because the
+//! order changed.
 //!
 //! Input/output slice-count errors are validation failures before `execute_tick`; they do **not**
 //! poison the monitor and the caller may retry with correctly sized slices. Any error returned after
@@ -337,18 +342,19 @@
 //!
 //! | owner | retained state |
 //! |:------|:---------------|
-//! | Positive `Delay` or `RecursiveDelay` | A fixed-capacity ring and pending-write state. |
-//! | Ordinary `if` | Independent persistent `StreamState` values for both branches. |
-//! | Persistent function call site | A nested evaluator, including delay rings in the function body. |
+//! | Positive delay in a top-level stream | A binding into the monitor's bounded `HistoryStore`; runtime-defined, internal, and recursive delays keep local rings. |
+//! | Ordinary `if` | Independent boxed `EvaluatorState` values for both branches. |
+//! | Persistent function call site | A nested `Evaluator`, including delay rings in the function body. |
 //! | Recursive function call | Resettable frames used for the active recursive evaluation. |
-//! | `dynamic` or `defer` | Source/result lifting state, an outer-environment shadow, and an optional active evaluator. |
+//! | `dynamic` or `defer` | Source/result lifting state, an outer-environment shadow, and an optional active `Evaluator`. |
 //! | Other lifted operations | Their required last operands, values, or control flags. |
 //!
-//! Delay storage is proportional to the sum of positive offsets across top-level evaluators and all
-//! retained nested evaluators. Replacing a `dynamic` evaluator releases its rings when the old
-//! evaluator is dropped. An activated `defer` evaluator remains retained until its enclosing state
-//! is reset or dropped. Offsets are converted from `u64` to `usize` and their rings are allocated
-//! eagerly; the compiler does not currently impose a configurable maximum history size.
+//! History storage is proportional to the maximum effective depth of shared outer-variable histories
+//! plus local positive offsets across top-level and retained nested evaluators. Reconfiguring a
+//! `dynamic` body releases local state owners that are not transferred into the new evaluator. An
+//! activated `defer` evaluator remains retained until its enclosing state is reset or dropped. Offsets
+//! are converted from `u64` to `usize`; the compiler does not currently impose a configurable maximum
+//! history size.
 //!
 //! These structures also encode scheduling invariants: an immediate stream read observes a producer
 //! scheduled earlier, a historical read observes retained node state and captures from the completed
@@ -368,7 +374,7 @@
 //!
 //! ## Selection and branch state
 //!
-//! `NodeState::LazyIf(LazyIfState)` gives each branch its own persistent `StreamState` and retained
+//! `NodeState::LazyIf(LazyIfState)` gives each branch its own boxed `EvaluatorState` and retained
 //! output, and also retains the last condition. In ordinary stream evaluation, both branches run on
 //! every tick in which the enclosing stream is evaluated, regardless of the condition. This keeps
 //! their independent temporal state aligned. Each branch output is lifted separately; if either
@@ -377,13 +383,18 @@
 //! condition propagates. A `Deferred` value from the unselected branch does not affect the selected
 //! result. Checked compilation normally prevents any other condition type.
 //!
-//! Recursive function evaluation is the supported exception to advancing both branches. When
-//! `EvaluationContext` contains the recursive callback, `Bool(true)` evaluates only the then-branch
-//! and `Bool(false)` evaluates only the else-branch. A `Deferred` or `NoVal` condition returns that
-//! value without evaluating either branch. This genuinely lazy selection lets a recursive base case
-//! return without entering the recursive branch.
+//! Branch state is local and recursively owned. Cloning an `Evaluator` clones its branch state, while
+//! normal evaluation mutates the unique live state directly. Context transfer moves matching branch
+//! owners only after preparation validates the complete rewrite; it does not require a monitor-wide
+//! state snapshot.
 //!
-//! Reconfiguration points are not supported inside lazy branches: compilation rejects an `if`
+//! Recursive function evaluation is the supported exception to advancing both branches. When
+//! `EvaluationEnvironment` contains the recursive callback, `Bool(true)` evaluates only the
+//! then-branch and `Bool(false)` evaluates only the else-branch. A `Deferred` or `NoVal` condition
+//! returns that value without evaluating either branch. This genuinely lazy selection lets a
+//! recursive base case return without entering the recursive branch.
+//!
+//! Reconfigurable expressions are not supported inside lazy branches: compilation rejects an `if`
 //! branch containing `dynamic` or `defer`. Supported branch evaluation is therefore infallible and
 //! has no branch-error suppression or rollback semantics. After an ordinary enclosing stream
 //! evaluates successfully, temporal commits recurse into both branch states.
@@ -452,7 +463,7 @@
 //! Application stream-lifts the function operand and every argument independently; `Deferred` or
 //! `NoVal` propagates before a call. For a directly applied `fix` lambda, `compiler::lower` emits
 //! `ir::StreamOp::RecursiveApply` and rewrites self calls as `ir::StreamOp::RecursiveCall`.
-//! `evaluate_recursive_apply` supplies the callback through `EvaluationContext`. The recursive
+//! `evaluate_recursive_apply` supplies the callback through `EvaluationEnvironment`. The recursive
 //! `if` rule above evaluates only the selected branch, so a base case can return without evaluating
 //! the recursive branch. Other function values use the general `Fix` wrapper.
 //!
@@ -489,15 +500,13 @@
 //! assert_eq!(output[output_index("recursive")], Value::Int(7));
 //! ```
 //!
-//! # `dynamic` handling
+//! # Reconfigurable expressions
 //!
-//! ## Reconfiguration points
-//!
-//! At the model level, a **reconfiguration point** is simply a `dynamic(...)` or `defer(...)`
-//! expression whose formula arrives through a string-valued input. The surrounding equation is fixed,
-//! but the orange expression box in the figure can be supplied at runtime. Each point fixes three
-//! things: the source input carrying the formula, the formula's result type, and the names that formula
-//! is allowed to use.
+//! At the model level, a **reconfigurable expression** is a `dynamic(...)` or `defer(...)` expression
+//! whose formula arrives through a string-valued input. The surrounding equation is fixed, while the
+//! body is compiled at a source barrier. In the bound IR, each point carries a
+//! `ReconfigurableExpressionKind` identifying whether it is `Dynamic` (re-evaluated when its source text changes) or `Deferred`
+//! (activated once). It also fixes the source operand, result type, and names the body may use.
 //!
 //! The figure depicts this model:
 //!
@@ -536,14 +545,15 @@
 //! first formula. The surrounding `&&` and the rest of the model remain fixed, and a stream such as
 //! `decision` can contain more than one point.
 //!
-//! At the start of a tick, the monitor activates or reuses each formula and collects these active
-//! reads before evaluating the affected streams. When the containing stream later evaluates, the
-//! point behaves like an ordinary subexpression and contributes its current value to the fixed
-//! surrounding equation.
+//! At the start of a tick, the monitor evaluates the source-prerequisite closure, then reaches a
+//! source barrier. It activates or reconfigures each eligible point and collects the active reads
+//! before scheduling affected streams. When the containing stream later evaluates, the point behaves
+//! like an ordinary subexpression and contributes its current value to the fixed surrounding
+//! equation.
 //!
 //! <figure style="margin:1.25rem 0">
-#![doc = include_str!("../../docs/src/assets/dataflow/reconfiguration-points.svg")]
-//! <figcaption>Orange boxes are the three reconfiguration points; solid arrows show current producer-to-consumer value flow, while the one dashed arrow is an allowed value source that the current formula does not use.</figcaption>
+#![doc = include_str!("../../docs/src/assets/dataflow/reconfigurable-expressions.svg")]
+//! <figcaption>Orange boxes are the three reconfigurable expressions; solid arrows show current producer-to-consumer value flow, while the one dashed arrow is an allowed value source that the current formula does not use.</figcaption>
 //! </figure>
 //!
 //! ## Scope and scheduling
@@ -551,7 +561,7 @@
 //! `dynamic(source: T)` treats the current string value of `source` as a DSRV expression. `compiler::lower`
 //! lowers the construct to `ir::StreamOp::Dynamic` with a `ir::DynamicExpressionSpec`. The spec records
 //! the source operand, optional checked type information, allowed variables, and
-//! `ir::DynamicExpressionMode::Dynamic`. Because activation can fail at evaluation time, a graph
+//! `ir::ReconfigurableExpressionKind::Dynamic`. Because activation can fail at evaluation time, a graph
 //! containing this node (including a nested branch graph) has `EvaluationMode::Fallible`.
 //!
 //! Scope resolution happens while the containing specification is compiled:
@@ -604,25 +614,27 @@
 //! <figcaption>The full graph and matrix show the same compile-time permissions; each runtime tick activates a subset and repairs the cached dependency-first schedule when necessary.</figcaption>
 //! </figure>
 //!
-//! The `MonitorPlan` determines source prerequisites and the `Scheduler` applies the tick phases
-//! listed above. Reconfiguration resolution activates or reuses programs and collects exact same-tick
-//! dependencies without evaluating the active programs. The scheduler first checks its current
-//! order and only runs its allocation-reusing iterative DFS when repair is needed; a cycle produces
+//! The `MonitorPlan` records each reconfigurable expression and the transitive source-prerequisite closure, while the
+//! `Scheduler` applies the tick phases listed above. Reconfiguration resolution activates or
+//! reconfigures local `Evaluator`s and collects exact same-tick dependencies without evaluating the
+//! active bodies. The scheduler first checks its current order and only runs its allocation-reusing
+//! iterative DFS when repair is needed; a cycle produces
 //! [`DataflowEvaluationError::DynamicDependencyCycle`]. `EnvironmentLayout` and bound
 //! `EnvironmentSlot` values remain stable; only stream IDs in the scheduled order change.
 //!
 //! Early dependency resolution imposes compile-time restrictions: every expression source must bind
-//! directly to a constant or outer environment slot, not a node-local result; a reconfiguration point
+//! directly to a constant or outer environment slot, not a node-local result; a reconfigurable expression
 //! cannot be hidden in a fallible lazy branch; and any computed stream needed to produce a source
-//! (including static prerequisites) must be infallible and contain no reconfiguration point. Violations
+//! (including static prerequisites) must be infallible and contain no reconfigurable expression. Violations
 //! produce [`DataflowCompilationError::UnsupportedReconfiguration`]. These constraints ensure source
 //! streams can run once before scheduling and then be omitted from the main execution order.
 //!
 //! ## Temporal history of runtime-defined expressions
 //!
-//! Temporal history belongs to the operator that records it. A delay created inside a newly active
-//! expression starts with empty state; a delay that remains alive keeps the samples it has recorded.
-//! The Dataflow runtime does not maintain a monitor-wide archive from which new delays are backfilled.
+//! Temporal history belongs to the `EvaluatorState` owner that records it. A delay in a newly active
+//! body starts empty unless `ContextTransferPolicy::MatchingStreamState` finds an exact body to carry
+//! over; a delay that remains alive keeps the samples it has recorded. The dataflow monitor does not
+//! maintain a monitor-wide archive from which a new body is backfilled.
 //!
 //! ### How history becomes available
 //!
@@ -653,47 +665,59 @@
 //! ### Where the state lives
 //!
 //! A `dynamic` or `defer` node compiles its source string into a `StreamProgram` and evaluates it in a
-//! nested `StreamEvaluator`. That evaluator owns the operation state of the active expression,
-//! including one delay ring for each temporal operator. The surrounding node separately owns source
-//! and result lifting state, its active dependency set, and an environment shadow containing one
-//! current-or-lifted value for each available outer stream.
+//! nested `Evaluator`. That evaluator owns the operation-local state and delay rings of the active body.
+//! The surrounding `NodeState::Dynamic` separately owns source and result lifting state, an active
+//! `EnvironmentProjection`, and an environment shadow in the nested evaluator's compiled layout.
 //!
-//! The environment shadow lets a new expression use the current value of `x` immediately. It is not a
-//! sample archive: it cannot answer a new `x[1]` or `x[2]` using rows from before activation. A value
-//! retained in the shadow through an outer `NoVal` becomes the new evaluator's current sample, not a
-//! pre-activation sample.
+//! The projection contains compact nested-slot/outer-slot pairs plus projected dependency and history
+//! slots. It lets a new expression use the current value of `x` immediately and lets an exact root
+//! transfer keep an old compiled body after the outer dense layout changes. Projected history slots
+//! contribute bounded context-retention requirements for a later root transfer; they do not backfill
+//! the active body's local delay rings.
 //!
-//! Reusing an evaluator preserves its operation state and delay rings. Replacing it keeps the
-//! surrounding environment shadow but clears the previous result, active dependencies, evaluator
-//! state, and delay rings. Temporal operators in the fixed surrounding specification are unaffected.
+//! Reusing an evaluator preserves its operation state and delay rings. A changed `Dynamic` source
+//! constructs a new local evaluator from a cached immutable template or a fresh compilation. Under
+//! `ContextTransferPolicy::MatchingStreamState` transfers state only when the replacement body is
+//! semantically identical; changed owners start cold. `None` keeps the new evaluator cold. Temporal
+//! operators in the fixed surrounding specification are unaffected.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/dynamic-history.svg")]
-//! <figcaption>Replacement creates fresh temporal state inside the active expression; temporal operators in the fixed surrounding specification continue.</figcaption>
+//! <figcaption>A changed active body gets a local evaluator; only an exact body match can continue state, while fixed surrounding temporal operators always keep their own state.</figcaption>
 //! </figure>
 //!
-//! ## Activation, reuse, and replacement
+//! ## Source-barrier activation and context transfer
 //!
-//! During reconfiguration, a new string is parsed as a DSRV expression, optionally type checked,
-//! lowered, checked against the resolved allow-list, and bound to the existing `EnvironmentLayout`.
-//! Its same-tick free variables become active dependency slots; all free variables are scope checked.
+//! During source-barrier reconfiguration, a new string is parsed as a DSRV expression, optionally
+//! type checked, lowered, checked against the resolved allow-list, and bound to the existing
+//! `EnvironmentLayout`. Its same-tick free variables become active dependency slots; all free
+//! variables are scope checked before the body is installed.
 //!
-//! `update_active_expression` compares the incoming string with the source text of the active
-//! expression. The first accepted string activates a fresh evaluator. Text equal to the current
-//! source reuses that evaluator, its dependencies, and all temporal state. Different text activates
-//! a fresh evaluator, recomputes dependencies, clears the retained dynamic result, and drops
-//! the previous evaluator state.
+//! Root monitor reconfiguration follows the same ownership rule. `DataflowMonitor::reconfigure`
+//! compiles the target program and prepares a target-indexed `ReconfigurationMapping` that pairs
+//! same-name streams whose `StreamStateKey` values match. `prepare_context_transfer` validates
+//! those matches, retained values, active-expression projections, dynamic dependencies, history
+//! requirements, and deferred-expression lifecycle state before any state moves.
+//! `context_transfer_from` then performs the infallible destructive handoff at the tick barrier.
+//! The input control barrier flushes earlier data before the command, the runtime replaces its
+//! input and output, and acknowledgement is last.
 //!
-//! Identity is textual rather than semantic: equivalent expressions with different text cause
-//! replacement. Replacement is also not a cache lookup. If the source changes from `"x[1]"` to
-//! `"x[0]"` and later returns to `"x[1]"`, the final string creates a third evaluator rather than
-//! recovering the first evaluator's history. The new evaluator consumes the replacement tick as its
-//! first tick; the discarded evaluator does not consume it. The lifecycle diagram follows this
-//! evaluator-A, evaluator-B, evaluator-C progression.
+//! `ReconfigurableExpressionKind::Dynamic` compares source text. The first accepted string activates a
+//! fresh evaluator; equal text reuses the current evaluator, its dependencies, and its temporal
+//! state. Different text creates a new evaluator. The source text is not a semantic cache key: the
+//! template cache shares immutable programs, not evaluator state. The new evaluator may transfer
+//! state from the old one only when the compiled bodies are semantically identical; a changed or
+//! absent owner has no history to recover. Returning to earlier text therefore does not restore an
+//! old evaluator instance.
+//!
+//! The owning `Evaluator` prepares a replacement body before it takes the old active body from the
+//! dynamic node. If parsing or binding fails, the live active body remains installed; a changed body
+//! installs cold. An exact match destructively moves the body state and reuses environment-shadow
+//! storage. It does not use a monitor-wide state image.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/dynamic-lifecycle.svg")]
-//! <figcaption>Equal source text preserves one evaluator timeline. Changed text drops that evaluator and activates a new one whose positive-delay history starts on the replacement tick.</figcaption>
+//! <figcaption>Equal source text keeps one evaluator timeline; changed text installs a new local evaluator without carrying partial state forward.</figcaption>
 //! </figure>
 //!
 //! ## Source values and evaluator advancement
@@ -706,17 +730,17 @@
 //!
 //! An effective string exposes the active evaluator's result. An effective `Deferred` still advances
 //! the evaluator internally, preserving its temporal alignment, but makes `dynamic` emit `Deferred`.
-//! Result lifting retains the previous result when the evaluator returns `NoVal`; `Deferred` replaces
-//! it. A changed string clears the old retained result so a fresh definition cannot leak the previous
-//! definition's output.
+//! The active body's own operators perform any result lifting; `defer` separately retains its last
+//! non-`NoVal` body result. A changed `dynamic` body therefore has no implicit result history beyond
+//! the state owners explicitly transferred into its new evaluator.
 //!
 //! Before any string is accepted, there is no evaluator to advance: effective `NoVal` yields `NoVal`
 //! and `Deferred` yields `Deferred`. Any non-string, non-special source produces
 //! [`DataflowEvaluationError::InvalidExpressionSource`]. Parse, type, scope, binding, nested
 //! reconfiguration, and dependency-cycle errors are terminal to the monitor.
 //!
-//! For `z = dynamic(source: Int)`, the following sequence preserves the first `x[1]` history,
-//! replaces it with `x[0]`, and then activates a new `x[1]` evaluator:
+//! For `z = dynamic(source: Int)`, the following sequence reuses an `x[1]` evaluator, activates
+//! an incompatible `x[0]` body, and then starts another `x[1]` evaluator:
 //!
 //! ```
 //! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
@@ -742,7 +766,7 @@
 //! assert_eq!(output, [Value::Deferred]); // Returning to x[1] starts fresh.
 //! ```
 //!
-//! ## History outside the reconfiguration point
+//! ## History outside the reconfigurable expression
 //!
 //! A delay in the fixed surrounding specification has its own lifetime. For example:
 //!
@@ -757,24 +781,24 @@
 //! | 1 | `"x"` | 20 | 10 |
 //! | 2 | `"x + 100"` | 130 | 20 |
 //!
-//! Replacing the expression that computes `z` replaces state inside that expression. It does not
-//! replace the `z[1]` operator, which belongs to the fixed definition of `previous`. Consequently,
-//! `previous` can return the value produced by `z` before the replacement. This is the same ownership
-//! rule as above: state continues when its temporal operator continues.
+//! Reconfiguring the expression that computes `z` changes only state inside that active body. It does
+//! not change the `z[1]` operator, which belongs to the fixed definition of `previous`. Consequently,
+//! `previous` can return the value produced by `z` before the reconfiguration. This is the same
+//! ownership rule as above: state continues when its temporal operator continues.
 //!
 //! # `defer` handling
 //!
 //! `defer(source: T)` uses the same parsing, checking, scope validation, binding, environment shadow,
-//! and nested-evaluator representation as `dynamic`. `compiler::lower` selects
-//! `ir::DynamicExpressionMode::Defer`. Automatic and explicit scopes have the same availability and
+//! and nested-`Evaluator` representation as `dynamic`. `compiler::lower` marks it as
+//! `ReconfigurableExpressionKind::Deferred`. Automatic and explicit scopes have the same availability and
 //! cycle rules described above.
 //!
 //! Its activation policy differs: before activation, `NoVal` yields `NoVal` and `Deferred` yields
 //! `Deferred`. The first accepted string activates one fresh evaluator and may reorder the monitor.
-//! That evaluator and its active dependencies then remain fixed. Later strings do not replace or
-//! recompile the definition; every later source value merely accompanies another tick of the same
-//! active evaluator. DSRV syntax has no retained-history length argument for `defer`: its optional
-//! type annotation and explicit scope control typing and name availability, not historical backfill.
+//! That evaluator and its active dependencies then remain fixed. Later strings do not recompile the
+//! definition; every later source value merely accompanies another tick of the same active evaluator.
+//! DSRV syntax has no retained-history length argument for `defer`: its optional type annotation and
+//! explicit scope control typing and name availability, not historical backfill.
 //!
 //! Thus `defer` has exactly one evaluator timeline. Positive-delay history starts on the activation
 //! tick and remains continuous across later strings, `NoVal`, and `Deferred`. If `"x[1]"` is the
@@ -785,11 +809,11 @@
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/defer-lifecycle.svg")]
-//! <figcaption>The first accepted string creates one evaluator. Its delay history starts on that activation tick and continues across every later source value without replacement.</figcaption>
+//! <figcaption>The first accepted string creates one evaluator. Its delay history starts on that activation tick and continues across every later source value without recompilation.</figcaption>
 //! </figure>
 //!
-//! For `z = defer(source: Int)`, the later `"x * 100"` source does not replace the active `x[1]`
-//! evaluator, and a later `Deferred` source does not interrupt its history:
+//! For `z = defer(source: Int)`, the later `"x * 100"` source does not reconfigure the active
+//! `x[1]` evaluator, and a later `Deferred` source does not interrupt its history:
 //!
 //! ```
 //! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
@@ -815,12 +839,10 @@
 
 //! ## Memory policy and the published strategies
 //!
-//! Dataflow allocates history with each delay operator. A newly active `x[k]` therefore needs `k`
-//! successful ticks of its own before it can resolve, and its memory cost is bounded by the delay
-//! rings in the active program. The runtime does not retain every value of every stream, enlarge a
-//! shared history window when a new expression asks for a larger offset, or recover samples that were
-//! discarded before activation. History retained for an unrelated equation is not copied into the
-//! new evaluator.
+//! Dataflow retains one bounded history per outer environment variable in `HistoryStore`. Static
+//! analysis supplies the initial depths. Active `dynamic` and `defer` bodies contribute projected
+//! runtime requirements, and the monitor keeps the maximum depth required by all current consumers.
+//! Internal and recursive delays remain evaluator-local.
 //!
 //! The published language definition [[1]] calls an expression *solvable* when the monitor has retained
 //! enough of every referenced stream, and has progressed far enough since those dependencies were
@@ -832,37 +854,25 @@
 //! | **2. Statically specify dynamic-property dependencies** | Bounded by declared stream and offset limits. | History is available up to each declared limit; a reference beyond that limit may never become solvable. |
 //! | **3. Dynamically update dependencies** | Bounded, but the bound may change when a property becomes active. | An existing sufficiently deep dependency may already have retained the requested samples. Otherwise retention grows from the tick that introduces the new dependency, and `x[k]` may remain unavailable until enough later ticks have passed. |
 //!
-//! Dataflow is closest to Strategy 3 in that it preserves bounded memory, accepts temporal offsets at
-//! runtime, and may require a new property to warm up. Its policy is stricter, however. If `x[k]`
-//! becomes active at tick `T`, Dataflow always creates a fresh delay ring, records the sample from `T`,
-//! and can first return it at `T + k`. It does not seed that ring from history retained for another
-//! equation, even when an existing dependency already retains at least `k` samples of `x`. In this
-//! runtime the warm-up result is `Deferred`. Replacing the active expression drops its rings, so the
-//! memory bound changes to the state required by the replacement.
+//! Property-level execution remains activation-local: a newly installed `x[k]` body does not borrow
+//! history from another body or equation. Activating it does, however, add depth `k` to the monitor's
+//! bounded context-retention requirement for `x`. The resulting history is maintained independently of
+//! the body's local ring and can therefore survive as useful context for a later specification change.
+//! Removing one consumer shrinks the retained bound only to the maximum still required by the others.
 //!
-//! The mechanism also differs from the published implementation. Strategy 3 extends a dynamic
-//! dependency graph and uses the graph's weighted edges to decide how much history each stream
-//! retains. Dataflow updates active dependencies for scheduling, while temporal storage remains in
-//! delay nodes inside the nested evaluator. Consequently, Dataflow has no shared retained stream
-//! history for a new evaluator to reuse. This gap from the published Strategy 3 is shared by the
-//! Dataflow, Async, and Semisync implementations, which all exhibit the same activation-local result.
-//!
-//! Suppose `x` has already produced several samples and an existing equation `y = x[2]` has caused a
-//! runtime to retain two of them. When the source for `z = dynamic(source: Int)` then supplies
-//! `"x[2]"`, Strategy 3 can use that sufficiently deep retained history; the current runtimes instead
-//! return `Deferred` and begin collecting history for `z` from that tick.
-//!
-//! The current behavior also keeps `z` independent of whether the otherwise unrelated equation `y`
-//! is present. Reusing incidental history would let `z` resolve immediately with `y` in the
-//! specification but defer without it, even though the inputs and the definition of `z` are unchanged.
-//! Avoiding that difference is consistent with referentially transparent, compositional evaluation,
-//! although the repository does not establish referential transparency as the reason this policy was
-//! chosen.
+//! Root context transfer preserves bounded histories for variables mapped between the old and new
+//! monitor definitions. After active-body slots are projected into the target layout, effective
+//! target depths are recomputed and matching live histories move by variable identity. A new
+//! top-level temporal expression can then be immediately solvable when the old monitor retained
+//! enough context. `MatchingStreamState` preserves the available bounded suffix for exact streams;
+//! `None` installs a cold monitor. This history movement is independent of evaluator-local owner
+//! matching.
 //!
 //! Strategy 1 is not available: Dataflow has no complete trace archive. Strategy 2 is also not exposed
 //! by the language. An explicit scope such as `dynamic(source: Int, {x})` or
 //! `defer(source: Int, {x})` permits the name `x`; it cannot declare a bound such as “retain four
-//! samples of `x`.” Neither construct accepts a memory-strategy selector or retained-history length.
+//! samples of `x`.” The bound comes from the active compiled expression, and no construct accepts a
+//! separate memory-strategy selector.
 //!
 //! # Scheduled plans, quickening, and native execution
 //!
@@ -889,9 +899,9 @@
 //! `if` may carry plans for its branches; every other node becomes a `Canonical` instruction.
 //! `StreamProgram` deliberately contains no quickening or JIT artifact.
 //!
-//! `StreamEvaluator` always owns its canonical `StreamState`. When planning finds quickened work,
-//! the evaluator also owns a parallel `quickening::State` containing compact node values, lifting state, and any
-//! persistent deoptimization decisions. The canonical state remains the semantic authority.
+//! `Evaluator` always owns its canonical `EvaluatorState`. When planning finds quickened work, the
+//! evaluator also owns a parallel `quickening::State` containing compact node values, lifting state,
+//! and any persistent deoptimization decisions. The canonical state remains the semantic authority.
 //!
 //! Scalar instructions operate on `ScalarValue::{Int, Float, Bool, NoVal, Deferred}`. The direct set
 //! is deliberately small:
@@ -918,19 +928,19 @@
 //!
 //! ## Schedule-specific plan bundles
 //!
-//! `MonitorExecution` owns every `StreamEvaluator` in a fixed `EvaluatorArena`, together with one
-//! optional published scalar slot per logical stream. The immutable `MonitorPlan` remains the
-//! logical description: stable stream slots, static dependencies, reconfiguration metadata, and the
-//! temporal commit set. A `PlanBundle` provides replaceable, schedule-specific routing over that
-//! stable state. It owns no evaluator or language state. Its semantic `ScheduledExecutionPlan`
-//! records a unique `PlanId`, ordered stream/program references, stable publication slots, stable
-//! `(stream, node)` state identities, fallibility and temporal effects, and the logical commit set.
-//! Hotness and schedule-wide native artifacts are tied to that identity.
+//! `MonitorExecution` owns every `Evaluator` in a fixed `EvaluatorArena`, together with one optional
+//! published scalar slot per logical stream. The immutable `MonitorPlan` remains the logical
+//! description: stable stream slots, static dependencies, reconfiguration metadata, and the temporal
+//! commit set. A `PlanBundle` provides selectable, schedule-specific routing over that stable state.
+//! It owns no evaluator or language state. Its semantic `ScheduledExecutionPlan` records a unique
+//! `PlanId`, ordered stream/program references, stable publication slots, stable `(stream, node)` state
+//! identities, fallibility and temporal effects, and the logical commit set. Hotness and schedule-wide
+//! native artifacts are tied to that identity.
 //!
 //! A bundle pairs that semantic plan with a derived `QuickPlan`. Sharing a semantic plan does not
 //! require sharing a physical instruction format: canonical execution follows its ordered stream
-//! descriptors, quickening records `Graph` and `ScalarRun` steps, and native lowering constructs
-//! SSA. The quick view uses:
+//! descriptors, the quick plan records `Graph` and `ScalarRun` steps, and native lowering
+//! constructs SSA. The quick view uses:
 //!
 //! - A `Graph` step enters the normal graph-level evaluator. It may still execute a mixed scalar
 //!   plan internally.
@@ -948,10 +958,10 @@
 //! The initial schedule creates the first bundle. When dynamic dependencies change the order,
 //! `ExecutionEngine` selects a matching cached bundle or builds a new one; it retains at most four
 //! previous bundles. Since plans contain identities, immutable program references, effects, and
-//! routing but no mutable evaluator state, replacement cannot reset delay rings, branch state,
-//! function frames, active dynamic expressions, or deoptimization decisions. Schedule-independent
-//! per-stream native regions can be reused; a whole-plan artifact is rebuilt for a different
-//! `PlanId`.
+//! routing but no mutable evaluator state, selecting a different bundle cannot reset delay rings,
+//! branch state, function frames, active dynamic expressions, or deoptimization decisions.
+//! Schedule-independent per-stream native regions can be reused; a whole-plan artifact is rebuilt for
+//! a different `PlanId`.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/execution-layout.svg")]
@@ -1050,19 +1060,19 @@
 //!
 //! Type quickening does not define separate semantics for richer language features:
 //!
-//! - Temporal nodes remain canonical and use the same staging and post-row commit described above.
-//!   Scalar nodes before or after them can still use the mixed plan.
-//! - A non-recursive `if` keeps canonical selection and independent branch `StreamState` values,
-//!   while either branch may carry its own plan. An `if` containing a recursive call stays
-//!   canonical because active recursive depths use reset frames. At monitor level every `if` stream
-//!   is a `Graph` step, but it can publish a scalar output for a later stream.
-//! - Persistent and recursive function frames use ordinary `StreamEvaluator` construction, so an
-//!   eligible checked function body can share its program's plan. Resetting a recursive frame clears
-//!   per-invocation values and lifting state; a persistent deoptimization decision remains local to
-//!   that instantiated evaluator.
+//! - Temporal nodes remain canonical and use the same temporal commit described above. Scalar nodes
+//!   before or after them can still use the mixed plan.
+//! - A non-recursive `if` keeps canonical selection and independent branch `EvaluatorState` values,
+//!   while either branch may carry its own plan. An `if` containing a recursive call stays canonical
+//!   because active recursive depths use reset frames. At monitor level every `if` stream is a `Graph`
+//!   step, but it can publish a scalar output for a later stream.
+//! - Persistent and recursive function frames use ordinary `Evaluator` construction, so an eligible
+//!   checked function body can own a local plan. Resetting a recursive frame clears per-invocation
+//!   values and lifting state; a persistent deoptimization decision remains local to that instantiated
+//!   evaluator.
 //! - A checked, runtime-compiled `dynamic` or `defer` expression can build its own plan when its
 //!   active program is infallible. The enclosing stream remains a fallible `Graph` step because
-//!   parsing, type checking, scope validation, and replacement can fail.
+//!   parsing, type checking, scope validation, and source-barrier installation can fail.
 //!
 //! ## Complete temporal kernels
 //!
@@ -1088,8 +1098,8 @@
 //! The optional JIT consumes the active `ScheduledExecutionPlan` directly and first attempts a
 //! schedule-wide artifact. Eligible temporal schedules use one complete tick call. If the entire
 //! plan is not lowerable, schedule-independent scalar regions derived from its stream descriptors
-//! may still be reused while the quick-plan interpreter preserves the logical commit barrier. If
-//! native execution is pending or unavailable, the engine executes quick instructions;
+//! may still be reused while dispatch through the quickening interpreter preserves the logical
+//! commit barrier. If native execution is pending or unavailable, the engine executes quickened instructions;
 //! instructions that cannot preserve the checked scalar contract enter the canonical evaluator
 //! with retained state transferred explicitly. Dynamic and otherwise fallible programs remain
 //! canonical. Native compilation is feature-gated, but the canonical and quick tiers, planner,
@@ -1121,7 +1131,6 @@ use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};
-use thiserror::Error;
 
 use self::environment::{EnvironmentLayout, EnvironmentSlot};
 
@@ -1130,187 +1139,37 @@ mod environment;
 mod error;
 mod execution;
 mod execution_plan;
+mod history;
+mod history_requirements;
 mod ir;
+#[cfg(feature = "jit")]
+mod jit_api;
 mod monitor;
+mod program;
 mod reconfiguration;
+mod reconfiguration_mapping;
 mod scheduler;
 #[cfg(test)]
 mod tests;
 
-pub use error::{DataflowCompilationError, DataflowEvaluationError, StreamProgramError};
-pub use monitor::{DataflowContext, DataflowMonitor};
-pub(crate) use reconfiguration::{
-    ActivationFrontier, DefinitionSource, ReplacementTarget, validate_replacement,
+pub use error::{
+    DataflowCompilationError, DataflowEvaluationError, DataflowStateError, StreamProgramError,
 };
+pub use execution_plan::ReconfigurableExpressionId;
+#[cfg(feature = "jit")]
+pub use jit_api::{JitConfig, JitPlan, JitReport};
+pub use monitor::DataflowMonitor;
+pub(crate) use monitor::MonitorReconfigurationPlan;
+pub use program::DataflowProgram;
 pub use reconfiguration::{
-    DefinitionKey, InterfaceEpoch, ReconfigurationError, RegionAddress, RevisionId, StateKey,
-    TransferDecision, TransferReportEntry,
+    ContextTransferPolicy, ContextTransferReport, DefinitionKey, InterfaceRevision,
+    MonitorRevision, ReconfigurationReport, StreamStateKey, StreamStateTransfer,
+    StreamStateTransferOutcome,
 };
-
-/// Controls how much canonical evaluator state is carried into a replacement monitor.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ContextTransferPolicy {
-    /// Do not carry any state into the replacement monitor.
-    None,
-    /// Carry state for streams whose bound program and environment layout are unchanged.
-    #[default]
-    Compatible,
-    /// Reject a replacement when an existing stream cannot be transferred exactly.
-    Strict,
-}
-
-/// Result of importing a context into a replacement monitor.
-///
-/// The counters preserve the original lightweight API. `entries` carries the portable region and
-/// state addresses needed to explain resets and strict-policy rejection on the cold path.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ContextTransferReport {
-    pub transferred_streams: usize,
-    pub reset_streams: usize,
-    pub rejected_streams: usize,
-    pub entries: Vec<TransferReportEntry>,
-}
-
-impl ContextTransferReport {
-    pub fn entries(&self) -> &[TransferReportEntry] {
-        &self.entries
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.transferred_streams == 0 && self.reset_streams == 0 && self.rejected_streams == 0
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum DataflowStateError {
-    #[error("cannot transfer dataflow context while a tick is in progress")]
-    TickInProgress,
-    #[error("stream `{0}` has incompatible state in the replacement monitor")]
-    IncompatibleStream(VarName),
-    #[error("active dynamic dependency graph is invalid in the replacement monitor: {0}")]
-    IncompatibleDependencies(String),
-}
-
-/// Activation policy for the integrated JIT. All configurations use the same optimizer and
-/// generated-code path; only the point at which native compilation occurs differs.
-#[cfg(feature = "jit")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct JitConfig {
-    /// `None` compiles eagerly. `Some(n)` runs `n` canonical ticks before compiling all eligible
-    /// graphs together, keeping short-lived monitors on the low-startup interpreter tier.
-    hotness_threshold: Option<u64>,
-}
-
-#[cfg(feature = "jit")]
-impl JitConfig {
-    pub const fn eager() -> Self {
-        Self {
-            hotness_threshold: None,
-        }
-    }
-
-    pub const fn after_events(events: u64) -> Self {
-        Self {
-            hotness_threshold: Some(events),
-        }
-    }
-
-    pub(in crate::dataflow) const fn hotness_threshold(self) -> Option<u64> {
-        self.hotness_threshold
-    }
-}
-
-#[cfg(feature = "jit")]
-impl Default for JitConfig {
-    fn default() -> Self {
-        Self::eager()
-    }
-}
-
-/// The native execution layout selected for a monitor.
-#[cfg(feature = "jit")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JitPlan {
-    /// The monitor is still below its configured hotness threshold.
-    Pending,
-    /// One native artifact evaluates the complete static schedule.
-    Fused,
-    /// Eligible streams have individual native artifacts; other streams remain interpreted.
-    PerStream,
-    /// Native compilation produced no usable artifact.
-    Unavailable,
-}
-
-/// Observable result of enabling the JIT.
-///
-/// Unsupported streams are normal and continue through the canonical interpreter. A backend
-/// error is also non-fatal: execution remains canonical, but the error is retained here rather
-/// than silently discarded.
-#[cfg(feature = "jit")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JitReport {
-    plan: JitPlan,
-    compiled_artifacts: usize,
-    unsupported_streams: Vec<usize>,
-    scheduled_temporal_streams: Vec<usize>,
-    complete_temporal_kernel_streams: Vec<usize>,
-    backend_error: Option<String>,
-}
-
-#[cfg(feature = "jit")]
-impl JitReport {
-    pub fn plan(&self) -> JitPlan {
-        self.plan
-    }
-
-    pub fn compiled_artifacts(&self) -> usize {
-        self.compiled_artifacts
-    }
-
-    pub fn unsupported_streams(&self) -> &[usize] {
-        &self.unsupported_streams
-    }
-
-    /// Stream indices whose native regions are fed by evaluator-scheduled temporal state.
-    pub fn scheduled_temporal_streams(&self) -> &[usize] {
-        &self.scheduled_temporal_streams
-    }
-
-    /// Stream indices evaluated and committed by one complete native temporal kernel call.
-    pub fn complete_temporal_kernel_streams(&self) -> &[usize] {
-        &self.complete_temporal_kernel_streams
-    }
-
-    pub fn backend_error(&self) -> Option<&str> {
-        self.backend_error.as_deref()
-    }
-
-    pub(in crate::dataflow) fn pending() -> Self {
-        Self {
-            plan: JitPlan::Pending,
-            compiled_artifacts: 0,
-            unsupported_streams: Vec::new(),
-            scheduled_temporal_streams: Vec::new(),
-            complete_temporal_kernel_streams: Vec::new(),
-            backend_error: None,
-        }
-    }
-
-    pub(in crate::dataflow) fn compiled(
-        plan: JitPlan,
-        compiled_artifacts: usize,
-        unsupported_streams: Vec<usize>,
-        scheduled_temporal_streams: Vec<usize>,
-        complete_temporal_kernel_streams: Vec<usize>,
-        backend_error: Option<String>,
-    ) -> Self {
-        Self {
-            plan,
-            compiled_artifacts,
-            unsupported_streams,
-            scheduled_temporal_streams,
-            complete_temporal_kernel_streams,
-            backend_error,
-        }
-    }
-}
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(in crate::dataflow) use reconfiguration_mapping::ReconfigurationMappingError;
+#[allow(unused_imports)]
+pub(in crate::dataflow) use reconfiguration_mapping::{
+    EnvironmentMapping, ReconfigurationMapping, StreamMapping,
+};

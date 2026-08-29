@@ -3,13 +3,15 @@ use futures::StreamExt;
 use std::collections::{BTreeMap, btree_map::Entry};
 
 use crate::core::{InputBatch, InputStream, JsonStreamValue, OutputStream, VarName};
-use crate::io::MonitorConfig;
+use crate::io::ReconfigurationRequest;
 
 #[derive(Debug)]
 pub(crate) enum RedisInputItem<V> {
     Data(InputBatch<V>),
-    Control(MonitorConfig),
+    Control(ReconfigurationRequest),
 }
+
+type RedisChannelMap = BTreeMap<String, VarName>;
 
 pub async fn input_stream_items<V: JsonStreamValue>(
     hostname: &str,
@@ -27,33 +29,24 @@ pub async fn input_stream_items<V: JsonStreamValue>(
     };
 
     let client = redis::Client::open(url)?;
-    let mut pubsub = client.get_async_pubsub().await?;
+    let pubsub = client.get_async_pubsub().await?;
+    let (mut pubsub_sink, mut redis_stream) = pubsub.split();
     let mut channel_names = var_topics.values().cloned().collect::<Vec<_>>();
     if let Some(control_topic) = &control_topic {
         channel_names.push(control_topic.clone());
     }
-    pubsub.subscribe(channel_names).await?;
-    let mut redis_stream = pubsub.into_on_message();
+    pubsub_sink.subscribe(channel_names).await?;
+    let retained_sink = pubsub_sink;
     Ok(Box::pin(async_stream::try_stream! {
+        let _retained_sink = retained_sink;
         while let Some(message) = redis_stream.next().await {
-            if control_topic.as_deref() == Some(message.get_channel_name()) {
-                let payload = message
-                    .get_payload::<String>()
-                    .map_err(anyhow::Error::from)
-                    .context("Redis monitor configuration is not valid UTF-8")?;
-                yield RedisInputItem::Control(MonitorConfig::from_json(&payload)?);
-                return;
+            if let Some(item) = decode_message::<V>(
+                message,
+                &topic_vars,
+                control_topic.as_deref(),
+            )? {
+                yield item;
             }
-            let Some(variable) = topic_vars.get(message.get_channel_name()).cloned() else {
-                continue;
-            };
-            let payload = message
-                .get_payload::<String>()
-                .map_err(anyhow::Error::from)
-                .context("Redis message payload is not valid UTF-8")?;
-            let value = V::decode_json(payload.as_bytes())
-                .with_context(|| format!("invalid Redis JSON5 payload for variable `{variable}`"))?;
-            yield RedisInputItem::Data(InputBatch::update(variable, value));
         }
     }))
 }
@@ -75,10 +68,38 @@ pub async fn input_stream<V: JsonStreamValue>(
     }))
 }
 
+fn decode_message<V: JsonStreamValue>(
+    message: redis::Msg,
+    topic_vars: &RedisChannelMap,
+    control_topic: Option<&str>,
+) -> anyhow::Result<Option<RedisInputItem<V>>> {
+    if control_topic == Some(message.get_channel_name()) {
+        let payload = message
+            .get_payload::<String>()
+            .map_err(anyhow::Error::from)
+            .context("Redis monitor configuration is not valid UTF-8")?;
+        return Ok(Some(RedisInputItem::Control(
+            ReconfigurationRequest::from_json(&payload)?,
+        )));
+    }
+    let Some(variable) = topic_vars.get(message.get_channel_name()).cloned() else {
+        return Ok(None);
+    };
+    let payload = message
+        .get_payload::<String>()
+        .map_err(anyhow::Error::from)
+        .context("Redis message payload is not valid UTF-8")?;
+    let value = V::decode_json(payload.as_bytes())
+        .with_context(|| format!("invalid Redis JSON5 payload for variable `{variable}`"))?;
+    Ok(Some(RedisInputItem::Data(InputBatch::update(
+        variable, value,
+    ))))
+}
+
 fn validate_topics(
     var_topics: &BTreeMap<VarName, String>,
     control_topic: Option<&str>,
-) -> anyhow::Result<BTreeMap<String, VarName>> {
+) -> anyhow::Result<RedisChannelMap> {
     let mut topic_vars = BTreeMap::new();
     for (variable, topic) in var_topics {
         match topic_vars.entry(topic.clone()) {

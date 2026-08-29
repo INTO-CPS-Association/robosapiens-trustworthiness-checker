@@ -4,7 +4,7 @@ use std::time::Duration;
 use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
-use trustworthiness_checker::dataflow::{ContextTransferPolicy, DataflowMonitor};
+use trustworthiness_checker::dataflow::{ContextTransferPolicy, DataflowMonitor, DataflowProgram};
 use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 
 #[cfg(feature = "jemalloc")]
@@ -12,6 +12,13 @@ use trustworthiness_checker::{DsrvSpecification, Value, VarName};
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const CACHED_TICKS: u64 = 1_024;
+
+fn compile_program(source: &str) -> DataflowProgram {
+    let spec = source
+        .parse::<DsrvSpecification>()
+        .expect("benchmark specification should parse");
+    DataflowProgram::compile_untyped(spec).expect("benchmark program should compile")
+}
 
 fn compile(source: &str) -> DataflowMonitor {
     let spec = source
@@ -260,6 +267,10 @@ fn reconfiguration_spec(streams: usize) -> String {
     source
 }
 
+fn reconfiguration_target_spec(streams: usize) -> String {
+    reconfiguration_spec(streams).replacen("x[4]\n", "x[4] + 1\n", 1)
+}
+
 fn warm_transfer_monitor(monitor: &mut DataflowMonitor) {
     let input = input_row(monitor, &[("x", Value::Int(1))]);
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
@@ -279,17 +290,22 @@ fn bench_runtime_reconfiguration(c: &mut Criterion) {
             BenchmarkId::new("candidate_compile_and_transfer", streams),
             &source,
             |b, source| {
-                let mut old = compile(source);
-                warm_transfer_monitor(&mut old);
-                let context = old.export_context().unwrap();
-                b.iter(|| {
-                    let mut candidate = compile(black_box(source));
-                    let report = candidate
-                        .import_context(&context, ContextTransferPolicy::Compatible)
-                        .unwrap();
-                    black_box(report);
-                    black_box(candidate);
-                });
+                b.iter_batched(
+                    || {
+                        let mut old = compile(source);
+                        warm_transfer_monitor(&mut old);
+                        old
+                    },
+                    |mut old| {
+                        let candidate = compile_program(black_box(source));
+                        let report = old
+                            .reconfigure(candidate, ContextTransferPolicy::MatchingStreamState)
+                            .unwrap();
+                        black_box(report);
+                        black_box(old);
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
 
@@ -297,16 +313,92 @@ fn bench_runtime_reconfiguration(c: &mut Criterion) {
             BenchmarkId::new("state_transfer_only", streams),
             &source,
             |b, source| {
-                let mut old = compile(source);
-                warm_transfer_monitor(&mut old);
-                let context = old.export_context().unwrap();
-                let mut candidate = compile(source);
-                b.iter(|| {
-                    let report = candidate
-                        .import_context(&context, ContextTransferPolicy::Compatible)
-                        .unwrap();
-                    black_box(report);
-                });
+                b.iter_batched(
+                    || {
+                        let mut old = compile(source);
+                        warm_transfer_monitor(&mut old);
+                        let candidate = compile_program(source);
+                        (old, candidate)
+                    },
+                    |(mut old, candidate)| {
+                        let report = old
+                            .reconfigure(candidate, ContextTransferPolicy::MatchingStreamState)
+                            .unwrap();
+                        black_box(report);
+                        black_box(old);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        let target = reconfiguration_target_spec(streams);
+        group.bench_with_input(
+            BenchmarkId::new("compatible_transfer_only", streams),
+            &target,
+            |b, target| {
+                b.iter_batched(
+                    || {
+                        let mut old = compile(&source);
+                        warm_transfer_monitor(&mut old);
+                        let candidate = compile_program(target);
+                        (old, candidate)
+                    },
+                    |(mut old, candidate)| {
+                        let report = old
+                            .reconfigure(candidate, ContextTransferPolicy::MatchingStreamState)
+                            .unwrap();
+                        black_box(report);
+                        black_box(old);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("exact_program_reconfiguration", streams),
+            &source,
+            |b, source| {
+                b.iter_batched(
+                    || {
+                        let mut old = compile(source);
+                        warm_transfer_monitor(&mut old);
+                        let target = compile_program(source);
+                        (old, target)
+                    },
+                    |(mut old, target)| {
+                        let report = old
+                            .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+                            .unwrap();
+                        black_box(report);
+                        black_box(old);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("compatible_program_reconfiguration", streams),
+            &target,
+            |b, target| {
+                b.iter_batched(
+                    || {
+                        let mut old = compile(&source);
+                        warm_transfer_monitor(&mut old);
+                        let target = compile_program(target);
+                        (old, target)
+                    },
+                    |(mut old, target)| {
+                        let report = old
+                            .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+                            .unwrap();
+                        black_box(report);
+                        black_box(old);
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
     }

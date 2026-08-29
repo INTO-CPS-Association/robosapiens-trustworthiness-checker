@@ -4,15 +4,16 @@ use crate::VarName;
 use crate::core::{InputStream, JsonStreamValue, OutputStream};
 use ::core::cfg_select;
 
-use crate::io::MonitorConfig;
+use crate::io::ReconfigurationRequest;
 
 #[derive(Debug)]
 pub(crate) enum MqttInputItem<V> {
     Data(crate::InputBatch<V>),
-    Control(MonitorConfig),
+    Control(ReconfigurationRequest),
 }
 
-type VarTopicMap = BTreeMap<VarName, String>;
+pub(super) type VarTopicMap = BTreeMap<VarName, String>;
+pub(super) type InverseVarTopicMap = BTreeMap<String, VarName>;
 
 /// MQTT client implementation used for input subscriptions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,12 +106,33 @@ pub async fn input_stream<V: JsonStreamValue>(
         .await
 }
 
-fn validate_topic_mapping(
+pub(super) fn invert_topic_mapping(var_topics: &VarTopicMap) -> InverseVarTopicMap {
+    var_topics
+        .iter()
+        .map(|(variable, topic)| (topic.clone(), variable.clone()))
+        .collect()
+}
+
+pub(super) fn validate_topic_mapping(
     var_topics: &VarTopicMap,
     control_topic: Option<&str>,
 ) -> anyhow::Result<()> {
+    if let Some(control_topic) = control_topic {
+        anyhow::ensure!(
+            !control_topic.trim().is_empty(),
+            "MQTT control topic cannot be empty"
+        );
+    }
     let mut mapped_topics = BTreeMap::new();
     for (var, topic) in var_topics {
+        anyhow::ensure!(
+            !var.name().trim().is_empty(),
+            "MQTT input variable cannot be empty"
+        );
+        anyhow::ensure!(
+            !topic.trim().is_empty(),
+            "MQTT input route for `{var}` cannot be empty"
+        );
         if let Some(control_topic) = control_topic
             && topic == control_topic
         {
@@ -146,28 +168,5 @@ mod tests {
             value,
             Value::List(vec![Value::Int(1), Value::Str("two".into())].into())
         );
-    }
-
-    #[test]
-    fn duplicate_topics_are_rejected_before_connecting() {
-        smol::block_on(async {
-            let result = MqttInputBackend::Rumqttc
-                .open_items::<Value>(
-                    "unreachable.invalid",
-                    None,
-                    BTreeMap::from([
-                        (VarName::new("x"), "shared".to_owned()),
-                        (VarName::new("y"), "shared".to_owned()),
-                    ]),
-                    0,
-                    None,
-                )
-                .await;
-            let error = match result {
-                Ok(_) => panic!("duplicate MQTT topics should be rejected"),
-                Err(error) => error,
-            };
-            assert!(error.to_string().contains("mapped to both"));
-        });
     }
 }

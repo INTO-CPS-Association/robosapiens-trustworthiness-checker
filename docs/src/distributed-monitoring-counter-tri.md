@@ -21,7 +21,7 @@ RUST_LOG=INFO cargo run --features ros --   examples/distributed/counter_tri.dsr
 The scheduler's file input is ordinary finite replay input. The adjacent and
 worker nodes below are reconfigurable runtimes, so they use the compact ROS
 route catalog and a live ROS control route instead of `--input-file`. Their
-local `InputSources` set resolves each generation's model inputs; a compact
+local `InputSources` set resolves each session's model inputs; a compact
 spec-only message is sufficient when those routes do not change.
 
 ## Adjacent node command

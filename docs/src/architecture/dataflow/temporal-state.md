@@ -93,26 +93,30 @@ There is no monitor-wide trace archive. State is distributed through persistent 
 | Conditional branch | A separate nested state tree for each branch; commit descends into both. |
 | Direct persistent function call | A nested evaluator and captures-plus-parameters environment; its staged writes join the enclosing commit. |
 | Instantiated first-class temporal function | A call-site evaluator that owns and advances its own temporal state. |
-| Active `dynamic` or `defer` expression | A nested evaluator with fresh operation state, plus an outer-environment shadow maintained by the enclosing node; active `defer` also has a separate retained published-result slot. |
+| Active `dynamic` or `defer` expression | A nested evaluator, plus an outer-environment shadow maintained by the enclosing node; a replacement may receive explicitly mapped owners from its immediate donor, and active `defer` also has a separate retained published-result slot. |
 | Other stateful/lifted operators | Only the last values and control flags required by that operator. |
 
 The top-level evaluator stores current operation results separately from persistent operation state. Nested graphs repeat the same structure. Commit traversal follows ownership: it descends into both conditional states, persistent direct-call evaluators, and active runtime-defined evaluators that require temporal commit.
 
-The environment shadow used by a runtime-defined expression retains current-or-lifted outer values so the nested evaluator can consume the current tick. It is not historical storage and cannot backfill a newly introduced `x[k]` from rows processed before activation. For an active `defer`, the node's published-result slot is separate again: a body `NoVal` reuses the last non-`NoVal` result under outer lifting, but neither that result nor the outer shadow seeds the evaluator's temporal history.
+The environment shadow used by a runtime-defined expression contains current-or-lifted outer values so the nested evaluator can consume the current tick. It is not historical storage. Temporal operators in the runtime-defined body remain evaluator-local. The body's projected history requirements separately retain bounded outer-variable context for a later root reconfiguration; they do not backfill the active evaluator. For an active `defer`, the node's published-result slot is separate again: a body `NoVal` reuses the last non-`NoVal` result under outer lifting.
+
+## History ownership during root reconfiguration
+
+`DataflowMonitor` owns a `HistoryStore` for its effective positive history requirements. Those requirements combine static programs with active runtime-defined bodies after their slots have been projected into the current outer layout. Root reconfiguration uses the environment correspondence in `ReconfigurationMapping` to match live histories by variable identity, then destructively replaces the target history with the source owner and resizes it to the target depth. A deeper target does not invent older samples, a shallower target keeps only the target-visible suffix, and unmatched requirements start cold.
 
 ## Lifetimes and memory bounds
 
-Each syntactic positive delay owns an independent ring whose capacity equals its offset. Repeating `x[2]` twice creates two equivalent but separate two-entry histories. Storage is therefore proportional to the sum of positive offsets across all retained top-level and nested evaluators, plus their small fixed state records.
+Direct positive delays in top-level stream programs can use one monitor history, sized to the maximum effective depth. Active runtime-defined bodies additionally contribute context-retention bounds, while their executing delay operators keep local rings. Positive delays of internal values and recursive outputs are also evaluator-local. Storage is therefore bounded by retained outer-variable context plus the local rings and small fixed state records of retained evaluators.
 
 Important lifetime rules are:
 
 - a statically compiled delay lives as long as its owning evaluator;
 - a persistent branch or call evaluator keeps its delay rings across outer ticks;
-- replacing a `dynamic` expression drops the old evaluator and its history, even if a cached immutable program template is reused;
+- replacing a `dynamic` expression never restores state from its template cache; exact or uniquely mapped evaluator-local owners may move from the immediately preceding active body, while other owners are dropped and start cold;
 - an activated `defer` keeps one evaluator timeline until its enclosing state is reset or dropped; and
-- history retained by another equation is never shared with or copied into a new delay.
+- history retained by another equation is not shared with a new delay during ordinary execution; a root context handoff can move only explicitly mapped `HistoryStore` ownership.
 
-A newly active runtime expression therefore begins collecting history on its activation tick. If it contains `x[k]`, its earliest known result is after `k` successful commits of that evaluator. Existing monitor history cannot make it resolve early.
+A newly active runtime expression starts its own `x[k]` delay timeline unless that exact or compatible delay owner is moved from the immediately preceding active body. Monitor-retained context for `x` never backfills the nested delay. That retained context becomes observable when a root reconfiguration installs a new top-level specification whose matching variable history is transferred. This distinction preserves property-level evaluator semantics while allowing mapped top-level stream histories to continue across a root reconfiguration.
 
 Offsets are converted to platform-sized indices and rings are allocated eagerly. The compiler currently exposes no configurable maximum history size, so a specification or runtime-defined expression can request a large allocation. Memory remains bounded for a fixed set of retained evaluators and offsets, but the chosen bound is input-dependent for `dynamic` expressions and can change when an evaluator is replaced.
 
@@ -120,7 +124,7 @@ Offsets are converted to platform-sized indices and rings are allocated eagerly.
 
 | Concept | Implementation |
 | :------ | :------------- |
-| Per-program state tree | `StreamState`, with parallel `node_values` and `node_states` vectors indexed by `NodeId`. |
+| Per-program state tree | `EvaluatorState`, with parallel `node_values` and `node_states` vectors indexed by `NodeId`. |
 | Delay storage and staging | `NodeState::Delay(DelayState)` or its scalar equivalent. |
 | Guarded stream feedback | Binding rewrites a positive delay of the current output to `StreamOp::RecursiveDelay`. The graph records its node IDs for post-output staging. |
 | Stage during evaluation | `DelayState::read_and_stage_write` for ordinary delay; `stage_recursive_delays` after an enclosing result is known. |

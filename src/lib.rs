@@ -20,6 +20,7 @@ pub use lang::dsrv::{
 };
 pub mod distributed;
 pub mod dsrv_fixtures;
+mod fingerprint;
 pub mod macros;
 pub mod runtime;
 pub mod semantics;

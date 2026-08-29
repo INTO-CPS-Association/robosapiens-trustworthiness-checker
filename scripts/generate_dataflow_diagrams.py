@@ -503,7 +503,7 @@ def specialization_overlay() -> tuple[str, str]:
             78,
             265,
             66,
-            "StreamState",
+            "EvaluatorState",
             fill="blue_fill",
             stroke="blue",
             sublabel="node_values + canonical NodeState",
@@ -605,7 +605,7 @@ def specialization_overlay() -> tuple[str, str]:
     return (
         svg(
             "Mixed scalar specialization beside the canonical graph",
-            "The canonical BoundEvaluationGraph, StreamState, and environment Value row remain authoritative. An optional plan places scalar and canonical instructions side by side. Scalar results mirror to canonical Values. A runtime kind mismatch transfers retained lifting state and permanently deoptimizes only that node, while neighbouring scalar nodes continue.",
+            "The canonical BoundEvaluationGraph, EvaluatorState, and environment Value row remain authoritative. An optional plan places scalar and canonical instructions side by side. Scalar results mirror to canonical Values. A runtime kind mismatch transfers retained lifting state and permanently deoptimizes only that node, while neighbouring scalar nodes continue.",
             1030,
             435,
             "\n".join(parts),
@@ -790,7 +790,7 @@ def lazy_if() -> tuple[str, str]:
                 "then EvaluationGraph",
                 fill="green_fill",
                 stroke="green",
-                sublabel="own persistent StreamState",
+                sublabel="own persistent EvaluatorState",
             ),
             box(
                 310,
@@ -800,7 +800,7 @@ def lazy_if() -> tuple[str, str]:
                 "else EvaluationGraph",
                 fill="orange_fill",
                 stroke="orange",
-                sublabel="own persistent StreamState",
+                sublabel="own persistent EvaluatorState",
             ),
             arrow(225, 100, 310, 84, marker),
             arrow(225, 120, 310, 174, marker),
@@ -852,7 +852,7 @@ def lazy_if() -> tuple[str, str]:
             text(
                 465,
                 386,
-                "Reconfiguration points inside either lazy branch are rejected during compilation",
+                "Reconfigurable expressions inside either lazy branch are rejected during compilation",
                 cls="small",
             ),
         ]
@@ -860,7 +860,7 @@ def lazy_if() -> tuple[str, str]:
     return (
         svg(
             "Conditional evaluation in ordinary and recursive contexts",
-            "Ordinary conditionals evaluate both branch EvaluationGraphs so both persistent StreamStates advance before one result is selected. In recursive call context a Boolean evaluates only its selected branch, while Deferred or NoVal evaluates neither branch. Reconfiguration points inside lazy branches are rejected during compilation.",
+            "Ordinary conditionals evaluate both branch EvaluationGraphs so both persistent EvaluatorStates advance before one result is selected. In recursive call context a Boolean evaluates only its selected branch, while Deferred or NoVal evaluates neither branch. Reconfigurable expressions inside lazy branches are rejected during compilation.",
             930,
             400,
             "\n".join(parts),
@@ -1095,8 +1095,8 @@ def function_call() -> tuple[str, str]:
     )
 
 
-def reconfiguration_points() -> tuple[str, str]:
-    marker = "reconfiguration-points-arrow"
+def reconfigurable_expressions() -> tuple[str, str]:
+    marker = "reconfigurable-expressions-arrow"
 
     def point_box(
         x: int,
@@ -1128,7 +1128,7 @@ def reconfiguration_points() -> tuple[str, str]:
         # Legend: the graph intentionally shows only one inactive potential
         # edge, avoiding the dense all-potential graph used by the scheduler view.
         f'<rect x="35" y="48" width="22" height="18" rx="3" fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="2"/>',
-        text(67, 62, "reconfiguration point", anchor="start", cls="small"),
+        text(67, 62, "reconfigurable expression", anchor="start", cls="small"),
         arrow(255, 57, 315, 57, marker),
         text(327, 62, "active value flow", anchor="start", cls="small"),
         arrow(495, 57, 555, 57, marker, dashed=True),
@@ -1205,14 +1205,14 @@ def reconfiguration_points() -> tuple[str, str]:
     ]
     return (
         svg(
-            "Current value flow through three reconfiguration points",
+            "Current value flow through three reconfigurable expressions",
             "Sensor and baseline feed static stream score. Point one is the defer expression for limit; its current formula score plus ten activates score to limit, while baseline is permitted by the scope but is shown as one dashed inactive edge. The fixed decision equation contains point two and point three. Point two currently reads score and limit, so both feed it. Point three reads enabled. Their Boolean values are combined into the final decision output. Each orange point also names its source input and current formula.",
             920,
             620,
             "\n".join(parts),
             marker,
         ),
-        "Orange boxes are the three reconfiguration points; solid arrows show current producer-to-consumer value flow, while the one dashed arrow is an allowed value source that the current formula does not use.",
+        "Orange boxes are the three reconfigurable expressions; solid arrows show current producer-to-consumer value flow, while the one dashed arrow is an allowed value source that the current formula does not use.",
     )
 
 
@@ -1543,7 +1543,7 @@ DIAGRAMS = {
     "lazy-if": lazy_if,
     "function-binding": function_binding,
     "function-call": function_call,
-    "reconfiguration-points": reconfiguration_points,
+    "reconfigurable-expressions": reconfigurable_expressions,
     "dynamic-dependencies": dynamic_dependencies,
     "dynamic-history": dynamic_history,
     "dynamic-lifecycle": dynamic_lifecycle,

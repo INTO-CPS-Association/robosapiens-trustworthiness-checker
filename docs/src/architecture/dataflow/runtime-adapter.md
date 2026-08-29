@@ -10,7 +10,6 @@ Both the ordinary and the reconfigurable variants share this adapter. This page 
 
 ## The adapter at a glance
 
-![Input batches driving the monitor through DirectDataflowEngine and one OutputWriter](../../assets/dataflow/architecture-runtime-adapter.svg)
 
 **What to notice.** The monitor sits at the centre as a pure row function. Every asynchronous concern—batching, buffering, writer capacity, and sink delivery—lives on one side or the other of it. Logical tick count is decided entirely by the input stream's tick boundaries; nothing in the adapter creates or removes a tick.
 
@@ -21,7 +20,7 @@ Both the ordinary and the reconfigurable variants share this adapter. This page 
 | `InputStream<Value>` | Asynchronously supplies transport batches, each containing one or more logical ticks. |
 | `DataflowMonitor` | Evaluates one row per tick and retains all language state between ticks. |
 | `DirectDataflowEngine` (private) | Converts input ticks into monitor rows and accumulates complete output rows in one contiguous row-major buffer. |
-| `OutputBackendBuilder` / `ResolvedOutput` | Resolves model outputs, auxiliary values, destinations, and routes into generation-specific output interfaces, then opens the writer. |
+| `OutputBackendBuilder` / `ResolvedOutput` | Resolves model outputs, auxiliary values, destinations, and routes into concrete output interfaces, then opens the writer. |
 | `OutputWriter` | Accepts packed `OutputBatch` values for the resolved interface and provides send, flush, and close barriers. |
 | `ExecutionPolicy` | Selects when accumulated rows are submitted to the writer. |
 
@@ -73,9 +72,9 @@ Batching is therefore invisible at the logical interface. Two runs with differen
 | `ExecutionPolicy::Buffered` | Every `DATAFLOW_RUNTIME_BATCH_SIZE` (256) logical ticks, plus a final non-empty partial batch at input EOF. | Amortize `OutputBatch` submission and writer overhead across many rows. |
 | `ExecutionPolicy::Synchronous` | After every logical tick. | Hand that tick's packed output batch to the writer before polling the next input tick. |
 
-The ordinary builder defaults to `Buffered`; the reconfigurable builder defaults to `Synchronous`, because a root command is a barrier and buffered rows must be submitted before the old writer is closed at cutover.
+The ordinary builder defaults to `Buffered`; the reconfigurable builder defaults to `Synchronous`, because a root command is a barrier and buffered rows must be submitted before the active output plan is applied. The active writer is closed only at shutdown or when an incompatible output owner requires replacement.
 
-A policy submission is a boundary **at the writer, not necessarily at the external transport**. `OutputWriter::send` accepts a complete `OutputBatch` without forcing a downstream flush. `OutputWriter::flush` is the completion barrier for accepted batches, and `OutputWriter::close` finalizes the opened output generation. A successful send therefore does not mean a remote transport has persisted or permanently retained the value.
+A policy submission is a boundary **at the writer, not necessarily at the external transport**. `OutputWriter::send` accepts a complete `OutputBatch` without forcing a downstream flush. `OutputWriter::flush` is the completion barrier for accepted batches, and `OutputWriter::close` finalizes the opened output session. A successful send therefore does not mean a remote transport has persisted or permanently retained the value.
 
 `DataflowRuntimeBuilder::controlled_input` wraps an input stream with an `InputController` and selects `Synchronous` for exactly this reason: control acknowledgements are only meaningful if they align with processed logical ticks.
 
@@ -99,13 +98,13 @@ The resulting behaviour:
 | Engine reaches input EOF | One final non-empty packed batch is submitted, then the writer is flushed and closed. |
 | Output writer closes during active processing | Terminal; it is never treated as a successful runtime result. |
 
-A later send failure does not trigger a retry or a new monitor generation. Rows already accepted by the writer are drained by the final writer `flush`/`close` where the backend permits; rows still in the engine's unsent buffer are not emitted on an ordinary monitor or input error. EOF synthesizes no extra ticks, so a monitor value that a `defer` or delay would have produced on a later tick is not drained after the final input row — the stream simply ends.
+A later send failure does not trigger a retry or a replacement monitor. Rows already accepted by the writer are drained by the final writer `flush`/`close` where the backend permits; rows still in the engine's unsent buffer are not emitted on an ordinary monitor or input error. EOF synthesizes no extra ticks, so a monitor value that a `defer` or delay would have produced on a later tick is not drained after the final input row — the stream simply ends.
 
 ### The executor setting
 
 `DataflowRuntimeBuilder::executor` is accepted and ignored. The ordinary runtime spawns no separate worker for the dataflow loop: the engine and writer are polled cooperatively in the caller's future.
 
-The reconfigurable builder requires an executor so `OutputBackendBuilder` can open worker-backed output stages and destinations. The owner loop still owns one `OutputWriter` for the active generation; its `flush` and `close` operations provide the completion barrier rather than a separate output-task session. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
+The reconfigurable builder requires an executor so `OutputBackendBuilder` can open worker-backed output stages and destinations. The owner loop still owns one `OutputPipelineSession` for the active resolution; its flush operation precedes mapped updates, while close is used at shutdown or an output replacement fallback. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
 
 ## What the adapter may not change
 

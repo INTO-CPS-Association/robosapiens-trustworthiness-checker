@@ -1,10 +1,27 @@
 use super::super::execution_plan::{MonitorPlan, StreamSlots};
 use super::super::ir::*;
 use super::super::monitor::DataflowMonitor;
+use super::super::program::DataflowProgram;
 use super::super::*;
 use super::lower::*;
 use crate::lang::core::DepGraph as NamedDependencyGraph;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+
+impl TryFrom<DsrvSpecification> for DataflowProgram {
+    type Error = DataflowCompilationError;
+
+    fn try_from(specification: DsrvSpecification) -> Result<Self, Self::Error> {
+        Self::compile_untyped(specification)
+    }
+}
+
+impl TryFrom<CheckedDsrvSpecification> for DataflowProgram {
+    type Error = DataflowCompilationError;
+
+    fn try_from(specification: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
+        Self::compile_checked(specification)
+    }
+}
 
 impl TryFrom<DsrvSpecification> for DataflowMonitor {
     type Error = DataflowCompilationError;
@@ -22,29 +39,15 @@ impl TryFrom<CheckedDsrvSpecification> for DataflowMonitor {
     }
 }
 
-impl DataflowMonitor {
+impl DataflowProgram {
+    /// Compile a checked specification into an immutable monitor definition.
     pub fn compile_checked(
         specification: CheckedDsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
         Self::compile_specification(specification, build_checked_expression_graph)
     }
 
-    /// Compiles a checked monitor and replaces complete eligible scalar graphs with guarded
-    /// native-code fast paths. Unsupported graphs continue through the canonical interpreter.
-    ///
-    /// This is an opt-in prototype: [`Self::compile_checked`] never enables native graph
-    /// execution, even when the crate is built with the `jit` feature.
-    #[cfg(feature = "jit")]
-    pub fn compile_checked_with_jit(
-        specification: CheckedDsrvSpecification,
-        config: JitConfig,
-    ) -> Result<Self, DataflowCompilationError> {
-        let mut monitor =
-            Self::compile_specification(specification, build_checked_expression_graph)?;
-        monitor.enable_jit(config);
-        Ok(monitor)
-    }
-
+    /// Compile an unchecked specification into an immutable monitor definition.
     pub fn compile_untyped(
         specification: DsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
@@ -61,10 +64,40 @@ impl DataflowMonitor {
         let input_variables = specification.input_vars().into_iter().collect::<Vec<_>>();
         let output_variables = specification.output_vars().into_iter().collect::<Vec<_>>();
         let stream_variables = specification.stream_vars();
+        let type_annotations = specification.type_annotations();
         let dataflow = LoweredDataflow::build(&input_variables, &stream_variables, |variable| {
             specification.var_expr(variable).map(&build_graph)
         })?;
-        dataflow.into_monitor(input_variables, output_variables)
+        dataflow.into_program(input_variables, output_variables, type_annotations)
+    }
+}
+
+impl DataflowMonitor {
+    pub fn compile_checked(
+        specification: CheckedDsrvSpecification,
+    ) -> Result<Self, DataflowCompilationError> {
+        DataflowProgram::compile_checked(specification).map(Self::from_program)
+    }
+
+    /// Compiles a checked monitor and replaces complete eligible scalar graphs with guarded
+    /// native-code fast paths. Unsupported graphs continue through the canonical interpreter.
+    ///
+    /// This is an opt-in prototype: [`Self::compile_checked`] never enables native graph
+    /// execution, even when the crate is built with the `jit` feature.
+    #[cfg(feature = "jit")]
+    pub fn compile_checked_with_jit(
+        specification: CheckedDsrvSpecification,
+        config: JitConfig,
+    ) -> Result<Self, DataflowCompilationError> {
+        let mut monitor = Self::from_program(DataflowProgram::compile_checked(specification)?);
+        monitor.enable_jit(config);
+        Ok(monitor)
+    }
+
+    pub fn compile_untyped(
+        specification: DsrvSpecification,
+    ) -> Result<Self, DataflowCompilationError> {
+        DataflowProgram::compile_untyped(specification).map(Self::from_program)
     }
 }
 
@@ -101,7 +134,11 @@ impl LoweredDataflow {
         for variable in stream_variables {
             let mut graph = build_graph(variable)
                 .ok_or_else(|| DataflowCompilationError::MissingExpression(variable.clone()))?;
-            graph.resolve_automatic_dynamic_scopes(variable, input_variables, stream_variables);
+            graph.resolve_automatic_reconfigurable_scopes(
+                variable,
+                input_variables,
+                stream_variables,
+            );
             let unavailable_variables = graph
                 .free_vars(Some(variable))
                 .into_iter()
@@ -146,11 +183,12 @@ impl LoweredDataflow {
         })
     }
 
-    fn into_monitor(
+    fn into_program(
         self,
         input_variables: Vec<VarName>,
         output_variables: Vec<VarName>,
-    ) -> Result<DataflowMonitor, DataflowCompilationError> {
+        type_annotations: BTreeMap<VarName, StreamType>,
+    ) -> Result<DataflowProgram, DataflowCompilationError> {
         let OrderedDataflow {
             streams,
             static_dependencies,
@@ -159,11 +197,12 @@ impl LoweredDataflow {
             .iter()
             .map(|stream| stream.name.clone())
             .collect::<Vec<_>>();
-        let environment_layout = Rc::new(EnvironmentLayout::from_variables(
+        let environment_layout = Rc::new(EnvironmentLayout::from_variables_with_types(
             input_variables
                 .iter()
                 .cloned()
                 .chain(streams.iter().map(|stream| stream.name.clone())),
+            &type_annotations,
         ));
         let output_slots = output_variables
             .iter()
@@ -195,7 +234,7 @@ impl LoweredDataflow {
             &static_dependencies,
             &stream_programs,
         )?;
-        Ok(DataflowMonitor::new(
+        Ok(DataflowProgram::from_parts(
             input_variables,
             output_variables,
             output_slots,

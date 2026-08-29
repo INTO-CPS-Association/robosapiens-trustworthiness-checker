@@ -2,12 +2,12 @@ use std::{borrow::Borrow, rc::Rc};
 
 use crate::core::{JsonStreamValue, OutputError, OutputWriter, RosStreamValue};
 use crate::io::config::{
-    DestinationConfig, DestinationId, DestinationKind, MonitorConfig, OutputConfigFile,
+    DestinationConfig, DestinationId, DestinationKind, OutputConfigFile, OutputConfiguration,
     OutputStageConfig,
 };
 use crate::io::output::{
-    OutputBackendConfig, OutputDestination, OutputDestinations, OutputPipeline, OutputStage,
-    ResolvedOutput,
+    OutputBackendConfig, OutputDestination, OutputDestinations, OutputPipeline,
+    OutputPipelineSession, OutputStage, ResolvedOutput,
 };
 use crate::{Value, VarName};
 
@@ -105,7 +105,7 @@ impl<V> OutputBackendBuilder<V> {
         &self,
         model_outputs: I,
         auxiliary: A,
-        monitor_config: Option<&MonitorConfig>,
+        output_configuration: Option<&OutputConfiguration>,
     ) -> anyhow::Result<ResolvedOutput>
     where
         I: IntoIterator,
@@ -114,14 +114,14 @@ impl<V> OutputBackendBuilder<V> {
         A::Item: Borrow<VarName>,
     {
         self.pipeline
-            .resolve(model_outputs, auxiliary, monitor_config)
+            .resolve(model_outputs, auxiliary, output_configuration)
     }
 
     pub async fn build<I, A>(
         &self,
         model_outputs: I,
         auxiliary: A,
-        monitor_config: Option<&MonitorConfig>,
+        output_configuration: Option<&OutputConfiguration>,
     ) -> Result<OutputWriter<V>, OutputError>
     where
         I: IntoIterator,
@@ -131,17 +131,17 @@ impl<V> OutputBackendBuilder<V> {
         V: JsonStreamValue + RosStreamValue,
     {
         self.pipeline
-            .build(model_outputs, auxiliary, monitor_config)
+            .build(model_outputs, auxiliary, output_configuration)
             .await
     }
 
     /// Fallible replacement-construction alias for callers that do not need
-    /// to retain the resolved generation separately.
+    /// to retain the resolved output separately.
     pub async fn try_build<I, A>(
         &self,
         model_outputs: I,
         auxiliary: A,
-        monitor_config: Option<&MonitorConfig>,
+        output_configuration: Option<&OutputConfiguration>,
     ) -> Result<OutputWriter<V>, OutputError>
     where
         I: IntoIterator,
@@ -150,7 +150,8 @@ impl<V> OutputBackendBuilder<V> {
         A::Item: Borrow<VarName>,
         V: JsonStreamValue + RosStreamValue,
     {
-        self.build(model_outputs, auxiliary, monitor_config).await
+        self.build(model_outputs, auxiliary, output_configuration)
+            .await
     }
 
     pub async fn open(&self, resolved: ResolvedOutput) -> Result<OutputWriter<V>, OutputError>
@@ -158,6 +159,16 @@ impl<V> OutputBackendBuilder<V> {
         V: JsonStreamValue + RosStreamValue,
     {
         self.pipeline.open(resolved).await
+    }
+
+    pub async fn open_session(
+        &self,
+        resolved: ResolvedOutput,
+    ) -> Result<OutputPipelineSession<V>, OutputError>
+    where
+        V: JsonStreamValue + RosStreamValue,
+    {
+        self.pipeline.open_session(resolved).await
     }
 
     /// Parse durable local output configuration into a resource-free builder.

@@ -2,29 +2,35 @@
 #[cfg(feature = "ros")]
 mod integration_tests {
     use std::collections::BTreeMap;
-
-    use futures::StreamExt;
-
-    use macro_rules_attribute::apply;
-    use r2r::std_msgs::msg::Int32;
-    use smol::LocalExecutor;
     use std::rc::Rc;
+    use std::time::Duration;
+
+    use async_unsync::bounded;
+    use futures::{FutureExt, StreamExt, future};
+    use macro_rules_attribute::apply;
+    use r2r::{
+        WrappedTypesupport,
+        std_msgs::msg::{Int32, String as RosString},
+    };
+    use smol::LocalExecutor;
     use tc_testutils::ros::generate_xy_test_publisher_tasks_with_topics;
     use tc_testutils::ros::qualified_ros_name;
     use tc_testutils::ros::recv_ros_int_stream;
-    use tc_testutils::streams::expect_events_serially;
+    use tc_testutils::streams::{expect_events_serially, with_timeout};
     use tracing::info;
-    use trustworthiness_checker::OutputBatch;
-    use trustworthiness_checker::Value;
-    use trustworthiness_checker::VarName;
     use trustworthiness_checker::async_test;
+    use trustworthiness_checker::core::{ExecutionPolicy, Runtime, RuntimeSpec, Semantics};
     use trustworthiness_checker::io::ros;
     use trustworthiness_checker::io::ros::ros_topic_stream_mapping::{
         RosMsgType, VariableMappingData,
     };
     use trustworthiness_checker::io::{
-        CodecId, OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route,
+        CodecId, InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
+        OutputDestination, Route,
     };
+    use trustworthiness_checker::runtime::dataflow::ReconfigurationAck;
+    use trustworthiness_checker::utils::cancellation_token::CancellationToken;
+    use trustworthiness_checker::{DsrvSpecification, OutputBatch, OutputStream, Value, VarName};
 
     #[apply(async_test)]
     async fn test_add_monitor_ros_input(ex: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -193,6 +199,322 @@ mod integration_tests {
         assert_eq!(z_actual_output, z_expected_output);
         writer.close().await?;
 
+        Ok(())
+    }
+
+    struct RosTestPublisher<T: WrappedTypesupport + 'static> {
+        publisher: r2r::Publisher<T>,
+        topic: String,
+        cancellation: CancellationToken,
+        _spinner: smol::Task<()>,
+    }
+
+    impl<T: WrappedTypesupport + 'static> RosTestPublisher<T> {
+        fn new(
+            executor: Rc<LocalExecutor<'static>>,
+            node_name: String,
+            topic: String,
+        ) -> anyhow::Result<Self> {
+            let context = r2r::Context::create()
+                .map_err(|error| anyhow::anyhow!("failed to create ROS context: {error:?}"))?;
+            let mut node = r2r::Node::create(context, node_name.as_str(), "")
+                .map_err(|error| anyhow::anyhow!("failed to create ROS node: {error:?}"))?;
+            let publisher = node
+                .create_publisher::<T>(&topic, r2r::QosProfile::default())
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to create ROS publisher on `{topic}`: {error:?}")
+                })?;
+
+            let cancellation = CancellationToken::new();
+            let cancellation_for_spinner = cancellation.clone();
+            let spinner = executor.spawn(async move {
+                let mut cancelled = cancellation_for_spinner.cancelled().fuse();
+                loop {
+                    futures::select_biased! {
+                        _ = cancelled => break,
+                        _ = smol::future::yield_now().fuse() => {
+                            node.spin_once(Duration::from_millis(0));
+                        }
+                    }
+                }
+            });
+
+            Ok(Self {
+                publisher,
+                topic,
+                cancellation,
+                _spinner: spinner,
+            })
+        }
+
+        async fn wait_for_subscribers(&self, label: &str) -> anyhow::Result<()> {
+            let wait_for_subscribers = self
+                .publisher
+                .wait_for_inter_process_subscribers()
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to wait for ROS subscribers on `{}`: {error:?}",
+                        self.topic
+                    )
+                })?;
+            let result = with_timeout(wait_for_subscribers, 5, label).await?;
+            result.map_err(|error| {
+                anyhow::anyhow!(
+                    "waiting for ROS subscribers on `{}` failed: {error:?}",
+                    self.topic
+                )
+            })?;
+            Ok(())
+        }
+
+        fn publish(&self, value: T) -> anyhow::Result<()> {
+            self.publisher.publish(&value).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to publish ROS message on `{}`: {error:?}",
+                    self.topic
+                )
+            })
+        }
+    }
+
+    impl<T: WrappedTypesupport + 'static> Drop for RosTestPublisher<T> {
+        fn drop(&mut self) {
+            self.cancellation.cancel();
+        }
+    }
+
+    struct RosIntSubscriber {
+        stream: OutputStream<Int32>,
+        cancellation: CancellationToken,
+        _spinner: smol::Task<()>,
+    }
+
+    impl RosIntSubscriber {
+        fn new(
+            executor: Rc<LocalExecutor<'static>>,
+            node_name: String,
+            topic: String,
+        ) -> anyhow::Result<Self> {
+            let context = r2r::Context::create()
+                .map_err(|error| anyhow::anyhow!("failed to create ROS context: {error:?}"))?;
+            let mut node = r2r::Node::create(context, node_name.as_str(), "")
+                .map_err(|error| anyhow::anyhow!("failed to create ROS node: {error:?}"))?;
+            let stream = node
+                .subscribe::<Int32>(&topic, r2r::QosProfile::default())
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to subscribe to ROS topic `{topic}`: {error:?}")
+                })?
+                .boxed_local();
+
+            let cancellation = CancellationToken::new();
+            let cancellation_for_spinner = cancellation.clone();
+            let spinner = executor.spawn(async move {
+                let mut cancelled = cancellation_for_spinner.cancelled().fuse();
+                loop {
+                    futures::select_biased! {
+                        _ = cancelled => break,
+                        _ = smol::future::yield_now().fuse() => {
+                            node.spin_once(Duration::from_millis(0));
+                        }
+                    }
+                }
+            });
+
+            Ok(Self {
+                stream,
+                cancellation,
+                _spinner: spinner,
+            })
+        }
+
+        async fn next_with_timeout(&mut self, timeout: Duration) -> Option<i32> {
+            let next = self.stream.next().fuse();
+            let timer = futures::FutureExt::fuse(smol::Timer::after(timeout));
+            futures::pin_mut!(next, timer);
+            futures::select! {
+                message = next => message.map(|message| message.data),
+                _ = timer => None,
+            }
+        }
+    }
+
+    impl Drop for RosIntSubscriber {
+        fn drop(&mut self) {
+            self.cancellation.cancel();
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_reconfigurable_dataflow_ros_live_session_switches_topics(
+        ex: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let input_a_topic = format!("/reconf_dataflow_input_a_{suffix}");
+        let input_b_topic = format!("/reconf_dataflow_input_b_{suffix}");
+        let control_topic = format!("/reconf_dataflow_control_{suffix}");
+        let output_a_topic = format!("/reconf_dataflow_output_a_{suffix}");
+        let output_b_topic = format!("/reconf_dataflow_output_b_{suffix}");
+        let specification = "in x: Int\nout z: Int\nz = x";
+
+        let mut output_a = RosIntSubscriber::new(
+            ex.clone(),
+            qualified_ros_name(
+                test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                "output_a_receiver",
+            ),
+            output_a_topic.clone(),
+        )?;
+        let mut output_b = RosIntSubscriber::new(
+            ex.clone(),
+            qualified_ros_name(
+                test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                "output_b_receiver",
+            ),
+            output_b_topic.clone(),
+        )?;
+
+        let input_source = InputSource::<Value>::ros(
+            BTreeMap::from([(
+                VarName::new("x"),
+                Route::new(
+                    input_a_topic.clone().into_boxed_str(),
+                    Some(CodecId::new("Int32")),
+                )?,
+            )]),
+            ex.clone(),
+        )
+        .with_reconfiguration_route(control_topic.clone().into_boxed_str())?;
+        let output_builder = OutputBackendBuilder::<Value>::from_destination(
+            OutputDestination::new(
+                "ros",
+                OutputBackendConfig::ros(
+                    ex.clone(),
+                    qualified_ros_name(
+                        test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                        "output",
+                    ),
+                ),
+            )
+            .with_route_catalog(BTreeMap::from([(
+                VarName::new("z"),
+                Route::new(
+                    output_a_topic.clone().into_boxed_str(),
+                    Some(CodecId::new("Int32")),
+                )?,
+            )])),
+        );
+
+        let input_a_publisher = RosTestPublisher::<Int32>::new(
+            ex.clone(),
+            qualified_ros_name(
+                test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                "input_a_publisher",
+            ),
+            input_a_topic.clone(),
+        )?;
+        let control_publisher = RosTestPublisher::<RosString>::new(
+            ex.clone(),
+            qualified_ros_name(
+                test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                "control_publisher",
+            ),
+            control_topic.clone(),
+        )?;
+
+        let spec = specification.parse::<DsrvSpecification>()?;
+        let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
+        let runtime = trustworthiness_checker::runtime::GeneralRuntimeBuilder::new()
+            .executor(ex.clone())
+            .model(spec)
+            .input_pipeline(InputPipeline::new(input_source))?
+            .output_pipeline_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
+            .semantics(Semantics::TypedUntimed)
+            .reconf_topic(control_topic.clone())
+            .acknowledgements(ack_tx)
+            .build()
+            .await?;
+        let runtime_task = ex.spawn(runtime.run());
+
+        input_a_publisher
+            .wait_for_subscribers("ROS data input topic A subscription")
+            .await?;
+        input_a_publisher.publish(Int32 { data: 1 })?;
+        let initial_output = output_a
+            .next_with_timeout(Duration::from_secs(5))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("ROS output on OUT_A did not arrive"))?;
+        assert_eq!(initial_output, 1);
+
+        control_publisher
+            .wait_for_subscribers("ROS String control topic subscription")
+            .await?;
+        let request = serde_json::json!({
+            "specification": specification,
+            "input": {
+                "source": "default",
+                "inputs": {"x": [input_b_topic.clone(), "Int32"]},
+            },
+            "output": {
+                "outputs": {"z": [output_b_topic.clone(), "Int32"]},
+            },
+        })
+        .to_string();
+        control_publisher.publish(RosString { data: request })?;
+        let acknowledgement = with_timeout(
+            ack_rx.recv(),
+            5,
+            "ROS dataflow reconfiguration acknowledgement",
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ROS dataflow acknowledgement channel closed"))?;
+        assert!(!acknowledgement.monitor_changed);
+        assert!(acknowledgement.interface_changed);
+
+        let input_b_publisher = RosTestPublisher::<Int32>::new(
+            ex.clone(),
+            qualified_ros_name(
+                test_reconfigurable_dataflow_ros_live_session_switches_topics,
+                "input_b_publisher",
+            ),
+            input_b_topic,
+        )?;
+        input_b_publisher
+            .wait_for_subscribers("ROS data input topic B subscription")
+            .await?;
+
+        input_a_publisher.publish(Int32 { data: 100 })?;
+        let (old_output_a, old_output_b) = future::join(
+            output_a.next_with_timeout(Duration::from_secs(2)),
+            output_b.next_with_timeout(Duration::from_secs(2)),
+        )
+        .await;
+        assert!(
+            old_output_a.is_none(),
+            "the old input topic must not produce output on OUT_A after the acknowledgement barrier"
+        );
+        assert!(
+            old_output_b.is_none(),
+            "the old input topic must not drive the new OUT_B route after the acknowledgement barrier"
+        );
+
+        input_b_publisher.publish(Int32 { data: 3 })?;
+        let (post_barrier_output_a, post_barrier_output_b) = future::join(
+            output_a.next_with_timeout(Duration::from_secs(2)),
+            output_b.next_with_timeout(Duration::from_secs(5)),
+        )
+        .await;
+        assert!(
+            post_barrier_output_a.is_none(),
+            "post-barrier output must not appear on OUT_A"
+        );
+        assert_eq!(post_barrier_output_b, Some(3));
+
+        let runtime_result =
+            with_timeout(runtime_task.cancel(), 5, "ROS dataflow runtime shutdown").await?;
+        if let Some(runtime_result) = runtime_result {
+            runtime_result?;
+        }
         Ok(())
     }
 }

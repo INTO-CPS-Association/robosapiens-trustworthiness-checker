@@ -1025,7 +1025,7 @@ mod reconf_tests {
 
         let reconf_stream = futures::stream::once(async {
             json!({
-                "spec": spec_simple_add_monitor_plus_one()
+                "specification": spec_simple_add_monitor_plus_one()
             })
             .to_string()
         })
@@ -1215,7 +1215,7 @@ mod reconf_tests {
 
         let reconf_stream = futures::stream::once(async {
             json!({
-                "spec": spec_simple_add_monitor()
+                "specification": spec_simple_add_monitor()
             })
             .to_string()
         })
@@ -1298,4 +1298,217 @@ mod reconf_tests {
     }
 
     // TODO: MHK - Implement test with topic mapping (currently unsupported for MQTT)
+}
+
+#[cfg(feature = "testcontainers")]
+#[cfg(test)]
+mod reconf_dataflow_mqtt_tests {
+    use async_compat::Compat as TokioCompat;
+    use async_unsync::bounded;
+    use futures::{StreamExt, stream};
+    use macro_rules_attribute::apply;
+    use serde_json::json;
+    use smol::LocalExecutor;
+    use std::{collections::BTreeMap, rc::Rc};
+    use tc_testutils::mqtt::{
+        dummy_mqtt_publisher, dummy_stream_mqtt_payload_publisher, get_mqtt_outputs, start_mqtt,
+    };
+    use tc_testutils::streams::{with_timeout, with_timeout_res};
+    use trustworthiness_checker::async_test;
+    use trustworthiness_checker::core::{ExecutionPolicy, Runtime, RuntimeSpec, Semantics};
+
+    use trustworthiness_checker::io::mqtt::MqttInputBackend;
+    use trustworthiness_checker::io::{
+        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, OutputDestination,
+        Route,
+    };
+    use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
+    use trustworthiness_checker::runtime::dataflow::ReconfigurationAck;
+    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+
+    const INPUT_A: &str = "reconf-dataflow/input-a";
+    const INPUT_B: &str = "reconf-dataflow/input-b";
+    const OUT_A: &str = "reconf-dataflow/output-a";
+    const OUT_B: &str = "reconf-dataflow/output-b";
+    const CONTROL_TOPIC: &str = "reconf-dataflow/control";
+    const SPECIFICATION: &str = "in x\nout z\nz = x";
+
+    fn route(topic: &str) -> Route {
+        Route::new(topic.to_owned().into_boxed_str(), None)
+            .expect("test MQTT route should be non-empty")
+    }
+
+    fn mqtt_output_builder(port: u16) -> OutputBackendBuilder<Value> {
+        let destination =
+            OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
+                .with_route_catalog(BTreeMap::from([(VarName::new("z"), route(OUT_A))]));
+        OutputBackendBuilder::from_destination(destination)
+    }
+
+    async fn exercise_reconf_dataflow_mqtt(
+        executor: Rc<LocalExecutor<'static>>,
+        backend: MqttInputBackend,
+    ) -> anyhow::Result<()> {
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = with_timeout_res(
+            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+            5,
+            "get_host_port",
+        )
+        .await?;
+
+        // Subscribe before opening the runtime so the initial output cannot race the subscriber.
+        let mut out_a = with_timeout(
+            get_mqtt_outputs(
+                OUT_A.to_owned(),
+                "reconf_dataflow_out_a_subscriber".to_owned(),
+                mqtt_port,
+            ),
+            5,
+            "OUT_A subscriber",
+        )
+        .await?;
+        let mut out_b = with_timeout(
+            get_mqtt_outputs(
+                OUT_B.to_owned(),
+                "reconf_dataflow_out_b_subscriber".to_owned(),
+                mqtt_port,
+            ),
+            5,
+            "OUT_B subscriber",
+        )
+        .await?;
+
+        let input_source = InputSource::mqtt_with_routes(
+            Some(BTreeMap::from([(VarName::new("x"), route(INPUT_A))])),
+            Some(mqtt_port),
+            backend,
+        )
+        .with_reconfiguration_route(CONTROL_TOPIC)?;
+        let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
+        let spec = SPECIFICATION
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+
+        let runtime = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input_pipeline(InputPipeline::new(input_source))?
+            .output_pipeline_builder(mqtt_output_builder(mqtt_port))
+            .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
+            .semantics(Semantics::Untimed)
+            .reconf_topic(CONTROL_TOPIC.to_owned())
+            .acknowledgements(ack_tx)
+            .build()
+            .await?;
+        executor.spawn(runtime.run()).detach();
+
+        with_timeout_res(
+            dummy_mqtt_publisher(
+                "reconf_dataflow_initial_input".to_owned(),
+                INPUT_A.to_owned(),
+                vec![Value::Int(1)],
+                mqtt_port,
+            ),
+            5,
+            "initial input publisher",
+        )
+        .await?;
+        let initial_output = with_timeout(out_a.next(), 5, "initial OUT_A output").await?;
+        assert_eq!(initial_output, Some(Value::Int(1)));
+
+        let request = json!({
+            "specification": SPECIFICATION,
+            "input": {
+                "source": "default",
+                "inputs": { "x": INPUT_B },
+            },
+            "output": {
+                "outputs": { "z": OUT_B },
+            },
+        })
+        .to_string();
+        let control_publisher = executor.spawn(with_timeout_res(
+            dummy_stream_mqtt_payload_publisher(
+                "reconf_dataflow_control".to_owned(),
+                CONTROL_TOPIC.to_owned(),
+                stream::once(async move { request }).boxed_local(),
+                1,
+                mqtt_port,
+            ),
+            5,
+            "reconfiguration publisher",
+        ));
+
+        let acknowledgement = with_timeout(ack_rx.recv(), 5, "reconfiguration acknowledgement")
+            .await
+            .expect("reconfiguration acknowledgement should arrive")
+            .expect("reconfiguration acknowledgement channel should remain open");
+        assert!(!acknowledgement.monitor_changed);
+        assert!(acknowledgement.interface_changed);
+        with_timeout_res(control_publisher, 5, "reconfiguration publisher task").await?;
+
+        // Both output subscribers must stay quiet for an old-topic publish after the barrier. The
+        // OUT_B assertion also catches an input cutover that accidentally leaves the old topic live.
+        with_timeout_res(
+            dummy_mqtt_publisher(
+                "reconf_dataflow_old_input".to_owned(),
+                INPUT_A.to_owned(),
+                vec![Value::Int(2)],
+                mqtt_port,
+            ),
+            5,
+            "old input publisher",
+        )
+        .await?;
+        let (old_route_output, new_route_output) = futures::join!(
+            with_timeout(out_a.next(), 1, "output on old route after cutover"),
+            with_timeout(out_b.next(), 1, "output on new route from old input"),
+        );
+        assert!(
+            old_route_output.is_err(),
+            "old input topic must not produce output on OUT_A"
+        );
+        assert!(
+            new_route_output.is_err(),
+            "old input topic must not produce output on OUT_B"
+        );
+
+        with_timeout_res(
+            dummy_mqtt_publisher(
+                "reconf_dataflow_new_input".to_owned(),
+                INPUT_B.to_owned(),
+                vec![Value::Int(3)],
+                mqtt_port,
+            ),
+            5,
+            "new input publisher",
+        )
+        .await?;
+        let new_output = with_timeout(out_b.next(), 5, "new OUT_B output").await?;
+        assert_eq!(new_output, Some(Value::Int(3)));
+
+        let old_route_after_new_input =
+            with_timeout(out_a.next(), 1, "output on old route after new input").await;
+        assert!(
+            old_route_after_new_input.is_err(),
+            "post-acknowledgement output must use only OUT_B"
+        );
+
+        Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_dataflow_mqtt_paho_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        exercise_reconf_dataflow_mqtt(executor, MqttInputBackend::Paho).await
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_dataflow_mqtt_rumqttc_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        exercise_reconf_dataflow_mqtt(executor, MqttInputBackend::Rumqttc).await
+    }
 }

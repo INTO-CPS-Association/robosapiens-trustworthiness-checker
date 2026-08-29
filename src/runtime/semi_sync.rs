@@ -72,7 +72,7 @@ where
         self
     }
 
-    /// Supply an already-open sink for a fixed semisync generation.
+    /// Supply an already-open sink for a fixed semisync run.
     pub fn output_writer(mut self, writer: OutputWriter<AC::Val>) -> Self {
         self.output_writer = Some(writer);
         self

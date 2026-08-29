@@ -74,7 +74,7 @@ This is deliberately exact. The allowed scope is an authorization boundary, not 
 
 ## Immutable templates, fresh evaluator state
 
-Each dynamic node owns a `DynamicExpressionState` with a **four-entry linear LRU** of immutable `DynamicExpressionTemplate` values. The cache is local to that node and keyed by exact source text.
+Each dynamic node owns a `DynamicExpressionState` with a **four-entry linear LRU** of immutable `DynamicExpressionTemplate` values. The cache is local to that node and keyed by exact source text within the same compiled outer layout. A root transfer may keep an active old-layout template through its explicit projection, but a later activation does not treat that template as a cache hit in the new layout.
 
 A template contains:
 
@@ -83,9 +83,9 @@ A template contains:
 - exact same-tick `dependency_slots`; and
 - all `environment_slots` needed to evaluate it.
 
-The most recently used template is at the front. A hit moves the entry to the front. A miss parses, optionally runtime-type-checks, validates the scope, binds a new program, inserts it at the front, and truncates the cache to four entries.
+The most recently used template is at the end. A hit moves the entry to the end. A miss parses, optionally runtime-type-checks, validates the scope, binds a new program, appends it, and evicts the oldest entry when necessary.
 
-Templates contain no mutable language state. Every activation—even a cache hit after another source was active—constructs a **fresh `StreamEvaluator`**. Delay rings, lifting state, branch state, and other temporal state therefore restart for that activation. Reusing a template avoids parse/lower/bind work; it does not resume an earlier activation. Repeating the text that is already active is `Unchanged` and keeps the existing evaluator state.
+Templates contain no mutable language state. Every activation—even a cache hit after another source was active—constructs a **fresh target `Evaluator`**. Template reuse therefore never resumes the evaluator from an earlier activation. The current active body may instead donate exact or uniquely matched state owners under `Compatible` or `Strict`; unmatched owners remain freshly initialized, and `None` keeps the whole target cold. Repeating the text that is already active is `Unchanged` and keeps the existing evaluator directly.
 
 ![Dynamic history is activation-local](../../assets/dataflow/dynamic-history.svg)
 
@@ -103,7 +103,7 @@ Templates contain no mutable language state. Every activation—even a cache hit
 Two reference-count families make shared cases precise:
 
 - `source_user_refcounts[stream]` counts unsealed points whose source-prerequisite closure contains the stream. A prerequisite leaves the source range only when this count reaches zero.
-- `live_point_refcounts[stream]` counts unresolved points in a containing stream. That stream leaves the resolution set only after all of its `defer` points are sealed; a `dynamic` point remains live.
+- `live_expression_refcounts[stream]` counts unresolved expressions in a containing stream. That stream leaves the resolution set only after all of its `defer` points are sealed; a `dynamic` point remains live.
 
 Consequently, sealing one `defer` cannot remove a source stream still needed by another `defer` or `dynamic`. Released prerequisite streams are not deleted: they move into the next plan's main range, preserving the invariant that every logical stream evaluates once per tick.
 
@@ -116,9 +116,11 @@ Reconfigurable monitors maintain two environment rows:
 
 `Deferred` is a value and is retained; only `NoVal` means “do not replace the retained entry.” Static monitors do not allocate this second row.
 
-Before a nested dynamic evaluator runs or commits, its environment shadow is updated only at the active template's `environment_slots`. For each such slot, the current value wins unless it is `NoVal`; in that case the retained value is used. This preserves stream-lifting semantics across sparse outer rows without retaining complete trace history.
+Before a nested expression `Evaluator` runs or commits, its environment shadow is updated only through the active body's `EnvironmentProjection`. Each compact binding contains a nested compiled slot and its current outer slot. The current outer value wins unless it is `NoVal`; in that case the retained outer value is copied into the nested slot. Normal ticks therefore perform only indexed copies and never resolve variable names.
 
-Retained environment values, the installed source definition, the active body's temporal history, and an active `defer`'s retained published result are different mechanisms. The environment row supplies outer inputs; it does not seed a newly activated `x[k]` delay ring or replace the body's published-result slot. A newly activated expression containing `x[k]` gets a fresh delay ring and must collect its own `k` successful samples. It cannot seed that ring from another stream's history or from the retained row.
+The same projection stores dependency slots and history requirements in the current outer layout. On root transfer, preparation rebuilds it by variable identity before the old nested evaluator is moved; scheduler repair and history sizing consume those projected slots. This lets a body compiled against an old dense layout continue unchanged after inputs or computed streams move.
+
+Retained environment values, the installed source definition, evaluator-local temporal state, monitor context history, and an active `defer`'s retained published result are different mechanisms. A runtime-defined body's delays remain local to its nested evaluator. New delay owners start cold, while owners matched to the immediately preceding active body may move into the fresh target evaluator under the selected transfer policy. Projected history requirements additionally tell the outer monitor which bounded variable history to retain for a later specification-level context transfer; multiple bodies can contribute to one retained bound without reading one another's evaluator-local delay state.
 
 ![History retention boundaries](../../assets/dataflow/history-retention.svg)
 
@@ -140,7 +142,7 @@ Once tick execution has begun, parse, type, scope, source, nested-reconfiguratio
 
 ## Continue reading
 
-Nested replacement is one half of a shared mechanism. [The reconfigurable runtime](reconfigurable-runtime.md) covers the other half — replacing the whole definition — and [The replacement contract](replacement-contract.md) defines the activation frontier both paths validate against.
+Expression reconfiguration is one half of a shared mechanism. [The reconfigurable runtime](reconfigurable-runtime.md) covers the other half — replacing the whole definition — and [The replacement contract](replacement-contract.md) defines the activation frontier both paths validate against.
 
 - [Execution model](model.md) defines ticks, dependency order, stable slots, and evaluator identity.
 - [Temporal state](temporal-state.md) explains staging, commit, delay rings, and history ownership.

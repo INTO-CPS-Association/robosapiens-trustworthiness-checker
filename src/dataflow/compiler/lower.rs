@@ -211,30 +211,34 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
                 key: key.clone(),
             })
         }
-        Dynamic(source, _, scope) => lower_dynamic_expression(
-            builder,
-            source,
-            DynamicExpressionScope::from_ast(scope.clone()),
-            DynamicExpressionMode::Dynamic,
-            expr.shared_type_environment()
-                .zip(expr.typ())
-                .map(|(environment, expected_type)| DynamicExpressionTyping {
-                    environment: Rc::clone(environment),
-                    expected_type: expected_type.clone(),
-                }),
-        ),
-        Defer(source, _, scope) => lower_dynamic_expression(
-            builder,
-            source,
-            DynamicExpressionScope::from_ast(scope.clone()),
-            DynamicExpressionMode::Defer,
-            expr.shared_type_environment()
-                .zip(expr.typ())
-                .map(|(environment, expected_type)| DynamicExpressionTyping {
-                    environment: Rc::clone(environment),
-                    expected_type: expected_type.clone(),
-                }),
-        ),
+        Dynamic(source, _, scope) => {
+            lower_reconfigurable_expression(
+                builder,
+                source,
+                ReconfigurableExpressionScope::from_ast(scope.clone()),
+                ReconfigurableExpressionKind::Dynamic,
+                expr.shared_type_environment().zip(expr.typ()).map(
+                    |(environment, expected_type)| ReconfigurableExpressionTyping {
+                        environment: Rc::clone(environment),
+                        expected_type: expected_type.clone(),
+                    },
+                ),
+            )
+        }
+        Defer(source, _, scope) => {
+            lower_reconfigurable_expression(
+                builder,
+                source,
+                ReconfigurableExpressionScope::from_ast(scope.clone()),
+                ReconfigurableExpressionKind::Deferred,
+                expr.shared_type_environment().zip(expr.typ()).map(
+                    |(environment, expected_type)| ReconfigurableExpressionTyping {
+                        environment: Rc::clone(environment),
+                        expected_type: expected_type.clone(),
+                    },
+                ),
+            )
+        }
         Lambda(params, body) => {
             let func = lower_function(params.clone(), body);
             builder.push(UnboundOp::Function { func })
@@ -347,18 +351,18 @@ fn lower_expressions<'arena>(
         .collect()
 }
 
-fn lower_dynamic_expression(
+fn lower_reconfigurable_expression(
     builder: &mut EvaluationGraphBuilder,
     input: ExprCursor<'_>,
-    scope: DynamicExpressionScope,
-    mode: DynamicExpressionMode,
-    typing: Option<DynamicExpressionTyping>,
+    scope: ReconfigurableExpressionScope,
+    kind: ReconfigurableExpressionKind,
+    typing: Option<ReconfigurableExpressionTyping>,
 ) -> UnboundRef {
     let input = lower_expression(input, builder);
     builder.push(UnboundOp::Dynamic(UnboundDynamicExpressionSpec {
         input,
         scope,
-        mode,
+        kind,
         typing,
     }))
 }

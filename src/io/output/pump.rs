@@ -18,7 +18,7 @@ use async_unsync::{bounded, oneshot};
 use futures::{Sink, future::LocalBoxFuture};
 use smol::{LocalExecutor, Task};
 
-use crate::core::{OutputBatch, OutputError, OutputWriter};
+use crate::core::{OutputBatch, OutputError, OutputInterfaceReconfigurationHandle, OutputWriter};
 
 type BarrierResult = Result<(), OutputError>;
 type CommandSender<V> = bounded::Sender<PumpCommand<V>>;
@@ -75,6 +75,7 @@ impl<V: 'static> Barrier<V> {
 /// a `smol::LocalExecutor`; it does not implement or require `Send` or `Sync`.
 pub struct OutputPump<V> {
     sink: PumpSink<V>,
+    interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
 }
 
 impl<V: 'static> OutputPump<V> {
@@ -87,9 +88,7 @@ impl<V: 'static> OutputPump<V> {
         executor: Rc<LocalExecutor<'static>>,
         capacity: usize,
     ) -> Result<OutputWriter<V>, OutputError> {
-        Ok(OutputWriter::from_sink(Self::from_writer(
-            writer, executor, capacity,
-        )?))
+        Self::from_writer(writer, executor, capacity).map(Self::into_writer)
     }
 
     /// Creates the producer-facing pump sink without wrapping it in another
@@ -102,14 +101,17 @@ impl<V: 'static> OutputPump<V> {
         let capacity = NonZeroUsize::new(capacity).ok_or_else(|| {
             OutputError::invalid("output pump capacity must be greater than zero")
         })?;
+        let interface_reconfiguration = writer.interface_reconfiguration();
         Ok(Self {
             sink: PumpSink::new(writer, executor, capacity),
+            interface_reconfiguration,
         })
     }
 
     /// Wraps this pump sink in the core sticky output writer.
     pub fn into_writer(self) -> OutputWriter<V> {
-        OutputWriter::from_sink(self)
+        let interface_reconfiguration = self.interface_reconfiguration.clone();
+        OutputWriter::from_sink_with_interface_reconfiguration(self, interface_reconfiguration)
     }
 }
 

@@ -1,4 +1,7 @@
 pub(in crate::dataflow) mod dynamic_expressions;
+pub(in crate::dataflow) mod environment_projection;
+pub(in crate::dataflow) mod evaluator;
+pub(in crate::dataflow) mod evaluator_state;
 pub(in crate::dataflow) mod functions;
 pub(in crate::dataflow) mod interpreter;
 mod jit;
@@ -6,5 +9,3 @@ pub(in crate::dataflow) mod lifting;
 pub(in crate::dataflow) mod monitor_execution;
 pub(in crate::dataflow) mod quickening;
 pub(in crate::dataflow) mod scheduled_plan;
-pub(in crate::dataflow) mod stream_evaluator;
-pub(in crate::dataflow) mod stream_state;

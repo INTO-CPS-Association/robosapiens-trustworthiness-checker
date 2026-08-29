@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="defer-arrow-title">Defer keeps the first source definition while advancing its body</title>
-<desc id="defer-arrow-desc">No evaluator is active before the first definition. The first string activates evaluator A and starts its delay rings. A later string and Deferred both advance A without replacing its program or state. A body NoVal is lifted to the last non-NoVal published result when one exists; that result retention is separate from evaluator state.</desc>
+<title id="defer-arrow-title">Defer keeps the first active evaluator</title>
+<desc id="defer-arrow-desc">No evaluator is active before the first definition. The first string activates evaluator A and starts its delay rings. A later string and Deferred both advance A without replacing its program or state.</desc>
 <defs>
   <marker id="defer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
@@ -33,5 +33,4 @@
 <text x="375" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">activate</text>
 <text x="605" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
 <text x="835" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
-<text x="35" y="307" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">body NoVal → last non-NoVal published result; temporal state still advances</text>
 </svg>

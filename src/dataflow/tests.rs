@@ -1904,7 +1904,7 @@ fn dataflow_lazy_if_reads_inputs_at_the_outer_tick() {
 }
 
 #[test]
-fn dataflow_rejects_reconfiguration_points_in_fallible_lazy_branches() {
+fn dataflow_rejects_reconfigurable_expressions_in_fallible_lazy_branches() {
     let spec = "in flag: Bool\n\
                         in x: Int\n\
                         in s: Str\n\

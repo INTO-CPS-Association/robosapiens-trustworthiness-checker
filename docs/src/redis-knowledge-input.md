@@ -439,7 +439,7 @@ When several knowledge sources are configured, use
 `--redis-knowledge-source SOURCE_ID` to select the one to override. A knowledge
 source cannot declare `reconfiguration_route`; reconfiguration remains on a
 separate control-capable source. Extra catalog entries may remain configured for
-later model generations.
+later monitors.
 
 ### Long-running deployments
 

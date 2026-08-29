@@ -1,6 +1,6 @@
 //! Sink-based MQTT output.
 
-use std::{collections::BTreeMap, marker::PhantomData, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
@@ -8,7 +8,7 @@ use futures::future::try_join_all;
 use crate::{
     core::{
         JsonStreamValue, MQTT_HOSTNAME, OutputBackend, OutputBatch, OutputError, OutputInterface,
-        OutputWriter, VarName,
+        OutputInterfaceReconfigurationHandle, OutputWriter, VarName,
     },
     io::mqtt::{MqttClient, MqttFactory, MqttMessage},
 };
@@ -69,24 +69,27 @@ impl<V: JsonStreamValue> OutputBackend for MqttOutputBackend<V> {
             .await
             .map_err(|error| OutputError::backend(format!("failed to connect to MQTT: {error}")))?;
         let client: LocalMqttClient = Rc::from(client);
-        let interface = Rc::new(interface);
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
         let batches_client = Rc::clone(&client);
         let close_client = Rc::clone(&client);
-        Ok(OutputWriter::from_sink(LocalBatchSink::with_close(
-            move |batch: OutputBatch<V>| {
-                let client = Rc::clone(&batches_client);
-                let interface = Rc::clone(&interface);
-                async move { publish_batch(client, interface, batch).await }
-            },
-            move || {
-                let client = Rc::clone(&close_client);
-                async move {
-                    client.disconnect().await.map_err(|error| {
-                        OutputError::backend(format!("failed to close MQTT: {error}"))
-                    })
-                }
-            },
-        )))
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            LocalBatchSink::with_close(
+                move |batch: OutputBatch<V>| {
+                    let client = Rc::clone(&batches_client);
+                    let interface = Rc::clone(&interface);
+                    async move { publish_batch(client, interface, batch).await }
+                },
+                move || {
+                    let client = Rc::clone(&close_client);
+                    async move {
+                        client.disconnect().await.map_err(|error| {
+                            OutputError::backend(format!("failed to close MQTT: {error}"))
+                        })
+                    }
+                },
+            ),
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
@@ -141,12 +144,37 @@ fn collect_messages<V: JsonStreamValue>(
     Ok(messages)
 }
 
+fn make_reconfigurable_interface(
+    interface: OutputInterface,
+) -> (
+    Rc<RefCell<OutputInterface>>,
+    OutputInterfaceReconfigurationHandle,
+) {
+    let interface = Rc::new(RefCell::new(interface));
+    let handle_interface = Rc::clone(&interface);
+    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
+        let interface = Rc::clone(&handle_interface);
+        Box::pin(async move {
+            // Keep the borrow entirely within this synchronous assignment. The
+            // next publish observes the replacement without reconnecting.
+            *interface.borrow_mut() = replacement;
+            Ok(())
+        })
+    });
+    (interface, handle)
+}
+
 async fn publish_batch<V: JsonStreamValue>(
     client: LocalMqttClient,
-    interface: Rc<OutputInterface>,
+    interface: Rc<RefCell<OutputInterface>>,
     batch: OutputBatch<V>,
 ) -> Result<(), OutputError> {
-    let messages = collect_messages(&batch, &interface)?;
+    // Take a value snapshot before starting any publish future. In particular,
+    // a RefCell borrow must not be retained across `try_join_all`'s await.
+    let messages = {
+        let interface = interface.borrow();
+        collect_messages(&batch, &interface)?
+    };
     let publishers = messages
         .into_values()
         .map(|messages| publish_variable(Rc::clone(&client), messages));
@@ -195,6 +223,44 @@ mod tests {
         assert_eq!(message.topic, "mapped/topic");
         assert_eq!(message.payload, r#"{"value": 42}"#);
         assert_eq!(message.qos, 1);
+    }
+
+    #[test]
+    fn mqtt_interface_reconfiguration_swaps_route_view_in_place() {
+        smol::block_on(async {
+            let (interface, handle) = make_reconfigurable_interface(
+                OutputInterface::from_routes([crate::core::OutputRoute::new(
+                    var("x"),
+                    Some("old/topic".into()),
+                    None,
+                    crate::core::OutputRole::Output,
+                )])
+                .unwrap(),
+            );
+            let replacement = OutputInterface::from_routes([crate::core::OutputRoute::new(
+                var("x"),
+                Some("new/topic".into()),
+                None,
+                crate::core::OutputRole::Output,
+            )])
+            .unwrap();
+            let batch = OutputBatch::update(var("x"), Value::Int(1));
+
+            let old_messages = {
+                let interface = interface.borrow();
+                collect_messages(&batch, &interface).unwrap()
+            };
+            assert_eq!(old_messages[&var("x")][0].topic, "old/topic");
+
+            handle.reconfigure(replacement.clone()).await.unwrap();
+
+            assert_eq!(*interface.borrow(), replacement);
+            let new_messages = {
+                let interface = interface.borrow();
+                collect_messages(&batch, &interface).unwrap()
+            };
+            assert_eq!(new_messages[&var("x")][0].topic, "new/topic");
+        });
     }
 
     #[test]

@@ -9,7 +9,7 @@ This is useful when the property to be monitored changes during execution, for e
 Reconfiguration is provided by two separate supported implementations. They have distinct execution machinery and failure policies:
 
 ```text
---runtime reconf-dataflow       serial region-based dataflow runtime
+--runtime reconf-dataflow       serial in-place dataflow owner loop
 --runtime reconf-semi-sync      independent semisynchronous runtime
 ```
 
@@ -22,31 +22,31 @@ Reconfiguration is provided by two separate supported implementations. They have
 The reconfigurable semi-sync runtime is built from a reusable `InputPipeline`,
 not from a pre-opened ordinary `InputStream`. The pipeline keeps an owned local
 source set, route catalogs, source ownership, and the optional input window. The
-runtime opens one input generation at a time and uses a private control adapter
+runtime opens one input session at a time and uses a private control adapter
 to listen for reconfiguration messages.
 
 Ordinary `InputStream` values contain only `InputBatch` data. The control route
 is not added as a fake model variable and does not pass through data mapping.
-Internally, the adapter carries either a data batch or a terminal
-`Reconfigure(MonitorConfig)` item. When a window is configured, ordinary and
+Internally, the adapter carries either a data batch or a terminal-for-semi-sync
+`Reconfigure(ReconfigurationRequest)` item. When a window is configured, ordinary and
 reconfigurable inputs both use the same private window driver: ordinary input
 has data events only, while the reconfigurable adapter adds the control event.
 This keeps control-plane messages out of ordinary runtimes while giving both
 paths the same batch, atomic-step, timer, and flush behavior.
 
-A control message is a generation barrier:
+A control message is a cutover barrier:
 
 1. Data accepted before the message is emitted normally.
 2. The shared private window driver flushes pending batch or atomic-step state.
 3. The private reconfiguration item is delivered and the window driver
    terminates.
-4. No later data from the old source generation is polled or emitted.
+4. No later data from the old input session is polled or emitted.
 5. The old input and runtime tasks are dropped before the replacement pipeline
    is opened.
 
-The replacement specification is parsed and validated, its generation-local
+The replacement specification is parsed and validated, its request-local
 input bindings are resolved against the reusable, owned local `InputSources`
-set, output routes are updated, and the next generation starts. A replacement is rebuilt
+set, output routes are updated, and the replacement monitor starts. A replacement is rebuilt
 even when its input and output sets have the same shape.
 
 ### Reconfiguration message format
@@ -54,18 +54,23 @@ even when its input and output sets have the same shape.
 Reconfiguration messages are JSON5. Standard JSON is accepted because it is a
 subset of JSON5.
 
-Each message must contain the new specification in `spec`. Input and output
-routes use the same compact route form as route catalog files: a string route,
-or a two-element array containing `[route, codec]`.
+Each message contains exactly three fields: the new specification in
+`specification`, plus optional nested `input` and `output` objects. Route values
+inside those objects use the same compact route form as route catalog files: a
+string route, or a two-element array containing `[route, codec]`.
 
 ```json
 {
-  "spec": "in x: Int\nout z: Int\nz = x",
-  "inputs": {
-    "x": "/robot/input/x"
+  "specification": "in x: Int\nout z: Int\nz = x",
+  "input": {
+    "inputs": {
+      "x": "/robot/input/x"
+    }
   },
-  "outputs": {
-    "z": "/robot/output/z"
+  "output": {
+    "outputs": {
+      "z": "/robot/output/z"
+    }
   }
 }
 ```
@@ -74,55 +79,60 @@ For ROS routes, the codec is the ROS message type required by the route:
 
 ```json
 {
-  "spec": "in x: Int\nout z: Int\nz = x",
-  "inputs": {
-    "x": ["/x", "Int32"]
+  "specification": "in x: Int\nout z: Int\nz = x",
+  "input": {
+    "inputs": {
+      "x": ["/x", "Int32"]
+    }
   },
-  "outputs": {
-    "z": ["/z", "Int32"]
+  "output": {
+    "outputs": {
+      "z": ["/z", "Int32"]
+    }
   }
 }
 ```
 
-In a single-source deployment, `inputs` can be omitted entirely. The runtime
+In a single-source deployment, `input` can be omitted entirely. The runtime
 then resolves the next specification's variables from the local source
 catalog and default source:
 
 ```json
 {
-  "spec": "in x: Int\nout z: Int\nz = x"
+  "specification": "in x: Int\nout z: Int\nz = x"
 }
 ```
 
-With a named multi-source local source set, use `source` and `inputs` to make
-one active source explicit. All active bindings in a reconfigurable generation
-must use the selected control source; other configured source catalogs remain
-inactive for that generation:
+With a named multi-source local source set, use `input.source` and
+`input.inputs` to make one active source explicit. All active bindings must use
+the selected control source; other configured source catalogs remain inactive:
 
 ```json
 {
-  "spec": "in x: Int\nin y: Int\nout z: Int\nz = x + y",
-  "source": "robot-mqtt",
-  "inputs": {
-    "x": "/robot/x",
-    "y": "/robot/y"
+  "specification": "in x: Int\nin y: Int\nout z: Int\nz = x + y",
+  "input": {
+    "source": "robot-mqtt",
+    "inputs": {
+      "x": "/robot/x",
+      "y": "/robot/y"
+    }
   }
 }
 ```
 
-`inputs` and `sources` are alternatives. `source` may accompany `inputs` to
-select one named source for all of those bindings. A `sources` object that
-assigns active bindings to two source IDs is rejected before opening by a
-reconfigurable runtime: it cannot establish a sound order between independent
-source streams. If no explicit input routes are present, the owned local source
-set supplies them from its catalogs and default, but the resolved bindings must
-still all belong to the selected control source. `outputs` is optional and uses
-the same compact route representation to override output routes for the new
-generation.
+Within `input`, `inputs` and `sources` are alternatives. `source` may accompany
+`inputs` to select one named source for all of those bindings. A `sources`
+object that assigns active bindings to two source IDs is rejected before opening
+by a reconfigurable runtime: it cannot establish a sound order between
+independent source streams. If no explicit input routes are present, the owned
+local source set supplies them from its catalogs and default, but the resolved
+bindings must still all belong to the selected control source. `output` is
+optional and uses the same compact route representation to override output
+routes for the replacement monitor.
 
 For a manually authored message, put route and codec information inside the
-compact `inputs`, `sources`, or `outputs` objects; the owned local source set
-remains responsible for transport configuration.
+compact `input` and `output` objects; the owned local source set remains
+responsible for transport configuration.
 
 ### Control route and source configuration
 
@@ -139,7 +149,7 @@ cargo run -- --runtime reconf-semi-sync \
   --output-stdout
 ```
 
-Publish a compact `MonitorConfig` JSON5 payload to `my-reconfig`. The same
+Publish a compact `ReconfigurationRequest` JSON5 payload to `my-reconfig`. The same
 pattern works with `--redis-input` and its Redis route.
 
 A named multi-source input configuration keeps source transport settings,
@@ -172,7 +182,7 @@ selected source must also own every active model-data binding:
 ```
 
 Here `robot-ros` is an additional configured but inactive source for this
-reconfigurable generation. Binding `pose` from it together with `x` or `y`
+reconfigurable session. Binding `pose` from it together with `x` or `y`
 would fail before any source is opened. Adding or removing streams remains
 supported when the replacement resolves them from the selected source's
 catalog (or explicitly binds them to that source).
@@ -189,7 +199,7 @@ cargo run --features ros -- --runtime reconf-semi-sync \
 `--reconf-topic` overrides the declared route but never changes the selected
 source. A multi-source config with no declaration or more than one declaration
 fails clearly. An empty catalog on the selected source is allowed only when the
-generation has no model-data bindings; it cannot act as a control-only provider
+session has no model-data bindings; it cannot act as a control-only provider
 for data owned by another active source. `--input-config` cannot be combined
 with another input-selection mode.
 
@@ -225,17 +235,17 @@ allowing compatible temporal context to survive changes to the specification.
 Use `--no-context-transfer` when the replacement must start without prior
 history.
 
-Context transfer does not keep the old input source alive. The old generation is
-dropped before the replacement source is opened, so old-generation data cannot
+Context transfer does not keep the old input source alive. The old session is
+dropped before the replacement source is opened, so old-session data cannot
 feed the new model.
 
 ### Source-local ordering and producer acknowledgements
 
-A reconfigurable generation has one source-ownership domain: its active model
+A reconfigurable session has one source-ownership domain: its active model
 bindings and its control route are owned by the same `InputSource`/source ID.
 The runtime rejects bindings that span source IDs, or data bindings that differ
 from the selected control source, before transport setup. Extra configured
-sources are allowed only while inactive for that generation. This validation
+sources are allowed only while inactive for that session. This validation
 prevents an accidental cross-source merge; it does not itself establish an
 order between data and control.
 
@@ -257,7 +267,7 @@ For ROS and manual, an external controller must quiesce data production and
 obtain an application/runtime acknowledgement that all preceding data has
 crossed the required boundary before publishing control. It must wait for the
 runtime's reconfiguration acknowledgement, where provided, before publishing
-rows for the replacement generation. A broker publish acknowledgement, a
+rows for the replacement session. A broker publish acknowledgement, a
 second source, a quiet stream, `Poll::Pending`, a sleep or yield, or control-poll
 priority is not a substitute for this contract.
 
@@ -289,50 +299,51 @@ implemented.
 ## Serial in-place dataflow reconfiguration
 
 The reconfigurable dataflow runtime has one persistent owner loop. At any instant it owns exactly one
-`DataflowMonitor`, one `ReconfigurableInputStream` generation, and one generation-specific
-`OutputWriter`. The reusable `InputPipeline` and `OutputBackendBuilder` remain configuration; their
-opened resources do not overlap. Root replacement is a stop-the-world configuration phase between
-logical ticks: the old definition and its opened I/O are drained and closed, then the replacement is
-installed in its place.
+`DataflowMonitor`, one `InputPipelineSession`, and one `OutputPipelineSession`. The reusable
+`InputPipeline` and `OutputBackendBuilder` remain configuration. Root reconfiguration is serial, but
+it does not always replace those sessions: pure resolution and mapping happen first, the active output
+is flushed, and compatible mapped owners are updated in place. Only an incompatible or unmatched
+owner causes the corresponding session to be dropped/closed and reopened.
 
 ### Typed input barrier and acknowledgement
 
 For `RuntimeSpec::ReconfDataflow`, the reusable `InputPipeline` is owned by
-`ReconfigurableInput`. Opening a generation returns a typed `ReconfigurableInputStream` whose items
+`ReconfigurableInput`. Opening a session returns a typed `ReconfigurableInputStream` whose items
 are either:
 
 ```text
 ReconfigurableInputItem::Data(InputBatch)
-ReconfigurableInputItem::Reconfigure(MonitorConfig)
+ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)
 ```
 
-The source adapter parses JSON5 and validates the `MonitorConfig` before yielding the typed control
-item. The dataflow owner receives that typed config directly; no control variable is added to the model
+The source adapter parses JSON5 into a `ReconfigurationRequest` before yielding the typed control
+item. The dataflow owner receives that request directly; no control variable is added to the model
 interface. A data item keeps its normal logical-tick and packed-row representation.
 
 The reserved control route is a **global input barrier**. If an input window is configured, its
 barrier stage flushes all pending data items before forwarding the typed
-`ReconfigurableInputItem::Reconfigure(MonitorConfig)` item and then terminates that input generation.
-Post-control data from the old generation is not emitted. Data and control remain separate typed items
-at this boundary.
+`ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)` item. The live input stream then
+continues, so post-control data can be delivered after cutover. Data and control remain separate typed
+items at this boundary; the control item is not an end-of-stream marker.
 
 The active model-data bindings and the control route must belong to one source. Input resolution
-rejects a generation whose active bindings span multiple source IDs or whose data source differs from
+rejects a resolution whose active bindings span multiple source IDs or whose data source differs from
 the selected control source before any transport is opened. Other configured sources may remain
-inactive. This source-ID check prevents a cross-source merge but does not turn independent
-subscriptions into an ordered data/control stream. MQTT and Redis expose one backend item stream
-that preserves the order observed by that transport client; ROS and manual input combine independent
-subscriptions/fanouts and require an external controller to quiesce and acknowledge preceding data
-before publishing control.
+inactive. This source-ID check prevents a cross-source merge: multi-source live input remains
+unsupported because ordered data and control must share one source-owned stream. Independent
+subscriptions still require an external controller to establish the required ordering.
 
-An acknowledgement contains the active semantic `RevisionId`, the active `InterfaceEpoch`, and
-whether the command changed anything. It is sent only after the old output has been drained by
-submitting pending packed rows and completing the old writer's `flush`/`close`, the replacement has
-been validated and compiled, context transfer has completed if requested, the old input has been
-dropped, the new input generation and output writer have opened, and the active monitor and runtime
-state have been installed.
+`plan_runtime_reconfiguration` owns the complete resolved `ResolvedInput` and `ResolvedOutput`
+values for the request. Planning opens no resource, so a rejected request leaves the active runtime
+untouched. Every accepted request then replaces the whole input and output, including a request that
+changes neither.
 
-The acknowledgement confirms cutover and generation-open completion. It does not guarantee that a
+An acknowledgement contains `monitor_changed`, `interface_changed`, `monitor_revision`, and
+`interface_revision`. It is sent only after planning, the old engine's pending rows and active output
+session have been flushed, the old output has been closed and the old input dropped, the complete
+replacement input and output have been opened, and the monitor plan has been applied.
+
+The acknowledgement confirms that the cutover and the replacement open completed. It does not guarantee that a
 future `OutputWriter::send`, backend flush/close, or remote transport publish cannot fail: later send
 failures are terminal, with committed rows drained where the writer/backend permits. Producers must
 wait for the acknowledgement before sending the next model row; added-input producers start after it,
@@ -348,59 +359,47 @@ control-poll priority substitutes for the required quiescence and acknowledgemen
 The owner performs this sequence synchronously for a typed control item:
 
 ```text
-typed Reconfigure(MonitorConfig)
-→ submit pending rows as one packed OutputBatch
-→ flush and close the old OutputWriter
-→ validate the replacement frontier and config-derived interfaces
-→ compile the replacement specification
-→ transfer context, if requested
-→ install candidate monitor identities
-→ close and drop the old input generation
-→ open and install the sole replacement input generation
-→ resolve/open the generation-specific output interface and writer
-→ install active input/output state and the replacement engine
+ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)
+→ plan_runtime_reconfiguration: compile DataflowProgram, plan monitor, resolve complete I/O
+→ submit pending rows and flush the active OutputPipelineSession
+→ close the active output session and drop the active input session
+→ open the complete replacement input and output
+→ apply MonitorReconfigurationPlan and rebuild the monitor layout
 → publish ReconfigurationAck
 ```
 
-`MonitorConfig` is already parsed before the item reaches the owner. The old output is therefore
-submitted and drained through `OutputWriter::flush`/`close` before the owner validates, compiles,
-transfers, opens, or installs the replacement configuration. `OutputBackendBuilder::resolve` computes
-the candidate `ResolvedOutput` and destination `OutputInterface` without opening resources;
-`OutputBackendBuilder::open` then opens the new generation's destinations and returns one writer,
-cleaning up partial opens on failure. The owner performs no additional control decoding.
+The request is already parsed before the item reaches the owner. `plan_runtime_reconfiguration` is
+resource-free: it validates the request, compiles the immutable `DataflowProgram`, resolves the
+complete target input/output interfaces, and selects `RetainExact`, `InstallCold`, or `Transfer`.
+`OutputBackendBuilder::resolve` and the input resolver open no resources.
 
-No success acknowledgement is sent before the old writer drain, replacement validation/compile/context
-transfer, new input/output open, and state installation complete. No old row can enter the new mapping,
-and no new row can overtake an old row. The acknowledgement is a cutover/open barrier, not a guarantee
-that later backend or transport publishes will succeed.
+Applying the monitor plan materializes `DataflowMonitor::from_program(target)` only for
+`InstallCold` and `Transfer`. `RetainExact` keeps the healthy live monitor without target
+materialization or monitor context mapping. For `Transfer`, `ReconfigurationMapping` was made from
+the immutable source and target programs before target construction, and the target destructively calls
+`DataflowMonitor::context_transfer_from`.
 
-Input and output replacement is always serial, including when the effective interfaces are unchanged.
-The old input generation is explicitly dropped before the replacement input is opened, and the old
-`OutputWriter` is closed before the replacement writer is opened. A failed input/output replacement,
-source or validation error, acknowledgement delivery failure, later output send failure, or any other
-root reconfiguration error terminates the runtime. The old monitor is not restored; cleanup drains rows
-already accepted by the old writer where possible.
+The output flush precedes the close, so accepted old rows reach the writer boundary before the old
+session goes away. A success acknowledgement is not sent until the replacement I/O and the monitor
+plan are both in place. Planning errors do not mutate the monitor. Once the destructive part of the
+cutover begins there is no rollback: any later error, including a failed acknowledgement, terminates
+the runtime through its terminal cleanup policy.
 
-A semantic no-op still crosses the command barrier, consumes no logical tick, advances neither
-identity, and does not transfer monitor state. Source formatting is normalized through the compiled
-`DefinitionKey`, while unused mapping metadata is excluded from effective interface comparisons.
+### Monitor and interface revision accounting
 
-### Revision and interface accounting
+`MonitorRevision` records successful monitor and nested semantic installation history. An accepted
+root request advances it once even when the target `DefinitionKey` is exact and
+`monitor_changed` is false. A nested body change advances it as well. `InterfaceRevision` records
+effective external input/output binding history and advances only when those bindings change. The
+control route is a source-local barrier route rather than a model input. Overflow is a terminal
+internal error rather than a saturating reuse of an identity.
 
-`RevisionId` is semantic definition history. It advances only when the normalized monitor definition
-changes. `InterfaceEpoch` is external binding/layout history for active model-data and output routes.
-It advances when effective input/output membership or transport binding changes. The control route is a
-source-local barrier route rather than a model input; its source compatibility is validated
-before the generation opens. Thus semantic-only, interface-only, and combined changes advance
-independently; an exact semantic and effective-interface no-op advances neither. Overflow is a
-terminal internal error rather than a saturating reuse of an identity.
+Root output rows are not filtered by revision. A nested expression reconfiguration publishes its own successful row;
+`MonitorRevision` is history, not an output fence.
 
-Root output rows are not filtered by revision. A nested replacement publishes its own successful row;
-`RevisionId` is history, not an output-generation fence.
+### Nested dynamic and defer expression reconfiguration
 
-### Nested dynamic and defer replacement
-
-Nested replacement happens at the existing source barrier, after prerequisites and before the owner
+Nested expression reconfiguration happens at the existing source barrier, after prerequisites and before the owner
 executes:
 
 1. unchanged dynamic definitions take an allocation-free fast path;
@@ -408,7 +407,7 @@ executes:
 3. context is transferred before the body is installed;
 4. the local body is installed once;
 5. dependencies and the schedule are repaired; and
-6. `RevisionId` advances immediately after each successful transfer/install.
+6. `MonitorRevision` advances immediately after each successful transfer/install.
 
 A later failure leaves the poisoned monitor carrying the revisions for bodies already installed, but
 publishes no row for the failed tick. The next evaluation returns `MonitorFailed`. `None` starts cold;
@@ -422,12 +421,20 @@ monitor failures rather than rejected candidates that can be retried.
 
 ### Context transfer
 
-`DataflowContext` is a cold-path, portable snapshot of semantic evaluator state, retained values,
-sealed regions, and active dynamic dependency bindings. External references remap by variable name,
-not dense environment slot. JIT/native artifacts are derived physical state and do not define
-identity; export is non-destructive to the active monitor. `Compatible` preserves unchanged delay
-history across stateless edits where the semantic provenance is unambiguous, while `Strict` reports an
-incompatible owner as an error.
+Root transfer first builds a fallible `PreparedContextTransfer`, then performs a cold-path, destructive
+`DataflowMonitor::context_transfer_from` handoff of semantic evaluator owners, retained values, sealed
+expressions, active dynamic dependencies, and live bounded histories. `ReconfigurationMapping` maps
+environment state by variable identity and stores target-indexed stream correspondence plus executable
+node-owner moves; it is created before the target monitor is materialized. `Compatible` preserves exact
+owners, rebuilds safe compatible owners, and initializes new or ambiguous owners. `Strict` rejects
+incompatible owners. JIT coordinator activation, fused artifacts, schedule-wide replay state, and schedule-specific routes remain target-owned. Required native state is materialized before transfer; exact matches move canonical and quickening state while retaining target-bound native artifacts, and compatible transfer rewrites canonical owners and rebuilds or synchronizes derived tiers.
+
+An exact transferred active body keeps the nested layout against which it was compiled. Preparation
+builds an `EnvironmentProjection` from nested slots to current outer slots and projects its scheduler
+and history requirements by variable identity. Each monitor owns the resulting `HistoryStore`; matching
+live histories move through the environment correspondence and are resized to the target effective
+depth, so a deeper target does not invent older samples and a shallower target keeps only its visible
+suffix.
 
 ### Transport limitations
 

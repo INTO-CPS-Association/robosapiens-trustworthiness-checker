@@ -6,7 +6,6 @@ One successful `DataflowMonitor::evaluate` call is one logical tick. The caller 
 
 ## Static tick
 
-![Static tick from input loading through main execution, commit, and output projection](../../assets/dataflow/architecture-static-tick.svg)
 
 **What to notice.** A static monitor has no source barrier. The fixed main range contains every computed stream exactly once. Temporal writes are staged during stream execution and become visible only at the commit boundary; outputs are projected afterward from stable environment slots.
 
@@ -23,7 +22,6 @@ The physical executor may be fused, per-stream native, quickened, or canonical. 
 
 ## Reconfigurable tick
 
-![Reconfigurable tick with source range, resolution barrier, main range, commit, and deferred release](../../assets/dataflow/architecture-dynamic-tick.svg)
 
 **What to notice.** The source and main ranges are disjoint and together cover every logical stream. Reconfiguration and schedule repair happen between them, before main-range state advances. There is no commit at the barrier. Pending `defer` releases are applied only after successful main execution and the shared commit, so they affect the next tick's ranges.
 
@@ -64,7 +62,7 @@ The source range contains only streams needed to obtain current expression sourc
 
 When a sealed `defer` releases its final claim on a prerequisite, that stream is not deleted. It moves from the source range to the main range of a subsequently selected plan. Its `StreamId`, environment slot, evaluator, and temporal state remain unchanged.
 
-Quickened scalar availability may carry across the barrier, but a scalar run does not. Per-stream native artifacts remain indexed by stable stream identity and may execute on either side. A complete per-stream temporal kernel is disabled in the source prelude because it would commit internally before the whole row succeeds. Whole-plan fused execution is rejected whenever the plan has a source barrier.
+Quickened scalar availability may carry across the barrier, but a scalar run does not. Per-stream native artifacts are reached through the evaluator selected by stable stream identity and may execute on either side; their scheduled temporal operations still use the shared end-of-tick commit. Whole-plan fused execution is rejected whenever the plan has a source barrier.
 
 ## One current evaluation and publication per stream
 

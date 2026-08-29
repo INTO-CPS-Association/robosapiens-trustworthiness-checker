@@ -10,7 +10,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{Sink, SinkExt};
+use futures::{Sink, SinkExt, future::LocalBoxFuture};
 
 use super::{StreamData, ValidatedLayout, VarName};
 
@@ -1278,6 +1278,30 @@ impl OutputInterface {
     }
 }
 
+/// An optional asynchronous interface update operation owned by an opened writer.
+///
+/// The handle is deliberately separate from the data sink so wrappers can retain
+/// it while the backend keeps ownership of its sender or transport resource.
+#[derive(Clone)]
+pub struct OutputInterfaceReconfigurationHandle {
+    operation: Rc<dyn Fn(OutputInterface) -> LocalBoxFuture<'static, Result<(), OutputError>>>,
+}
+
+impl OutputInterfaceReconfigurationHandle {
+    pub(crate) fn new<F>(operation: F) -> Self
+    where
+        F: Fn(OutputInterface) -> LocalBoxFuture<'static, Result<(), OutputError>> + 'static,
+    {
+        Self {
+            operation: Rc::new(operation),
+        }
+    }
+
+    pub async fn reconfigure(&self, interface: OutputInterface) -> Result<(), OutputError> {
+        (self.operation)(interface).await
+    }
+}
+
 /// A local, dynamically dispatched sink for output batches.
 pub type DynOutputSink<V> = Pin<Box<dyn Sink<OutputBatch<V>, Error = OutputError>>>;
 
@@ -1296,6 +1320,7 @@ enum OutputCloseState {
 /// also fails, its error is attached to the retained primary error.
 pub struct OutputWriter<V> {
     sink: DynOutputSink<V>,
+    interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
     primary_error: Option<OutputError>,
     close_state: OutputCloseState,
 }
@@ -1306,6 +1331,7 @@ impl<V> OutputWriter<V> {
     pub fn new(sink: DynOutputSink<V>) -> Self {
         Self {
             sink,
+            interface_reconfiguration: None,
             primary_error: None,
             close_state: OutputCloseState::Open,
         }
@@ -1316,6 +1342,26 @@ impl<V> OutputWriter<V> {
         S: Sink<OutputBatch<V>, Error = OutputError> + 'static,
     {
         Self::new(Box::pin(sink))
+    }
+
+    pub(crate) fn from_sink_with_interface_reconfiguration<S>(
+        sink: S,
+        interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
+    ) -> Self
+    where
+        V: 'static,
+        S: Sink<OutputBatch<V>, Error = OutputError> + 'static,
+    {
+        Self {
+            sink: Box::pin(sink),
+            interface_reconfiguration,
+            primary_error: None,
+            close_state: OutputCloseState::Open,
+        }
+    }
+
+    pub(crate) fn interface_reconfiguration(&self) -> Option<OutputInterfaceReconfigurationHandle> {
+        self.interface_reconfiguration.clone()
     }
 
     pub fn is_closed(&self) -> bool {

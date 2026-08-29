@@ -22,7 +22,7 @@ mod pump;
 pub use backend::{MqttOutputBackendKind, OutputBackendConfig, OutputBackendKind};
 pub use pipeline::{
     OutputDestination, OutputDestinationSelection, OutputDestinations, OutputPipeline,
-    ResolvedDestination, ResolvedOutput, ResolvedOutputBinding,
+    OutputPipelineSession, ResolvedDestination, ResolvedOutput, ResolvedOutputBinding,
 };
 pub use sinks::{
     AsyncFnSink, LimitedNullOutputBackend, LocalBatchSink, ManualOutputBackend,

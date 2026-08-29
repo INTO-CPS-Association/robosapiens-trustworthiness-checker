@@ -7,13 +7,16 @@ pub mod mqtt;
 pub mod ros;
 
 pub mod testing;
+
 pub use self::builders::{InputPipeline, InputSource, InputSources, OutputBackendBuilder};
 pub mod config;
 pub use config::{
-    CodecId, DestinationConfig, DestinationId, DestinationKind, InputConfigFile, InputReduction,
-    InputStage, InputWindow, MonitorConfig, MsgTypeMapping, OutputConfigFile, OutputStageConfig,
-    Route, SourceConfig, SourceId, TopicMapping, WireRoute,
+    CodecId, DestinationConfig, DestinationId, DestinationKind, InputConfigFile,
+    InputConfiguration, InputReduction, InputStage, InputWindow, MsgTypeMapping, OutputConfigFile,
+    OutputConfiguration, OutputStageConfig, ReconfigurationRequest, Route, SourceConfig, SourceId,
+    TopicMapping, WireRoute,
 };
+
 pub use redis_config::{
     RedisKnowledgeConfig, RedisKnowledgeRetry, decode_redis_knowledge_value, redis_keyspace_channel,
 };

@@ -350,7 +350,7 @@ fn configure_reconfigurable_dataflow_builder<S>(
 ) -> ReconfigurableDataflowRuntimeBuilder<S>
 where
     S: Specification + 'static,
-    crate::dataflow::DataflowMonitor: TryFrom<S, Error = crate::dataflow::DataflowCompilationError>,
+    crate::dataflow::DataflowProgram: TryFrom<S, Error = crate::dataflow::DataflowCompilationError>,
 {
     let builder = builder
         .execution_policy(execution_policy)
@@ -1246,7 +1246,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 }
                 (RuntimeSpec::ReconfDataflow(policy), Semantics::Untimed) => {
                     let transfer_policy = if use_context_transfer {
-                        ContextTransferPolicy::Compatible
+                        ContextTransferPolicy::MatchingStreamState
                     } else {
                         ContextTransferPolicy::None
                     };
@@ -1265,7 +1265,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 }
                 (RuntimeSpec::ReconfDataflow(policy), Semantics::TypedUntimed) => {
                     let transfer_policy = if use_context_transfer {
-                        ContextTransferPolicy::Compatible
+                        ContextTransferPolicy::MatchingStreamState
                     } else {
                         ContextTransferPolicy::None
                     };
@@ -1284,7 +1284,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 }
                 (RuntimeSpec::ReconfDataflow(policy), Semantics::GradualTypedUntimed) => {
                     let transfer_policy = if use_context_transfer {
-                        ContextTransferPolicy::Compatible
+                        ContextTransferPolicy::MatchingStreamState
                     } else {
                         ContextTransferPolicy::None
                     };

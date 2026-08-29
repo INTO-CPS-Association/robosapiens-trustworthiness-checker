@@ -3,26 +3,25 @@
 use std::rc::Rc;
 
 use crate::dataflow::environment::EnvironmentLayout;
+use crate::dataflow::execution::evaluator::EvaluationEnvironment;
+use crate::dataflow::execution::evaluator::Evaluator;
+use crate::dataflow::execution::evaluator_state::{EvaluatorState, NodeState};
 use crate::dataflow::execution::interpreter::{evaluate_node, evaluate_nodes};
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::execution::scheduled_plan::{ScheduledExecutionPlan, TemporalPlan};
-use crate::dataflow::execution::stream_evaluator::EvaluationContext;
-use crate::dataflow::execution::stream_evaluator::StreamEvaluator;
-use crate::dataflow::execution::stream_state::{NodeState, StreamState};
 use crate::dataflow::execution_plan::StreamSlots;
 use crate::dataflow::ir::{BoundEvaluationGraph, NodeId, ScalarKind};
 use crate::dataflow::*;
 
 use super::backend::{
     CompiledGraph, CompiledRun, CompiledTemporalRun, InputSource, InputSpec, Lowering, STATUS_OK,
-    TemporalNodeLayout, TemporalStateLayout, compile_graphs, compile_run, compile_temporal_run,
-    decode,
+    TemporalNodeLayout, TemporalStateLayout, compile_run, compile_scalar_graphs,
+    compile_temporal_run, decode,
 };
 use super::scheduled_state::ScheduledTemporalPlan;
 
-pub(in crate::dataflow) enum JittedRunOutcome {
-    Success,
-    SuccessCommitted,
+pub(in crate::dataflow) enum NativeRunOutcome {
+    Completed,
     Fallback {
         replay_environment: Option<Vec<Value>>,
     },
@@ -92,10 +91,10 @@ impl JittedRunEvaluator {
         &mut self,
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
-    ) -> JittedRunOutcome {
+    ) -> NativeRunOutcome {
         self.last_tick_native = false;
         if self.disabled {
-            return JittedRunOutcome::Fallback {
+            return NativeRunOutcome::Fallback {
                 replay_environment: None,
             };
         }
@@ -128,10 +127,10 @@ impl JittedRunEvaluator {
         );
         self.has_previous = true;
         self.last_tick_native = true;
-        JittedRunOutcome::Success
+        NativeRunOutcome::Completed
     }
 
-    fn fallback(&mut self, permanent: bool) -> JittedRunOutcome {
+    fn fallback(&mut self, permanent: bool) -> NativeRunOutcome {
         self.last_tick_native = false;
         self.disabled |= permanent;
         let replay_environment = self.has_previous.then(|| {
@@ -144,7 +143,7 @@ impl JittedRunEvaluator {
             }
             values
         });
-        JittedRunOutcome::Fallback { replay_environment }
+        NativeRunOutcome::Fallback { replay_environment }
     }
 }
 
@@ -219,19 +218,19 @@ impl JittedTemporalRunEvaluator {
     #[inline(always)]
     pub(in crate::dataflow) fn evaluate(
         &mut self,
-        evaluators: &mut [StreamEvaluator],
+        evaluators: &mut [Evaluator],
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
-    ) -> JittedRunOutcome {
+    ) -> NativeRunOutcome {
         self.last_tick_native = false;
         if self.disabled {
-            return JittedRunOutcome::Fallback {
+            return NativeRunOutcome::Fallback {
                 replay_environment: None,
             };
         }
         if !self.state_ready && !self.promote(evaluators) {
             self.disabled = true;
-            return JittedRunOutcome::Fallback {
+            return NativeRunOutcome::Fallback {
                 replay_environment: None,
             };
         }
@@ -269,13 +268,13 @@ impl JittedTemporalRunEvaluator {
         );
         self.has_previous = true;
         self.last_tick_native = true;
-        JittedRunOutcome::SuccessCommitted
+        NativeRunOutcome::Completed
     }
 
-    fn promote(&mut self, evaluators: &mut [StreamEvaluator]) -> bool {
+    fn promote(&mut self, evaluators: &mut [Evaluator]) -> bool {
         for (index, layout) in self.compiled.states.iter().enumerate() {
             let temporal_plan = self.temporal_plans[layout.stream].as_ref().unwrap();
-            let state = &mut evaluators[layout.stream].state;
+            let state = evaluators[layout.stream].state_mut();
             if !temporal_plan.promote(state) {
                 self.deopt_promoted(evaluators, index);
                 return false;
@@ -292,18 +291,18 @@ impl JittedTemporalRunEvaluator {
         true
     }
 
-    fn deopt_promoted(&self, evaluators: &mut [StreamEvaluator], count: usize) {
+    fn deopt_promoted(&self, evaluators: &mut [Evaluator], count: usize) {
         for layout in self.compiled.states[..count].iter() {
             self.temporal_plans[layout.stream]
                 .as_ref()
                 .unwrap()
-                .deopt(&mut evaluators[layout.stream].state);
+                .deopt(evaluators[layout.stream].state_mut());
         }
     }
 
     /// Materialize the packed temporal state into a snapshot evaluator arena without disabling
     /// the active native artifact.
-    pub(in crate::dataflow) fn snapshot_into(&self, evaluators: &mut [StreamEvaluator]) {
+    pub(in crate::dataflow) fn snapshot_into(&self, evaluators: &mut [Evaluator]) {
         if !self.state_ready {
             return;
         }
@@ -312,7 +311,7 @@ impl JittedTemporalRunEvaluator {
             let native = NativeTemporalState {
                 cells: self.temporal_state[layout.offset..end].to_vec(),
             };
-            let state = &mut evaluators[layout.stream].state;
+            let state = evaluators[layout.stream].state_mut();
             native.materialize(&layout.layout, state);
             self.temporal_plans[layout.stream]
                 .as_ref()
@@ -321,14 +320,14 @@ impl JittedTemporalRunEvaluator {
         }
     }
 
-    fn fallback(&mut self, evaluators: &mut [StreamEvaluator]) -> JittedRunOutcome {
+    fn fallback(&mut self, evaluators: &mut [Evaluator]) -> NativeRunOutcome {
         self.last_tick_native = false;
         for layout in self.compiled.states.iter() {
             let end = layout.offset + layout.layout.len;
             let native = NativeTemporalState {
                 cells: self.temporal_state[layout.offset..end].to_vec(),
             };
-            let state = &mut evaluators[layout.stream].state;
+            let state = evaluators[layout.stream].state_mut();
             native.materialize(&layout.layout, state);
             self.temporal_plans[layout.stream]
                 .as_ref()
@@ -347,7 +346,7 @@ impl JittedTemporalRunEvaluator {
             }
             values
         });
-        JittedRunOutcome::Fallback { replay_environment }
+        NativeRunOutcome::Fallback { replay_environment }
     }
 }
 
@@ -379,8 +378,6 @@ pub(in crate::dataflow) struct JittedGraphEvaluator {
     scheduled_scalars: Vec<Option<ScalarValue>>,
     handled_current_tick: bool,
     scalar_state_ready: bool,
-    temporal_kernel_state: Option<NativeTemporalState>,
-    temporal_kernel_completed_tick: bool,
 }
 
 #[derive(Clone)]
@@ -389,7 +386,7 @@ struct NativeTemporalState {
 }
 
 impl NativeTemporalState {
-    fn promote(layout: &TemporalStateLayout, state: &StreamState) -> Option<Self> {
+    fn promote(layout: &TemporalStateLayout, state: &EvaluatorState) -> Option<Self> {
         let mut cells = vec![0; layout.len];
         for node in &layout.nodes {
             match node {
@@ -448,7 +445,7 @@ impl NativeTemporalState {
         Some(Self { cells })
     }
 
-    fn materialize(&self, layout: &TemporalStateLayout, state: &mut StreamState) {
+    fn materialize(&self, layout: &TemporalStateLayout, state: &mut EvaluatorState) {
         for node in &layout.nodes {
             match node {
                 TemporalNodeLayout::Delay {
@@ -544,32 +541,6 @@ fn decode_optional(bits: i64, tag: i64, kind: ScalarKind) -> Option<ScalarValue>
     }
 }
 
-fn encode_temporal_external_inputs(
-    inputs: &[InputSpec],
-    scratch: &mut [i64],
-    environment_values: &[Value],
-    published_scalars: &[Option<ScalarValue>],
-    stream_slots: StreamSlots,
-) -> bool {
-    for (index, input) in inputs.iter().enumerate() {
-        let InputSource::External(slot) = input.source else {
-            continue;
-        };
-        let value = stream_slots
-            .stream(slot)
-            .and_then(|stream| published_scalars[stream.index()])
-            .or_else(|| ScalarValue::from_untyped_value(&environment_values[slot.index()]));
-        let Some(value) = value else {
-            return false;
-        };
-        let Some(encoded) = encode_present(value, input.kind) else {
-            return false;
-        };
-        scratch[index] = encoded;
-    }
-    true
-}
-
 impl JittedGraphEvaluator {
     /// Compile every eligible graph in one Cranelift module and finalize executable memory once.
     /// The returned vector is indexed by global `StreamId` and contains `None` for unsupported
@@ -580,9 +551,9 @@ impl JittedGraphEvaluator {
         let lowered = plan
             .streams
             .iter()
-            .map(|stream| Lowering::new().lower(&stream.program.graph, None))
+            .map(|stream| Lowering::new().lower_scalar(&stream.program.graph))
             .collect::<Vec<_>>();
-        let compiled = compile_graphs(lowered)?;
+        let compiled = compile_scalar_graphs(lowered)?;
         let mut result = vec![None; plan.stream_slots.len()];
         for (planned, compiled) in plan.streams.iter().zip(compiled) {
             result[planned.stream.index()] = compiled.and_then(|compiled| {
@@ -611,8 +582,6 @@ impl JittedGraphEvaluator {
             scheduled_scalars: vec![None; graph.nodes.len()],
             handled_current_tick: false,
             scalar_state_ready: false,
-            temporal_kernel_state: None,
-            temporal_kernel_completed_tick: false,
         })
     }
 
@@ -620,47 +589,32 @@ impl JittedGraphEvaluator {
         self.disabled
     }
 
-    pub(in crate::dataflow) fn has_scheduled_temporal_state(&self) -> bool {
-        self.temporal_plan.has_scheduled_state()
+    #[cfg(test)]
+    pub(in crate::dataflow) fn artifact_identity(&self) -> *const () {
+        Rc::as_ptr(&self.compiled).cast()
     }
 
-    pub(in crate::dataflow) fn has_complete_temporal_kernel(&self) -> bool {
-        self.compiled.temporal_function.is_some()
+    pub(in crate::dataflow) fn has_scheduled_temporal_state(&self) -> bool {
+        self.temporal_plan.has_evaluation_steps()
     }
 
     #[inline(always)]
     pub(in crate::dataflow) fn evaluate(
         &mut self,
         graph: &BoundEvaluationGraph,
-        state: &mut StreamState,
+        state: &mut EvaluatorState,
         environment_values: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
         published_scalars: &[Option<ScalarValue>],
         stream_slots: StreamSlots,
-        allow_complete_temporal_kernel: bool,
     ) -> Option<Value> {
         self.handled_current_tick = false;
-        self.temporal_kernel_completed_tick = false;
         self.last_tick_native = false;
         if self.disabled {
             return None;
         }
 
-        if self.compiled.temporal_function.is_some() {
-            if !allow_complete_temporal_kernel {
-                return None;
-            }
-            return self.evaluate_temporal_kernel(
-                graph,
-                state,
-                environment_values,
-                environment_layout,
-                published_scalars,
-                stream_slots,
-            );
-        }
-
-        let current_context = EvaluationContext {
+        let current_context = EvaluationEnvironment {
             environment_values,
             environment_layout,
             retained_environment_values: None,
@@ -789,10 +743,7 @@ impl JittedGraphEvaluator {
 
         // SAFETY: compilation creates this exact two-pointer ABI. Both buffers have the sizes
         // recorded in `CompiledGraph`, and the owning JITModule stays alive through `Rc`.
-        let function = self
-            .compiled
-            .function
-            .expect("non-temporal compiled graphs have a scalar function");
+        let function = self.compiled.function;
         let status = unsafe {
             function(
                 self.input_scratch.as_ptr(),
@@ -817,88 +768,23 @@ impl JittedGraphEvaluator {
         Some(decode(self.output_scratch, self.compiled.output_kind))
     }
 
-    #[inline(always)]
-    fn evaluate_temporal_kernel(
-        &mut self,
-        graph: &BoundEvaluationGraph,
-        state: &mut StreamState,
-        environment_values: &[Value],
-        environment_layout: &Rc<EnvironmentLayout>,
-        published_scalars: &[Option<ScalarValue>],
-        stream_slots: StreamSlots,
-    ) -> Option<Value> {
-        let function = self.compiled.temporal_function.unwrap();
-        let layout = self.compiled.temporal_state.as_ref().unwrap();
-        if !self.scalar_state_ready {
-            self.scalar_state_ready = self.temporal_plan.promote(state);
-        }
-        if self.scalar_state_ready && self.temporal_kernel_state.is_none() {
-            self.temporal_kernel_state = NativeTemporalState::promote(layout, state);
-        }
-        if self.temporal_kernel_state.is_some()
-            && encode_temporal_external_inputs(
-                &self.compiled.inputs,
-                &mut self.input_scratch,
-                environment_values,
-                published_scalars,
-                stream_slots,
-            )
-        {
-            let native_state = self.temporal_kernel_state.as_mut().unwrap();
-            // SAFETY: the backend fixes this three-pointer ABI and the state/input/output buffers
-            // are allocated from the compiled layout retained by `CompiledGraph`.
-            let status = unsafe {
-                function(
-                    self.input_scratch.as_mut_ptr(),
-                    native_state.cells.as_mut_ptr(),
-                    std::ptr::from_mut(&mut self.output_scratch),
-                )
-            };
-            if status == STATUS_OK {
-                std::mem::swap(&mut self.previous_inputs, &mut self.input_scratch);
-                self.has_previous_inputs = true;
-                self.last_tick_native = true;
-                self.handled_current_tick = true;
-                self.temporal_kernel_completed_tick = true;
-                return Some(decode(self.output_scratch, self.compiled.output_kind));
-            }
-        }
-
-        // A side exit occurs before any native state write. Complete kernels deliberately do not
-        // compile a duplicate scalar artifact: reconstruct the interpreter state from the last
-        // successful row and continue this tick in the shared canonical tier.
-        if let Some(native_state) = self.temporal_kernel_state.take() {
-            native_state.materialize(layout, state);
-        }
-        self.temporal_plan.deopt(state);
-        self.scalar_state_ready = false;
-        self.replay_previous(graph, state, environment_values, environment_layout);
-        self.disabled = true;
-        None
-    }
-
     pub(in crate::dataflow) fn commit(
         &mut self,
-        state: &mut StreamState,
+        state: &mut EvaluatorState,
         environment_values: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
         retained_environment_values: Option<&[Value]>,
     ) -> bool {
-        if self.temporal_kernel_completed_tick {
-            self.temporal_kernel_completed_tick = false;
-            self.handled_current_tick = false;
-            return true;
-        }
         if !self.handled_current_tick
             || !self.scalar_state_ready
-            || !self.temporal_plan.has_temporal_state()
+            || !self.temporal_plan.has_commit_steps()
         {
             return false;
         }
         self.handled_current_tick = false;
         let committed = self.temporal_plan.commit(
             state,
-            EvaluationContext {
+            EvaluationEnvironment {
                 environment_values,
                 environment_layout,
                 retained_environment_values,
@@ -920,36 +806,31 @@ impl JittedGraphEvaluator {
         self.scheduled_scalars.fill(None);
         self.handled_current_tick = false;
         self.scalar_state_ready = false;
-        self.temporal_kernel_state = None;
-        self.temporal_kernel_completed_tick = false;
     }
 
     /// Materialize native state into a temporary snapshot without changing this active artifact.
-    pub(in crate::dataflow) fn snapshot_into(&self, evaluator: &mut StreamEvaluator) {
-        {
-            let state = &mut evaluator.state;
-            if let Some(native_state) = &self.temporal_kernel_state {
-                let layout = self.compiled.temporal_state.as_ref().unwrap();
-                native_state.clone().materialize(layout, state);
-                self.temporal_plan.deopt(state);
-            } else if self.scalar_state_ready {
-                self.temporal_plan
-                    .materialize(state, &self.scheduled_scalars);
-                self.temporal_plan.deopt(state);
-            }
+    pub(in crate::dataflow) fn snapshot_into(&self, evaluator: &mut Evaluator) {
+        if self.scalar_state_ready {
+            let state = evaluator.state_mut();
+            self.temporal_plan
+                .materialize(state, &self.scheduled_scalars);
+            self.temporal_plan.deopt(state);
         }
         if self.last_tick_native && self.has_previous_inputs {
             self.replay_previous_canonical(evaluator);
         }
     }
 
-    fn replay_previous_canonical(&self, evaluator: &mut StreamEvaluator) {
+    fn replay_previous_canonical(&self, evaluator: &mut Evaluator) {
         let mut environment = vec![Value::NoVal; evaluator.program.environment_layout.len()];
-        for (index, input) in self.compiled.inputs.iter().enumerate() {
-            let value = decode(self.previous_inputs[index], input.kind);
-            match input.source {
-                InputSource::External(slot) => environment[slot.index()] = value,
-                InputSource::Node(node) => evaluator.state.node_values[node.index()] = value,
+        {
+            let state = evaluator.state_mut();
+            for (index, input) in self.compiled.inputs.iter().enumerate() {
+                let value = decode(self.previous_inputs[index], input.kind);
+                match input.source {
+                    InputSource::External(slot) => environment[slot.index()] = value,
+                    InputSource::Node(node) => state.node_values[node.index()] = value,
+                }
             }
         }
         evaluator.evaluate_canonical_infallible(&environment);
@@ -960,7 +841,7 @@ impl JittedGraphEvaluator {
     fn fallback_current(
         &mut self,
         graph: &BoundEvaluationGraph,
-        state: &mut StreamState,
+        state: &mut EvaluatorState,
         current_environment: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
         permanent: bool,
@@ -985,7 +866,7 @@ impl JittedGraphEvaluator {
         for (node, value) in current_boundaries {
             state.node_values[node.index()] = value;
         }
-        let context = EvaluationContext {
+        let context = EvaluationEnvironment {
             environment_values: current_environment,
             environment_layout,
             retained_environment_values: None,
@@ -998,7 +879,7 @@ impl JittedGraphEvaluator {
     fn replay_previous(
         &mut self,
         graph: &BoundEvaluationGraph,
-        state: &mut StreamState,
+        state: &mut EvaluatorState,
         current_environment: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
     ) {
@@ -1014,7 +895,7 @@ impl JittedGraphEvaluator {
                 InputSource::Node(node) => state.node_values[node.index()] = value,
             }
         }
-        let context = EvaluationContext {
+        let context = EvaluationEnvironment {
             environment_values: &replay_environment,
             environment_layout,
             retained_environment_values: None,
@@ -1026,8 +907,8 @@ impl JittedGraphEvaluator {
     fn evaluate_non_boundary(
         &self,
         graph: &BoundEvaluationGraph,
-        state: &mut StreamState,
-        context: EvaluationContext<'_>,
+        state: &mut EvaluatorState,
+        context: EvaluationEnvironment<'_>,
     ) {
         if self.compiled.boundary_nodes.is_empty() {
             evaluate_nodes(&graph.nodes, state, context);

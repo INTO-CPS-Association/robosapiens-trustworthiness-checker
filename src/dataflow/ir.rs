@@ -1,7 +1,9 @@
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
+use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::DynamicExprScope;
+
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
 
@@ -39,29 +41,45 @@ pub(super) enum ScalarSignature {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DynamicExpressionMode {
+pub(super) enum ReconfigurableExpressionKind {
     Dynamic,
-    Defer,
+    Deferred,
 }
 
+/// The variables a nested `dynamic`/`defer` body may reference.
+///
+/// Binding resolves both forms to a concrete variable list, but the two are
+/// kept apart: an `Automatic` list is derived from the enclosing program, while
+/// a `Restricted` list is written in the specification. Only the latter is part
+/// of the owning stream's semantic identity.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum DynamicExpressionScope {
-    Automatic,
+pub(super) enum ReconfigurableExpressionScope {
+    Automatic { allowed_variables: EcoVec<VarName> },
     Restricted { allowed_variables: EcoVec<VarName> },
 }
 
-impl DynamicExpressionScope {
+impl ReconfigurableExpressionScope {
     pub(super) fn from_ast(scope: DynamicExprScope) -> Self {
         match scope {
-            DynamicExprScope::Automatic => Self::Automatic,
+            DynamicExprScope::Automatic => Self::Automatic {
+                allowed_variables: EcoVec::new(),
+            },
             DynamicExprScope::Explicit(allowed_variables) => Self::Restricted { allowed_variables },
         }
     }
 
-    pub(super) fn allowed_variables(&self) -> Option<&EcoVec<VarName>> {
+    pub(super) fn allowed_variables(&self) -> &EcoVec<VarName> {
         match self {
-            Self::Automatic => None,
-            Self::Restricted { allowed_variables } => Some(allowed_variables),
+            Self::Automatic { allowed_variables } | Self::Restricted { allowed_variables } => {
+                allowed_variables
+            }
+        }
+    }
+
+    pub(super) fn with_allowed_variables(&self, allowed_variables: EcoVec<VarName>) -> Self {
+        match self {
+            Self::Automatic { .. } => Self::Automatic { allowed_variables },
+            Self::Restricted { .. } => Self::Restricted { allowed_variables },
         }
     }
 }
@@ -219,12 +237,23 @@ impl BoundEvaluationGraph {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct StreamProgram {
     pub(super) graph: BoundEvaluationGraph,
     pub(super) environment_layout: Rc<EnvironmentLayout>,
+    pub(super) state_key: StreamStateKey,
     pub(super) evaluation_mode: EvaluationMode,
     pub(super) requires_temporal_commit: bool,
+}
+
+impl PartialEq for StreamProgram {
+    fn eq(&self, other: &Self) -> bool {
+        self.graph == other.graph
+            && self.environment_layout == other.environment_layout
+            && self.state_key == other.state_key
+            && self.evaluation_mode == other.evaluation_mode
+            && self.requires_temporal_commit == other.requires_temporal_commit
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,27 +273,35 @@ impl StreamProgram {
             EvaluationMode::Infallible
         };
         let requires_temporal_commit = graph_requires_temporal_commit(&graph);
+        let descriptor = canonical_graph_descriptor(&graph, environment_layout.as_ref());
+        let state_key = StreamStateKey::from_canonical(descriptor.as_bytes());
         Self {
             graph,
             environment_layout,
+            state_key,
             evaluation_mode,
             requires_temporal_commit,
         }
     }
 
-    pub(super) fn has_reconfiguration_points(&self) -> bool {
-        graph_has_reconfiguration_points(&self.graph)
+    #[inline]
+    pub(super) fn state_key(&self) -> StreamStateKey {
+        self.state_key
     }
 
-    pub(super) fn reconfiguration_points(
+    pub(super) fn has_reconfigurable_expressions(&self) -> bool {
+        graph_has_reconfigurable_expressions(&self.graph)
+    }
+
+    pub(super) fn reconfigurable_expressions(
         &self,
-    ) -> impl Iterator<Item = (NodeId, &BoundRef, DynamicExpressionMode)> {
+    ) -> impl Iterator<Item = (NodeId, &BoundRef, ReconfigurableExpressionKind)> {
         self.graph
             .nodes
             .iter()
             .enumerate()
             .filter_map(|(index, op)| match op {
-                BoundOp::Dynamic(spec) => Some((NodeId::new(index), &spec.input, spec.mode)),
+                BoundOp::Dynamic(spec) => Some((NodeId::new(index), &spec.input, spec.kind)),
                 _ => None,
             })
     }
@@ -286,7 +323,7 @@ impl StreamProgram {
     }
 }
 
-fn graph_has_reconfiguration_points(graph: &BoundEvaluationGraph) -> bool {
+fn graph_has_reconfigurable_expressions(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
         BoundOp::Dynamic(_) => true,
         BoundOp::If {
@@ -294,8 +331,8 @@ fn graph_has_reconfiguration_points(graph: &BoundEvaluationGraph) -> bool {
             else_branch,
             ..
         } => {
-            graph_has_reconfiguration_points(then_branch)
-                || graph_has_reconfiguration_points(else_branch)
+            graph_has_reconfigurable_expressions(then_branch)
+                || graph_has_reconfigurable_expressions(else_branch)
         }
         _ => false,
     })
@@ -360,25 +397,6 @@ pub(super) fn canonical_graph_descriptor(
     append_graph_descriptor(&mut descriptor, graph, layout);
     descriptor.push('}');
     descriptor
-}
-
-/// Return a conservative semantic identity for one node and every node that precedes it in the
-/// bound DAG. This is used only while planning compatible state transfer. Including the complete
-/// prefix may reject some safe migrations after unrelated insertions, but it prevents a stateful
-/// node from inheriting history when a same-numbered upstream node changed meaning.
-pub(super) fn node_semantic_descriptor(
-    graph: &BoundEvaluationGraph,
-    node: NodeId,
-    layout: &EnvironmentLayout,
-) -> String {
-    let mut prefix = graph.clone();
-    prefix.nodes.truncate(node.index() + 1);
-    prefix.scalar_signatures.truncate(node.index() + 1);
-    prefix
-        .recursive_delays
-        .retain(|candidate| candidate.index() <= node.index());
-    prefix.output = BoundRef::Node(node);
-    canonical_graph_descriptor(&prefix, layout)
 }
 
 fn append_graph_descriptor(
@@ -449,6 +467,10 @@ fn append_ref_descriptor(
             descriptor.push_str("external(");
             if let Some(variable) = layout.variable(*slot) {
                 append_identifier(descriptor, variable.name());
+                if let Some(stream_type) = layout.stream_type(*slot) {
+                    descriptor.push(':');
+                    append_stream_type(descriptor, stream_type);
+                }
             } else {
                 descriptor.push_str("unknown");
             }
@@ -604,21 +626,28 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             descriptor.push_str("dynamic(");
             append_ref_descriptor(descriptor, &spec.input, layout);
             descriptor.push_str(",mode=");
-            descriptor.push_str(match spec.mode {
-                DynamicExpressionMode::Dynamic => "dynamic",
-                DynamicExpressionMode::Defer => "defer",
+            descriptor.push_str(match spec.kind {
+                ReconfigurableExpressionKind::Dynamic => "dynamic",
+                ReconfigurableExpressionKind::Deferred => "defer",
             });
             descriptor.push_str(",scope=");
+            // An automatic scope is derived from the whole program's variable
+            // set, so naming its members here would make every dynamic stream
+            // depend on unrelated declarations. A body that actually reads a
+            // changed variable is caught by that body's own descriptor.
             match &spec.scope {
-                DynamicExpressionScope::Automatic => descriptor.push_str("automatic"),
-                DynamicExpressionScope::Restricted { allowed_variables } => {
-                    let mut names = allowed_variables
-                        .iter()
-                        .map(VarName::name)
-                        .collect::<Vec<_>>();
-                    names.sort();
-                    for name in names {
-                        append_identifier(descriptor, name);
+                ReconfigurableExpressionScope::Automatic { .. } => descriptor.push_str("automatic"),
+                ReconfigurableExpressionScope::Restricted { allowed_variables } => {
+                    let mut allowed = allowed_variables.iter().collect::<Vec<_>>();
+                    allowed.sort_by_key(|variable| variable.name());
+                    for variable in allowed {
+                        append_identifier(descriptor, &variable.name());
+                        if let Some(typing) = &spec.typing
+                            && let Some(stream_type) = typing.environment.get(variable)
+                        {
+                            descriptor.push(':');
+                            append_stream_type(descriptor, stream_type);
+                        }
                         descriptor.push(',');
                     }
                 }
@@ -626,13 +655,6 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             if let Some(typing) = &spec.typing {
                 descriptor.push_str(",type=");
                 append_tc_type(descriptor, &typing.expected_type);
-                descriptor.push_str(",environment=");
-                for (variable, stream_type) in typing.environment.iter() {
-                    append_identifier(descriptor, variable.name());
-                    descriptor.push(':');
-                    append_stream_type(descriptor, stream_type);
-                    descriptor.push(',');
-                }
             }
             descriptor.push(')');
         }
@@ -919,419 +941,8 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
     }
 }
 
-/// Compare two bound programs by the names of their external variables rather than by
-/// replacement-local environment slot numbers. This is the compatibility check used by runtime
-/// context transfer when an interface change shifts existing slots.
-pub(super) fn graphs_semantically_equal(
-    left: &BoundEvaluationGraph,
-    left_layout: &EnvironmentLayout,
-    right: &BoundEvaluationGraph,
-    right_layout: &EnvironmentLayout,
-) -> bool {
-    left.nodes.len() == right.nodes.len()
-        && left.scalar_signatures == right.scalar_signatures
-        && left.recursive_delays == right.recursive_delays
-        && refs_equal(&left.output, left_layout, &right.output, right_layout)
-        && left
-            .nodes
-            .iter()
-            .zip(&right.nodes)
-            .all(|(left, right)| ops_equal(left, left_layout, right, right_layout))
-}
-
-fn refs_equal(
-    left: &BoundRef,
-    left_layout: &EnvironmentLayout,
-    right: &BoundRef,
-    right_layout: &EnvironmentLayout,
-) -> bool {
-    match (left, right) {
-        (DataRef::Const(left), DataRef::Const(right)) => left == right,
-        (DataRef::Node(left), DataRef::Node(right)) => left == right,
-        (DataRef::External(left), DataRef::External(right)) => {
-            left_layout.variable(*left) == right_layout.variable(*right)
-        }
-        _ => false,
-    }
-}
-
-fn refs_slice_equal(
-    left: &[BoundRef],
-    left_layout: &EnvironmentLayout,
-    right: &[BoundRef],
-    right_layout: &EnvironmentLayout,
-) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(left, right)| refs_equal(left, left_layout, right, right_layout))
-}
-
-fn functions_equal(
-    left: &StreamFunction,
-    left_layout: &EnvironmentLayout,
-    right: &StreamFunction,
-    right_layout: &EnvironmentLayout,
-) -> bool {
-    left.parameters == right.parameters
-        && left.display == right.display
-        && left
-            .capture_slots
-            .iter()
-            .map(|slot| left_layout.variable(*slot))
-            .eq(right
-                .capture_slots
-                .iter()
-                .map(|slot| right_layout.variable(*slot)))
-        && graphs_semantically_equal(
-            &left.program.graph,
-            &left.program.environment_layout,
-            &right.program.graph,
-            &right.program.environment_layout,
-        )
-}
-
-pub(super) fn ops_equal(
-    left: &BoundOp,
-    left_layout: &EnvironmentLayout,
-    right: &BoundOp,
-    right_layout: &EnvironmentLayout,
-) -> bool {
-    match (left, right) {
-        (
-            StreamOp::Unary {
-                op: left_op,
-                arg: left_arg,
-            },
-            StreamOp::Unary {
-                op: right_op,
-                arg: right_arg,
-            },
-        ) => left_op == right_op && refs_equal(left_arg, left_layout, right_arg, right_layout),
-        (
-            StreamOp::Binary {
-                op: left_op,
-                lhs: left_lhs,
-                rhs: left_rhs,
-            },
-            StreamOp::Binary {
-                op: right_op,
-                lhs: right_lhs,
-                rhs: right_rhs,
-            },
-        ) => {
-            left_op == right_op
-                && refs_equal(left_lhs, left_layout, right_lhs, right_layout)
-                && refs_equal(left_rhs, left_layout, right_rhs, right_layout)
-        }
-        (
-            StreamOp::If {
-                cond: left_cond,
-                then_branch: left_then,
-                else_branch: left_else,
-            },
-            StreamOp::If {
-                cond: right_cond,
-                then_branch: right_then,
-                else_branch: right_else,
-            },
-        ) => {
-            refs_equal(left_cond, left_layout, right_cond, right_layout)
-                && graphs_semantically_equal(left_then, left_layout, right_then, right_layout)
-                && graphs_semantically_equal(left_else, left_layout, right_else, right_layout)
-        }
-        (
-            StreamOp::Delay {
-                input: left_input,
-                offset: left_offset,
-            },
-            StreamOp::Delay {
-                input: right_input,
-                offset: right_offset,
-            },
-        ) => {
-            left_offset == right_offset
-                && refs_equal(left_input, left_layout, right_input, right_layout)
-        }
-        (StreamOp::RecursiveDelay { offset: left }, StreamOp::RecursiveDelay { offset: right }) => {
-            left == right
-        }
-        (
-            StreamOp::Default {
-                input: left_input,
-                fallback: left_fallback,
-            },
-            StreamOp::Default {
-                input: right_input,
-                fallback: right_fallback,
-            },
-        ) => {
-            refs_equal(left_input, left_layout, right_input, right_layout)
-                && refs_equal(left_fallback, left_layout, right_fallback, right_layout)
-        }
-        (
-            StreamOp::Init {
-                input: left_input,
-                initial: left_initial,
-            },
-            StreamOp::Init {
-                input: right_input,
-                initial: right_initial,
-            },
-        ) => {
-            refs_equal(left_input, left_layout, right_input, right_layout)
-                && refs_equal(left_initial, left_layout, right_initial, right_layout)
-        }
-        (StreamOp::IsDefined { input: left }, StreamOp::IsDefined { input: right })
-        | (StreamOp::When { input: left }, StreamOp::When { input: right }) => {
-            refs_equal(left, left_layout, right, right_layout)
-        }
-        (
-            StreamOp::Update {
-                base: left_base,
-                update: left_update,
-            },
-            StreamOp::Update {
-                base: right_base,
-                update: right_update,
-            },
-        ) => {
-            refs_equal(left_base, left_layout, right_base, right_layout)
-                && refs_equal(left_update, left_layout, right_update, right_layout)
-        }
-        (
-            StreamOp::Latch {
-                value: left_value,
-                trigger: left_trigger,
-            },
-            StreamOp::Latch {
-                value: right_value,
-                trigger: right_trigger,
-            },
-        ) => {
-            refs_equal(left_value, left_layout, right_value, right_layout)
-                && refs_equal(left_trigger, left_layout, right_trigger, right_layout)
-        }
-        (StreamOp::List(left), StreamOp::List(right))
-        | (StreamOp::Tuple(left), StreamOp::Tuple(right)) => {
-            refs_slice_equal(left, left_layout, right, right_layout)
-        }
-        (StreamOp::Map(left), StreamOp::Map(right)) => {
-            left.len() == right.len()
-                && left.iter().zip(right).all(
-                    |((left_key, left_value), (right_key, right_value))| {
-                        left_key == right_key
-                            && refs_equal(left_value, left_layout, right_value, right_layout)
-                    },
-                )
-        }
-        (
-            StreamOp::LIndex {
-                list: left_list,
-                index: left_index,
-            },
-            StreamOp::LIndex {
-                list: right_list,
-                index: right_index,
-            },
-        ) => {
-            refs_equal(left_list, left_layout, right_list, right_layout)
-                && refs_equal(left_index, left_layout, right_index, right_layout)
-        }
-        (
-            StreamOp::LAppend {
-                list: left_list,
-                value: left_value,
-            },
-            StreamOp::LAppend {
-                list: right_list,
-                value: right_value,
-            },
-        ) => {
-            refs_equal(left_list, left_layout, right_list, right_layout)
-                && refs_equal(left_value, left_layout, right_value, right_layout)
-        }
-        (
-            StreamOp::LConcat {
-                lhs: left_lhs,
-                rhs: left_rhs,
-            },
-            StreamOp::LConcat {
-                lhs: right_lhs,
-                rhs: right_rhs,
-            },
-        ) => {
-            refs_equal(left_lhs, left_layout, right_lhs, right_layout)
-                && refs_equal(left_rhs, left_layout, right_rhs, right_layout)
-        }
-        (StreamOp::LHead { list: left }, StreamOp::LHead { list: right })
-        | (StreamOp::LTail { list: left }, StreamOp::LTail { list: right })
-        | (StreamOp::LLen { list: left }, StreamOp::LLen { list: right }) => {
-            refs_equal(left, left_layout, right, right_layout)
-        }
-        (
-            StreamOp::Fix {
-                func: left_func,
-                display: left_display,
-            },
-            StreamOp::Fix {
-                func: right_func,
-                display: right_display,
-            },
-        ) => {
-            left_display == right_display
-                && refs_equal(left_func, left_layout, right_func, right_layout)
-        }
-        (
-            StreamOp::MGet {
-                map: left,
-                key: left_key,
-            },
-            StreamOp::MGet {
-                map: right,
-                key: right_key,
-            },
-        )
-        | (
-            StreamOp::MRemove {
-                map: left,
-                key: left_key,
-            },
-            StreamOp::MRemove {
-                map: right,
-                key: right_key,
-            },
-        )
-        | (
-            StreamOp::MHasKey {
-                map: left,
-                key: left_key,
-            },
-            StreamOp::MHasKey {
-                map: right,
-                key: right_key,
-            },
-        ) => left_key == right_key && refs_equal(left, left_layout, right, right_layout),
-        (
-            StreamOp::MInsert {
-                map: left_map,
-                key: left_key,
-                value: left_value,
-            },
-            StreamOp::MInsert {
-                map: right_map,
-                key: right_key,
-                value: right_value,
-            },
-        ) => {
-            left_key == right_key
-                && refs_equal(left_map, left_layout, right_map, right_layout)
-                && refs_equal(left_value, left_layout, right_value, right_layout)
-        }
-        (
-            StreamOp::TGet {
-                tuple: left,
-                index: left_index,
-            },
-            StreamOp::TGet {
-                tuple: right,
-                index: right_index,
-            },
-        ) => left_index == right_index && refs_equal(left, left_layout, right, right_layout),
-        (StreamOp::Dynamic(left), StreamOp::Dynamic(right)) => {
-            // Scope authorization and the checked environment may grow when a root interface adds an
-            // otherwise-unused input. The active body is revalidated against the replacement scope
-            // during transfer, so slot-independent continuity is determined by its mode, expected
-            // result type, and source owner rather than by the replacement-local scope vector.
-            left.mode == right.mode
-                && left.typing.as_ref().map(|typing| &typing.expected_type)
-                    == right.typing.as_ref().map(|typing| &typing.expected_type)
-                && refs_equal(&left.input, left_layout, &right.input, right_layout)
-        }
-        (StreamOp::Function { func: left }, StreamOp::Function { func: right })
-        | (StreamOp::DirectApply { func: left, .. }, StreamOp::DirectApply { func: right, .. })
-        | (
-            StreamOp::RecursiveApply { func: left, .. },
-            StreamOp::RecursiveApply { func: right, .. },
-        ) => functions_equal(left, left_layout, right, right_layout),
-        (
-            StreamOp::Apply {
-                func: left_func,
-                args: left_args,
-            },
-            StreamOp::Apply {
-                func: right_func,
-                args: right_args,
-            },
-        ) => {
-            refs_equal(left_func, left_layout, right_func, right_layout)
-                && refs_slice_equal(left_args, left_layout, right_args, right_layout)
-        }
-        (
-            StreamOp::Partial {
-                func: left_func,
-                args: left_args,
-                display: left_display,
-            },
-            StreamOp::Partial {
-                func: right_func,
-                args: right_args,
-                display: right_display,
-            },
-        ) => {
-            refs_equal(left_func, left_layout, right_func, right_layout)
-                && refs_slice_equal(left_args, left_layout, right_args, right_layout)
-                && left_display == right_display
-        }
-        (StreamOp::RecursiveCall { args: left }, StreamOp::RecursiveCall { args: right }) => {
-            refs_slice_equal(left, left_layout, right, right_layout)
-        }
-        (
-            StreamOp::ListMap {
-                func: left_func,
-                list: left_list,
-            },
-            StreamOp::ListMap {
-                func: right_func,
-                list: right_list,
-            },
-        )
-        | (
-            StreamOp::ListFilter {
-                func: left_func,
-                list: left_list,
-            },
-            StreamOp::ListFilter {
-                func: right_func,
-                list: right_list,
-            },
-        ) => {
-            refs_equal(left_func, left_layout, right_func, right_layout)
-                && refs_equal(left_list, left_layout, right_list, right_layout)
-        }
-        (
-            StreamOp::ListFold {
-                func: left_func,
-                init: left_init,
-                list: left_list,
-            },
-            StreamOp::ListFold {
-                func: right_func,
-                init: right_init,
-                list: right_list,
-            },
-        ) => {
-            refs_equal(left_func, left_layout, right_func, right_layout)
-                && refs_equal(left_init, left_layout, right_init, right_layout)
-                && refs_equal(left_list, left_layout, right_list, right_layout)
-        }
-        _ => false,
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct DynamicExpressionTyping {
+pub(super) struct ReconfigurableExpressionTyping {
     pub(super) environment: Rc<StreamTypeEnvironment>,
     pub(super) expected_type: TCType,
 }
@@ -1339,10 +950,11 @@ pub(super) struct DynamicExpressionTyping {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct DynamicExpressionSpec<E> {
     pub(super) input: DataRef<E>,
-    pub(super) scope: DynamicExpressionScope,
-    pub(super) mode: DynamicExpressionMode,
+    pub(super) scope: ReconfigurableExpressionScope,
+    /// The explicit `dynamic` or `defer` occurrence that owns this nested body.
+    pub(super) kind: ReconfigurableExpressionKind,
     /// Type information for typed graphs; `None` for untyped graphs.
-    pub(super) typing: Option<DynamicExpressionTyping>,
+    pub(super) typing: Option<ReconfigurableExpressionTyping>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

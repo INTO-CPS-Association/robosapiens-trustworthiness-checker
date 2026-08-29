@@ -4440,7 +4440,7 @@ mod reconf_tests {
 
         let typed_plus_one_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + y + 1";
         let reconf_json = serde_json::json!({
-            "spec": typed_plus_one_spec
+            "specification": typed_plus_one_spec
         })
         .to_string();
 
@@ -4510,7 +4510,7 @@ mod reconf_tests {
 
         let invalid_reconf_spec = "in x: Int\nin y: Int\nout z: Int\nz = x + \"not an int\"";
         let reconf_json = serde_json::json!({
-            "spec": invalid_reconf_spec
+            "specification": invalid_reconf_spec
         })
         .to_string();
 
@@ -4574,13 +4574,14 @@ mod reconf_tests {
                 .expect("reconf dataflow output channel closed");
             assert_eq!(first.remove(&"z".into()), Some(Value::Int(2)));
 
-            let request = serde_json::json!({ "spec": source_text }).to_string();
+            let request = serde_json::json!({ "specification": source_text }).to_string();
             send_value_noval_others((RECONF_TOPIC, Value::Str(request.into())), &mut tx_fans).await;
             let acknowledgement = with_timeout(ack_rx.recv(), 3, "reconf dataflow ack")
                 .await
                 .expect("reconf dataflow did not acknowledge the command")
                 .expect("reconf dataflow acknowledgement channel closed");
-            assert!(!acknowledgement.applied);
+            assert!(!acknowledgement.monitor_changed);
+            assert!(!acknowledgement.interface_changed);
 
             send_value_noval_others(("x", Value::Int(3)), &mut tx_fans).await;
             let mut second = with_timeout(out_rx.recv(), 3, "reconf dataflow replacement output")
@@ -4744,7 +4745,7 @@ mod reconf_tests {
                     })
                 })
                 .collect();
-            let request = serde_json::json!({ "spec": source }).to_string();
+            let request = serde_json::json!({ "specification": source }).to_string();
             send_value_noval_others((RECONF_TOPIC, Value::Str(request.into())), &mut tx_fans).await;
             future::join_all(sub_event_futs).await;
 
@@ -4835,7 +4836,7 @@ mod reconf_tests {
         info!("Finished pre-reconf phase, now sending reconf");
         // Reconfigure: send the new spec via RECONF_TOPIC
         let reconf_json = serde_json::json!({
-            "spec": spec_simple_add_monitor_plus_one()
+            "specification": spec_simple_add_monitor_plus_one()
         })
         .to_string();
 
@@ -4959,7 +4960,7 @@ mod reconf_tests {
         info!("Finished pre-reconf phase, now sending reconf");
         // Reconfigure: send the new spec via RECONF_TOPIC
         let reconf_json = serde_json::json!({
-            "spec": spec_acc_monitor()
+            "specification": spec_acc_monitor()
         })
         .to_string();
 
@@ -5060,7 +5061,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_simple_add_monitor()
+            "specification": spec_simple_add_monitor()
         })
         .to_string();
 
@@ -5168,7 +5169,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_assignment_monitor()
+            "specification": spec_assignment_monitor()
         })
         .to_string();
 
@@ -5269,7 +5270,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": spec_assignment2_monitor()
+            "specification": spec_assignment2_monitor()
         })
         .to_string();
 
@@ -5368,7 +5369,7 @@ mod reconf_tests {
 
         info!("Finished pre-reconf phase, now sending reconf");
         let reconf_json = serde_json::json!({
-            "spec": "in x\nout z\nz = x[1] + 1"
+            "specification": "in x\nout z\nz = x[1] + 1"
         })
         .to_string();
 
@@ -5489,7 +5490,7 @@ mod reconf_tests {
 
             info!("Finished pre-reconf phase, now sending reconf");
             let reconf_json = serde_json::json!({
-                "spec": second_spec
+                "specification": second_spec
             })
             .to_string();
 
@@ -5602,7 +5603,7 @@ mod reconf_tests {
 
             info!("Finished pre-reconf phase, now sending reconf");
             let reconf_json = serde_json::json!({
-                "spec": "in x\nout z\nz = default(z[1], 0) + 1 + x - x"
+                "specification": "in x\nout z\nz = default(z[1], 0) + 1 + x - x"
             })
             .to_string();
 

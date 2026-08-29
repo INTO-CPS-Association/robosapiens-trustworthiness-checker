@@ -2,7 +2,7 @@ use super::VarName;
 use super::environment::EnvironmentSlot;
 use super::error::DataflowEvaluationError;
 use super::execution_plan::{
-    DependencyGraph, ReconfigurationPlan, StreamId, StreamSet, StreamSlots,
+    DependencyGraph, ReconfigurableExpressionPlan, StreamId, StreamSet, StreamSlots,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -111,7 +111,7 @@ impl ActiveSourceStreams for StreamSet {
     }
 }
 
-impl ActiveSourceStreams for ReconfigurationPlan {
+impl ActiveSourceStreams for ReconfigurableExpressionPlan {
     fn active_source_streams(&self) -> &StreamSet {
         self.initial_source_streams()
     }
@@ -127,6 +127,8 @@ pub(super) struct Scheduler {
     dfs_stack: Vec<DfsFrame>,
     repaired_order: Vec<StreamId>,
     execution_schedule: ExecutionSchedule,
+    #[cfg(test)]
+    update_schedule_call_count: usize,
 }
 
 impl Scheduler {
@@ -161,6 +163,8 @@ impl Scheduler {
                 evaluation_order: Vec::with_capacity(stream_count),
                 uses_static_order: false,
             },
+            #[cfg(test)]
+            update_schedule_call_count: 0,
         };
         for (position, stream) in scheduler.scheduled_order.iter().copied().enumerate() {
             scheduler.positions_by_stream[stream.index()].set(position);
@@ -197,6 +201,10 @@ impl Scheduler {
         source_streams: &impl ActiveSourceStreams,
         stream_vars: &[VarName],
     ) -> Result<bool, DataflowEvaluationError> {
+        #[cfg(test)]
+        {
+            self.update_schedule_call_count += 1;
+        }
         if !self.order_dirty.get() {
             return Ok(false);
         }
@@ -214,6 +222,16 @@ impl Scheduler {
     #[inline]
     pub(super) fn execution_schedule(&self) -> &ExecutionSchedule {
         &self.execution_schedule
+    }
+
+    #[cfg(test)]
+    pub(super) fn update_schedule_call_count(&self) -> usize {
+        self.update_schedule_call_count
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_update_schedule_call_count(&mut self) {
+        self.update_schedule_call_count = 0;
     }
 
     pub(super) fn refresh_main_execution_schedule(&mut self, source_streams: &StreamSet) -> bool {
@@ -313,7 +331,7 @@ impl Scheduler {
 mod tests {
     use super::*;
     use crate::dataflow::execution_plan::test_support::{
-        dependency_graph_without_static_dependencies, empty_reconfiguration_plan,
+        dependency_graph_without_static_dependencies, empty_reconfigurable_expression_plan,
     };
 
     fn set_dynamic_dependencies(
@@ -334,7 +352,7 @@ mod tests {
     #[test]
     fn scheduled_order_is_retained_when_dynamic_edges_are_satisfied() {
         let graph = dependency_graph_without_static_dependencies(3);
-        let reconfiguration = empty_reconfiguration_plan(3);
+        let reconfiguration = empty_reconfigurable_expression_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -367,7 +385,7 @@ mod tests {
     #[test]
     fn unchanged_dynamic_dependencies_do_not_dirty_the_order() {
         let graph = dependency_graph_without_static_dependencies(3);
-        let reconfiguration = empty_reconfiguration_plan(3);
+        let reconfiguration = empty_reconfigurable_expression_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -399,7 +417,7 @@ mod tests {
     #[test]
     fn removing_dynamic_dependencies_does_not_dirty_the_order() {
         let graph = dependency_graph_without_static_dependencies(3);
-        let reconfiguration = empty_reconfiguration_plan(3);
+        let reconfiguration = empty_reconfigurable_expression_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -438,7 +456,7 @@ mod tests {
     #[test]
     fn iterative_repair_orders_dynamic_dependencies_before_consumers() {
         let graph = dependency_graph_without_static_dependencies(3);
-        let reconfiguration = empty_reconfiguration_plan(3);
+        let reconfiguration = empty_reconfigurable_expression_plan(3);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 3),
             &graph,
@@ -498,7 +516,7 @@ mod tests {
     #[test]
     fn dynamic_cycles_are_rejected() {
         let graph = dependency_graph_without_static_dependencies(2);
-        let reconfiguration = empty_reconfiguration_plan(2);
+        let reconfiguration = empty_reconfigurable_expression_plan(2);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), 2),
             &graph,
@@ -517,7 +535,7 @@ mod tests {
     fn repair_uses_an_explicit_stack_for_long_chains() {
         let stream_count = 4_096;
         let graph = dependency_graph_without_static_dependencies(stream_count);
-        let reconfiguration = empty_reconfiguration_plan(stream_count);
+        let reconfiguration = empty_reconfigurable_expression_plan(stream_count);
         let mut scheduler = Scheduler::new(
             StreamSlots::new(EnvironmentSlot::new(0), stream_count),
             &graph,

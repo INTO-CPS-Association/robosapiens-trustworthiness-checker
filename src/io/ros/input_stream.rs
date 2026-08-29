@@ -1,7 +1,6 @@
 use anyhow::Context;
-use futures::FutureExt;
-use futures::StreamExt;
 use futures::select;
+use futures::{FutureExt, StreamExt};
 use r2r;
 use smol::LocalExecutor;
 use std::collections::BTreeMap;
@@ -16,7 +15,7 @@ use super::{
 };
 
 use crate::core::empty_input_stream;
-use crate::io::MonitorConfig;
+use crate::io::ReconfigurationRequest;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{InputBatch, InputStream, OutputStream, Value, VarName};
@@ -150,7 +149,7 @@ impl RosMsgType {
 pub(crate) fn control_stream(
     executor: Rc<LocalExecutor<'static>>,
     topic: String,
-) -> anyhow::Result<OutputStream<anyhow::Result<MonitorConfig>>> {
+) -> anyhow::Result<OutputStream<anyhow::Result<ReconfigurationRequest>>> {
     let context = r2r::Context::create()?;
     let node_name = format!("input_control_{}", Uuid::new_v4().simple());
     let mut node = r2r::Node::create(context, &node_name, "")?;
@@ -176,13 +175,15 @@ pub(crate) fn control_stream(
         let _drop_guard = drop_guard;
         let mut subscription = subscription;
         while let Some(message) = subscription.next().await {
-            let request = MonitorConfig::from_json(&message.data)
+            let request = ReconfigurationRequest::from_json(&message.data)
                 .with_context(|| format!("invalid ROS monitor configuration on `{topic}`"))?;
             yield request;
             return;
         }
     }))
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 
 /// Subscribe to ROS topics and return a stream that owns the subscriber lifetime.
 #[instrument(level = Level::INFO, skip(var_topics))]

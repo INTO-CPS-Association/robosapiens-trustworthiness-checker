@@ -1,16 +1,20 @@
 use super::super::compiler::lower::*;
+use super::super::history::HistoryAccess;
+use super::super::history_requirements::HistoryRequirements;
 use super::super::ir::*;
 use super::super::*;
+use super::environment_projection::EnvironmentProjection;
+use super::evaluator::{EvaluationEnvironment, Evaluator};
+use super::evaluator_state::*;
 use super::lifting::retain_last_value;
-use super::stream_evaluator::{EvaluationContext, StreamEvaluator};
-use super::stream_state::*;
 use crate::lang::dsrv::{parser::parse_expr, type_checker::check_expression};
 
 pub(in crate::dataflow) fn evaluate_dynamic_expression(
     current: Value,
     spec: &BoundDynamicExpressionSpec,
     dynamic: &mut DynamicExpressionState,
-    context: EvaluationContext<'_>,
+    context: EvaluationEnvironment<'_>,
+    _history_access: Option<HistoryAccess<'_>>,
 ) -> Result<Value, DataflowEvaluationError> {
     match current {
         // The active expression is always evaluated so its temporal and lifting state keeps
@@ -22,7 +26,9 @@ pub(in crate::dataflow) fn evaluate_dynamic_expression(
                 context.retained_environment_values,
             );
             let result = evaluate_active_expression(dynamic)?;
-            if spec.mode == DynamicExpressionMode::Defer && dynamic.active_expression.is_some() {
+            if spec.kind == ReconfigurableExpressionKind::Deferred
+                && dynamic.active_expression.is_some()
+            {
                 Ok(retain_last_value(result, &mut dynamic.last_defer_result))
             } else {
                 Ok(special)
@@ -40,7 +46,7 @@ pub(in crate::dataflow) fn evaluate_dynamic_expression(
                 context.retained_environment_values,
             );
             let result = evaluate_active_expression(dynamic)?;
-            if spec.mode == DynamicExpressionMode::Defer {
+            if spec.kind == ReconfigurableExpressionKind::Deferred {
                 Ok(retain_last_value(result, &mut dynamic.last_defer_result))
             } else {
                 Ok(result)
@@ -77,47 +83,132 @@ impl DynamicExpressionActivation {
     }
 }
 
-/// A locally compiled nested body that has not yet been installed.  Keeping this boundary explicit
+pub(in crate::dataflow) const SHARED_DYNAMIC_EXPRESSION_CACHE_CAPACITY: usize = 8;
+
+#[derive(Default)]
+pub(in crate::dataflow) struct SharedDynamicExpressionCache {
+    entries: Vec<SharedDynamicExpressionCacheEntry>,
+}
+
+struct SharedDynamicExpressionCacheEntry {
+    environment: Rc<EnvironmentLayout>,
+    typing: Option<ReconfigurableExpressionTyping>,
+    template: Rc<DynamicExpressionTemplate>,
+}
+
+impl SharedDynamicExpressionCacheEntry {
+    fn matches(
+        &self,
+        source_text: &EcoString,
+        spec: &BoundDynamicExpressionSpec,
+        environment: &Rc<EnvironmentLayout>,
+    ) -> bool {
+        let allowed_variables = spec.scope.allowed_variables();
+        &*self.template.source_text == &*source_text
+            && Rc::ptr_eq(&self.environment, environment)
+            && self.template.nested_environment_slots.iter().all(|slot| {
+                environment
+                    .variable(*slot)
+                    .is_some_and(|variable| allowed_variables.contains(variable))
+            })
+            && match (&self.typing, &spec.typing) {
+                (None, None) => true,
+                (Some(cached), Some(requested)) => {
+                    Rc::ptr_eq(&cached.environment, &requested.environment)
+                        && cached.expected_type == requested.expected_type
+                }
+                _ => false,
+            }
+    }
+}
+
+impl SharedDynamicExpressionCache {
+    pub(in crate::dataflow) fn lookup(
+        &self,
+        source_text: &EcoString,
+        spec: &BoundDynamicExpressionSpec,
+        environment: &Rc<EnvironmentLayout>,
+    ) -> Option<Rc<DynamicExpressionTemplate>> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.matches(source_text, spec, environment))
+            .map(|entry| Rc::clone(&entry.template))
+    }
+
+    pub(in crate::dataflow) fn insert(
+        &mut self,
+        spec: &BoundDynamicExpressionSpec,
+        environment: &Rc<EnvironmentLayout>,
+        template: Rc<DynamicExpressionTemplate>,
+    ) {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.matches(&template.source_text, spec, environment))
+        {
+            let entry = self.entries.remove(index);
+            self.entries.push(entry);
+            return;
+        }
+        if self.entries.len() == SHARED_DYNAMIC_EXPRESSION_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
+        self.entries.push(SharedDynamicExpressionCacheEntry {
+            environment: Rc::clone(environment),
+            typing: spec.typing.clone(),
+            template,
+        });
+    }
+}
+
+/// A locally compiled nested body that has not yet been installed. Keeping this boundary explicit
 /// lets the replacement path transfer state before mutating the owning dynamic node.
 pub(in crate::dataflow) struct PreparedDynamicExpression {
     pub(in crate::dataflow) activation: DynamicExpressionActivation,
-    pub(in crate::dataflow) active_expression: ActiveExpression,
+    pub(in crate::dataflow) template: Rc<DynamicExpressionTemplate>,
+    pub(in crate::dataflow) environment_projection: EnvironmentProjection,
 }
 
 pub(in crate::dataflow) fn prepare_active_expression_with_change(
     source_text: EcoString,
     spec: &BoundDynamicExpressionSpec,
-    dynamic: &mut DynamicExpressionState,
+    template_cache: &[Rc<DynamicExpressionTemplate>],
+    shared_template_cache: Option<&SharedDynamicExpressionCache>,
     environment: &Rc<EnvironmentLayout>,
     had_active_expression: bool,
     previous_dependency_slots: &[EnvironmentSlot],
 ) -> Result<Option<PreparedDynamicExpression>, DataflowEvaluationError> {
-    let should_activate = match spec.mode {
-        DynamicExpressionMode::Defer => !had_active_expression,
-        DynamicExpressionMode::Dynamic => true,
+    let should_activate = match spec.kind {
+        ReconfigurableExpressionKind::Deferred => !had_active_expression,
+        ReconfigurableExpressionKind::Dynamic => true,
     };
     if !should_activate {
         return Ok(None);
     }
 
-    let template = if let Some(template) = dynamic.cached_template(&source_text) {
+    let template = if let Some(template) = template_cache
+        .iter()
+        .find(|template| {
+            template.source_text == source_text
+                && Rc::ptr_eq(&template.program.environment_layout, environment)
+        })
+        .cloned()
+    {
         template
-    } else {
-        let compiled = compile_dynamic_expression(&source_text, spec, environment)?;
-        if compiled.program.has_reconfiguration_points() {
-            return Err(DataflowEvaluationError::UnsupportedNestedReconfiguration);
+    } else if let Some(shared_template_cache) = shared_template_cache {
+        if let Some(template) = shared_template_cache.lookup(&source_text, spec, environment) {
+            template
+        } else {
+            compile_dynamic_expression_template(source_text, spec, environment)?
         }
-        let template = Rc::new(DynamicExpressionTemplate {
-            source_text,
-            program: compiled.program,
-            dependency_slots: compiled.dependency_slots,
-            environment_slots: compiled.environment_slots,
-        });
-        dynamic.cache_template(Rc::clone(&template));
-        template
+    } else {
+        compile_dynamic_expression_template(source_text, spec, environment)?
     };
+    let environment_projection = EnvironmentProjection::for_template(&template, environment)
+        .map_err(|variable| DataflowEvaluationError::DynamicExpressionContext(vec![variable]))?;
     let dependency_slots_changed =
-        previous_dependency_slots != template.dependency_slots.as_slice();
+        previous_dependency_slots != environment_projection.outer_dependency_slots();
     let activation = if had_active_expression {
         DynamicExpressionActivation::Replaced {
             dependency_slots_changed,
@@ -129,10 +220,8 @@ pub(in crate::dataflow) fn prepare_active_expression_with_change(
     };
     Ok(Some(PreparedDynamicExpression {
         activation,
-        active_expression: ActiveExpression {
-            evaluator: StreamEvaluator::new(Rc::clone(&template.program)),
-            template,
-        },
+        template,
+        environment_projection,
     }))
 }
 
@@ -143,9 +232,9 @@ pub(in crate::dataflow) fn update_active_expression_with_change(
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<DynamicExpressionActivation, DataflowEvaluationError> {
     let had_active_expression = dynamic.active_expression.is_some();
-    let should_activate = match spec.mode {
-        DynamicExpressionMode::Defer => !had_active_expression,
-        DynamicExpressionMode::Dynamic => dynamic
+    let should_activate = match spec.kind {
+        ReconfigurableExpressionKind::Deferred => !had_active_expression,
+        ReconfigurableExpressionKind::Dynamic => dynamic
             .active_expression
             .as_ref()
             .is_none_or(|active| &active.source_text != &source_text),
@@ -153,24 +242,35 @@ pub(in crate::dataflow) fn update_active_expression_with_change(
     if !should_activate {
         return Ok(DynamicExpressionActivation::Unchanged);
     }
-    let previous_dependency_slots = dynamic
-        .active_expression
-        .as_ref()
-        .map(|active| active.dependency_slots.clone())
-        .unwrap_or_default();
+    let DynamicExpressionState {
+        active_expression,
+        template_cache,
+        ..
+    } = dynamic;
+    let previous_dependency_slots = active_expression.as_ref().map_or(&[][..], |active| {
+        active.environment_projection.outer_dependency_slots()
+    });
     let prepared = prepare_active_expression_with_change(
         source_text,
         spec,
-        dynamic,
+        template_cache,
+        None,
         environment,
         had_active_expression,
-        &previous_dependency_slots,
+        previous_dependency_slots,
     )?
     .expect("the activation check was true");
-    if spec.mode == DynamicExpressionMode::Defer && !had_active_expression {
+    let template = prepared.template;
+    let environment_projection = prepared.environment_projection;
+    dynamic.cache_template(Rc::clone(&template));
+    if spec.kind == ReconfigurableExpressionKind::Deferred && !had_active_expression {
         dynamic.last_defer_result = None;
     }
-    dynamic.active_expression = Some(prepared.active_expression);
+    dynamic.active_expression = Some(ActiveExpression {
+        evaluator: Evaluator::new(Rc::clone(&template.program)),
+        template,
+        environment_projection,
+    });
     Ok(prepared.activation)
 }
 
@@ -187,13 +287,34 @@ fn evaluate_active_expression(
     };
     active_expression
         .evaluator
-        .evaluate_and_stage(environment_values)
+        .evaluate_and_stage_with_history(environment_values, None)
 }
 
 struct CompiledDynamicExpression {
     program: Rc<StreamProgram>,
-    dependency_slots: Vec<EnvironmentSlot>,
-    environment_slots: Vec<EnvironmentSlot>,
+    nested_dependency_slots: Vec<EnvironmentSlot>,
+    nested_environment_slots: Vec<EnvironmentSlot>,
+    nested_history_requirements: HistoryRequirements,
+}
+
+#[cold]
+#[inline(never)]
+fn compile_dynamic_expression_template(
+    source_text: EcoString,
+    spec: &BoundDynamicExpressionSpec,
+    environment: &Rc<EnvironmentLayout>,
+) -> Result<Rc<DynamicExpressionTemplate>, DataflowEvaluationError> {
+    let compiled = compile_dynamic_expression(&source_text, spec, environment)?;
+    if compiled.program.has_reconfigurable_expressions() {
+        return Err(DataflowEvaluationError::UnsupportedNestedReconfiguration);
+    }
+    Ok(Rc::new(DynamicExpressionTemplate {
+        source_text,
+        program: compiled.program,
+        nested_dependency_slots: compiled.nested_dependency_slots,
+        nested_environment_slots: compiled.nested_environment_slots,
+        nested_history_requirements: compiled.nested_history_requirements,
+    }))
 }
 
 #[cold]
@@ -209,7 +330,7 @@ fn compile_dynamic_expression(
             message: error.to_string(),
         }
     })?;
-    let mut graph = if let Some(DynamicExpressionTyping {
+    let mut graph = if let Some(ReconfigurableExpressionTyping {
         environment,
         expected_type,
     }) = &spec.typing
@@ -224,11 +345,8 @@ fn compile_dynamic_expression(
     } else {
         build_expression_graph(expr)
     };
-    let allowed_vars = spec
-        .scope
-        .allowed_variables()
-        .expect("dynamic scope should be resolved during stream-program binding");
-    graph.restrict_dynamic_scopes(allowed_vars);
+    let allowed_vars = spec.scope.allowed_variables();
+    graph.restrict_reconfigurable_scopes(allowed_vars);
     let free_vars = graph.free_vars(None);
     let unsupported = free_vars
         .iter()
@@ -240,7 +358,7 @@ fn compile_dynamic_expression(
             unsupported,
         ));
     }
-    let environment_slots = free_vars
+    let nested_environment_slots = free_vars
         .iter()
         .map(|name| {
             environment
@@ -248,7 +366,7 @@ fn compile_dynamic_expression(
                 .expect("validated dynamic environment variable must have an environment slot")
         })
         .collect();
-    let dependency_slots = graph
+    let nested_dependency_slots = graph
         .same_tick_free_vars(None)
         .iter()
         .map(|name| {
@@ -260,10 +378,13 @@ fn compile_dynamic_expression(
     let program = graph
         .bind_graph(None, Rc::clone(environment))
         .map_err(DataflowEvaluationError::InvalidDynamicProgram)?;
+    let nested_history_requirements =
+        HistoryRequirements::analyze_graph(&program.graph, program.environment_layout.as_ref());
     Ok(CompiledDynamicExpression {
         program,
-        dependency_slots,
-        environment_slots,
+        nested_dependency_slots,
+        nested_environment_slots,
+        nested_history_requirements,
     })
 }
 
@@ -273,7 +394,7 @@ mod tests {
     use crate::VarName;
 
     fn fixture(
-        mode: DynamicExpressionMode,
+        kind: ReconfigurableExpressionKind,
         variables: &[&str],
     ) -> (BoundDynamicExpressionSpec, Rc<EnvironmentLayout>) {
         let variables = variables
@@ -283,10 +404,10 @@ mod tests {
         let environment = Rc::new(EnvironmentLayout::from_variables(variables.iter().cloned()));
         let spec = BoundDynamicExpressionSpec {
             input: BoundRef::Const(Value::NoVal),
-            scope: DynamicExpressionScope::Restricted {
+            scope: ReconfigurableExpressionScope::Restricted {
                 allowed_variables: variables.into_iter().collect(),
             },
-            mode,
+            kind,
             typing: None,
         };
         (spec, environment)
@@ -301,9 +422,50 @@ mod tests {
         update_active_expression_with_change(source.into(), spec, state, environment).unwrap()
     }
 
+    fn restricted_scope(names: &[&str]) -> ReconfigurableExpressionScope {
+        ReconfigurableExpressionScope::Restricted {
+            allowed_variables: names.iter().map(|name| VarName::new(*name)).collect(),
+        }
+    }
+
+    fn dynamic_spec(
+        scope: ReconfigurableExpressionScope,
+        kind: ReconfigurableExpressionKind,
+        typing: Option<ReconfigurableExpressionTyping>,
+    ) -> BoundDynamicExpressionSpec {
+        BoundDynamicExpressionSpec {
+            input: BoundRef::Const(Value::NoVal),
+            scope,
+            kind,
+            typing,
+        }
+    }
+
+    fn cache_template(
+        cache: &mut SharedDynamicExpressionCache,
+        source: &str,
+        spec: &BoundDynamicExpressionSpec,
+        environment: &Rc<EnvironmentLayout>,
+    ) -> Rc<DynamicExpressionTemplate> {
+        let prepared = prepare_active_expression_with_change(
+            source.into(),
+            spec,
+            &[],
+            Some(&*cache),
+            environment,
+            false,
+            &[],
+        )
+        .unwrap()
+        .expect("a fresh owner must activate");
+        let template = prepared.template;
+        cache.insert(spec, environment, Rc::clone(&template));
+        template
+    }
+
     #[test]
     fn activation_reports_lifecycle_and_dependency_changes() {
-        let (spec, environment) = fixture(DynamicExpressionMode::Dynamic, &["x", "y"]);
+        let (spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x", "y"]);
         let mut state = DynamicExpressionState::default();
 
         assert_eq!(
@@ -340,7 +502,7 @@ mod tests {
 
     #[test]
     fn cached_template_reactivation_uses_fresh_temporal_state() {
-        let (spec, environment) = fixture(DynamicExpressionMode::Dynamic, &["x"]);
+        let (spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
         let mut state = DynamicExpressionState::default();
 
         activate("x[1]", &spec, &mut state, &environment);
@@ -369,13 +531,41 @@ mod tests {
         assert_eq!(
             evaluate_active_expression(&mut state).unwrap(),
             Value::Deferred,
-            "reactivation must not recover the previous evaluator's delay history"
+            "reactivation must not recover the previous evaluator's local delay history"
         );
     }
 
     #[test]
+    fn same_source_replaces_a_cached_template_from_an_old_layout() {
+        let (spec, old_environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x", "y"]);
+        let new_environment = Rc::new(EnvironmentLayout::from_variables([
+            VarName::new("added"),
+            VarName::new("x"),
+            VarName::new("y"),
+        ]));
+        let mut state = DynamicExpressionState::default();
+
+        activate("x", &spec, &mut state, &old_environment);
+        let old_template = Rc::clone(&state.active_expression.as_ref().unwrap().template);
+        activate("y", &spec, &mut state, &new_environment);
+        activate("x", &spec, &mut state, &new_environment);
+
+        let cached_x = state
+            .template_cache
+            .iter()
+            .filter(|template| template.source_text == "x")
+            .collect::<Vec<_>>();
+        assert_eq!(cached_x.len(), 1);
+        assert!(!Rc::ptr_eq(cached_x[0], &old_template));
+        assert!(Rc::ptr_eq(
+            &cached_x[0].program.environment_layout,
+            &new_environment
+        ));
+    }
+
+    #[test]
     fn template_cache_is_four_entry_linear_lru() {
-        let (spec, environment) = fixture(DynamicExpressionMode::Dynamic, &[]);
+        let (spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &[]);
         let mut state = DynamicExpressionState::default();
 
         activate("1", &spec, &mut state, &environment);
@@ -396,7 +586,7 @@ mod tests {
                 .iter()
                 .map(|template| &*template.source_text)
                 .collect::<Vec<&str>>(),
-            ["5", "2", "4", "3"]
+            ["3", "4", "2", "5"]
         );
 
         activate("1", &spec, &mut state, &environment);
@@ -407,8 +597,130 @@ mod tests {
     }
 
     #[test]
+    fn shared_cache_matches_used_variables_across_resolved_scopes() {
+        let environment = Rc::new(EnvironmentLayout::from_variables([
+            VarName::new("x"),
+            VarName::new("y"),
+        ]));
+        let mut cache = SharedDynamicExpressionCache::default();
+        let narrow_dynamic_spec = dynamic_spec(
+            restricted_scope(&["x"]),
+            ReconfigurableExpressionKind::Dynamic,
+            None,
+        );
+        let dynamic_template = cache_template(&mut cache, "x", &narrow_dynamic_spec, &environment);
+
+        let broad_deferred_spec = dynamic_spec(
+            restricted_scope(&["x", "y"]),
+            ReconfigurableExpressionKind::Deferred,
+            None,
+        );
+        let shared_template = cache_template(&mut cache, "x", &broad_deferred_spec, &environment);
+        assert!(Rc::ptr_eq(&dynamic_template, &shared_template));
+
+        let excluded_scope_spec = dynamic_spec(
+            restricted_scope(&["y"]),
+            ReconfigurableExpressionKind::Dynamic,
+            None,
+        );
+        let source = EcoString::from("x");
+        assert!(
+            cache
+                .lookup(&source, &excluded_scope_spec, &environment)
+                .is_none()
+        );
+        assert!(matches!(
+            prepare_active_expression_with_change(
+                source,
+                &excluded_scope_spec,
+                &[],
+                Some(&cache),
+                &environment,
+                false,
+                &[],
+            ),
+            Err(DataflowEvaluationError::DynamicExpressionContext(_))
+        ));
+
+        let unresolved_scope_spec = dynamic_spec(
+            ReconfigurableExpressionScope::Automatic {
+                allowed_variables: EcoVec::new(),
+            },
+            ReconfigurableExpressionKind::Dynamic,
+            None,
+        );
+        let source = EcoString::from("x");
+        assert!(
+            cache
+                .lookup(&source, &unresolved_scope_spec, &environment)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn shared_cache_rejects_environment_and_typing_identity_mismatches() {
+        let environment_a = Rc::new(EnvironmentLayout::from_variables([VarName::new("x")]));
+        let environment_b = Rc::new(EnvironmentLayout::from_variables([VarName::new("x")]));
+        let untyped_spec = dynamic_spec(
+            restricted_scope(&["x"]),
+            ReconfigurableExpressionKind::Dynamic,
+            None,
+        );
+        let mut cache = SharedDynamicExpressionCache::default();
+        let first = cache_template(&mut cache, "x", &untyped_spec, &environment_a);
+        let different_environment = cache_template(&mut cache, "x", &untyped_spec, &environment_b);
+        assert!(!Rc::ptr_eq(&first, &different_environment));
+
+        let type_environment_a = Rc::new(std::collections::BTreeMap::from([(
+            VarName::new("x"),
+            crate::core::StreamType::Int,
+        )]));
+        let type_environment_b = Rc::new(std::collections::BTreeMap::from([(
+            VarName::new("x"),
+            crate::core::StreamType::Int,
+        )]));
+        let typed_spec_a = dynamic_spec(
+            restricted_scope(&["x"]),
+            ReconfigurableExpressionKind::Dynamic,
+            Some(ReconfigurableExpressionTyping {
+                environment: Rc::clone(&type_environment_a),
+                expected_type: crate::lang::dsrv::type_checker::TCType::Int,
+            }),
+        );
+        let typed_spec_b = dynamic_spec(
+            restricted_scope(&["x"]),
+            ReconfigurableExpressionKind::Dynamic,
+            Some(ReconfigurableExpressionTyping {
+                environment: Rc::clone(&type_environment_b),
+                expected_type: crate::lang::dsrv::type_checker::TCType::Int,
+            }),
+        );
+        let typed_first = cache_template(&mut cache, "x", &typed_spec_a, &environment_a);
+        assert!(!Rc::ptr_eq(&first, &typed_first));
+        let different_type_environment =
+            cache_template(&mut cache, "x", &typed_spec_b, &environment_a);
+        assert!(!Rc::ptr_eq(&typed_first, &different_type_environment));
+
+        let different_expected_type_spec = dynamic_spec(
+            restricted_scope(&["x"]),
+            ReconfigurableExpressionKind::Dynamic,
+            Some(ReconfigurableExpressionTyping {
+                environment: Rc::clone(&type_environment_a),
+                expected_type: crate::lang::dsrv::type_checker::TCType::Any,
+            }),
+        );
+        let different_expected_type = cache_template(
+            &mut cache,
+            "x",
+            &different_expected_type_spec,
+            &environment_a,
+        );
+        assert!(!Rc::ptr_eq(&typed_first, &different_expected_type));
+    }
+
+    #[test]
     fn defer_compiles_only_its_first_accepted_definition() {
-        let (spec, environment) = fixture(DynamicExpressionMode::Defer, &[]);
+        let (spec, environment) = fixture(ReconfigurableExpressionKind::Deferred, &[]);
         let mut state = DynamicExpressionState::default();
 
         assert!(
@@ -430,8 +742,8 @@ mod tests {
     }
 
     #[test]
-    fn nested_reconfiguration_fails_without_caching_a_template() {
-        let (spec, environment) = fixture(DynamicExpressionMode::Dynamic, &[]);
+    fn nested_expression_reconfiguration_fails_without_caching_a_template() {
+        let (spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &[]);
         let mut state = DynamicExpressionState::default();
 
         let result = update_active_expression_with_change(

@@ -63,12 +63,12 @@ backend is programmatic-only and cannot be selected in `--output-config`.
 MQTT output is Paho-only; the CLI's MQTT input backend choice does not change
 that output implementation. Configuration is resource-free: opening a
 configuration creates clients, nodes, publishers, and stage workers only after a
-complete generation has been resolved.
+complete output has been resolved.
 
 `OutputPipeline::resolve(model_outputs, auxiliary, monitor_config)` returns a
 complete deterministic `ResolvedOutput`:
 
-1. explicit generation bindings win;
+1. explicit request bindings win;
 2. otherwise local catalogs and selection roles own variables;
 3. otherwise the sole/default local destination supplies supported primary defaults;
 4. every model output must have at least one primary owner;
@@ -190,7 +190,7 @@ final pre-barrier tick
   -> parse/type-check replacement
   -> resolve both replacement input and output plans without I/O
   -> transfer context explicitly
-  -> cancel current generation
+  -> cancel the active monitor
   -> drain coalescing and buffer stages
   -> close old destinations and join workers
   -> drop old input resources
@@ -200,7 +200,7 @@ final pre-barrier tick
 ```
 
 Control messages are not `OutputBatch` variants. Wire reconfiguration can change
-bindings, routes, codecs, destination selection, and generation shape, but it
+bindings, routes, codecs, destination selection, and output shape, but it
 cannot create endpoints or change local backend host/port, credentials/TLS,
 MQTT implementation, ROS executor, or local stage configuration.
 

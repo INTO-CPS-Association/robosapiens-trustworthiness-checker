@@ -50,7 +50,7 @@ pub enum RuntimeSpec {
     SemiSync,
     /// Independent reference runtime with semisynchronous reconfiguration.
     ReconfSemiSync,
-    /// Region-based reconfigurable dataflow runtime with the selected input policy.
+    /// Reconfigurable dataflow runtime with the selected input policy.
     ReconfDataflow(ExecutionPolicy),
 }
 

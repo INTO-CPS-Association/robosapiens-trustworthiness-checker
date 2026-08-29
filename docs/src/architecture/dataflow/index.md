@@ -6,11 +6,10 @@ The dataflow subsystem compiles synchronous stream equations into a machine that
 
 This page stays at that conceptual level. The following pages first establish the synchronous execution model, then descend through compilation, runtime ownership, and tick execution before examining temporal state, language state, dynamic properties, and acceleration tiers in detail. The later pages leave the synchronous core and cover the asynchronous runtime that drives it, in both its ordinary and reconfigurable variants.
 
-The guide therefore spans three source regions: `src/dataflow/` for the compiled monitor, `src/runtime/dataflow.rs` for the runtime that drives it, and `src/io/` for the boundary at which inputs and outputs are bound.
+The guide therefore spans three source areas: `src/dataflow/` for immutable programs and stateful monitors, `src/runtime/dataflow.rs` for the runtime that drives them, and `src/io/` for the boundary at which inputs and outputs are resolved and opened.
 
 ## Architecture at a glance
 
-![Layered dataflow architecture from source model to repeated ticks](../../assets/dataflow/architecture-overview.svg)
 
 **What to notice.** Compilation fixes the meaning and identity of the machine. Runtime state remains attached to those identities across ticks. Scheduling may change the order in which streams run, and execution routing may select a different physical path, but neither is allowed to redefine the program or relocate its state.
 
@@ -75,14 +74,14 @@ The source and main ranges are disjoint and together contain every logical strea
 |---|---|---|
 | Builder | `DataflowRuntimeBuilder` | `ReconfigurableDataflowRuntimeBuilder` |
 | Runtime spec | `RuntimeSpec::Dataflow(policy)` | `RuntimeSpec::ReconfDataflow(policy)` |
-| Input | A caller-supplied `InputStream<Value>` | An `InputPipeline`, reopened at each cutover |
-| Output | A caller-supplied `OutputWriter` | An `OutputBackendBuilder`, resolved and opened for each generation |
+| Input | A caller-supplied `InputStream<Value>` | An `InputPipelineSession` with mapped owners applied in place when supported |
+| Output | A caller-supplied `OutputWriter` | An `OutputPipelineSession`; mapped destinations update in place when supported, otherwise a replacement is opened |
 | Flush policy | Selected `ExecutionPolicy` | Selected `ExecutionPolicy` (CLI default `Buffered`; direct reconfigurable builder default `Synchronous`) |
 | Executor | Accepted and ignored; the engine and writer are polled cooperatively in the caller's task | Required for opening the reconfigurable output pipeline and its worker-backed stages |
 | Definition | Fixed for the process | Replaceable at a global command barrier |
 | Failure scope | Engine or writer error ends the run | Additionally, any replacement or acknowledgement failure terminates the owner loop |
 
-Both variants use the same `DirectDataflowEngine`, the same packed `OutputBatch` representation, and the same `OutputWriter` backpressure path. The reconfigurable variant carries its selected `ExecutionPolicy` and adds a typed control item, a serial cutover, generation-specific input/output reopening, and context transfer — nothing about ordinary tick evaluation changes.
+Both variants use the same `DirectDataflowEngine`, the same packed `OutputBatch` representation, and the same `OutputWriter` backpressure path. The reconfigurable variant carries its selected `ExecutionPolicy` and adds a typed control item, resource-free planning, a serial cutover that replaces the complete input and output, and context transfer — nothing about ordinary tick evaluation changes.
 
 `RuntimeSpec::ReconfSemiSync` is a separate supported implementation in `src/runtime/reconfigurable_semi_sync.rs`. It shares neither this evaluator nor its failure policy and is not described by this guide.
 
@@ -110,9 +109,9 @@ Use the pages in this order for a top-down architecture review:
 5. [Temporal state](temporal-state.md), [Language state](language-state.md), and [Dynamic properties](dynamic-properties.md) examine the principal stateful semantics.
 6. [Execution tiers](execution-tiers.md) explains canonical, quickened, and native physical execution.
 7. [The dataflow runtime adapter](runtime-adapter.md) leaves the synchronous core and describes how ticks are actually driven, buffered, and delivered.
-8. [Input and output boundary](runtime-io.md) defines input generations, resolved output interfaces, generation-specific writers, and the flush/close barrier at cutover.
-9. [The reconfigurable runtime](reconfigurable-runtime.md) describes the serial owner loop, root cutover, generation-specific output reopening, and nested replacement.
-10. [The replacement contract](replacement-contract.md) defines region addressing, activation frontiers, and semantic/interface identity.
+8. [Input and output boundary](runtime-io.md) defines input sessions, resolved output interfaces, request-specific writers, and the flush/close barrier at cutover.
+9. [The reconfigurable runtime](reconfigurable-runtime.md) describes the serial owner loop, resource-free planning, complete input/output replacement, and nested expression reconfiguration.
+10. [The replacement contract](replacement-contract.md) defines semantic keys, activation timing, and semantic/interface identity.
 11. [Context transfer](context-transfer.md) explains what state survives a replacement and why.
 12. [Failure and termination](failure-model.md) assembles the containment ladder from node deoptimization to runtime termination.
 13. [Concept-to-code map](implementation-guide.md) connects every concept above to the files and types that implement it.
@@ -121,23 +120,24 @@ Use the pages in this order for a top-down architecture review:
 
 | Architectural concept | Current implementation | Primary guide |
 |---|---|---|
-| Public synchronous machine | `DataflowMonitor` | [Tick execution](tick-execution.md) |
+| Immutable compilation result | `DataflowProgram` | [Compilation](compilation.md) |
+| Public synchronous machine | `DataflowMonitor::from_program` and `DataflowMonitor` | [Tick execution](tick-execution.md) |
 | Immutable expression semantics | `StreamProgram` and `BoundEvaluationGraph` | [Compilation](compilation.md) |
 | Fixed monitor structure | `MonitorPlan` | [Compilation](compilation.md) |
 | Stable stream, row, and operation identities | `StreamId`, `EnvironmentSlot`, and `NodeId` | [Runtime ownership](runtime-ownership.md) |
-| Persistent per-stream state | `EvaluatorArena`, `StreamEvaluator`, and `StreamState` | [Runtime ownership](runtime-ownership.md) |
-| Active dependency order | `Scheduler` and `ReconfigurationState` | [Tick execution](tick-execution.md) |
+| Persistent per-stream state | `EvaluatorArena`, `Evaluator`, `EvaluatorTierStates`, and `EvaluatorState` | [Runtime ownership](runtime-ownership.md) |
+| Active dependency order | `Scheduler` and `ReconfigurableExpressionState` | [Tick execution](tick-execution.md) |
 | Replaceable schedule-specific routing | `ExecutionEngine`, `PlanBundle`, and `ScheduledExecutionPlan` | [Runtime ownership](runtime-ownership.md) |
-| Runtime-defined nested programs | `DynamicExpressionState` and its active `StreamEvaluator` | [Dynamic properties](dynamic-properties.md) |
+| Runtime-defined nested programs | `DynamicExpressionState` and its active `Evaluator` | [Dynamic properties](dynamic-properties.md) |
 | Shared temporal visibility boundary | `evaluate_main_and_commit` and `commit_active_plan` | [Temporal state](temporal-state.md) |
-| Physical acceleration | quickening plans and `Jit` artifacts | [Execution tiers](execution-tiers.md) |
+| Physical acceleration | evaluator-local quickening/`JittedGraphEvaluator` tiers, `QuickPlan`/`QuickStep`, and Jit's fused artifacts | [Execution tiers](execution-tiers.md) |
 | Asynchronous tick driver and packed output batches | `DataflowRuntime`, `DirectDataflowEngine`, `OutputBatch`, and `OutputWriter` | [Runtime adapter](runtime-adapter.md) |
-| Input generations and typed control | `InputPipeline`, `ReconfigurableInput`, and `ReconfigurableInputItem` | [Input and output boundary](runtime-io.md) |
-| Resolved output interfaces and generation opening | `OutputBackendBuilder`, `ResolvedOutput`, and `OutputInterface` | [Input and output boundary](runtime-io.md) |
-| Output drain and terminal cleanup | `finish_writer`, `drain_previous_output`, and `terminate_after_output_drain` | [Input and output boundary](runtime-io.md) |
-| Serial root replacement and nested reconfiguration | `run_reconfigurable_dataflow`, `replace_root`, and source-barrier installation | [The reconfigurable runtime](reconfigurable-runtime.md) |
-| Safe activation points and semantic identity | `validate_replacement`, `RevisionId`, and `InterfaceEpoch` | [The replacement contract](replacement-contract.md) |
-| State carried across a replacement | `DataflowContext` and `ContextTransferPolicy` | [Context transfer](context-transfer.md) |
+| Input sessions and typed control | `InputPipeline`, `ReconfigurableInput`, and `ReconfigurableInputItem` | [Input and output boundary](runtime-io.md) |
+| Resolved output interfaces and opening | `OutputBackendBuilder`, `ResolvedOutput`, and `OutputInterface` | [Input and output boundary](runtime-io.md) |
+| Output flush, replacement, and terminal cleanup | `flush_reconfiguration_barrier`, `finish_dataflow_output`, `reconfiguration_failure`, and `finish_writer` | [Input and output boundary](runtime-io.md) |
+| Serial root replacement and nested reconfiguration | `run_reconfigurable_dataflow`, `plan_runtime_reconfiguration`, `apply_runtime_reconfiguration`, and source-barrier installation | [The reconfigurable runtime](reconfigurable-runtime.md) |
+| Safe activation points and semantic identity | `DataflowMonitor::reconfigure`, `DefinitionKey`, `StreamStateKey`, `MonitorRevision`, and `InterfaceRevision` | [The replacement contract](replacement-contract.md) |
+| State carried across a replacement | `DataflowMonitor::context_transfer_from`, `ReconfigurationMapping`, and `ContextTransferPolicy` | [Context transfer](context-transfer.md) |
 | Failure containment and terminal policy | `DataflowMonitor::failed` and owner-loop termination | [Failure and termination](failure-model.md) |
 
 [Next: Execution model](model.md) →

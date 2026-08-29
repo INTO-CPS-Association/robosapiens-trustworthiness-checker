@@ -2,95 +2,58 @@
 
 [← Previous: The replacement contract](replacement-contract.md) · [Next: Failure and termination](failure-model.md) →
 
-A replacement monitor is a different machine. Its evaluator arena is freshly allocated, its dense slot assignments are specific to its own definition, and its delay rings start empty. Without transfer, replacing a definition would restart every delay, forget every branch timeline, and reset every accumulated fold — even for streams the replacement did not touch.
+A root replacement compares two immutable `DataflowProgram` values. The outgoing `DataflowMonitor` owns the live evaluator state; the program values own only bound semantics, monitor planning, layout, history requirements, and `DefinitionKey` identity.
 
-Context transfer carries canonical semantic state from the outgoing monitor into the replacement. It is a cold-path operation performed once per replacement, between logical ticks, and it is deliberately conservative: state moves only where the replacement can prove it means the same thing.
+`plan_runtime_reconfiguration` compiles the requested definition and asks the active monitor for a `MonitorReconfigurationPlan`. The plan is pure. It is accompanied by the complete resolved input and output, and it does not create a stateful target monitor.
 
-## What a context contains
+## The three monitor plans
 
-`DataflowContext` is a semantic snapshot, not a runtime handle graph:
+`MonitorReconfigurationPlan` has exactly three variants:
 
-| Field | Keyed by | Carries |
+| Plan | When | What the root cutover does |
 |---|---|---|
-| `stream_evaluators` | `VarName` | One canonical `StreamEvaluator` per top-level stream. |
-| `retained_values` | `VarName` | The retained outer environment row, if the monitor allocated one. |
-| `sealed_regions` | `RegionAddress` | Which `defer` points had already sealed. |
-| `dynamic_dependencies` | `RegionAddress` | The active same-tick dependencies of each live point, as variable names. |
-| `revision` / `interface_epoch` | — | The identities the snapshot was exported from. |
+| `RetainExact` | The target `DefinitionKey` equals the active key and the active monitor is healthy under `MatchingStreamState`. | Keeps the live `DataflowMonitor`; no target monitor and no monitor context mapping are materialized. |
+| `InstallCold { target }` | The policy is `None`, or the active monitor has failed. | Calls `DataflowMonitor::from_program(target)` and installs a fresh monitor with initialized state. Monitor context mapping is skipped. |
+| `Transfer { target, mapping, policy }` | The definition changed while transfer is enabled and the active monitor is healthy. | Builds a target monitor from `target`, then applies the supplied mapping and policy. |
 
-Every collection is keyed by **name or region address, never by dense slot**. This is the property the whole mechanism rests on. A `StreamId` or `EnvironmentSlot` means something only relative to the layout that assigned it; carrying one across a definition boundary would silently reinterpret it as whatever the replacement happens to have allocated at that index.
+`None` skips **monitor** context mapping, but the runtime still resolves the complete candidate input and output interfaces. A failed active monitor never donates state: its replacement is installed cold even when its definition key happens to match the target.
 
-The evaluator values are otherwise opaque. A context can only be applied through `import_context`, which re-validates program identity in the replacement's own terms before copying anything.
+`ReconfigurationMapping::between` analyses the two immutable programs before `DataflowMonitor::from_program(target)` is called. It is an internal, target-indexed correspondence for streams, executable evaluator-owner moves, and environment slots. History is deliberately not represented by a second static mapping: effective history requirements can come from transferred active expressions and are known only from monitor state.
 
-## Export happens between ticks
+## Destructive handoff
 
-`export_context` fails with `TickInProgress` if a tick is in flight. Mid-tick state is not a coherent semantic snapshot: some streams have published for the current row and others have not.
+Root replacement has separate preparation and application phases. `prepare_context_transfer` checks tick state, mapping structure, active-expression projections, dependencies, schedule viability, retained-row layout, and the transfer report without moving persistent owners. It returns a private `PreparedContextTransfer` containing the validated mapping, candidate scheduler and reconfiguration state, and any executable environment projections.
 
-Export also **materializes native state into the snapshot only**. The active monitor keeps its compiled artifacts, activation counter, and packed native state untouched, because at export time the replacement has not yet been proven viable. If compilation or validation subsequently fails, the active monitor is still fully able to continue — the snapshot is a copy, not a deoptimization of the running machine.
+`DataflowMonitor::context_transfer_from` consumes that prepared value at the tick barrier. This application path has no recovery branch: it moves evaluator owners, installs prepared projections, moves retained values and histories, and publishes the prepared scheduler and control state. The source monitor is consumed by the root cutover; state moves directly between monitor owners.
 
-## Two ways state can move
+The handoff is valid only between ticks. If either monitor has a tick in progress, preparation returns `DataflowStateError::TickInProgress`. A matched stream moves its complete `Evaluator.tier_states` (`EvaluatorTierStates`) as one aggregate, so canonical `EvaluatorState`, optional quickening state, `quick_plan`, and evaluator-local `JittedGraphEvaluator` state/artifact cannot separate. There is no node-level rewriting: a stream either moves whole or starts cold. Schedule-owned plans, JIT coordinator activation, fused artifacts, and schedule-wide replay state remain target-owned.
 
-Import considers each stream in the replacement independently and tries two mechanisms, in order.
+## Mapping rules
 
-### Exact transfer
+`ReconfigurationMapping` is indexed by target dense identities, while correspondence is established semantically:
 
-`transfer_from` first requires `graphs_semantically_equal` — the bound graph *and* the environment layout must match. Only then is state copied.
+- Top-level streams are matched independently, by variable name. A pair whose `StreamStateKey` values are equal is recorded as `StreamMapping::Exact`; every other target stream is `StreamMapping::Unmapped` and starts cold.
+- There is no compatible node-level rewriting. A changed stream has no partial correspondence to exploit.
+- Environment slots map by variable name, not by equal slot number, so unrelated declarations do not disturb a match.
+- Active reconfigurable-expression state and dependencies are restored only for matched stream owners.
+- Each transferred active body keeps the environment layout against which its nested evaluator was compiled. A prepared `EnvironmentProjection` maps the body's nested slots to current outer slots by variable identity and stores projected dependency and history slots.
 
-An exactly transferred stream is fully equivalent to its predecessor, which is what qualifies it for the three follow-on restorations described below.
+The result is reported per stream with `StreamStateTransferOutcome::Transferred` or `StreamStateTransferOutcome::Initialized`.
 
-### Compatible transfer
+## History ownership
 
-`transfer_compatible_from` handles a stream whose graph has changed. The replacement owns a fresh graph, and only matching state cells are copied across. Stateless edits keep their history; new owners and reshaped owners stay cold.
+Each monitor owns a `HistoryStore`. Before history movement, the target recomputes effective requirements from its static program plus the projected requirements of transferred active bodies. The environment part of `ReconfigurationMapping` then identifies the same variable in the source monitor, and the handoff moves the actual live history owner when both sides have a useful binding.
 
-Compatible transfer is available only when **the stream contains no reconfiguration points**. A stream holding a `dynamic` or `defer` point takes the exact path or nothing. The reason is provenance: a nested body's state belongs to whichever source text was active, and matching cells across a changed outer graph cannot establish that the nested owner is still the same owner. Reviving nested history under a different provenance is precisely the error the design refuses.
+History is matched independently of stream-state matching, by variable name **and** declared type, so a stream that starts cold can still consume retained input history. The moved history is resized to the target's effective depth. A shallower target keeps only the most recent target-visible values, while a deeper target preserves the available suffix without inventing older samples. Static programs and active bodies can contribute to one context-retention bound whose depth is their maximum. Active bodies still execute their own evaluator-local delays; the shared history exists so a later root specification can reuse the bounded context. Unmatched requirements remain cold.
 
-## Policies
+A history whose effective depth becomes zero is retired immediately: its binding is removed and its storage is dropped. If a later specification needs that variable again, its history is reallocated then.
 
-| Policy | Behaviour | Use |
-|---|---|---|
-| `None` | Nothing transfers. Every stream is reported `Reset("policy=None")`. | Restart semantics; a clean machine per definition. |
-| `Compatible` (default) | Exact transfer where possible, compatible transfer otherwise, cold start where neither applies. | Preserve as much history as can be justified. |
-| `Strict` | Exact or compatible transfer must succeed for every existing stream; the first failure rejects the replacement. | Reject any replacement that would silently lose history. |
+History ownership is separate from the retained current-row environment used by reconfigurable expressions. Context transfer materializes and resets evaluator-local native state, while each compiled per-stream artifact remains bound to its target evaluator's program and environment ABI.
 
-`Strict` fails *before* installation. For nested replacement the ordering is explicit in `replace_reconfiguration_point`: the body is compiled and transferred into a local value, and only a successful transfer results in installation. A strict failure therefore never leaves a partially transferred body visible.
+## Transfer reports
 
-Root transfer is attempted only when the `DefinitionKey` actually changed. A semantic no-op keeps the active monitor and performs no transfer at all — there is nothing to transfer *into*.
+`ContextTransferReport` reports at stream granularity. `streams` holds one `StreamStateTransfer` per target stream, naming the variable and whether its state was `Transferred` or `Initialized`; `retained_history` names the variables whose history survived.
 
-## What exact transfer additionally restores
-
-Three things are restored only for exactly transferred streams, because only exact equivalence justifies them:
-
-1. **Retained stream values.** Retained *input* values are restored by name for any input the replacement declares. Retained *stream* values are restored only for exactly transferred streams, since a changed stream's retained value would be a value of a different computation.
-2. **Sealed `defer` regions.** A sealed point is restored only when its containing stream transferred exactly and the replacement still has a point at that address. A `defer` that sealed under a different definition of its containing stream re-arms rather than staying sealed.
-3. **Active dynamic dependencies.** The recorded dependency variable names are re-resolved to slots in the replacement's own layout. A dependency naming a variable the replacement does not have is `IncompatibleDependencies` — a hard error, not a reset, because the scheduler would otherwise have no edge for an active nested body.
-
-## What never transfers
-
-| Not transferred | Why |
-|---|---|
-| Wrong-provenance delay history | A delay ring only means something relative to the operation that filled it. |
-| JIT and native artifacts | Derived physical state, tied to a `PlanId` or program identity that no longer exists. |
-| Quickening plans and deoptimization decisions | Rebuilt from the replacement's own graphs; a previous tier decision is not semantic. |
-| Schedule order and plan caches | Routing over the old definition's stream identities. |
-| `tick_in_progress` and other execution flags | Export is only valid between ticks, so there is nothing in flight to carry. |
-
-The unifying rule: **semantic state transfers, derived state is rebuilt.** Anything a tier could reconstruct from the replacement's own programs is reconstructed rather than carried, which is also what keeps the replacement free to make different tier decisions.
-
-## Reading a transfer report
-
-`ContextTransferReport` carries three counters plus a portable entry per owner:
-
-```text
-transferred_streams  reset_streams  rejected_streams  entries[]
-```
-
-The counters preserve a lightweight API for logging — `replace_root` emits `transferred_streams` and `reset_streams` at info level. The entries carry the `RegionAddress` and `StateKey` needed to explain *which* owners reset and why, which is what makes a reset diagnosable rather than merely countable.
-
-Reset reasons distinguish the two ordinary causes:
-
-- `Reset("new owner")` — the outgoing definition had no stream by that name. Expected when a replacement adds a stream.
-- `Reset("incompatible or ambiguous state")` — the stream exists in both, but neither transfer mechanism applied. Worth investigating: under `Compatible` it is silent history loss.
-
-A failed transfer leaves some evaluators already holding copied state, so `import_context` sets `failed` on the replacement monitor and the caller discards the value.
+Nested bodies do not appear in the root report. A nested body's fate is decided one level down by the same key comparison, so the root report stays a flat, readable list of stream names rather than a tree of owner paths.
 
 [← Previous: The replacement contract](replacement-contract.md) · [Next: Failure and termination](failure-model.md) →

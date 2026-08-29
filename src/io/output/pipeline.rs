@@ -7,7 +7,7 @@ use std::{
 use futures::Sink;
 use smol::LocalExecutor;
 
-use crate::io::config::{CodecId, MonitorConfig, Route};
+use crate::io::config::{CodecId, OutputConfiguration, Route};
 use crate::{
     VarName,
     core::{
@@ -402,7 +402,7 @@ impl<V> OutputPipeline<V> {
     }
 
     /// Resolve model output variables, auxiliary variables, local route
-    /// catalogs, and an optional generation-specific monitor override.
+    /// catalogs, and an optional request-specific monitor override.
     ///
     /// This method performs no backend construction or I/O. Its result is
     /// deterministic: variables, bindings, and destinations are ordered by
@@ -411,7 +411,7 @@ impl<V> OutputPipeline<V> {
         &self,
         model_outputs: I,
         auxiliary: A,
-        monitor_config: Option<&MonitorConfig>,
+        output_configuration: Option<&OutputConfiguration>,
     ) -> anyhow::Result<ResolvedOutput>
     where
         I: IntoIterator,
@@ -436,8 +436,8 @@ impl<V> OutputPipeline<V> {
             "variables cannot be both model outputs and auxiliary outputs: {overlap:?}"
         );
 
-        validate_monitor_configuration(
-            monitor_config,
+        validate_output_configuration(
+            output_configuration,
             &model_outputs,
             &auxiliary,
             &self.destinations,
@@ -449,7 +449,7 @@ impl<V> OutputPipeline<V> {
             self.destinations.default(),
             &model_outputs,
             &auxiliary,
-            monitor_config,
+            output_configuration,
         )?;
         let mut resolved_destinations = Vec::with_capacity(ordered.len());
 
@@ -459,7 +459,7 @@ impl<V> OutputPipeline<V> {
             let destination_auxiliary = auxiliary_deliveries(
                 destination,
                 &auxiliary,
-                monitor_config,
+                output_configuration,
                 self.destinations.default(),
                 &self.destinations,
             )?;
@@ -468,8 +468,8 @@ impl<V> OutputPipeline<V> {
                 .chain(destination_auxiliary.iter())
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            let monitor_routes = monitor_routes_for_destination(
-                monitor_config,
+            let output_routes = output_routes_for_destination(
+                output_configuration,
                 &destination.id,
                 self.destinations.destinations.len(),
                 self.destinations.default(),
@@ -478,7 +478,7 @@ impl<V> OutputPipeline<V> {
                 destination,
                 &destination_auxiliary,
                 &variables,
-                monitor_routes,
+                output_routes,
             )?;
             validate_backend_routes(destination, &bindings)?;
             let interface = OutputInterface::from_routes(bindings.iter().map(|binding| {
@@ -527,7 +527,7 @@ impl<V> OutputPipeline<V> {
         &self,
         model_outputs: I,
         auxiliary: A,
-        monitor_config: Option<&MonitorConfig>,
+        output_configuration: Option<&OutputConfiguration>,
     ) -> Result<OutputWriter<V>, OutputError>
     where
         I: IntoIterator,
@@ -537,13 +537,27 @@ impl<V> OutputPipeline<V> {
         V: JsonStreamValue + RosStreamValue,
     {
         let resolved = self
-            .resolve(model_outputs, auxiliary, monitor_config)
+            .resolve(model_outputs, auxiliary, output_configuration)
             .map_err(OutputError::from)?;
         self.open(resolved).await
     }
 
-    /// Open every resolved destination and return one routed writer.
+    /// Open a resolved output and return its live writer without session state.
     pub async fn open(&self, resolved: ResolvedOutput) -> Result<OutputWriter<V>, OutputError>
+    where
+        V: JsonStreamValue + RosStreamValue,
+    {
+        self.open_session(resolved)
+            .await
+            .map(OutputPipelineSession::into_writer)
+    }
+
+    /// Open every resolved destination and retain the active resolution for live
+    /// interface reconfiguration.
+    pub async fn open_session(
+        &self,
+        resolved: ResolvedOutput,
+    ) -> Result<OutputPipelineSession<V>, OutputError>
     where
         V: JsonStreamValue + RosStreamValue,
     {
@@ -663,17 +677,19 @@ impl<V> OutputPipeline<V> {
                     "output pipeline opened no destinations",
                 ));
             };
-            return apply_stages_in_order(
+            let writer = apply_stages_in_order(
                 opened.writer,
                 &resolved.shared_stages,
                 self.executor.as_ref(),
             )
-            .await;
+            .await?;
+            return Ok(OutputPipelineSession::new(resolved, writer));
         }
 
-        let router = OutputRouter::new(opened);
-        let writer = OutputWriter::from_sink(router);
-        apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref()).await
+        let writer = OutputWriter::from_sink(OutputRouter::new(opened));
+        let writer =
+            apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref()).await?;
+        Ok(OutputPipelineSession::new(resolved, writer))
     }
 }
 
@@ -697,15 +713,16 @@ where
     Ok(result)
 }
 
-fn validate_monitor_configuration<V>(
-    monitor_config: Option<&MonitorConfig>,
+fn validate_output_configuration<V>(
+    output_configuration: Option<&OutputConfiguration>,
     model_outputs: &BTreeSet<VarName>,
     auxiliary: &BTreeSet<VarName>,
     destinations: &OutputDestinations<V>,
 ) -> anyhow::Result<()> {
-    let Some(config) = monitor_config else {
+    let Some(config) = output_configuration else {
         return Ok(());
     };
+    config.validate_structure()?;
     if let Some(destination) = &config.destination {
         anyhow::ensure!(
             destinations.destinations.contains_key(destination),
@@ -730,11 +747,11 @@ fn validate_monitor_configuration<V>(
             "grouped monitor output bindings must cover the model outputs exactly"
         );
         for routes in groups.values() {
-            validate_monitor_routes(Some(routes), model_outputs, auxiliary, false)?;
+            validate_requested_routes(Some(routes), model_outputs, auxiliary, false)?;
         }
     }
     if let Some(routes) = &config.outputs {
-        validate_monitor_routes(Some(routes), model_outputs, auxiliary, true)?;
+        validate_requested_routes(Some(routes), model_outputs, auxiliary, true)?;
         if let Some(destination) = &config.destination {
             anyhow::ensure!(
                 destinations.destinations.contains_key(destination),
@@ -747,13 +764,13 @@ fn validate_monitor_configuration<V>(
     Ok(())
 }
 
-fn monitor_routes_for_destination<'a>(
-    monitor_config: Option<&'a MonitorConfig>,
+fn output_routes_for_destination<'a>(
+    output_configuration: Option<&'a OutputConfiguration>,
     destination: &DestinationId,
     destination_count: usize,
     default: Option<&DestinationId>,
 ) -> anyhow::Result<Option<&'a BTreeMap<VarName, Route>>> {
-    let Some(config) = monitor_config else {
+    let Some(config) = output_configuration else {
         return Ok(None);
     };
     if let Some(groups) = &config.destinations {
@@ -776,7 +793,7 @@ fn resolve_deliveries<V>(
     default: Option<&DestinationId>,
     model_outputs: &BTreeSet<VarName>,
     _auxiliary: &BTreeSet<VarName>,
-    monitor_config: Option<&MonitorConfig>,
+    output_configuration: Option<&OutputConfiguration>,
 ) -> anyhow::Result<(
     BTreeMap<DestinationId, BTreeSet<VarName>>,
     BTreeMap<VarName, DestinationId>,
@@ -787,7 +804,7 @@ fn resolve_deliveries<V>(
         .collect::<BTreeMap<_, _>>();
     let mut primary = BTreeMap::new();
 
-    if let Some(config) = monitor_config {
+    if let Some(config) = output_configuration {
         if let Some(groups) = &config.destinations {
             for (destination, routes) in groups {
                 let selected = deliveries
@@ -968,14 +985,14 @@ fn resolve_deliveries<V>(
 fn auxiliary_deliveries<V>(
     destination: &OutputDestination<V>,
     auxiliary: &BTreeSet<VarName>,
-    monitor_config: Option<&MonitorConfig>,
+    output_configuration: Option<&OutputConfiguration>,
     default: Option<&DestinationId>,
     destinations: &OutputDestinations<V>,
 ) -> anyhow::Result<BTreeSet<VarName>> {
     if auxiliary.is_empty() {
         return Ok(BTreeSet::new());
     }
-    if let Some(config) = monitor_config {
+    if let Some(config) = output_configuration {
         if let Some(groups) = &config.destinations {
             return Ok(groups
                 .get(&destination.id)
@@ -1008,7 +1025,7 @@ fn auxiliary_deliveries<V>(
     })
 }
 
-fn validate_monitor_routes(
+fn validate_requested_routes(
     routes: Option<&BTreeMap<VarName, Route>>,
     model_outputs: &BTreeSet<VarName>,
     auxiliary: &BTreeSet<VarName>,
@@ -1057,15 +1074,15 @@ fn resolve_destination_bindings<V>(
     destination: &OutputDestination<V>,
     auxiliary: &BTreeSet<VarName>,
     variables: &BTreeSet<VarName>,
-    monitor_routes: Option<&BTreeMap<VarName, Route>>,
+    requested_routes: Option<&BTreeMap<VarName, Route>>,
 ) -> anyhow::Result<Vec<ResolvedOutputBinding>> {
     let mut bindings = Vec::with_capacity(variables.len());
     for variable in variables {
-        // A generation-specific route is an override, not a replacement for
+        // A requested route is an override, not a replacement for
         // the durable catalog. The latter may contain routes for a previous
-        // model generation; entries outside this generation are ignored, while
+        // the resolved model outputs; entries outside them are ignored, while
         // newly added variables continue to the backend's default route.
-        let requested = monitor_routes
+        let requested = requested_routes
             .and_then(|routes| routes.get(variable))
             .or_else(|| {
                 destination
@@ -1314,7 +1331,7 @@ impl ResolvedDestination {
     }
 }
 
-/// Complete deterministic output resolution for one model generation.
+/// Complete deterministic output resolution for one active monitor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedOutput {
     model_outputs: Box<[VarName]>,
@@ -1366,6 +1383,78 @@ impl ResolvedOutput {
     }
 }
 
+/// An opened output pipeline together with the resolution it was opened from.
+pub struct OutputPipelineSession<V> {
+    resolved: ResolvedOutput,
+    writer: OutputWriter<V>,
+}
+
+impl<V> OutputPipelineSession<V> {
+    fn new(resolved: ResolvedOutput, writer: OutputWriter<V>) -> Self {
+        Self { resolved, writer }
+    }
+
+    pub fn resolved(&self) -> &ResolvedOutput {
+        &self.resolved
+    }
+
+    pub fn writer(&self) -> &OutputWriter<V> {
+        &self.writer
+    }
+
+    pub fn writer_mut(&mut self) -> &mut OutputWriter<V> {
+        &mut self.writer
+    }
+
+    pub fn into_writer(self) -> OutputWriter<V> {
+        self.writer
+    }
+
+    pub async fn send(&mut self, batch: OutputBatch<V>) -> Result<(), OutputError> {
+        self.writer.send(batch).await
+    }
+
+    pub async fn flush(&mut self) -> Result<(), OutputError> {
+        self.writer.flush().await
+    }
+
+    pub async fn close(&mut self) -> Result<(), OutputError> {
+        self.writer.close().await
+    }
+}
+
+#[derive(Default)]
+struct OutputRouterSelection {
+    variables: Vec<BTreeSet<VarName>>,
+    routing: BTreeMap<VarName, Vec<usize>>,
+}
+
+impl OutputRouterSelection {
+    fn new<V>(destinations: &[OpenedDestination<V>]) -> Self {
+        let mut selection = Self {
+            variables: destinations
+                .iter()
+                .map(|destination| destination.variables.clone())
+                .collect(),
+            routing: BTreeMap::new(),
+        };
+        selection.rebuild_routing();
+        selection
+    }
+
+    fn rebuild_routing(&mut self) {
+        self.routing.clear();
+        for (index, variables) in self.variables.iter().enumerate() {
+            for variable in variables {
+                self.routing
+                    .entry(variable.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+    }
+}
+
 /// Fan out one logical batch under global backpressure. `poll_ready` is ready
 /// only when every opened destination writer is ready, including destinations
 /// that receive no variable from the next batch. `start_send` then clones each
@@ -1373,7 +1462,7 @@ impl ResolvedOutput {
 /// the same cloning contract as mirrors rather than moving values specially.
 struct OutputRouter<V> {
     destinations: Vec<OpenedDestination<V>>,
-    routing: BTreeMap<VarName, Vec<usize>>,
+    selection: OutputRouterSelection,
     ready: bool,
     failure: Option<OutputError>,
     closing: bool,
@@ -1383,16 +1472,11 @@ struct OutputRouter<V> {
 
 impl<V> OutputRouter<V> {
     fn new(destinations: Vec<OpenedDestination<V>>) -> Self {
-        let mut routing = BTreeMap::<VarName, Vec<usize>>::new();
-        for (index, destination) in destinations.iter().enumerate() {
-            for variable in &destination.variables {
-                routing.entry(variable.clone()).or_default().push(index);
-            }
-        }
+        let selection = OutputRouterSelection::new(&destinations);
         let close_done = vec![false; destinations.len()];
         Self {
             destinations,
-            routing,
+            selection,
             ready: false,
             failure: None,
             closing: false,
@@ -1467,17 +1551,25 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
             )));
         }
         this.ready = false;
-        for update in batch.updates() {
-            if !this.routing.contains_key(update.variable) {
-                return Err(this.remember(OutputError::invalid(format!(
-                    "output update variable `{}` has no resolved destination",
-                    update.variable
-                ))));
-            }
+        let missing_variable = {
+            let selection = &this.selection;
+            batch
+                .updates()
+                .find(|update| !selection.routing.contains_key(update.variable))
+                .map(|update| update.variable.clone())
+        };
+        if let Some(variable) = missing_variable {
+            return Err(this.remember(OutputError::invalid(format!(
+                "output update variable `{variable}` has no resolved destination"
+            ))));
         }
 
-        for destination in &mut this.destinations {
-            let selected = match batch.select_variables_cloned(&destination.variables) {
+        for (index, destination) in this.destinations.iter_mut().enumerate() {
+            let selected_result = {
+                let selection = &this.selection;
+                batch.select_variables_cloned(&selection.variables[index])
+            };
+            let selected = match selected_result {
                 Ok(selected) => selected,
                 Err(error) => return Err(this.remember(error)),
             };
@@ -1621,8 +1713,8 @@ mod tests {
     use futures::Sink;
 
     use super::*;
-    use crate::core::{OutputUpdate, VarName};
-    use crate::io::output::OutputCoalescing;
+    use crate::core::{OutputBackend, OutputInterfaceReconfigurationHandle, OutputUpdate, VarName};
+    use crate::io::output::{OutputBuffer, OutputCoalescing};
 
     #[derive(Clone)]
     struct RecordingBackend {
@@ -1631,6 +1723,38 @@ mod tests {
         batches: Rc<RefCell<Vec<OutputBatch<crate::Value>>>>,
         fail_open: bool,
         fail_close: bool,
+    }
+
+    #[derive(Clone)]
+    struct ReconfigurableRecordingBackend {
+        opened: Rc<Cell<usize>>,
+        closed: Rc<Cell<usize>>,
+        flushes: Rc<Cell<usize>>,
+        interface_updates: Rc<Cell<usize>>,
+        batches: Rc<RefCell<Vec<OutputBatch<crate::Value>>>>,
+        fail_interface_update: bool,
+    }
+
+    impl ReconfigurableRecordingBackend {
+        fn new() -> Self {
+            Self {
+                opened: Rc::new(Cell::new(0)),
+                closed: Rc::new(Cell::new(0)),
+                flushes: Rc::new(Cell::new(0)),
+                interface_updates: Rc::new(Cell::new(0)),
+                batches: Rc::new(RefCell::new(Vec::new())),
+                fail_interface_update: false,
+            }
+        }
+    }
+
+    struct ReconfigurableRecordingSink {
+        interface: Rc<RefCell<OutputInterface>>,
+        closed: Rc<Cell<usize>>,
+        flushes: Rc<Cell<usize>>,
+        batches: Rc<RefCell<Vec<OutputBatch<crate::Value>>>>,
+        ready: bool,
+        is_closed: bool,
     }
 
     struct RecordingSink {
@@ -1739,6 +1863,103 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
+        }
+    }
+
+    impl Sink<OutputBatch<crate::Value>> for ReconfigurableRecordingSink {
+        type Error = OutputError;
+
+        fn poll_ready(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.is_closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.ready = true;
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(
+            mut self: Pin<&mut Self>,
+            batch: OutputBatch<crate::Value>,
+        ) -> Result<(), Self::Error> {
+            if self.is_closed {
+                return Err(OutputError::Closed);
+            }
+            if !self.ready {
+                return Err(OutputError::backend(
+                    "reconfigurable recording sink was not ready",
+                ));
+            }
+            self.interface.as_ref().borrow().validate_batch(&batch)?;
+            self.ready = false;
+            self.batches.borrow_mut().push(batch);
+            Ok(())
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.is_closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.flushes.set(self.flushes.get() + 1);
+            self.ready = true;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.is_closed {
+                return Poll::Ready(Err(OutputError::Closed));
+            }
+            self.is_closed = true;
+            self.ready = true;
+            self.closed.set(self.closed.get() + 1);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl crate::core::OutputBackend for ReconfigurableRecordingBackend {
+        type Val = crate::Value;
+
+        async fn open(
+            &self,
+            interface: OutputInterface,
+        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+            self.opened.set(self.opened.get() + 1);
+            let interface = Rc::new(RefCell::new(interface));
+            let handle_interface = Rc::clone(&interface);
+            let interface_updates = Rc::clone(&self.interface_updates);
+            let fail_interface_update = self.fail_interface_update;
+            let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
+                let interface = Rc::clone(&handle_interface);
+                let interface_updates = Rc::clone(&interface_updates);
+                Box::pin(async move {
+                    if fail_interface_update {
+                        return Err(OutputError::backend("intentional interface update failure"));
+                    }
+                    *interface.borrow_mut() = replacement;
+                    interface_updates.set(interface_updates.get() + 1);
+                    Ok(())
+                })
+            });
+            Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+                ReconfigurableRecordingSink {
+                    interface,
+                    closed: Rc::clone(&self.closed),
+                    flushes: Rc::clone(&self.flushes),
+                    batches: Rc::clone(&self.batches),
+                    ready: false,
+                    is_closed: false,
+                },
+                Some(handle),
+            ))
         }
     }
 
@@ -2080,11 +2301,7 @@ mod tests {
     #[test]
     fn explicit_flat_bindings_and_route_free_local_bindings_resolve() {
         let only = OutputDestination::<crate::Value>::new("only", OutputBackendConfig::null());
-        let config = MonitorConfig {
-            spec: "out x\nout y".into(),
-            source: None,
-            inputs: None,
-            sources: None,
+        let config = OutputConfiguration {
             outputs: Some(BTreeMap::from([
                 (VarName::new("x"), route("/x")),
                 (VarName::new("y"), route("/y")),
@@ -2114,11 +2331,7 @@ mod tests {
 
     #[test]
     fn grouped_bindings_make_cross_destination_mirroring_explicit() {
-        let config = MonitorConfig {
-            spec: "out x\nout y".into(),
-            source: None,
-            inputs: None,
-            sources: None,
+        let config = OutputConfiguration {
             outputs: None,
             destination: None,
             destinations: Some(BTreeMap::from([
@@ -2221,11 +2434,7 @@ mod tests {
                 .is_err()
         );
 
-        let monitor = MonitorConfig {
-            spec: "out x".into(),
-            source: None,
-            inputs: None,
-            sources: None,
+        let output_configuration = OutputConfiguration {
             outputs: Some(BTreeMap::from([(VarName::new("x"), route("/monitor/x"))])),
             destination: Some("mirror".into()),
             destinations: None,
@@ -2237,7 +2446,7 @@ mod tests {
             .resolve(
                 [VarName::new("x")],
                 std::iter::empty::<VarName>(),
-                Some(&monitor),
+                Some(&output_configuration),
             )
             .is_err()
         );
@@ -2462,16 +2671,41 @@ mod tests {
     }
 
     #[test]
+    fn stage_wrappers_preserve_interface_reconfiguration() {
+        smol::block_on(async {
+            let interface = OutputInterface::outputs([VarName::new("x")]).unwrap();
+
+            let backend = ReconfigurableRecordingBackend::new();
+            let writer = backend.open(interface.clone()).await.unwrap();
+            let mut writer = OutputStage::Coalesce(OutputCoalescing::count(2).unwrap())
+                .apply(writer, None)
+                .unwrap();
+            assert!(writer.interface_reconfiguration().is_some());
+            writer.close().await.unwrap();
+
+            let writer = backend.open(interface.clone()).await.unwrap();
+            let mut writer = OutputStage::Buffer(OutputBuffer::with_limits(1, Some(1)).unwrap())
+                .apply(writer, None)
+                .unwrap();
+            assert!(writer.interface_reconfiguration().is_some());
+            writer.close().await.unwrap();
+
+            let executor = Rc::new(LocalExecutor::new());
+            let writer = backend.open(interface).await.unwrap();
+            let mut writer =
+                crate::io::output::OutputPump::new(writer, Rc::clone(&executor), 1).unwrap();
+            assert!(writer.interface_reconfiguration().is_some());
+            executor.run(async { writer.close().await.unwrap() }).await;
+        });
+    }
+
+    #[test]
     fn flat_monitor_bindings_override_unused_local_catalogs() {
         let selected = OutputDestination::new("selected", OutputBackendConfig::null())
             .with_routes([(VarName::new("x"), route("/local/x"))]);
         let unused = OutputDestination::new("unused", OutputBackendConfig::null())
             .with_routes([(VarName::new("x"), route("/stale/x"))]);
-        let config = MonitorConfig {
-            spec: "out x".into(),
-            source: None,
-            inputs: None,
-            sources: None,
+        let config = OutputConfiguration {
             outputs: Some(BTreeMap::from([(VarName::new("x"), route("/monitor/x"))])),
             destination: Some("selected".into()),
             destinations: None,
@@ -2511,11 +2745,7 @@ mod tests {
             .with_routes([(VarName::new("x"), route("/local/x"))]);
         let second = OutputDestination::new("second", OutputBackendConfig::null())
             .with_routes([(VarName::new("y"), route("/local/y"))]);
-        let config = MonitorConfig {
-            spec: "out x\nout y".into(),
-            source: None,
-            inputs: None,
-            sources: None,
+        let config = OutputConfiguration {
             outputs: None,
             destination: None,
             destinations: Some(BTreeMap::from([

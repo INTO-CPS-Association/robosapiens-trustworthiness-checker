@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 pub(in crate::dataflow) use super::super::error::StreamProgramError;
 
 impl UnboundEvaluationGraph {
-    fn for_each_dynamic_expression(
+    fn for_each_reconfigurable_expression(
         &mut self,
         visit: &mut impl FnMut(&mut UnboundDynamicExpressionSpec),
     ) {
@@ -17,23 +17,23 @@ impl UnboundEvaluationGraph {
                     else_branch,
                     ..
                 } => {
-                    then_branch.for_each_dynamic_expression(visit);
-                    else_branch.for_each_dynamic_expression(visit);
+                    then_branch.for_each_reconfigurable_expression(visit);
+                    else_branch.for_each_reconfigurable_expression(visit);
                 }
                 _ => {}
             }
         }
     }
 
-    pub(in crate::dataflow) fn resolve_automatic_dynamic_scopes(
+    pub(in crate::dataflow) fn resolve_automatic_reconfigurable_scopes(
         &mut self,
         current_stream: &VarName,
         input_vars: &[VarName],
         stream_vars: &BTreeSet<VarName>,
     ) {
-        self.for_each_dynamic_expression(&mut |spec| match &mut spec.scope {
-            DynamicExpressionScope::Automatic => {
-                spec.scope = DynamicExpressionScope::Restricted {
+        self.for_each_reconfigurable_expression(&mut |spec| {
+            if let ReconfigurableExpressionScope::Automatic { .. } = &spec.scope {
+                spec.scope = ReconfigurableExpressionScope::Automatic {
                     allowed_variables: input_vars
                         .iter()
                         .chain(stream_vars)
@@ -42,35 +42,44 @@ impl UnboundEvaluationGraph {
                         .collect(),
                 };
             }
-            DynamicExpressionScope::Restricted { .. } => {}
         });
     }
 
-    pub(in crate::dataflow) fn restrict_dynamic_scopes(&mut self, allowed_vars: &[VarName]) {
-        self.for_each_dynamic_expression(&mut |spec| {
+    pub(in crate::dataflow) fn restrict_reconfigurable_scopes(&mut self, allowed_vars: &[VarName]) {
+        self.for_each_reconfigurable_expression(&mut |spec| {
             let allowed_variables = match &spec.scope {
-                DynamicExpressionScope::Automatic => allowed_vars.iter().cloned().collect(),
-                DynamicExpressionScope::Restricted { allowed_variables } => allowed_variables
+                ReconfigurableExpressionScope::Automatic { allowed_variables }
+                    if allowed_variables.is_empty() =>
+                {
+                    allowed_vars.iter().cloned().collect()
+                }
+                scope => scope
+                    .allowed_variables()
                     .iter()
                     .filter(|var| allowed_vars.contains(var))
                     .cloned()
                     .collect(),
             };
-            spec.scope = DynamicExpressionScope::Restricted { allowed_variables };
+            spec.scope = spec.scope.with_allowed_variables(allowed_variables);
         });
     }
 
-    fn restrict_dynamic_scopes_to_environment(&mut self, environment: &EnvironmentLayout) {
-        self.for_each_dynamic_expression(&mut |spec| {
+    fn restrict_reconfigurable_scopes_to_environment(&mut self, environment: &EnvironmentLayout) {
+        self.for_each_reconfigurable_expression(&mut |spec| {
             let allowed_variables = match &spec.scope {
-                DynamicExpressionScope::Automatic => environment.variables().cloned().collect(),
-                DynamicExpressionScope::Restricted { allowed_variables } => allowed_variables
+                ReconfigurableExpressionScope::Automatic { allowed_variables }
+                    if allowed_variables.is_empty() =>
+                {
+                    environment.variables().cloned().collect()
+                }
+                scope => scope
+                    .allowed_variables()
                     .iter()
                     .filter(|var| environment.slot(var).is_some())
                     .cloned()
                     .collect(),
             };
-            spec.scope = DynamicExpressionScope::Restricted { allowed_variables };
+            spec.scope = spec.scope.with_allowed_variables(allowed_variables);
         });
     }
 
@@ -79,7 +88,7 @@ impl UnboundEvaluationGraph {
         recursive_output: Option<VarName>,
         environment: Rc<EnvironmentLayout>,
     ) -> Result<Rc<StreamProgram>, StreamProgramError> {
-        self.restrict_dynamic_scopes_to_environment(&environment);
+        self.restrict_reconfigurable_scopes_to_environment(&environment);
         self.validate(false)?;
         let body = bind_graph(self, &environment, recursive_output.as_ref())?;
         body.debug_assert_valid(environment.len());
@@ -388,7 +397,7 @@ fn bind_op(
         UnboundOp::Dynamic(spec) => BoundOp::Dynamic(BoundDynamicExpressionSpec {
             input: r!(spec.input),
             scope: spec.scope,
-            mode: spec.mode,
+            kind: spec.kind,
             typing: spec.typing,
         }),
         UnboundOp::Function { func } => BoundOp::Function {

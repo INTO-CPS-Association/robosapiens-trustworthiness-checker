@@ -174,7 +174,7 @@ impl Drop for NotificationDrain {
     fn drop(&mut self) {
         let _ = self.cancel.try_send(());
         // Dropping the owned task cancels it. It is intentionally not detached;
-        // the task cannot outlive the opened source generation.
+        // the task cannot outlive the opened source.
         let _ = self.task.take();
     }
 }
@@ -718,7 +718,7 @@ async fn recover_connection(
     state: &mut KnowledgeStateMachine,
 ) -> anyhow::Result<(RedisKnowledgeConnection, Option<InputBatch<Value>>)> {
     // Stop and await the old drain before opening a replacement. This makes
-    // connection and generation barriers explicit: an old notification cannot
+    // connection and reconfiguration barriers explicit: an old notification cannot
     // mark the new connection after the fresh snapshot has begun.
     connection.stop_drain().await;
     state.reset_reads_for_reconnect();
@@ -1302,7 +1302,7 @@ mod redis_knowledge_tests {
     }
 
     #[test]
-    fn notification_drain_cancellation_stops_old_generation_processing() {
+    fn notification_drain_cancellation_stops_cancelled_source_processing() {
         smol::block_on(async {
             let tracker = std::sync::Arc::new(std::sync::Mutex::new(NotificationTracker::new(2)));
             let (messages, receiver) = async_channel::bounded(1);

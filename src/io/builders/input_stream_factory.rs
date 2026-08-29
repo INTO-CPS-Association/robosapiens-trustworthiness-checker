@@ -15,8 +15,8 @@ use crate::core::{
 };
 use crate::io::RedisKnowledgeConfig;
 use crate::io::config::{
-    CodecId, InputConfigFile, MonitorConfig, ResolvedBinding, ResolvedInput, ResolvedSource, Route,
-    SourceId,
+    CodecId, InputConfigFile, InputConfiguration, ReconfigurationRequest, ResolvedBinding,
+    ResolvedInput, ResolvedSource, Route, SourceId,
 };
 use crate::io::mqtt::MqttInputBackend;
 use crate::io::reconfigurable_input::{
@@ -121,7 +121,7 @@ where
 
 /// An owned local source set containing source-owned catalogs and
 /// security-sensitive transport configuration. It is deliberately separate
-/// from generation-specific resolved input.
+/// from request-specific resolved input.
 #[derive(Clone, Debug)]
 pub struct InputSources<V = Value> {
     sources: BTreeMap<SourceId, InputSource<V>>,
@@ -130,7 +130,7 @@ pub struct InputSources<V = Value> {
 
 /// The fixed source and route used by a reconfigurable input adapter.
 /// This borrows only the reusable source configuration; the route is owned so
-/// the adapter can retain it independently of any generation plan.
+/// the adapter can retain it independently of any resolved input.
 #[derive(Debug)]
 pub(crate) struct ResolvedReconfigurationSource<'a, V> {
     source_id: &'a SourceId,
@@ -196,6 +196,23 @@ impl<V> InputSources<V> {
 
     pub fn source_mut(&mut self, source: &str) -> Option<&mut InputSource<V>> {
         self.sources.get_mut(source)
+    }
+
+    fn configuration_fingerprint(&self) -> String {
+        let sources = self
+            .sources
+            .iter()
+            .map(|(id, source)| (id, source.configuration_fingerprint()))
+            .collect::<Vec<_>>();
+        format!("default={:?};sources={sources:?}", self.default)
+    }
+
+    fn sole_reconfigurable_source_id(&self) -> Option<SourceId> {
+        if self.sources.len() != 1 {
+            return None;
+        }
+        let (source_id, source) = self.sources.iter().next()?;
+        source.supports_reconfiguration().then(|| source_id.clone())
     }
 
     pub(crate) fn resolve_reconfiguration_source(
@@ -389,6 +406,11 @@ impl<V> InputSources<V> {
             source.validate_binding(&binding)?;
             by_source.entry(source_id).or_default().push(binding);
         }
+        if variables.is_empty() {
+            if let Some(source_id) = self.sole_reconfigurable_source_id() {
+                by_source.entry(source_id).or_default();
+            }
+        }
         let resolved = ResolvedInput::new(
             by_source
                 .into_iter()
@@ -397,9 +419,9 @@ impl<V> InputSources<V> {
         self.validate_resolved(&resolved, variables)
     }
 
-    pub(crate) fn resolve_monitor_config(
+    pub(crate) fn resolve_input_configuration(
         &self,
-        config: &MonitorConfig,
+        config: &InputConfiguration,
         variables: &BTreeSet<VarName>,
     ) -> anyhow::Result<ResolvedInput> {
         config.validate_structure()?;
@@ -417,6 +439,25 @@ impl<V> InputSources<V> {
             BTreeMap::new()
         };
         let mut grouped = BTreeMap::<SourceId, Vec<ResolvedBinding>>::new();
+        if explicit_bindings.is_empty() {
+            let configured_source = config.source.clone().or_else(|| {
+                config.sources.as_ref().and_then(|sources| {
+                    if sources.len() == 1 {
+                        sources.keys().next().cloned()
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(source_id) = configured_source {
+                grouped.entry(source_id).or_default();
+            } else if config.sources.is_none()
+                && variables.is_empty()
+                && let Some(source_id) = self.sole_reconfigurable_source_id()
+            {
+                grouped.entry(source_id).or_default();
+            }
+        }
         for (source, variable, route) in explicit_bindings {
             let source_id = match source {
                 Some(source) => source.to_owned(),
@@ -545,6 +586,62 @@ impl<V> InputSource<V> {
             kind,
             reconfiguration_route: None,
         }
+    }
+
+    fn configuration_fingerprint(&self) -> String {
+        let kind = match &self.kind {
+            InputSourceKind::File { path } => format!("file:path={path:?}"),
+            InputSourceKind::InMemoryRows { columns } => {
+                let columns = columns
+                    .iter()
+                    .map(|(variable, values)| (variable.to_string(), values.len()))
+                    .collect::<Vec<_>>();
+                format!("in-memory-rows:columns={columns:?}")
+            }
+            InputSourceKind::InMemoryTicks { batches } => {
+                let batches = batches
+                    .iter()
+                    .map(|batch| {
+                        batch
+                            .updates()
+                            .map(|update| update.variable.to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                format!("in-memory-ticks:batches={batches:?}")
+            }
+            InputSourceKind::Ros { routes, executor } => {
+                format!("ros:routes={routes:?};executor={:p}", Rc::as_ptr(executor))
+            }
+            InputSourceKind::Mqtt {
+                host,
+                routes,
+                port,
+                backend,
+            } => format!("mqtt:host={host:?};routes={routes:?};port={port:?};backend={backend:?}"),
+            InputSourceKind::Redis { host, routes, port } => {
+                format!("redis:host={host:?};routes={routes:?};port={port:?}")
+            }
+            InputSourceKind::RedisKnowledge(config) => {
+                format!("redis-knowledge:{config:?}")
+            }
+            InputSourceKind::Manual { fanouts, control } => {
+                let fanouts = fanouts
+                    .iter()
+                    .map(|(variable, fanout)| {
+                        (variable.to_string(), format!("{:p}", Rc::as_ptr(fanout)))
+                    })
+                    .collect::<Vec<_>>();
+                let control = control
+                    .as_ref()
+                    .map(|control| format!("{:p}", Rc::as_ptr(control)));
+                format!("manual:fanouts={fanouts:?};control={control:?}")
+            }
+        };
+        format!(
+            "kind={kind};reconfiguration_route={:?}",
+            self.reconfiguration_route
+        )
     }
 
     /// Set the transport-local route carrying monitor reconfiguration messages.
@@ -1088,13 +1185,13 @@ impl<V> InputSource<V> {
                     anyhow::bail!("manual input has no configured control source")
                 };
                 let mut receiver = control.subscribe();
-                let control: crate::OutputStream<anyhow::Result<MonitorConfig>> =
+                let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
                     Box::pin(async_stream::try_stream! {
                         while let Some(payload) = receiver.recv().await {
                             match payload {
                                 Value::NoVal => continue,
                                 Value::Str(payload) => {
-                                    yield MonitorConfig::from_json(payload.as_str())?;
+                                    yield ReconfigurationRequest::from_json(payload.as_str())?;
                                 }
                                 other => Err(anyhow!(
                                     "manual reconfiguration payload must be a string, got {other:?}"
@@ -1115,13 +1212,13 @@ impl<V> InputSource<V> {
 
 enum ControlledInputNext<V> {
     Data(anyhow::Result<InputBatch<V>>),
-    Control(anyhow::Result<MonitorConfig>),
+    Control(anyhow::Result<ReconfigurationRequest>),
     Complete,
 }
 
 fn poll_controlled_input<V>(
     data: &mut Option<InputStream<V>>,
-    control: &mut Option<crate::OutputStream<anyhow::Result<MonitorConfig>>>,
+    control: &mut Option<crate::OutputStream<anyhow::Result<ReconfigurationRequest>>>,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<ControlledInputNext<V>> {
     // Check control first for responsiveness only; independent ROS/manual
@@ -1169,7 +1266,7 @@ fn validate_ros_control_route(
 
 fn controlled_input_stream<V: 'static>(
     mut data: Option<InputStream<V>>,
-    control: crate::OutputStream<anyhow::Result<MonitorConfig>>,
+    control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>>,
 ) -> ReconfigurableInputStream<V> {
     Box::pin(async_stream::try_stream! {
         let mut control = Some(control);
@@ -1181,7 +1278,6 @@ fn controlled_input_stream<V: 'static>(
             {
                 ControlledInputNext::Control(request) => {
                     yield ReconfigurableInputItem::Reconfigure(request?);
-                    return;
                 }
                 ControlledInputNext::Data(batch) => {
                     yield ReconfigurableInputItem::Data(batch?);
@@ -1196,6 +1292,7 @@ fn controlled_input_stream<V: 'static>(
 pub struct InputPipeline<V = Value> {
     sources: InputSources<V>,
     stages: Box<[InputStage]>,
+    configuration_identity: Rc<()>,
 }
 
 impl<V> InputPipeline<V> {
@@ -1203,6 +1300,7 @@ impl<V> InputPipeline<V> {
         Self {
             sources: InputSources::single(source),
             stages: Box::new([]),
+            configuration_identity: Rc::new(()),
         }
     }
 
@@ -1210,6 +1308,7 @@ impl<V> InputPipeline<V> {
         Self {
             sources,
             stages: Box::new([]),
+            configuration_identity: Rc::new(()),
         }
     }
 
@@ -1234,12 +1333,62 @@ impl<V> InputPipeline<V> {
         &self.stages
     }
 
+    fn configuration_identity(&self) -> &Rc<()> {
+        &self.configuration_identity
+    }
+
+    fn configuration_fingerprint(&self) -> String {
+        format!(
+            "sources={};stages={:?}",
+            self.sources.configuration_fingerprint(),
+            self.stages
+        )
+    }
+
+    fn validate_resolved(
+        &self,
+        resolved: &ResolvedInput,
+        pipeline_configuration: &str,
+    ) -> anyhow::Result<()> {
+        resolved.validate_for_pipeline(self.configuration_identity(), pipeline_configuration)?;
+
+        let mut source_ids = BTreeSet::new();
+        let mut variables = BTreeSet::new();
+        for source_plan in resolved.sources() {
+            anyhow::ensure!(
+                source_ids.insert(source_plan.source().clone()),
+                "resolved input source `{}` is duplicated",
+                source_plan.source()
+            );
+            let source = self
+                .sources
+                .sources
+                .get(source_plan.source())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "resolved input source `{}` is not registered",
+                        source_plan.source()
+                    )
+                })?;
+            source.validate_bindings(source_plan.bindings())?;
+            for binding in source_plan.bindings() {
+                source.validate_binding(binding)?;
+                anyhow::ensure!(
+                    variables.insert(binding.variable().clone()),
+                    "resolved input variable `{}` is assigned to multiple source owners",
+                    binding.variable()
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_reconfigurable(
         &self,
         requested_route: Option<&str>,
     ) -> anyhow::Result<()> {
         // Only the selected control source is opened by a reconfigurable
-        // generation. Other configured sources may remain inactive, including
+        // runtime. Other configured sources may remain inactive, including
         // sources that cannot carry a live control route.
         self.sources
             .resolve_reconfiguration_source(requested_route)
@@ -1249,12 +1398,16 @@ impl<V> InputPipeline<V> {
     pub(crate) fn resolve(
         &self,
         model_inputs: &BTreeSet<VarName>,
-        monitor_config: Option<&MonitorConfig>,
+        input_configuration: Option<&InputConfiguration>,
     ) -> anyhow::Result<ResolvedInput> {
-        match monitor_config {
-            Some(config) => self.sources.resolve_monitor_config(config, model_inputs),
+        let resolved = match input_configuration {
+            Some(config) => self
+                .sources
+                .resolve_input_configuration(config, model_inputs),
             None => self.sources.resolve_default(model_inputs),
-        }
+        }?;
+        let pipeline_configuration = self.configuration_fingerprint();
+        Ok(resolved.attach_to_pipeline(self.configuration_identity(), &pipeline_configuration))
     }
 
     pub fn into_sources(self) -> InputSources<V> {
@@ -1310,6 +1463,48 @@ impl<V> InputPipeline<V> {
         Ok(stream)
     }
 
+    fn select_reconfiguration_source(
+        &self,
+        resolved: &ResolvedInput,
+        control: &ReconfigurationControl,
+    ) -> anyhow::Result<ResolvedSource> {
+        // A reconfiguration command is ordered only when data and control are
+        // delivered by the same source-owned item stream. Validate the whole
+        // resolution before looking up or opening any transport so a control
+        // barrier cannot be associated with one source while another active
+        // source still has data pending.
+        let pipeline_configuration = self.configuration_fingerprint();
+        self.validate_resolved(resolved, &pipeline_configuration)?;
+        match resolved.sources() {
+            [] => Ok(ResolvedSource::new(control.source.clone(), [])),
+            [source_plan] => {
+                anyhow::ensure!(
+                    source_plan.source() == &control.source,
+                    "reconfigurable input data source `{}` differs from selected control source `{}` (route `{}`); bind every active model input to `{}` or select a control route owned by `{}`",
+                    source_plan.source(),
+                    control.source,
+                    control.route,
+                    control.source,
+                    source_plan.source()
+                );
+                Ok(source_plan.clone())
+            }
+            source_plans => {
+                let active_sources = source_plans
+                    .iter()
+                    .map(|source| source.source().as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "reconfigurable input has active model bindings across sources [{active_sources}]; data and the control route `{}` must use one source (selected control source `{}`). Bind all active inputs to `{}` or select a control route on their single source",
+                    control.route,
+                    control.source,
+                    control.source
+                );
+            }
+        }
+    }
+
     pub(crate) async fn open_reconfigurable(
         &self,
         resolved: ResolvedInput,
@@ -1318,44 +1513,7 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        // A reconfiguration command is ordered only when data and control are
-        // delivered by the same source-owned item stream. Validate the whole
-        // generation before looking up or opening any transport so a command
-        // can never terminate one source while another active source still has
-        // data pending.
-        let mut source_plans = resolved.into_sources();
-        let source_plan = match source_plans.len() {
-            0 => ResolvedSource::new(control.source.clone(), []),
-            1 => {
-                let source_plan = source_plans.pop().expect("source count checked above");
-                anyhow::ensure!(
-                    source_plan.source() == &control.source,
-                    "reconfigurable generation data source `{}` differs from selected control source `{}` (route `{}`); bind every active model input to `{}` or select a control route owned by `{}`",
-                    source_plan.source(),
-                    control.source,
-                    control.route,
-                    control.source,
-                    source_plan.source()
-                );
-                source_plan
-            }
-            _ => {
-                let active_sources = source_plans
-                    .iter()
-                    .map(|source| source.source().as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                anyhow::bail!(
-                    "reconfigurable generation has active model bindings across sources [{active_sources}]; data and the control route `{}` must use one source (selected control source `{}`). Bind all active inputs to `{}` or select a control route on their single source",
-                    control.route,
-                    control.source,
-                    control.source
-                );
-            }
-        };
-
-        // The source-plan check above is deliberately complete before this
-        // lookup and before the source opener can acquire any resource.
+        let source_plan = self.select_reconfiguration_source(&resolved, control)?;
         let source = self.sources.sources.get(&control.source).ok_or_else(|| {
             anyhow::anyhow!("input source `{}` is not registered", control.source)
         })?;
@@ -1496,14 +1654,14 @@ mod resolution_tests {
                 InputSource::mqtt(Some(mqtt_routes("/catalog/knowledge")), None),
             );
         let pipeline = InputPipeline::from_sources(sources);
-        let config = MonitorConfig::from_json(
-            r#"{
-                "spec": "in x",
-                "source": "telemetry",
-                "inputs": {"x": "/replacement/x"}
-            }"#,
-        )
-        .unwrap();
+        let config = InputConfiguration {
+            source: Some("telemetry".into()),
+            inputs: Some(BTreeMap::from([(
+                VarName::new("x"),
+                Route::new("/replacement/x", None).unwrap(),
+            )])),
+            sources: None,
+        };
         let variables = BTreeSet::from([VarName::new("x")]);
         let resolved = pipeline.resolve(&variables, Some(&config)).unwrap();
         assert_eq!(resolved.sources()[0].source(), "telemetry");
@@ -1531,15 +1689,16 @@ mod resolution_tests {
     }
 
     #[test]
-    fn explicit_monitor_bindings_must_cover_all_inputs() {
+    fn explicit_input_bindings_must_cover_all_inputs() {
         let pipeline = InputPipeline::<Value>::new(InputSource::mqtt(None, None));
-        let config = MonitorConfig::from_json(
-            r#"{
-                "spec": "in x\nin y",
-                "inputs": {"x": "/x"}
-            }"#,
-        )
-        .unwrap();
+        let config = InputConfiguration {
+            source: None,
+            inputs: Some(BTreeMap::from([(
+                VarName::new("x"),
+                Route::new("/x", None).unwrap(),
+            )])),
+            sources: None,
+        };
         let variables = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
         let error = pipeline.resolve(&variables, Some(&config)).unwrap_err();
         assert!(error.to_string().contains("missing bindings"));
@@ -1641,7 +1800,7 @@ mod resolution_tests {
     }
 
     #[test]
-    fn reconfigurable_generation_rejects_data_source_different_from_control_before_opening() {
+    fn reconfigurable_input_rejects_data_source_different_from_control_before_opening() {
         smol::block_on(async {
             let (data_sender, data_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
@@ -1663,12 +1822,12 @@ mod resolution_tests {
             let control = ReconfigurationControl::new("control", "control").unwrap();
 
             // Both values are pending before the attempted open. The source
-            // ownership check must reject the generation without subscribing
+            // ownership check must reject the resolution without subscribing
             // to either fanout, rather than returning a stream that could let
             // the command terminate over pending data from `data`.
             data_sender.send(Value::Int(7)).await;
             control_sender
-                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
             let error = match pipeline.open_reconfigurable(resolved, &control).await {
                 Ok(_) => panic!("data/control source mismatch must be rejected before opening"),
@@ -1686,7 +1845,7 @@ mod resolution_tests {
     }
 
     #[test]
-    fn reconfigurable_generation_rejects_bindings_spanning_sources_before_opening() {
+    fn reconfigurable_input_rejects_bindings_spanning_sources_before_opening() {
         smol::block_on(async {
             let (data_sender, data_fanout) = Fanout::<Value>::new();
             let (_control_data_sender, control_data_fanout) = Fanout::<Value>::new();
@@ -1710,10 +1869,10 @@ mod resolution_tests {
 
             data_sender.send(Value::Int(1)).await;
             control_sender
-                .send(Value::Str(r#"{"spec":"in x\nin y"}"#.into()))
+                .send(Value::Str(r#"{"specification":"in x\nin y"}"#.into()))
                 .await;
             let error = match pipeline.open_reconfigurable(resolved, &control).await {
-                Ok(_) => panic!("cross-source generation must be rejected before opening"),
+                Ok(_) => panic!("cross-source resolution must be rejected before opening"),
                 Err(error) => error,
             };
 
@@ -1756,7 +1915,7 @@ mod resolution_tests {
                 .unwrap();
 
             control_sender
-                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
             assert!(matches!(
                 stream.next().await.unwrap().unwrap(),
@@ -1799,7 +1958,7 @@ mod resolution_tests {
     }
 
     #[test]
-    fn manual_control_requires_external_quiescence_before_publish() {
+    fn manual_control_does_not_discard_data_queued_before_the_barrier() {
         smol::block_on(async {
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let (data_sender, data_fanout) = Fanout::<Value>::new();
@@ -1816,21 +1975,22 @@ mod resolution_tests {
                 .await
                 .unwrap();
 
-            // Both independent fanouts are populated before the first poll.
-            // A control item may therefore terminate the generation while
-            // earlier data is still queued. This is a deterministic reminder
-            // that manual producers must quiesce and acknowledge prior data
-            // before publishing control.
+            // Independent manual fanouts are not an ordering edge. Control is
+            // prioritized for responsiveness, while the reusable boundary
+            // still preserves already queued data afterwards.
             data_sender.send(Value::Int(7)).await;
             control_sender
-                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
 
             assert!(matches!(
                 stream.next().await.unwrap().unwrap(),
                 ReconfigurableInputItem::Reconfigure(_)
             ));
-            assert!(stream.next().await.is_none());
+            let ReconfigurableInputItem::Data(batch) = stream.next().await.unwrap().unwrap() else {
+                panic!("data queued before a control barrier must remain live");
+            };
+            assert_eq!(*batch.updates().next().unwrap().value, Value::Int(7));
         });
     }
 
@@ -1860,12 +2020,13 @@ mod resolution_tests {
             assert!(matches!(first, ReconfigurableInputItem::Data(_)));
 
             control_sender
-                .send(Value::Str(r#"{"spec":"in x"}"#.into()))
+                .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
 
             let item = stream.next().await.unwrap().unwrap();
             assert!(matches!(item, ReconfigurableInputItem::Reconfigure(_)));
-            assert!(stream.next().await.is_none());
+            let item = stream.next().await.unwrap().unwrap();
+            assert!(matches!(item, ReconfigurableInputItem::Data(_)));
         });
     }
 
@@ -1905,10 +2066,10 @@ mod resolution_tests {
     fn data_eof_leaves_control_active() {
         smol::block_on(async {
             let data: InputStream<Value> = Box::pin(futures::stream::empty());
-            let control: crate::OutputStream<anyhow::Result<MonitorConfig>> =
+            let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::once(async {
                     smol::future::yield_now().await;
-                    MonitorConfig::from_json(r#"{"spec":"in x"}"#)
+                    ReconfigurationRequest::from_json(r#"{"specification":"in x"}"#)
                 }));
             let mut stream = controlled_input_stream(Some(data), control);
 
@@ -1922,7 +2083,7 @@ mod resolution_tests {
     fn controlled_input_completes_after_both_branches_end() {
         smol::block_on(async {
             let data: InputStream<Value> = Box::pin(futures::stream::empty());
-            let control: crate::OutputStream<anyhow::Result<MonitorConfig>> =
+            let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::empty());
             let mut stream = controlled_input_stream(Some(data), control);
 
@@ -1964,7 +2125,7 @@ mod resolution_tests {
     }
 
     #[test]
-    fn redis_knowledge_catalog_is_generation_scoped_and_not_a_control_source() {
+    fn redis_knowledge_catalog_is_resolution_scoped_and_not_a_control_source() {
         let source = InputSource::<Value>::redis_knowledge(RedisKnowledgeConfig {
             host: "redis".to_owned(),
             port: None,
@@ -2006,14 +2167,14 @@ mod resolution_tests {
                 retry: crate::io::RedisKnowledgeRetry::default(),
             },
         ));
-        let config = MonitorConfig::from_json(
-            r#"{
-                spec: "in x\nin y",
-                source: "default",
-                inputs: {x: "same:key", y: "same:key"}
-            }"#,
-        )
-        .unwrap();
+        let config = InputConfiguration {
+            source: Some("default".into()),
+            inputs: Some(BTreeMap::from([
+                (VarName::new("x"), Route::new("same:key", None).unwrap()),
+                (VarName::new("y"), Route::new("same:key", None).unwrap()),
+            ])),
+            sources: None,
+        };
         let error = pipeline
             .resolve(
                 &BTreeSet::from([VarName::new("x"), VarName::new("y")]),

@@ -1,15 +1,46 @@
+use super::super::history::HistoryId;
+use super::super::history_requirements::VariableHistoryRequirement;
 use super::super::ir::*;
 use super::super::*;
-use super::dynamic_expressions::update_active_expression_with_change;
+
+use super::environment_projection::EnvironmentProjection;
+use super::evaluator::Evaluator;
 use super::quickening::ScalarValue;
-use super::stream_evaluator::StreamEvaluator;
 use crate::core::{RuntimeFunction, RuntimeFunctionValueCallable};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
-#[derive(Clone)]
-pub(in crate::dataflow) struct StreamState {
+#[cfg(test)]
+use std::cell::Cell;
+
+pub(in crate::dataflow) struct EvaluatorState {
     pub(in crate::dataflow) node_values: Vec<Value>,
     pub(in crate::dataflow) node_states: Vec<NodeState>,
+}
+
+impl Clone for EvaluatorState {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        STATE_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            node_values: self.node_values.clone(),
+            node_states: self.node_states.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATE_CLONES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::dataflow) fn reset_state_clone_count() {
+    STATE_CLONES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::dataflow) fn state_clone_count() -> usize {
+    STATE_CLONES.with(Cell::get)
 }
 
 #[derive(Clone)]
@@ -63,7 +94,7 @@ pub(in crate::dataflow) enum NodeState {
         captures: Rc<RefCell<Vec<Value>>>,
     },
     PersistentCall {
-        evaluator: StreamEvaluator,
+        evaluator: Evaluator,
         environment_values: Vec<Value>,
         last_arguments: Vec<Option<Value>>,
     },
@@ -73,8 +104,8 @@ pub(in crate::dataflow) enum NodeState {
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct LazyIfState {
-    pub(in crate::dataflow) then_state: Box<StreamState>,
-    pub(in crate::dataflow) else_state: Box<StreamState>,
+    pub(in crate::dataflow) then_state: Box<EvaluatorState>,
+    pub(in crate::dataflow) else_state: Box<EvaluatorState>,
     pub(in crate::dataflow) last_condition: Option<Value>,
     pub(in crate::dataflow) last_then_value: Option<Value>,
     pub(in crate::dataflow) last_else_value: Option<Value>,
@@ -95,7 +126,7 @@ pub(in crate::dataflow) const DYNAMIC_EXPRESSION_CACHE_CAPACITY: usize = 4;
 #[derive(Clone, Default)]
 pub(in crate::dataflow) struct DynamicExpressionState {
     pub(in crate::dataflow) active_expression: Option<ActiveExpression>,
-    /// Immutable program templates in most-recently-used order.
+    /// Immutable program templates in least-recently-used order.
     pub(in crate::dataflow) template_cache: Vec<Rc<DynamicExpressionTemplate>>,
     pub(in crate::dataflow) last_source_value: Option<Value>,
     /// `defer`'s retained published result: the last non-`NoVal` body result (`Deferred` counts as
@@ -106,29 +137,25 @@ pub(in crate::dataflow) struct DynamicExpressionState {
 }
 
 impl DynamicExpressionState {
-    pub(in crate::dataflow) fn cached_template(
-        &mut self,
-        source_text: &EcoString,
-    ) -> Option<Rc<DynamicExpressionTemplate>> {
-        let index = self
+    pub(in crate::dataflow) fn cache_template(&mut self, template: Rc<DynamicExpressionTemplate>) {
+        if let Some(index) = self
             .template_cache
             .iter()
-            .position(|template| &template.source_text == source_text)?;
-        let template = self.template_cache.remove(index);
-        self.template_cache.insert(0, Rc::clone(&template));
-        Some(template)
-    }
-
-    pub(in crate::dataflow) fn cache_template(&mut self, template: Rc<DynamicExpressionTemplate>) {
-        debug_assert!(
-            self.template_cache
-                .iter()
-                .all(|cached| cached.source_text != template.source_text),
-            "dynamic expression template cache contains duplicate source text"
-        );
-        self.template_cache.insert(0, template);
-        self.template_cache
-            .truncate(DYNAMIC_EXPRESSION_CACHE_CAPACITY);
+            .position(|cached| cached.source_text == template.source_text)
+        {
+            let cached = self.template_cache.remove(index);
+            if Rc::ptr_eq(
+                &cached.program.environment_layout,
+                &template.program.environment_layout,
+            ) {
+                self.template_cache.push(cached);
+                return;
+            }
+        }
+        if self.template_cache.len() == DYNAMIC_EXPRESSION_CACHE_CAPACITY {
+            self.template_cache.remove(0);
+        }
+        self.template_cache.push(template);
     }
 
     pub(in crate::dataflow) fn update_environment(
@@ -139,25 +166,39 @@ impl DynamicExpressionState {
         let Some(active) = &self.active_expression else {
             return;
         };
-        if self.environment_values.len() != environment_values.len() {
+        let projection = &active.environment_projection;
+        if self.environment_values.len() != projection.nested_environment_size() {
             self.environment_values
-                .resize(environment_values.len(), Value::NoVal);
+                .resize(projection.nested_environment_size(), Value::NoVal);
         }
 
         if let Some(retained) = retained_environment_values {
             debug_assert_eq!(environment_values.len(), retained.len());
-            for &slot in &active.environment_slots {
-                let current = &environment_values[slot.index()];
-                self.environment_values[slot.index()] = if current == &Value::NoVal {
-                    retained[slot.index()].clone()
+            for binding in projection.bindings() {
+                let current = &environment_values[binding.outer_slot.index()];
+                self.environment_values[binding.nested_slot.index()] = if current == &Value::NoVal {
+                    retained[binding.outer_slot.index()].clone()
                 } else {
                     current.clone()
                 };
             }
         } else {
-            for &slot in &active.environment_slots {
-                self.environment_values[slot.index()] = environment_values[slot.index()].clone();
+            for binding in projection.bindings() {
+                self.environment_values[binding.nested_slot.index()] =
+                    environment_values[binding.outer_slot.index()].clone();
             }
+        }
+    }
+
+    pub(in crate::dataflow) fn for_each_active_body_history_requirement(
+        &self,
+        visit: &mut impl FnMut(VariableHistoryRequirement),
+    ) {
+        let Some(active) = &self.active_expression else {
+            return;
+        };
+        for &requirement in active.environment_projection.outer_history_requirements() {
+            visit(requirement);
         }
     }
 }
@@ -166,14 +207,23 @@ impl DynamicExpressionState {
 pub(in crate::dataflow) struct DynamicExpressionTemplate {
     pub(in crate::dataflow) source_text: EcoString,
     pub(in crate::dataflow) program: Rc<StreamProgram>,
-    pub(in crate::dataflow) dependency_slots: Vec<EnvironmentSlot>,
-    pub(in crate::dataflow) environment_slots: Vec<EnvironmentSlot>,
+    pub(in crate::dataflow) nested_dependency_slots: Vec<EnvironmentSlot>,
+    pub(in crate::dataflow) nested_environment_slots: Vec<EnvironmentSlot>,
+    pub(in crate::dataflow) nested_history_requirements:
+        super::super::history_requirements::HistoryRequirements,
 }
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct ActiveExpression {
     pub(in crate::dataflow) template: Rc<DynamicExpressionTemplate>,
-    pub(in crate::dataflow) evaluator: StreamEvaluator,
+    pub(in crate::dataflow) evaluator: Evaluator,
+    pub(in crate::dataflow) environment_projection: EnvironmentProjection,
+}
+
+impl ActiveExpression {
+    pub(in crate::dataflow) fn rebind_environment(&mut self, projection: EnvironmentProjection) {
+        self.environment_projection = projection;
+    }
 }
 
 impl Deref for ActiveExpression {
@@ -191,6 +241,7 @@ pub(in crate::dataflow) struct DelayState {
     filled_slots: usize,
     last_output: Option<Value>,
     write_pending: bool,
+    shared_read_pending: bool,
     staged_recursive_value: Option<Value>,
 }
 
@@ -202,6 +253,7 @@ pub(in crate::dataflow) struct ScalarDelayState {
     filled_slots: usize,
     last_output: Option<ScalarValue>,
     write_pending: bool,
+    shared_read_pending: bool,
     staged_recursive_value: Option<ScalarValue>,
 }
 
@@ -213,6 +265,19 @@ impl DelayState {
             filled_slots: 0,
             last_output: None,
             write_pending: false,
+            shared_read_pending: false,
+            staged_recursive_value: None,
+        }
+    }
+
+    pub(in crate::dataflow) fn new_shared() -> Self {
+        Self {
+            values: Vec::new(),
+            next_write: 0,
+            filled_slots: 0,
+            last_output: None,
+            write_pending: false,
+            shared_read_pending: false,
             staged_recursive_value: None,
         }
     }
@@ -236,7 +301,7 @@ impl DelayState {
 
     pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> Value {
         debug_assert!(
-            !self.write_pending,
+            !self.write_pending && !self.shared_read_pending,
             "delay was evaluated more than once before commit"
         );
         self.write_pending = true;
@@ -244,7 +309,23 @@ impl DelayState {
         super::lifting::retain_last_value(previous, &mut self.last_output)
     }
 
+    pub(in crate::dataflow) fn read_shared_value(&mut self, value: Value) -> Value {
+        debug_assert!(
+            !self.write_pending && !self.shared_read_pending,
+            "delay was evaluated more than once before commit"
+        );
+        self.shared_read_pending = true;
+        self.values.clear();
+        self.next_write = 0;
+        self.filled_slots = 0;
+        super::lifting::retain_last_value(value, &mut self.last_output)
+    }
+
     pub(in crate::dataflow) fn commit_staged_write(&mut self, value: Value) {
+        if self.shared_read_pending {
+            self.shared_read_pending = false;
+            return;
+        }
         if self.write_pending {
             self.write_pending = false;
             self.push_value(value);
@@ -253,6 +334,7 @@ impl DelayState {
 
     pub(in crate::dataflow) fn discard_staged_write(&mut self) {
         self.write_pending = false;
+        self.shared_read_pending = false;
     }
 
     pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: Value) {
@@ -282,6 +364,7 @@ impl DelayState {
         self.filled_slots = 0;
         self.last_output = None;
         self.write_pending = false;
+        self.shared_read_pending = false;
         self.staged_recursive_value = None;
     }
 
@@ -301,6 +384,7 @@ impl DelayState {
             filled_slots: self.filled_slots,
             last_output: optional_scalar(&self.last_output)?,
             write_pending: self.write_pending,
+            shared_read_pending: self.shared_read_pending,
             staged_recursive_value: optional_scalar(&self.staged_recursive_value)?,
         })
     }
@@ -333,6 +417,7 @@ impl ScalarDelayState {
         self.filled_slots = filled_slots.min(self.values.len());
         self.last_output = last_output;
         self.write_pending = false;
+        self.shared_read_pending = false;
         self.staged_recursive_value = None;
     }
 
@@ -347,10 +432,26 @@ impl ScalarDelayState {
 
     #[inline]
     pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> ScalarValue {
-        debug_assert!(!self.write_pending);
+        debug_assert!(!self.write_pending && !self.shared_read_pending);
         self.write_pending = true;
         let previous = self.read_delayed_value();
         match previous {
+            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
+            value => {
+                self.last_output = Some(value);
+                value
+            }
+        }
+    }
+
+    #[inline]
+    pub(in crate::dataflow) fn read_shared_value(&mut self, value: ScalarValue) -> ScalarValue {
+        debug_assert!(!self.write_pending && !self.shared_read_pending);
+        self.shared_read_pending = true;
+        self.values.clear();
+        self.next_write = 0;
+        self.filled_slots = 0;
+        match value {
             ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
             value => {
                 self.last_output = Some(value);
@@ -372,6 +473,10 @@ impl ScalarDelayState {
 
     #[inline]
     pub(in crate::dataflow) fn commit_staged_write(&mut self, value: ScalarValue) {
+        if self.shared_read_pending {
+            self.shared_read_pending = false;
+            return;
+        }
         if !self.write_pending {
             return;
         }
@@ -386,6 +491,7 @@ impl ScalarDelayState {
 
     pub(in crate::dataflow) fn discard_staged_write(&mut self) {
         self.write_pending = false;
+        self.shared_read_pending = false;
     }
 
     pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: ScalarValue) {
@@ -421,6 +527,7 @@ impl ScalarDelayState {
             filled_slots: self.filled_slots,
             last_output: self.last_output.map(ScalarValue::into_value),
             write_pending: self.write_pending,
+            shared_read_pending: self.shared_read_pending,
             staged_recursive_value: self.staged_recursive_value.map(ScalarValue::into_value),
         }
     }
@@ -430,70 +537,145 @@ impl ScalarDelayState {
         self.filled_slots = 0;
         self.last_output = None;
         self.write_pending = false;
+        self.shared_read_pending = false;
         self.staged_recursive_value = None;
     }
 }
 
-impl StreamState {
+impl EvaluatorState {
+    #[cfg(test)]
     pub(in crate::dataflow) fn new(body: &BoundEvaluationGraph) -> Self {
-        Self::new_for_nodes(&body.nodes)
+        Self::new_for_nodes(&body.nodes, &[])
     }
 
-    /// Copy state after the caller has established semantic program compatibility.
+    pub(in crate::dataflow) fn new_with_history(
+        body: &BoundEvaluationGraph,
+        history_bindings: &[Option<HistoryId>],
+    ) -> Self {
+        Self::new_for_nodes(&body.nodes, history_bindings)
+    }
+
+    /// Perform the read-only structural part of an ownership-moving context rewrite.
     ///
-    /// The recursive walk is deliberately aware of the corresponding bound programs.  This lets
-    /// nested evaluators and capture/environment vectors can be remapped by variable name instead of
-    /// by replacement-local slot position.
-    pub(in crate::dataflow) fn transfer_from(
-        &mut self,
+    /// Native execution may temporarily represent a canonical owner with a compact state variant,
+    /// so this preflight checks the graph and mapping shape but leaves representation checks to
+    /// [`Self::validate_context_rewrite`] after native state has been materialized.
+    pub(in crate::dataflow) fn validate_context_mapping(
+        &self,
+        source: &Self,
+        target_body: &BoundEvaluationGraph,
+        source_body: &BoundEvaluationGraph,
+        mapping: &StreamMapping,
+    ) -> bool {
+        if matches!(mapping, StreamMapping::Unmapped) {
+            return true;
+        }
+        if !state_dimensions_compatible(self, source, target_body, source_body) {
+            return false;
+        }
+
+        match mapping {
+            StreamMapping::Exact(_) | StreamMapping::Unmapped => true,
+        }
+    }
+
+    /// Validate an exact ownership-moving rewrite without changing either state arena.
+    pub(in crate::dataflow) fn validate_exact_rewrite(
+        &self,
         source: &Self,
         target_body: &BoundEvaluationGraph,
         source_body: &BoundEvaluationGraph,
         target_layout: &Rc<EnvironmentLayout>,
         source_layout: &Rc<EnvironmentLayout>,
     ) -> bool {
-        let mut candidate = self.clone();
-        if !transfer_stream_state(
-            &mut candidate,
+        state_shape_compatible(
+            self,
             source,
             target_body,
             source_body,
             target_layout,
             source_layout,
-        ) {
-            return false;
-        }
-        *self = candidate;
-        true
+        )
     }
 
-    pub(in crate::dataflow) fn transfer_compatible_from(
-        &mut self,
+    /// Validate an ownership-moving rewrite without changing either state arena.
+    pub(in crate::dataflow) fn validate_context_rewrite(
+        &self,
         source: &Self,
         target_body: &BoundEvaluationGraph,
         source_body: &BoundEvaluationGraph,
         target_layout: &Rc<EnvironmentLayout>,
         source_layout: &Rc<EnvironmentLayout>,
+        mapping: &StreamMapping,
     ) -> bool {
-        let mut candidate = self.clone();
-        if !transfer_compatible_state(
-            &mut candidate,
-            source,
-            target_body,
-            source_body,
-            target_layout,
-            source_layout,
-        ) {
+        if !self.validate_context_mapping(source, target_body, source_body, mapping) {
             return false;
         }
-        *self = candidate;
-        true
+        match mapping {
+            StreamMapping::Exact(_) => state_shape_compatible(
+                self,
+                source,
+                target_body,
+                source_body,
+                target_layout,
+                source_layout,
+            ),
+            StreamMapping::Unmapped => true,
+        }
     }
 
-    fn new_for_nodes(nodes: &[BoundOp]) -> Self {
+    pub(in crate::dataflow) fn dynamic_expression_state(
+        &self,
+        node: NodeId,
+    ) -> &DynamicExpressionState {
+        let NodeState::Dynamic(dynamic) = &self.node_states[node.index()] else {
+            unreachable!("reconfigurable expression referenced incompatible runtime state")
+        };
+        dynamic
+    }
+
+    pub(in crate::dataflow) fn dynamic_expression_state_mut(
+        &mut self,
+        node: NodeId,
+    ) -> &mut DynamicExpressionState {
+        let NodeState::Dynamic(dynamic) = &mut self.node_states[node.index()] else {
+            unreachable!("reconfigurable expression referenced incompatible runtime state")
+        };
+        dynamic
+    }
+
+    pub(in crate::dataflow) fn for_each_active_body_history_requirement(
+        &self,
+        visit: &mut impl FnMut(VariableHistoryRequirement),
+    ) {
+        for state in &self.node_states {
+            match state {
+                NodeState::Dynamic(dynamic) => {
+                    dynamic.for_each_active_body_history_requirement(&mut *visit);
+                }
+                NodeState::PersistentCall { evaluator, .. } => {
+                    evaluator.for_each_active_body_history_requirement(&mut *visit);
+                }
+                NodeState::LazyIf(lazy_if) => {
+                    lazy_if
+                        .then_state
+                        .for_each_active_body_history_requirement(&mut *visit);
+                    lazy_if
+                        .else_state
+                        .for_each_active_body_history_requirement(&mut *visit);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn new_for_nodes(nodes: &[BoundOp], history_bindings: &[Option<HistoryId>]) -> Self {
         Self {
             node_values: vec![Value::NoVal; nodes.len()],
-            node_states: nodes.iter().map(NodeState::for_op).collect(),
+            node_states: nodes
+                .iter()
+                .map(|op| NodeState::for_op_with_history(op, history_bindings))
+                .collect(),
         }
     }
 
@@ -505,96 +687,63 @@ impl StreamState {
             state.reset();
         }
     }
-}
 
-fn transfer_stream_state(
-    target: &mut StreamState,
-    source: &StreamState,
-    target_body: &BoundEvaluationGraph,
-    source_body: &BoundEvaluationGraph,
-    target_layout: &Rc<EnvironmentLayout>,
-    source_layout: &Rc<EnvironmentLayout>,
-) -> bool {
-    if target.node_values.len() != source.node_values.len()
-        || target.node_states.len() != source.node_states.len()
-        || target_body.nodes.len() != source_body.nodes.len()
-    {
-        return false;
-    }
-
-    for index in 0..target.node_states.len() {
-        if !transfer_node_state(
-            &mut target.node_states[index],
-            &source.node_states[index],
-            &target_body.nodes[index],
-            &source_body.nodes[index],
-            target_layout,
-            source_layout,
-        ) {
-            return false;
-        }
-    }
-    target.node_values.clone_from(&source.node_values);
-    true
-}
-
-fn transfer_compatible_state(
-    target: &mut StreamState,
-    source: &StreamState,
-    target_body: &BoundEvaluationGraph,
-    source_body: &BoundEvaluationGraph,
-    target_layout: &Rc<EnvironmentLayout>,
-    source_layout: &Rc<EnvironmentLayout>,
-) -> bool {
-    if target.node_states.len() != target_body.nodes.len()
-        || source.node_states.len() != source_body.nodes.len()
-    {
-        return false;
-    }
-    let source_descriptors = source_body
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            node_semantic_descriptor(source_body, NodeId::new(index), source_layout.as_ref())
-        })
-        .collect::<Vec<_>>();
-    let mut used_source = vec![false; source_body.nodes.len()];
-    let mut transferred_any = false;
-    for (target_index, target_op) in target_body.nodes.iter().enumerate() {
-        let target_descriptor = node_semantic_descriptor(
-            target_body,
-            NodeId::new(target_index),
-            target_layout.as_ref(),
-        );
-        let mut candidates = source_descriptors
+    #[cfg(test)]
+    pub(in crate::dataflow) fn delay_ring_lengths(&self) -> Vec<usize> {
+        self.node_states
             .iter()
-            .enumerate()
-            .filter(|(_, source_descriptor)| **source_descriptor == target_descriptor)
-            .map(|(source_index, _)| source_index);
-        let Some(source_index) = candidates.next() else {
-            continue;
-        };
-        if candidates.next().is_some() || used_source[source_index] {
-            continue;
-        }
-        if transfer_node_state(
-            &mut target.node_states[target_index],
-            &source.node_states[source_index],
-            target_op,
-            &source_body.nodes[source_index],
-            target_layout,
-            source_layout,
-        ) {
-            used_source[source_index] = true;
-            transferred_any = true;
-        }
+            .filter_map(|state| match state {
+                NodeState::Delay(history) => Some(history.values.len()),
+                NodeState::ScalarDelay(history) => Some(history.values.len()),
+                _ => None,
+            })
+            .collect()
     }
-    transferred_any || target_body.nodes.is_empty()
 }
 
-fn transfer_node_state(
-    target: &mut NodeState,
+fn state_dimensions_compatible(
+    target: &EvaluatorState,
+    source: &EvaluatorState,
+    target_body: &BoundEvaluationGraph,
+    source_body: &BoundEvaluationGraph,
+) -> bool {
+    target.node_values.len() == target_body.nodes.len()
+        && target.node_states.len() == target_body.nodes.len()
+        && source.node_values.len() == source_body.nodes.len()
+        && source.node_states.len() == source_body.nodes.len()
+}
+
+fn state_shape_compatible(
+    target: &EvaluatorState,
+    source: &EvaluatorState,
+    target_body: &BoundEvaluationGraph,
+    source_body: &BoundEvaluationGraph,
+    target_layout: &Rc<EnvironmentLayout>,
+    source_layout: &Rc<EnvironmentLayout>,
+) -> bool {
+    target.node_values.len() == target_body.nodes.len()
+        && target.node_states.len() == target_body.nodes.len()
+        && source.node_values.len() == source_body.nodes.len()
+        && source.node_states.len() == source_body.nodes.len()
+        && target
+            .node_states
+            .iter()
+            .zip(&source.node_states)
+            .enumerate()
+            .all(|(index, (target_state, source_state))| {
+                node_state_can_rewrite(
+                    target_state,
+                    source_state,
+                    &target_body.nodes[index],
+                    &source_body.nodes[index],
+                    target_layout,
+                    source_layout,
+                )
+            })
+}
+
+fn node_state_can_rewrite(
+    target: &NodeState,
     source: &NodeState,
     target_op: &BoundOp,
     source_op: &BoundOp,
@@ -602,32 +751,15 @@ fn transfer_node_state(
     source_layout: &Rc<EnvironmentLayout>,
 ) -> bool {
     match (target, source) {
-        (
-            NodeState::UnaryLift { last_input: target },
-            NodeState::UnaryLift { last_input: source },
-        )
-        | (NodeState::Default { last_input: target }, NodeState::Default { last_input: source })
-        | (
-            NodeState::IsDefined { last_input: target },
-            NodeState::IsDefined { last_input: source },
-        ) => {
-            *target = source.clone();
-            true
-        }
-        (
-            NodeState::BinaryLift {
-                last_left: target_left,
-                last_right: target_right,
-            },
-            NodeState::BinaryLift {
-                last_left: source_left,
-                last_right: source_right,
-            },
-        ) => {
-            *target_left = source_left.clone();
-            *target_right = source_right.clone();
-            true
-        }
+        (NodeState::UnaryLift { .. }, NodeState::UnaryLift { .. })
+        | (NodeState::Default { .. }, NodeState::Default { .. })
+        | (NodeState::ScalarDefault { .. }, NodeState::ScalarDefault { .. })
+        | (NodeState::Init { .. }, NodeState::Init { .. })
+        | (NodeState::IsDefined { .. }, NodeState::IsDefined { .. })
+        | (NodeState::When { .. }, NodeState::When { .. })
+        | (NodeState::Latch { .. }, NodeState::Latch { .. }) => true,
+        (NodeState::BinaryLift { .. }, NodeState::BinaryLift { .. })
+        | (NodeState::Update { .. }, NodeState::Update { .. }) => true,
         (
             NodeState::OperandLift {
                 last_operands: target,
@@ -635,89 +767,31 @@ fn transfer_node_state(
             NodeState::OperandLift {
                 last_operands: source,
             },
-        ) if target.len() == source.len() => {
-            target.clone_from(source);
-            true
+        ) => target.len() == source.len(),
+        (NodeState::Delay(target), NodeState::Delay(source)) => {
+            target.values.len() == source.values.len()
         }
-        (NodeState::Delay(target), NodeState::Delay(source))
-            if target.values.len() == source.values.len() =>
-        {
-            *target = source.clone();
-            true
-        }
-        (NodeState::ScalarDelay(target), NodeState::ScalarDelay(source))
-            if target.values.len() == source.values.len() =>
-        {
-            *target = source.clone();
-            true
-        }
-        (NodeState::Init { started: target }, NodeState::Init { started: source }) => {
-            *target = *source;
-            true
-        }
-        (
-            NodeState::When {
-                last_input: target_input,
-                started: target_started,
-            },
-            NodeState::When {
-                last_input: source_input,
-                started: source_started,
-            },
-        ) => {
-            *target_input = source_input.clone();
-            *target_started = *source_started;
-            true
-        }
-        (
-            NodeState::Update {
-                switched: target_switched,
-                last_base: target_base,
-                last_update: target_update,
-            },
-            NodeState::Update {
-                switched: source_switched,
-                last_base: source_base,
-                last_update: source_update,
-            },
-        ) => {
-            *target_switched = *source_switched;
-            *target_base = source_base.clone();
-            *target_update = source_update.clone();
-            true
-        }
-        (NodeState::Latch { last_value: target }, NodeState::Latch { last_value: source }) => {
-            *target = source.clone();
-            true
+        (NodeState::ScalarDelay(target), NodeState::ScalarDelay(source)) => {
+            target.values.len() == source.values.len()
         }
         (
             NodeState::CallLift {
-                last_function: target_function,
                 last_arguments: target_arguments,
-                active_function: target_active,
-                callable: target_callable,
+                ..
             },
             NodeState::CallLift {
-                last_function: source_function,
                 last_arguments: source_arguments,
-                active_function: source_active,
-                callable: source_callable,
+                ..
             },
-        ) if target_arguments.len() == source_arguments.len() => {
-            *target_function = source_function.clone();
-            target_arguments.clone_from(source_arguments);
-            *target_active = source_active.clone();
-            *target_callable = source_callable.clone();
-            true
-        }
+        ) => target_arguments.len() == source_arguments.len(),
         (
             NodeState::Function {
-                function: target_function,
                 captures: target_captures,
+                ..
             },
             NodeState::Function {
-                function: source_function,
                 captures: source_captures,
+                ..
             },
         ) => {
             let (
@@ -727,19 +801,8 @@ fn transfer_node_state(
             else {
                 return false;
             };
-            let mut captures = target_captures.borrow_mut();
-            if !remap_slots(
-                &mut captures,
-                &source_captures.borrow(),
-                &target_func.capture_slots,
-                &source_func.capture_slots,
-                target_layout,
-                source_layout,
-            ) {
-                return false;
-            }
-            *target_function = source_function.clone();
-            true
+            target_captures.borrow().len() == target_func.capture_slots.len()
+                && source_captures.borrow().len() == source_func.capture_slots.len()
         }
         (
             NodeState::PersistentCall {
@@ -752,36 +815,23 @@ fn transfer_node_state(
                 environment_values: source_environment,
                 last_arguments: source_arguments,
             },
-        ) if target_environment.len() == source_environment.len()
-            && target_arguments.len() == source_arguments.len() =>
-        {
-            if !target_evaluator.transfer_from(source_evaluator) {
-                return false;
-            }
-            if !remap_environment_values(
-                target_environment,
-                source_environment,
-                &target_evaluator.program.environment_layout,
-                &source_evaluator.program.environment_layout,
-            ) {
-                return false;
-            }
-            target_arguments.clone_from(source_arguments);
-            true
+        ) => {
+            target_environment.len() == source_environment.len()
+                && target_arguments.len() == source_arguments.len()
+                && target_evaluator.program.state_key() == source_evaluator.program.state_key()
+                && state_shape_compatible(
+                    &target_evaluator.tier_states.canonical,
+                    &source_evaluator.tier_states.canonical,
+                    &target_evaluator.program.graph,
+                    &source_evaluator.program.graph,
+                    &target_evaluator.program.environment_layout,
+                    &source_evaluator.program.environment_layout,
+                )
         }
-        (NodeState::Dynamic(target), NodeState::Dynamic(source)) => {
-            let (StreamOp::Dynamic(target_spec), StreamOp::Dynamic(source_spec)) =
-                (target_op, source_op)
-            else {
-                return false;
-            };
-            transfer_dynamic_state(
-                target,
-                source,
-                target_spec,
-                source_spec,
-                target_layout,
-                source_layout,
+        (NodeState::Dynamic(_), NodeState::Dynamic(_)) => {
+            matches!(
+                (target_op, source_op),
+                (StreamOp::Dynamic(_), StreamOp::Dynamic(_))
             )
         }
         (NodeState::LazyIf(target), NodeState::LazyIf(source)) => {
@@ -800,151 +850,28 @@ fn transfer_node_state(
             else {
                 return false;
             };
-            if !transfer_stream_state(
-                &mut target.then_state,
-                &source.then_state,
+            state_shape_compatible(
+                target.then_state.as_ref(),
+                source.then_state.as_ref(),
                 target_then,
                 source_then,
                 target_layout,
                 source_layout,
-            ) || !transfer_stream_state(
-                &mut target.else_state,
-                &source.else_state,
+            ) && state_shape_compatible(
+                target.else_state.as_ref(),
+                source.else_state.as_ref(),
                 target_else,
                 source_else,
                 target_layout,
                 source_layout,
-            ) {
-                return false;
-            }
-            target.last_condition = source.last_condition.clone();
-            target.last_then_value = source.last_then_value.clone();
-            target.last_else_value = source.last_else_value.clone();
-            true
+            )
         }
         _ => false,
     }
 }
 
-fn remap_environment_values(
-    target: &mut Vec<Value>,
-    source: &[Value],
-    target_layout: &Rc<EnvironmentLayout>,
-    source_layout: &Rc<EnvironmentLayout>,
-) -> bool {
-    target.resize(target_layout.len(), Value::NoVal);
-    for target_slot in 0..target_layout.len() {
-        let target_slot = EnvironmentSlot::new(target_slot);
-        let Some(variable) = target_layout.variable(target_slot) else {
-            return false;
-        };
-        let Some(source_slot) = source_layout.slot(variable) else {
-            continue;
-        };
-        let Some(value) = source.get(source_slot.index()) else {
-            return false;
-        };
-        target[target_slot.index()] = value.clone();
-    }
-    true
-}
-
-fn remap_slots(
-    target: &mut Vec<Value>,
-    source: &[Value],
-    target_slots: &[EnvironmentSlot],
-    source_slots: &[EnvironmentSlot],
-    target_layout: &Rc<EnvironmentLayout>,
-    source_layout: &Rc<EnvironmentLayout>,
-) -> bool {
-    if target_slots.len() != source_slots.len() || target.len() != target_slots.len() {
-        return false;
-    }
-    let mut remapped = vec![Value::NoVal; target.len()];
-    for (index, target_slot) in target_slots.iter().copied().enumerate() {
-        let Some(variable) = target_layout.variable(target_slot) else {
-            return false;
-        };
-        let Some(source_slot) = source_slots
-            .iter()
-            .copied()
-            .find(|slot| source_layout.variable(*slot) == Some(variable))
-        else {
-            return false;
-        };
-        let Some(source_index) = source_slots.iter().position(|slot| *slot == source_slot) else {
-            return false;
-        };
-        remapped[index] = source.get(source_index).cloned().unwrap_or(Value::NoVal);
-    }
-    target.clone_from(&remapped);
-    true
-}
-
-fn transfer_dynamic_state(
-    target: &mut DynamicExpressionState,
-    source: &DynamicExpressionState,
-    target_spec: &BoundDynamicExpressionSpec,
-    source_spec: &BoundDynamicExpressionSpec,
-    target_layout: &Rc<EnvironmentLayout>,
-    source_layout: &Rc<EnvironmentLayout>,
-) -> bool {
-    if target_spec.mode != source_spec.mode {
-        return false;
-    }
-    let Some(source_active) = source.active_expression.as_ref() else {
-        return true;
-    };
-
-    let mut candidate = DynamicExpressionState::default();
-    if update_active_expression_with_change(
-        source_active.source_text.clone(),
-        target_spec,
-        &mut candidate,
-        target_layout,
-    )
-    .is_err()
-    {
-        return false;
-    }
-    let Some(target_active) = candidate.active_expression.as_mut() else {
-        return false;
-    };
-    if !graphs_semantically_equal(
-        &target_active.template.program.graph,
-        &target_active.template.program.environment_layout,
-        &source_active.template.program.graph,
-        &source_active.template.program.environment_layout,
-    ) || !target_active
-        .evaluator
-        .transfer_from(&source_active.evaluator)
-    {
-        return false;
-    }
-
-    candidate
-        .environment_values
-        .resize(target_layout.len(), Value::NoVal);
-    for target_slot in target_active.environment_slots.iter().copied() {
-        let Some(variable) = target_layout.variable(target_slot) else {
-            return false;
-        };
-        let Some(source_slot) = source_layout.slot(variable) else {
-            return false;
-        };
-        let Some(value) = source.environment_values.get(source_slot.index()) else {
-            return false;
-        };
-        candidate.environment_values[target_slot.index()] = value.clone();
-    }
-    candidate.last_source_value = source.last_source_value.clone();
-    candidate.last_defer_result = source.last_defer_result.clone();
-    *target = candidate;
-    true
-}
-
 impl NodeState {
-    fn for_op(op: &BoundOp) -> Self {
+    fn for_op_with_history(op: &BoundOp, history_bindings: &[Option<HistoryId>]) -> Self {
         match op {
             StreamOp::Unary { .. } => Self::UnaryLift { last_input: None },
             StreamOp::Binary { .. } => Self::BinaryLift {
@@ -978,9 +905,20 @@ impl NodeState {
             StreamOp::ListFold { .. } => Self::OperandLift {
                 last_operands: vec![None; 3],
             },
-            StreamOp::Delay { offset, .. } => Self::Delay(DelayState::new(
-                usize::try_from(*offset).expect("sindex offset does not fit usize"),
-            )),
+            StreamOp::Delay { input, offset } => {
+                let shared = *offset > 0
+                    && matches!(input, BoundRef::External(slot)
+                        if history_bindings
+                            .get(slot.index())
+                            .is_some_and(Option::is_some));
+                if shared {
+                    Self::Delay(DelayState::new_shared())
+                } else {
+                    Self::Delay(DelayState::new(
+                        usize::try_from(*offset).expect("sindex offset does not fit usize"),
+                    ))
+                }
+            }
             StreamOp::RecursiveDelay { offset } => Self::Delay(DelayState::new(
                 usize::try_from(offset.get()).expect("sindex offset does not fit usize"),
             )),
@@ -1008,7 +946,7 @@ impl NodeState {
                 captures: Rc::new(RefCell::new(vec![Value::NoVal; func.capture_slots.len()])),
             },
             StreamOp::DirectApply { func, args } => Self::PersistentCall {
-                evaluator: StreamEvaluator::new(Rc::clone(&func.program)),
+                evaluator: Evaluator::new(Rc::clone(&func.program)),
                 environment_values: vec![
                     Value::NoVal;
                     func.capture_slots.len() + func.parameters.len()
@@ -1029,8 +967,14 @@ impl NodeState {
                 else_branch,
                 ..
             } => Self::LazyIf(LazyIfState {
-                then_state: Box::new(StreamState::new_for_nodes(&then_branch.nodes)),
-                else_state: Box::new(StreamState::new_for_nodes(&else_branch.nodes)),
+                then_state: Box::new(EvaluatorState::new_for_nodes(
+                    &then_branch.nodes,
+                    history_bindings,
+                )),
+                else_state: Box::new(EvaluatorState::new_for_nodes(
+                    &else_branch.nodes,
+                    history_bindings,
+                )),
                 last_condition: None,
                 last_then_value: None,
                 last_else_value: None,

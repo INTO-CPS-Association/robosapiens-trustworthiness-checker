@@ -94,6 +94,47 @@ pub struct PahoClient {
     client: mqtt::AsyncClient,
 }
 
+fn validate_subscription_result_codes(
+    result_codes: &[i32],
+    expected_topics: usize,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        result_codes.len() == expected_topics,
+        "MQTT subscribe response returned {} result codes for {} requested topics",
+        result_codes.len(),
+        expected_topics,
+    );
+
+    if let Some((index, code)) = result_codes
+        .iter()
+        .enumerate()
+        .find(|(_, code)| **code < 0 || **code > 2)
+    {
+        anyhow::bail!(
+            "MQTT subscription at topic index {index} was not accepted (Paho result code {code})"
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_single_subscription_response(response: mqtt::ServerResponse) -> anyhow::Result<()> {
+    let code = response
+        .subscribe_response()
+        .ok_or_else(|| anyhow!("Paho subscribe response did not contain a result code"))?;
+    validate_subscription_result_codes(&[code], 1)
+}
+
+fn validate_many_subscription_response(
+    response: mqtt::ServerResponse,
+    expected_topics: usize,
+) -> anyhow::Result<()> {
+    let result_codes = response
+        .subscribe_many_response()
+        .ok_or_else(|| anyhow!("Paho subscribe-many response did not contain result codes"))?;
+    validate_subscription_result_codes(&result_codes, expected_topics)
+}
+
 #[async_trait]
 impl MqttClient for PahoClient {
     async fn publish(&self, message: MqttMessage) -> anyhow::Result<()> {
@@ -134,16 +175,21 @@ impl MqttClient for PahoClient {
     }
 
     async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()> {
-        match self.client.subscribe(topic, qos).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
+        let response = self
+            .client
+            .subscribe(topic, qos)
+            .await
+            .map_err(|error| anyhow!("{}", error))?;
+        validate_single_subscription_response(response)
     }
+
     async fn subscribe_many(&self, topics: &Vec<String>, qos: &[i32]) -> anyhow::Result<()> {
-        match self.client.subscribe_many(topics, qos).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
+        let response = self
+            .client
+            .subscribe_many(topics, qos)
+            .await
+            .map_err(|error| anyhow!("{}", error))?;
+        validate_many_subscription_response(response, topics.len())
     }
 
     async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()> {
@@ -157,6 +203,36 @@ impl MqttClient for PahoClient {
         Box::new(PahoClient {
             client: self.client.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_all_mqtt_subscription_grants() {
+        assert!(validate_subscription_result_codes(&[0, 1, 2], 3).is_ok());
+    }
+
+    #[test]
+    fn rejects_broker_refused_subscription() {
+        let error = validate_subscription_result_codes(&[0, 0x80, 1], 3)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("topic index 1"));
+        assert!(error.contains("128"));
+    }
+
+    #[test]
+    fn rejects_a_response_with_the_wrong_number_of_codes() {
+        let error = validate_subscription_result_codes(&[0], 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("1 result codes"));
+        assert!(error.contains("2 requested topics"));
     }
 }
 

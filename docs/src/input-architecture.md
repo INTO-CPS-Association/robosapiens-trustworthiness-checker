@@ -85,49 +85,46 @@ The reconfigurable semi-sync runtime's private item has the following shape:
 ```rust
 pub(crate) enum ReconfigurableInputItem<V> {
     Data(InputBatch<V>),
-    Reconfigure(MonitorConfig),
+    Reconfigure(ReconfigurationRequest),
 }
 ```
 
-### Generations
+### Input sessions
 
-A **generation** is one opened set of input transports: the concrete
+An **input session** is one opened set of input transports: the concrete
 subscriptions, sockets, files, and decoders that serve one specification's
 inputs under one binding configuration. An `InputPipeline` is reusable
-configuration and outlives every generation; a generation is the live
-connection made from it.
+configuration and outlives every session; a session is the live connection
+made from it.
 
-A generation ends when a control message arrives, and the replacement
+A session ends when a control message arrives, and the replacement
 specification opens the next one:
 
 ```text
-generation 1    spec: in x, in y        subscribes: robot/x, robot/y
-                data … data … Reconfigure{ spec: "in y, in z" }   ← ends here
+session 1    spec: in x, in y        subscribes: robot/x, robot/y
+             data … data … Reconfigure{ specification: "in y, in z" }   ← ends here
 
-generation 2    spec: in y, in z        subscribes: robot/y, robot/z
-                data … data …
+session 2    spec: in y, in z        subscribes: robot/y, robot/z
+             data … data …
 ```
 
-Even though `y` is bound to the same route in both, generation 1's
-subscription is dropped and generation 2 opens its own. Generations never
-overlap: exactly one is open at a time.
+Even though `y` is bound to the same route in both, session 1's subscription
+is dropped and session 2 opens its own. Sessions never overlap: exactly one is
+open at a time.
 
 `ReconfigurableInput` owns a reusable `InputPipeline` and one validated control
-binding. It opens the data sources and the control route for one generation,
-then translates one control message into the private `Reconfigure` item. The
-control route is not a model variable, does not enter value/variable mapping,
-and is never exposed as an ordinary `InputStream` item. The reconfigurable
-runtime therefore accepts an `InputPipeline`, not a pre-opened direct
-`InputStream`.
+binding. It opens the data sources and the control route for one session, then
+translates one control message into the private `Reconfigure` item. The control
+route is not a model variable, does not enter value/variable mapping, and is
+never exposed as an ordinary `InputStream` item. The reconfigurable runtime
+therefore accepts an `InputPipeline`, not a pre-opened direct `InputStream`.
 
-A control item is a terminal barrier for its generation. The shared private
-window driver first flushes pending data, then emits the private reconfiguration
-item and terminates without polling or emitting later old-generation data. The
-old source tasks are then dropped. The new specification is parsed and
-validated, a generation-specific resolved input is produced from the
-replacement `MonitorConfig`, and a fresh generation is opened. Even
-when the input and output sets have the same shape, the barrier starts a new
-generation.
+A control item is a barrier. The shared private window driver first flushes
+pending data, then emits the private reconfiguration item. The old source tasks
+are dropped at the cutover. The new specification is parsed and validated, a
+complete resolved input is produced from the replacement
+`ReconfigurationRequest`, and a fresh session is opened. Even when the input and
+output sets have the same shape, the barrier starts a new session.
 
 ## Sources, resolution, and composition
 
@@ -135,17 +132,17 @@ generation.
 connection. `InputSources` is the owned local source set: it gives sources stable
 IDs and keeps route catalogs, defaults, endpoints, security-sensitive connection
 settings, and each source's optional transport-local `reconfiguration_route`
-together. It does not hold a generation-specific control selection.
+together. It does not hold a session-specific control selection.
 
 Resolution and opening are separate. `InputPipeline::resolve(model_inputs,
 monitor_config)` validates ownership, complete coverage, routes, and codecs and
 returns an internal immutable `ResolvedInput` made of `ResolvedSource` and
-`ResolvedBinding` values for one generation. `InputPipeline::open(resolved)`
+`ResolvedBinding` values for one session. `InputPipeline::open(resolved)`
 then acquires only the resources described by that resolved value. The convenient
 `build(model_inputs)` method performs the default/catalog resolution followed by
-opening for simple callers. A reconfigurable generation resolves its
-`MonitorConfig` immediately before opening; neither the pipeline nor the private
-reconfiguration adapter stores a resolved generation plan.
+opening for simple callers. A reconfigurable runtime resolves its
+`ReconfigurationRequest` immediately before opening; neither the pipeline nor
+the private reconfiguration adapter stores a resolved input plan.
 
 Resolution follows these rules:
 
@@ -165,17 +162,17 @@ source separately. A single source needs no marker; with multiple sources,
 exactly one source must declare `reconfiguration_route`. `--reconf-topic` may
 override the route but not the selected source.
 
-Reconfigurable generations have a stronger ownership invariant than ordinary
+Reconfigurable sessions have a stronger ownership invariant than ordinary
 input composition: all active model bindings and the control route must belong
 to one `InputSource`/source ID. If resolution produces bindings on more than one
 source, or produces data bindings on a source other than the selected control
-source, `InputPipeline::open_reconfigurable` rejects the generation before it
+source, `InputPipeline::open_reconfigurable` rejects the resolution before it
 opens any source. It never uses `select_all` to guess an order between
 independent source streams. Additional configured sources may remain in the
-owned catalog, but they are inactive for that generation. A generation with no
+owned catalog, but they are inactive for that session. A session with no
 model bindings may still open the selected source as a control-only stream.
 
-The selected source is opened once per generation with its active model-data
+The selected source is opened once per session with its active model-data
 bindings and control route. The one-source invariant is an ownership check; it is
 not, by itself, an ordering guarantee. Backend behavior is different:
 
@@ -194,7 +191,7 @@ For ROS and manual sources, an external controller must quiesce the data
 producers and obtain an application/runtime acknowledgement that preceding data
 has crossed the required boundary before publishing control. It must wait for
 the reconfiguration acknowledgement, where provided, before publishing rows
-for the replacement generation. A quiet stream, `Poll::Pending`, a sleep or
+for the replacement session. A quiet stream, `Poll::Pending`, a sleep or
 yield, or control-poll priority is not an ordering proof. Library callers can
 install the in-process dataflow acknowledgement sink; CLI deployments must use
 source/backend-specific external controller coordination. No new network
@@ -212,7 +209,7 @@ let stream = pipeline.build(spec.input_vars().clone()).await?;
 
 For a named multi-source deployment, use `InputSources` through the
 `--input-config` command-line form. Catalog ownership or compact
-source-qualified monitor bindings determine each generation's resolved input.
+source-qualified monitor bindings determine each session's resolved input.
 
 ## Batch and atomic-step windows
 
@@ -313,33 +310,39 @@ constructed through the library API.
 
 ## Compact reconfiguration messages
 
-A reconfiguration message always contains a new `spec`. Its optional route
-fields use the same compact route form as route catalogs:
+A reconfiguration message always contains a new `specification`. Its optional
+`input` and `output` objects use the same compact route form as route catalogs:
 
 ```json
 {
-  "spec": "in x: Int\nout z: Int\nz = x",
-  "inputs": {
-    "x": "/robot/input/x"
+  "specification": "in x: Int\nout z: Int\nz = x",
+  "input": {
+    "inputs": {
+      "x": "/robot/input/x"
+    }
   },
-  "outputs": {
-    "z": "/robot/output/z"
+  "output": {
+    "outputs": {
+      "z": "/robot/output/z"
+    }
   }
 }
 ```
 
-With `inputs`, `source` may identify the named source for all of those input
-bindings. With a multi-source local source set, a reconfigurable generation
-must assign every active binding to the selected control source; other source
-catalogs remain inactive for that generation:
+With `input.inputs`, `input.source` may identify the named source for all of
+those input bindings. With a multi-source local source set, a reconfigurable
+runtime must assign every active binding to the selected control source; other
+source catalogs remain inactive:
 
 ```json
 {
-  "spec": "in alarm: Bool\nin pose\nout safe: Bool\nsafe = alarm",
-  "source": "robot-mqtt",
-  "inputs": {
-    "alarm": "/robot/alarm",
-    "pose": "/robot/pose"
+  "specification": "in alarm: Bool\nin pose\nout safe: Bool\nsafe = alarm",
+  "input": {
+    "source": "robot-mqtt",
+    "inputs": {
+      "alarm": "/robot/alarm",
+      "pose": "/robot/pose"
+    }
   }
 }
 ```
@@ -347,11 +350,11 @@ catalogs remain inactive for that generation:
 The `inputs` and `sources` forms are alternatives. A `sources` object with
 active bindings for two source IDs is valid as a general monitor configuration,
 but is rejected before opening when used for reconfiguration because it cannot
-prove command order. If neither `inputs` nor `sources` is present, the next
-specification is resolved from the local source catalogs and default; this is
-safe only when all resolved variables belong to the selected control source.
-`outputs` is optional and updates output routes for the new generation. The
-message is validated before any replacement is opened.
+prove command order. If neither is present, the next specification is resolved
+from the local source catalogs and default; this is safe only when all resolved
+variables belong to the selected control source. `output` is optional and
+updates output routes for the replacement monitor. The message is validated
+before any replacement is opened.
 
 ## Context transfer and unsupported file reconfiguration
 

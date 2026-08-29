@@ -161,7 +161,7 @@ impl Instruction {
 }
 
 impl Source {
-    fn new(
+    pub(super) fn new(
         reference: &BoundRef,
         kind: ScalarKind,
         instructions: &[Instruction],

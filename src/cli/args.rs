@@ -43,7 +43,7 @@ pub enum RuntimeKind {
     SemiSync,
     /// Independent semisynchronous reconfiguration reference runtime.
     ReconfSemiSync,
-    /// Region-based reconfigurable dataflow runtime.
+    /// Reconfigurable dataflow runtime.
     ReconfDataflow,
 }
 

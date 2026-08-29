@@ -81,7 +81,7 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                     Some(Err(error)) => Err(error)?,
                     Some(Ok(WindowEvent::Control(control))) => {
                         yield WindowEvent::Control(control);
-                        return;
+                        continue;
                     }
                     Some(Ok(WindowEvent::Data(batch))) => {
                         for completed in pending.append(batch, window.update_limit) {
@@ -114,7 +114,7 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                                 Some(Ok(WindowEvent::Control(control))) => {
                                     yield WindowEvent::Data(pending.take()?);
                                     yield WindowEvent::Control(control);
-                                    return;
+                                    break;
                                 }
                                 Some(Ok(WindowEvent::Data(batch))) => {
                                     let mut flushed = false;
@@ -153,7 +153,7 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                                 yield WindowEvent::Data(pending.take()?);
                             }
                             yield WindowEvent::Control(control);
-                            return;
+                            break;
                         }
                         Some(Ok(WindowEvent::Data(batch))) => {
                             for completed in pending.append(batch, window.update_limit) {
@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn control_barrier_flushes_coalesced_data_before_terminating_the_window() {
+    fn control_barrier_flushes_coalesced_data_and_continues_after_control() {
         smol::block_on(async {
             let stage = InputStage::WindowToStep {
                 window: InputWindow::new(None, NonZeroUsize::new(10)).unwrap(),
@@ -620,6 +620,13 @@ mod tests {
                 output.next().await,
                 Some(Ok(WindowEvent::Control("control")))
             ));
+            let Some(Ok(WindowEvent::Data(batch))) = output.next().await else {
+                panic!("data after a control barrier must remain live");
+            };
+            assert_eq!(
+                batch.ticks().next().unwrap().to_updates(),
+                vec![update("x", 2)]
+            );
             assert!(output.next().await.is_none());
         });
     }

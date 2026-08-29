@@ -35,7 +35,6 @@ pub(super) const STATUS_OK: i32 = 0;
 const STATUS_FALLBACK: i32 = 1;
 
 pub(super) type GraphFn = unsafe extern "C" fn(*const i64, *mut i64) -> i32;
-pub(super) type TemporalGraphFn = unsafe extern "C" fn(*mut i64, *mut i64, *mut i64) -> i32;
 pub(super) type TemporalRunFn = unsafe extern "C" fn(*mut i64, *mut i64) -> i32;
 pub(super) type RunFn = unsafe extern "C" fn(*mut i64) -> i32;
 
@@ -52,11 +51,8 @@ pub(super) struct InputSpec {
 }
 
 pub(super) struct CompiledGraph {
-    #[allow(dead_code)]
-    module: Rc<CompiledModule>,
-    pub(super) function: Option<GraphFn>,
-    pub(super) temporal_function: Option<TemporalGraphFn>,
-    pub(super) temporal_state: Option<TemporalStateLayout>,
+    _module_owner: Rc<CompiledModule>,
+    pub(super) function: GraphFn,
     pub(super) inputs: Box<[InputSpec]>,
     pub(super) output_kind: ScalarKind,
     pub(super) boundary_nodes: Box<[NodeId]>,
@@ -89,13 +85,11 @@ pub(super) enum TemporalNodeLayout {
 }
 
 struct CompiledModule {
-    #[allow(dead_code)]
-    module: JITModule,
+    _module: JITModule,
 }
 
 pub(super) struct CompiledRun {
-    #[allow(dead_code)]
-    module: JITModule,
+    _module: JITModule,
     pub(super) function: RunFn,
     pub(super) external_inputs: Box<[InputSpec]>,
     pub(super) outputs: Box<[(EnvironmentSlot, ScalarKind, usize)]>,
@@ -103,8 +97,7 @@ pub(super) struct CompiledRun {
 }
 
 pub(super) struct CompiledTemporalRun {
-    #[allow(dead_code)]
-    module: JITModule,
+    _module: JITModule,
     pub(super) function: TemporalRunFn,
     pub(super) external_inputs: Box<[InputSpec]>,
     pub(super) outputs: Box<[(EnvironmentSlot, ScalarKind, usize)]>,
@@ -217,7 +210,19 @@ impl Lowering {
         Self::default()
     }
 
-    pub(super) fn lower(
+    pub(super) fn lower_scalar(self, canonical: &BoundEvaluationGraph) -> Option<LoweredProgram> {
+        self.lower_program(canonical, None)
+    }
+
+    pub(super) fn lower_temporal_run(
+        self,
+        canonical: &BoundEvaluationGraph,
+        temporal_plan: &TemporalPlan,
+    ) -> Option<LoweredProgram> {
+        self.lower_program(canonical, Some(temporal_plan))
+    }
+
+    fn lower_program(
         mut self,
         canonical: &BoundEvaluationGraph,
         temporal_plan: Option<&TemporalPlan>,
@@ -848,7 +853,7 @@ fn infer_output_kind(graph: &BoundEvaluationGraph) -> Option<ScalarKind> {
     }
 }
 
-pub(super) fn compile_graphs(
+pub(super) fn compile_scalar_graphs(
     programs: Vec<Option<LoweredProgram>>,
 ) -> Result<Vec<Option<Rc<CompiledGraph>>>, String> {
     let result_len = programs.len();
@@ -873,59 +878,26 @@ pub(super) fn compile_graphs(
         let Some(program) = program else {
             continue;
         };
-        // A complete temporal kernel subsumes the scalar-region artifact. If it side-exits, the
-        // runtime transfers its state back to the backend-independent quick/canonical tiers rather
-        // than paying eager compilation cost for a second native fallback that may never run.
-        let (function_id, temporal_function_id) = if let Some(temporal) = &program.temporal {
-            (
-                None,
-                Some(define_temporal_graph_function(
-                    &mut module,
-                    &program,
-                    temporal,
-                    index,
-                )?),
-            )
-        } else {
-            (
-                Some(define_graph_function(&mut module, &program, index)?),
-                None,
-            )
-        };
-        defined.push((index, function_id, temporal_function_id, program));
+        debug_assert!(program.temporal.is_none());
+        let function_id = define_graph_function(&mut module, &program, index)?;
+        defined.push((index, function_id, program));
     }
     module
         .finalize_definitions()
         .map_err(|error| error.to_string())?;
     let functions = defined
         .iter()
-        .map(|(_, function_id, temporal_function_id, _)| {
-            (
-                function_id.map(|id| module.get_finalized_function(id)),
-                temporal_function_id.map(|id| module.get_finalized_function(id)),
-            )
-        })
+        .map(|(_, function_id, _)| module.get_finalized_function(*function_id))
         .collect::<Vec<_>>();
-    let module = Rc::new(CompiledModule { module });
+    let module = Rc::new(CompiledModule { _module: module });
     let mut result = vec![None; result_len];
-    for ((index, _, _, program), (function, temporal_function)) in
-        defined.into_iter().zip(functions)
-    {
-        let function = function.map(|function| {
-            // SAFETY: `define_graph_function` declares exactly `GraphFn`, and the shared module
-            // remains alive through every `CompiledGraph` that owns one of its pointers.
-            unsafe { std::mem::transmute::<*const u8, GraphFn>(function) }
-        });
-        let temporal_function = temporal_function.map(|function| {
-            // SAFETY: `define_temporal_graph_function` declares exactly `TemporalGraphFn`.
-            unsafe { std::mem::transmute::<*const u8, TemporalGraphFn>(function) }
-        });
-        let temporal_state = program.temporal.map(|temporal| temporal.state);
+    for ((index, _, program), function) in defined.into_iter().zip(functions) {
+        // SAFETY: `define_graph_function` declares exactly `GraphFn`, and the shared module
+        // remains alive through every `CompiledGraph` that owns one of its pointers.
+        let function = unsafe { std::mem::transmute::<*const u8, GraphFn>(function) };
         result[index] = Some(Rc::new(CompiledGraph {
-            module: Rc::clone(&module),
+            _module_owner: Rc::clone(&module),
             function,
-            temporal_function,
-            temporal_state,
             inputs: program.inputs.into_boxed_slice(),
             output_kind: program.graph.output_kind,
             boundary_nodes: program.boundary_nodes.into_boxed_slice(),
@@ -1010,239 +982,6 @@ fn define_graph_function(
     Ok(function_id)
 }
 
-fn define_temporal_graph_function(
-    module: &mut JITModule,
-    program: &LoweredProgram,
-    temporal: &TemporalProgram,
-    index: usize,
-) -> Result<FuncId, String> {
-    let frontend_config = module.target_config();
-    let pointer_type = frontend_config.pointer_type();
-    let mut signature = module.make_signature();
-    signature.params.push(AbiParam::new(pointer_type));
-    signature.params.push(AbiParam::new(pointer_type));
-    signature.params.push(AbiParam::new(pointer_type));
-    signature.returns.push(AbiParam::new(types::I32));
-    let function_id = module
-        .declare_function(
-            &format!("dsrv_jitted_temporal_graph_{index}"),
-            Linkage::Export,
-            &signature,
-        )
-        .map_err(|error| error.to_string())?;
-    let mut context = module.make_context();
-    context.func.signature = signature;
-    let mut function_builder_context = FunctionBuilderContext::new();
-    {
-        let mut builder = FunctionBuilder::new(&mut context.func, &mut function_builder_context);
-        let entry = builder.create_block();
-        let fallback = builder.create_block();
-        builder.append_block_params_for_function_params(entry);
-        builder.switch_to_block(entry);
-        builder.seal_block(entry);
-        let inputs = builder.block_params(entry)[0];
-        let state = builder.block_params(entry)[1];
-        let output = builder.block_params(entry)[2];
-
-        let mut input_values = program
-            .inputs
-            .iter()
-            .enumerate()
-            .map(|(input_index, input)| match input.source {
-                InputSource::External(_) => Some(NativeValue {
-                    value: builder.ins().load(
-                        native_type(input.kind),
-                        MemFlagsData::trusted(),
-                        inputs,
-                        (input_index as i32) * 8,
-                    ),
-                    kind: input.kind,
-                }),
-                InputSource::Node(_) => None,
-            })
-            .collect::<Vec<_>>();
-        let mut temporal_values =
-            vec![None; program.boundary_nodes.last().map_or(0, |n| n.index() + 1)];
-
-        for op in &temporal.ops {
-            match op {
-                TemporalOp::Delay {
-                    node,
-                    kind,
-                    cursor,
-                    filled,
-                    cells,
-                    len,
-                    ..
-                } => {
-                    let cursor_value = load_i64(&mut builder, state, *cursor);
-                    let filled_value = load_i64(&mut builder, state, *filled);
-                    let available = builder.ins().icmp_imm_s(
-                        IntCC::SignedGreaterThanOrEqual,
-                        filled_value,
-                        *len as i64,
-                    );
-                    let byte_offset = builder.ins().imul_imm_s(cursor_value, 8);
-                    let cells_offset = builder.ins().iconst(types::I64, (*cells * 8) as i64);
-                    let address = builder.ins().iadd(state, cells_offset);
-                    let address = builder.ins().iadd(address, byte_offset);
-                    let value =
-                        builder
-                            .ins()
-                            .load(native_type(*kind), MemFlagsData::trusted(), address, 0);
-                    temporal_values.resize(temporal_values.len().max(node.index() + 1), None);
-                    temporal_values[node.index()] = Some(TemporalValue {
-                        value: NativeValue { value, kind: *kind },
-                        available,
-                    });
-                }
-                TemporalOp::Default {
-                    node,
-                    kind,
-                    input,
-                    fallback,
-                    ..
-                } => {
-                    let delayed = temporal_values[input.index()]
-                        .expect("temporal lowering orders a delay before its default");
-                    let fallback =
-                        read_temporal_source(&mut builder, *fallback, &input_values, None);
-                    debug_assert_eq!(fallback.kind, *kind);
-                    let value = builder.ins().select(
-                        delayed.available,
-                        delayed.value.value,
-                        fallback.value,
-                    );
-                    let available = builder.ins().iconst(types::I8, 1);
-                    temporal_values.resize(temporal_values.len().max(node.index() + 1), None);
-                    temporal_values[node.index()] = Some(TemporalValue {
-                        value: NativeValue { value, kind: *kind },
-                        available,
-                    });
-                }
-            }
-        }
-        for (index, input) in program.inputs.iter().enumerate() {
-            if let InputSource::Node(node) = input.source {
-                let value = temporal_values[node.index()]
-                    .ok_or_else(|| "temporal input was not lowered".to_owned())?
-                    .value;
-                debug_assert_eq!(value.kind, input.kind);
-                input_values[index] = Some(value);
-                builder.ins().store(
-                    MemFlagsData::trusted(),
-                    value.value,
-                    inputs,
-                    (index as i32) * 8,
-                );
-            }
-        }
-        let input_values = input_values
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .expect("complete temporal lowering supplies every scalar input");
-        let temporal_inputs = input_values.clone();
-        let value = GraphCodegen {
-            builder: &mut builder,
-            input_values,
-            fallback,
-        }
-        .compile(&program.graph);
-
-        // Every state write is emitted after scalar code generation. Any checked-arithmetic side
-        // exit therefore reaches `fallback` without partially committing the tick.
-        for op in &temporal.ops {
-            match op {
-                TemporalOp::Delay {
-                    kind,
-                    source,
-                    recursive,
-                    cursor,
-                    filled,
-                    last_bits,
-                    last_tag,
-                    cells,
-                    len,
-                    node,
-                } => {
-                    let delayed = temporal_values[node.index()].unwrap();
-                    if !recursive {
-                        store_native(&mut builder, state, *last_bits, delayed.value);
-                        let concrete = builder.ins().iconst(types::I64, 2);
-                        let deferred = builder.ins().iconst(types::I64, 1);
-                        let tag = builder.ins().select(delayed.available, concrete, deferred);
-                        store_i64(&mut builder, state, *last_tag, tag);
-                    }
-                    let source = read_temporal_source(
-                        &mut builder,
-                        *source,
-                        &temporal_inputs
-                            .iter()
-                            .copied()
-                            .map(Some)
-                            .collect::<Vec<_>>(),
-                        Some(value),
-                    );
-                    debug_assert_eq!(source.kind, *kind);
-                    let cursor_value = load_i64(&mut builder, state, *cursor);
-                    let byte_offset = builder.ins().imul_imm_s(cursor_value, 8);
-                    let cells_offset = builder.ins().iconst(types::I64, (*cells * 8) as i64);
-                    let address = builder.ins().iadd(state, cells_offset);
-                    let address = builder.ins().iadd(address, byte_offset);
-                    builder
-                        .ins()
-                        .store(MemFlagsData::trusted(), source.value, address, 0);
-                    let next_cursor = builder.ins().iadd_imm_s(cursor_value, 1);
-                    let wraps = builder
-                        .ins()
-                        .icmp_imm_s(IntCC::Equal, next_cursor, *len as i64);
-                    let zero = builder.ins().iconst(types::I64, 0);
-                    let next_cursor = builder.ins().select(wraps, zero, next_cursor);
-                    store_i64(&mut builder, state, *cursor, next_cursor);
-                    let filled_value = load_i64(&mut builder, state, *filled);
-                    let incremented = builder.ins().iadd_imm_s(filled_value, 1);
-                    let full = builder.ins().icmp_imm_s(
-                        IntCC::SignedGreaterThanOrEqual,
-                        incremented,
-                        *len as i64,
-                    );
-                    let capacity = builder.ins().iconst(types::I64, *len as i64);
-                    let next_filled = builder.ins().select(full, capacity, incremented);
-                    store_i64(&mut builder, state, *filled, next_filled);
-                }
-                TemporalOp::Default {
-                    input,
-                    last_bits,
-                    last_tag,
-                    ..
-                } => {
-                    let delayed = temporal_values[input.index()].unwrap();
-                    store_native(&mut builder, state, *last_bits, delayed.value);
-                    let concrete = builder.ins().iconst(types::I64, 2);
-                    let deferred = builder.ins().iconst(types::I64, 1);
-                    let tag = builder.ins().select(delayed.available, concrete, deferred);
-                    store_i64(&mut builder, state, *last_tag, tag);
-                }
-            }
-        }
-        builder
-            .ins()
-            .store(MemFlagsData::trusted(), value.value, output, 0);
-        let ok = builder.ins().iconst(types::I32, STATUS_OK as i64);
-        builder.ins().return_(&[ok]);
-        builder.switch_to_block(fallback);
-        builder.seal_block(fallback);
-        let fallback_status = builder.ins().iconst(types::I32, STATUS_FALLBACK as i64);
-        builder.ins().return_(&[fallback_status]);
-        builder.finalize(frontend_config);
-    }
-    module
-        .define_function(function_id, &mut context)
-        .map_err(|error| error.to_string())?;
-    module.clear_context(&mut context);
-    Ok(function_id)
-}
-
 #[derive(Clone, Copy)]
 struct TemporalValue {
     value: NativeValue,
@@ -1310,7 +1049,8 @@ pub(super) fn compile_temporal_run(
     let mut state_len = 0usize;
     let mut states = Vec::new();
     for planned in plan.streams.iter() {
-        let Some(program) = Lowering::new().lower(&planned.program.graph, Some(&planned.temporal))
+        let Some(program) =
+            Lowering::new().lower_temporal_run(&planned.program.graph, &planned.temporal)
         else {
             return Ok(None);
         };
@@ -1500,7 +1240,7 @@ pub(super) fn compile_temporal_run(
         .collect::<Vec<_>>()
         .into_boxed_slice();
     Ok(Some(CompiledTemporalRun {
-        module,
+        _module: module,
         function,
         external_inputs,
         outputs,
@@ -1696,7 +1436,7 @@ pub(super) fn compile_run(
     }
     let mut lowered = Vec::with_capacity(graphs.len());
     for &(graph, output_slot, stream) in graphs {
-        let Some(program) = Lowering::new().lower(graph, None) else {
+        let Some(program) = Lowering::new().lower_scalar(graph) else {
             return Ok(None);
         };
         if !program.boundary_nodes.is_empty()
@@ -1820,7 +1560,7 @@ pub(super) fn compile_run(
         })
         .collect();
     Ok(Some(CompiledRun {
-        module,
+        _module: module,
         function,
         external_inputs,
         outputs,

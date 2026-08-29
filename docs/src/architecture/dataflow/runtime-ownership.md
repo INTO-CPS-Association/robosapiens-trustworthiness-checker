@@ -6,20 +6,19 @@ The runtime preserves correctness by keeping semantic ownership separate from ex
 
 ## Ownership at a glance
 
-![Ownership boundaries among monitor, evaluator arena, scheduler, and execution engine](../../assets/dataflow/architecture-runtime-ownership.svg)
 
-**What to notice.** `DataflowMonitor` coordinates several owners rather than placing all mutable concerns in one plan. `EvaluatorArena` remains fixed and owns canonical stream state. `Scheduler` and `ReconfigurationState` evolve dependency control. `ExecutionEngine` may exchange `PlanBundle` values and native artifacts without moving the arena.
+**What to notice.** `DataflowMonitor` coordinates several owners rather than placing all mutable concerns in one plan. `EvaluatorArena` remains fixed and owns one evaluator per stream, whose tier states hold canonical and evaluator-local derived state. `Scheduler` and `ReconfigurableExpressionState` evolve dependency control. `ExecutionEngine` may exchange `PlanBundle` values and schedule-wide fused artifacts without moving the arena; evaluator-local per-stream artifacts stay with their owning evaluators.
 
 ## Four categories of runtime object
 
 | Category | Examples | May be replaced? | Owns canonical language state? |
 |---|---|---:|---:|
 | Immutable semantics | `StreamProgram`, `EnvironmentLayout`, `MonitorPlan` | Shared for the monitor lifetime | No |
-| Persistent state | `EvaluatorArena`, `StreamEvaluator`, `StreamState` | Only when the owning semantic lifetime ends | **Yes** |
-| Mutable scheduling | `Scheduler`, `ReconfigurationState` | Mutated in place as active edges and sealed points change | No evaluator state |
-| Replaceable routing | `ScheduledExecutionPlan`, `PlanBundle`, quick plans, JIT artifacts | Yes; active and cached routes may be exchanged | No canonical language state |
+| Persistent state | `EvaluatorArena`, `Evaluator`, `EvaluatorTierStates`, `EvaluatorState` | Only when the owning semantic lifetime ends | **Yes** |
+| Mutable scheduling | `Scheduler`, `ReconfigurableExpressionState` | Mutated in place as active edges and sealed expressions change | No evaluator state |
+| Replaceable routing | `ScheduledExecutionPlan`, `PlanBundle`, `QuickPlan`, fused JIT artifacts | Yes; active and cached routes may be exchanged | No canonical language state |
 
-Some replaceable routes may own compact scratch data or a native physical representation of temporal state. That representation is subordinate to stable semantic state identities and must be materialized before canonical fallback. It is not an independent history model.
+Fused routes may own compact scratch data or a native physical representation of temporal state. That representation is subordinate to stable semantic state identities and must be materialized before canonical fallback. Per-stream native state and artifacts instead stay in the owning `Evaluator.tier_states`; neither is an independent history model.
 
 ## `DataflowMonitor` is the orchestration owner
 
@@ -31,7 +30,7 @@ Some replaceable routes may own compact scratch data or a native physical repres
 - the saved output-slot projection;
 - stable stream names;
 - `MonitorPlan`;
-- `ReconfigurationState`;
+- `ReconfigurableExpressionState`;
 - `Scheduler`;
 - the current environment row;
 - an optional retained environment row for reconfigurable monitors;
@@ -56,18 +55,24 @@ This is an intentional split inside one owner. The arena is schedule-independent
 
 ## `EvaluatorArena` owns one persistent evaluator per stream
 
-At monitor construction, `EvaluatorArena::new` consumes the compiled program vector and creates exactly one `StreamEvaluator` for each logical computed stream. The evaluator array remains indexed by `StreamId` for the monitor lifetime.
+At monitor construction, `EvaluatorArena::new` consumes the compiled program vector and creates exactly one `Evaluator` for each logical computed stream. The evaluator array remains indexed by `StreamId` for the monitor lifetime.
 
-Each `StreamEvaluator` pairs:
+Each `Evaluator` pairs:
 
 - an `Rc<StreamProgram>` containing immutable semantics; and
-- `StreamState` containing current node values and persistent `NodeState` variants.
+- `tier_states: EvaluatorTierStates`, containing:
+  - canonical `EvaluatorState`;
+  - optional quickening state;
+  - optional `quick_plan`; and
+  - with JIT, optional evaluator-local `native: JittedGraphEvaluator` state/artifact.
+
+The arena's boxed evaluator collection is indexed by stable `StreamId`. The per-stream native tier is reached through its owning `Evaluator.tier_states`, not stored as a boxed array in the JIT coordinator.
 
 Delay rings, lifted operands, branch timelines, persistent call evaluators, active runtime expressions, and deoptimization state all remain reachable through this stable evaluator. Reordering a schedule changes only which `StreamId` is visited next.
 
 The arena also owns `published_scalars`, compact per-stream publication scratch used by quickened execution. This array is likewise indexed by stable `StreamId`; it supplements the canonical environment row rather than replacing canonical publication.
 
-Top-level evaluator-local quick plans are detached because schedule-specific published-source routing belongs to the active `PlanBundle`. Nested evaluators keep local plans: they execute inside their owning stream evaluator rather than as independent top-level schedule entries.
+Top-level evaluator-owned `quick_plan` values are detached because schedule-specific published-source routing belongs to the active `PlanBundle` and its `QuickPlan`. Nested evaluators retain their `quick_plan`: they execute inside their owning stream evaluator rather than as independent top-level schedule entries.
 
 ## Stable IDs are ownership coordinates
 
@@ -87,11 +92,11 @@ Likewise, `NodeId` is not globally unique. Nested branches, function bodies, and
 
 ## Immutable semantics are safe to share
 
-`StreamProgram` is reference counted because the same immutable program may be referenced by an evaluator, a scheduled plan, a function definition, or a cached dynamic-expression template. It contains no `StreamState`.
+`StreamProgram` is reference counted because the same immutable program may be referenced by an evaluator, a scheduled plan, a function definition, or a cached dynamic-expression template. It contains no `EvaluatorState`.
 
-`MonitorPlan` is also semantic metadata rather than an execution snapshot. Its stream slots, fixed dependency graph, reconfiguration plan, and temporal stream set do not change when a `defer` seals or an active dynamic expression changes dependencies. Mutable `ReconfigurationState` records which fixed points and source prerequisites remain live.
+`MonitorPlan` is also semantic metadata rather than an execution snapshot. Its stream slots, fixed dependency graph, reconfigurable-expression plan, and temporal stream set do not change when a `defer` seals or an active dynamic expression changes dependencies. Mutable `ReconfigurableExpressionState` records which expressions and source prerequisites remain live.
 
-This distinction is particularly important for runtime-defined expressions. A cached `DynamicExpressionTemplate` may reuse an `Rc<StreamProgram>`, but reactivation after another source was active creates a fresh nested `StreamEvaluator`. Cache reuse avoids compilation; it does not restore the old activation's history.
+This distinction is particularly important for runtime-defined expressions. A cached `DynamicExpressionTemplate` may reuse an `Rc<StreamProgram>`, but reactivation after another source was active creates a fresh target `Evaluator`. Cache reuse does not restore an earlier activation; only owners matched to the immediately preceding active body can move into that target under the selected context-transfer policy.
 
 ## Mutable scheduling owns edges and order, not state
 
@@ -99,7 +104,7 @@ This distinction is particularly important for runtime-defined expressions. A ca
 
 When a point's `dependency_slots` change, the containing stream's active producer union is rebuilt. The scheduler marks the order dirty only when required, then validates and repairs the order with static and dynamic edges together. A runtime cycle is rejected before main-range evaluation.
 
-`ReconfigurationState` complements the scheduler by tracking:
+`ReconfigurableExpressionState` complements the scheduler by tracking:
 
 - sealed `defer` points;
 - pending post-tick releases;
@@ -108,7 +113,7 @@ When a point's `dependency_slots` change, the containing stream's active produce
 - the current resolution-stream set; and
 - the current source range and source order.
 
-These objects control eligibility. They never move a `StreamEvaluator`, rewrite a bound slot, or own a delay ring.
+These objects control eligibility. They never move an `Evaluator`, rewrite a bound slot, or own a delay ring.
 
 ## `ExecutionEngine` owns replaceable routing
 
@@ -117,9 +122,9 @@ These objects control eligibility. They never move a `StreamEvaluator`, rewrite 
 - one active `PlanBundle`;
 - up to four previous bundles;
 - the next `PlanId`; and
-- `Jit`, including compiled native artifacts and tier state.
+- `Jit`, the coordinator for activation, execution-mode selection, fused scalar/temporal artifacts, and schedule-wide replay state.
 
-A `PlanBundle` pairs an immutable backend-neutral `ScheduledExecutionPlan` with a derived `QuickPlan`. The semantic plan orders stable streams, records the source/main split, carries program references, maps outputs and state to stable slots, describes effects, and names the commit set. The quick plan partitions each range into scalar runs and graph steps.
+A `PlanBundle` pairs an immutable backend-neutral `ScheduledExecutionPlan` with a derived `QuickPlan`. The semantic plan orders stable streams, records the source/main split, carries program references, maps outputs and state to stable slots, describes effects, and names the commit set. The quick plan partitions each range into `QuickStep::ScalarRun` and `QuickStep::Graph` entries.
 
 When schedule ranges change, `select_schedule_ranges` first looks for an equivalent cached source/main order. A hit swaps bundles. A miss builds a new semantic plan and quick plan, assigns a new `PlanId`, moves the previous active bundle into the bounded cache, and notifies the JIT coordinator.
 
@@ -127,7 +132,7 @@ None of those operations reconstructs the evaluator arena. A schedule-cache hit 
 
 ![One semantic schedule with canonical, quickened, and native execution views](../../assets/dataflow/execution-layout.svg)
 
-**What to notice.** All physical executors consume the same stable stream and state identities. Quickened routing and native artifacts may be schedule-specific, but canonical publication and the evaluator arena remain the common fallback boundary.
+**What to notice.** All physical executors consume the same stable stream and state identities. Quickened routing and fused native artifacts may be schedule-specific, while evaluator-local per-stream native tiers remain with their owning evaluators. Canonical publication and the evaluator arena remain the common fallback boundary.
 
 ## Current and retained environment ownership
 
@@ -154,10 +159,10 @@ It must not accidentally:
 
 - renumber top-level `StreamId` values;
 - change an `EnvironmentSlot` assignment;
-- move `StreamState` into a scheduled plan;
-- index per-stream artifacts by transient schedule position;
+- move evaluator-local `EvaluatorTierStates` into a scheduled plan;
+- store per-stream native artifacts in the JIT coordinator or index them by transient schedule position;
 - share evaluator state merely because two call sites share a program;
-- preserve a replaced dynamic activation's history through template caching; or
+- preserve an earlier dynamic activation through template caching rather than an explicit donor mapping; or
 - allow native physical state to diverge from its canonical `(stream, node)` identity.
 
 [← Previous: Compilation](compilation.md) · [Next: Tick execution](tick-execution.md) →

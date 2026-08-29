@@ -426,7 +426,7 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
-        ContextTransferPolicy::Compatible
+        ContextTransferPolicy::MatchingStreamState
     } else {
         ContextTransferPolicy::None
     };
@@ -452,7 +452,7 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
-        ContextTransferPolicy::Compatible
+        ContextTransferPolicy::MatchingStreamState
     } else {
         ContextTransferPolicy::None
     };
@@ -482,7 +482,7 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
-        ContextTransferPolicy::Compatible
+        ContextTransferPolicy::MatchingStreamState
     } else {
         ContextTransferPolicy::None
     };
@@ -512,7 +512,7 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
-        ContextTransferPolicy::Compatible
+        ContextTransferPolicy::MatchingStreamState
     } else {
         ContextTransferPolicy::None
     };

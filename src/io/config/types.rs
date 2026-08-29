@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
+    rc::Rc,
     time::Duration,
 };
 
@@ -463,163 +464,55 @@ impl WireRoute {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct MonitorConfig {
-    pub spec: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<SourceId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inputs: Option<BTreeMap<VarName, Route>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sources: Option<BTreeMap<SourceId, BTreeMap<VarName, Route>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outputs: Option<BTreeMap<VarName, Route>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub destination: Option<DestinationId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub destinations: Option<BTreeMap<DestinationId, BTreeMap<VarName, Route>>>,
-}
-
-#[derive(Deserialize)]
+/// Request-specific input bindings. Source catalogs and their opened
+/// resources remain owned by [`crate::io::InputPipeline`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireMonitorConfig {
-    spec: String,
-    source: Option<SourceId>,
-    inputs: Option<BTreeMap<VarName, WireRoute>>,
-    sources: Option<BTreeMap<SourceId, BTreeMap<VarName, WireRoute>>>,
-    outputs: Option<BTreeMap<VarName, WireRoute>>,
-    destination: Option<DestinationId>,
-    destinations: Option<BTreeMap<DestinationId, BTreeMap<VarName, WireRoute>>>,
+pub struct InputConfiguration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<BTreeMap<VarName, Route>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<BTreeMap<SourceId, BTreeMap<VarName, Route>>>,
 }
 
-impl<'de> Deserialize<'de> for MonitorConfig {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let wire = WireMonitorConfig::deserialize(deserializer)?;
-        let convert = |routes: BTreeMap<VarName, WireRoute>| {
-            routes
-                .into_iter()
-                .map(|(variable, route)| {
-                    route
-                        .into_route()
-                        .map(|route| (variable, route))
-                        .map_err(serde::de::Error::custom)
-                })
-                .collect::<Result<BTreeMap<_, _>, _>>()
-        };
-        let inputs = wire.inputs.map(convert).transpose()?;
-        let sources = wire
-            .sources
-            .map(|groups| {
-                groups
-                    .into_iter()
-                    .map(|(source, routes)| convert(routes).map(|routes| (source, routes)))
-                    .collect::<Result<BTreeMap<_, _>, _>>()
-            })
-            .transpose()?;
-        let outputs = wire.outputs.map(convert).transpose()?;
-        let destinations = wire
-            .destinations
-            .map(|groups| {
-                groups
-                    .into_iter()
-                    .map(|(destination, routes)| {
-                        convert(routes).map(|routes| (destination, routes))
-                    })
-                    .collect::<Result<BTreeMap<_, _>, _>>()
-            })
-            .transpose()?;
-        let config = Self {
-            spec: wire.spec,
-            source: wire.source,
-            inputs,
-            sources,
-            outputs,
-            destination: wire.destination,
-            destinations,
-        };
-        config
-            .validate_structure()
-            .map_err(serde::de::Error::custom)?;
-        Ok(config)
-    }
-}
-
-impl MonitorConfig {
-    pub fn from_json(payload: &str) -> anyhow::Result<Self> {
-        let config: Self = json5::from_str(payload)
-            .map_err(|error| anyhow::anyhow!("invalid monitor configuration: {error}"))?;
-        config.validate_structure()?;
-        Ok(config)
+impl InputConfiguration {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.validate_structure()
     }
 
     pub fn validate_structure(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.spec.trim().is_empty(), "monitor spec cannot be empty");
         anyhow::ensure!(
             !(self.inputs.is_some() && self.sources.is_some()),
-            "monitor configuration cannot contain both `inputs` and `sources`"
+            "input configuration cannot contain both `inputs` and `sources`"
         );
         anyhow::ensure!(
             self.source.is_none() || self.inputs.is_some(),
-            "monitor configuration `source` requires `inputs`"
+            "input configuration `source` requires `inputs`"
         );
         anyhow::ensure!(
             self.source.is_none() || self.sources.is_none(),
-            "monitor configuration cannot contain `source` together with `sources`"
+            "input configuration cannot contain `source` together with `sources`"
         );
-        anyhow::ensure!(
-            !(self.outputs.is_some() && self.destinations.is_some()),
-            "monitor configuration cannot contain both `outputs` and `destinations`"
-        );
-        anyhow::ensure!(
-            self.destination.is_none() || self.outputs.is_some(),
-            "monitor configuration `destination` requires `outputs`"
-        );
-        anyhow::ensure!(
-            self.destination.is_none() || self.destinations.is_none(),
-            "monitor configuration cannot contain `destination` together with `destinations`"
-        );
-        if let Some(destination) = &self.destination {
-            anyhow::ensure!(
-                !destination.trim().is_empty(),
-                "monitor output destination ID cannot be empty"
-            );
-        }
-        if let Some(destinations) = &self.destinations {
-            for destination in destinations.keys() {
-                anyhow::ensure!(
-                    !destination.trim().is_empty(),
-                    "monitor output destination ID cannot be empty"
-                );
-            }
-        }
         if let Some(source) = &self.source {
-            anyhow::ensure!(
-                !source.trim().is_empty(),
-                "monitor source ID cannot be empty"
-            );
+            anyhow::ensure!(!source.trim().is_empty(), "input source ID cannot be empty");
+        }
+        if let Some(inputs) = &self.inputs {
+            validate_input_routes(inputs)?;
         }
         if let Some(sources) = &self.sources {
             let mut variables = BTreeMap::<VarName, &SourceId>::new();
             for (source, bindings) in sources {
-                anyhow::ensure!(
-                    !source.trim().is_empty(),
-                    "monitor source ID cannot be empty"
-                );
+                anyhow::ensure!(!source.trim().is_empty(), "input source ID cannot be empty");
+                validate_input_routes(bindings)?;
                 for variable in bindings.keys() {
                     if let Some(previous) = variables.insert(variable.clone(), source) {
                         anyhow::bail!(
-                            "monitor input variable `{variable}` is bound by both source `{previous}` and source `{source}`"
+                            "input variable `{variable}` is bound by both source `{previous}` and source `{source}`"
                         );
                     }
                 }
-            }
-        }
-        if let Some(outputs) = &self.outputs {
-            validate_output_routes(outputs)?;
-        }
-        if let Some(destinations) = &self.destinations {
-            for routes in destinations.values() {
-                validate_output_routes(routes)?;
             }
         }
         Ok(())
@@ -648,15 +541,159 @@ impl MonitorConfig {
     }
 }
 
-fn validate_output_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<()> {
+fn validate_input_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<()> {
     for (variable, route) in routes {
         anyhow::ensure!(
             !variable.name().trim().is_empty(),
-            "monitor output variable cannot be empty"
+            "input variable cannot be empty"
         );
         Route::new(route.route.clone(), route.codec.clone())?;
     }
     Ok(())
+}
+
+/// Request-specific output routing. Destination implementations and their
+/// local catalogs remain owned by [`crate::io::OutputBackendBuilder`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputConfiguration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<BTreeMap<VarName, Route>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<DestinationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destinations: Option<BTreeMap<DestinationId, BTreeMap<VarName, Route>>>,
+}
+
+impl OutputConfiguration {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.validate_structure()
+    }
+
+    pub fn validate_structure(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !(self.outputs.is_some() && self.destinations.is_some()),
+            "output configuration cannot contain both `outputs` and `destinations`"
+        );
+        anyhow::ensure!(
+            self.destination.is_none() || self.outputs.is_some(),
+            "output configuration `destination` requires `outputs`"
+        );
+        anyhow::ensure!(
+            self.destination.is_none() || self.destinations.is_none(),
+            "output configuration cannot contain `destination` together with `destinations`"
+        );
+        if let Some(destination) = &self.destination {
+            anyhow::ensure!(
+                !destination.trim().is_empty(),
+                "output destination ID cannot be empty"
+            );
+        }
+        if let Some(destinations) = &self.destinations {
+            for (destination, routes) in destinations {
+                anyhow::ensure!(
+                    !destination.trim().is_empty(),
+                    "output destination ID cannot be empty"
+                );
+                validate_output_routes(routes)?;
+            }
+        }
+        if let Some(outputs) = &self.outputs {
+            validate_output_routes(outputs)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_output_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<()> {
+    for (variable, route) in routes {
+        anyhow::ensure!(
+            !variable.name().trim().is_empty(),
+            "output variable cannot be empty"
+        );
+        Route::new(route.route.clone(), route.codec.clone())?;
+    }
+    Ok(())
+}
+
+/// A monitor replacement request. The nested input and output values keep
+/// transport-independent reconfiguration data separate from runtime state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconfigurationRequest {
+    pub specification: String,
+    pub input: InputConfiguration,
+    pub output: OutputConfiguration,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WireReconfigurationRequest {
+    specification: String,
+    #[serde(default)]
+    input: InputConfiguration,
+    #[serde(default)]
+    output: OutputConfiguration,
+}
+
+impl Serialize for ReconfigurationRequest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        WireReconfigurationRequest {
+            specification: self.specification.clone(),
+            input: self.input.clone(),
+            output: self.output.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReconfigurationRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let WireReconfigurationRequest {
+            specification,
+            input,
+            output,
+        } = WireReconfigurationRequest::deserialize(deserializer)?;
+        let request = Self {
+            specification,
+            input,
+            output,
+        };
+        request
+            .validate_structure()
+            .map_err(serde::de::Error::custom)?;
+        Ok(request)
+    }
+}
+
+impl ReconfigurationRequest {
+    pub fn new(specification: impl Into<String>) -> Self {
+        Self {
+            specification: specification.into(),
+            input: InputConfiguration::default(),
+            output: OutputConfiguration::default(),
+        }
+    }
+
+    pub fn from_json(payload: &str) -> anyhow::Result<Self> {
+        let request: Self = json5::from_str(payload)
+            .map_err(|error| anyhow::anyhow!("invalid reconfiguration request: {error}"))?;
+        request.validate_structure()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.validate_structure()
+    }
+
+    pub fn validate_structure(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.specification.trim().is_empty(),
+            "reconfiguration specification cannot be empty"
+        );
+        self.input.validate_structure()?;
+        self.output.validate_structure()?;
+        Ok(())
+    }
 }
 
 fn default_redis_knowledge_database() -> u32 {
@@ -894,7 +931,7 @@ impl InputStage {
     }
 }
 
-/// An immutable, generation-specific binding resolved from source catalogs and
+/// An immutable, request-specific binding resolved from source catalogs and
 /// monitor configuration. These types stay inside input orchestration; callers
 /// configure sources and routes rather than constructing resolved inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -955,21 +992,68 @@ impl ResolvedSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct ResolvedInput {
     sources: Box<[ResolvedSource]>,
+    #[serde(skip)]
+    pipeline_identity: Rc<()>,
+    #[serde(skip)]
+    pipeline_configuration: Box<str>,
+    #[serde(skip)]
+    fingerprint: Box<str>,
 }
 
 impl ResolvedInput {
     pub(crate) fn new(sources: impl IntoIterator<Item = ResolvedSource>) -> Self {
-        Self {
+        let mut resolved = Self {
             sources: sources.into_iter().collect(),
-        }
+            pipeline_identity: Rc::new(()),
+            pipeline_configuration: String::new().into_boxed_str(),
+            fingerprint: String::new().into_boxed_str(),
+        };
+        resolved.fingerprint = resolved.compute_fingerprint().into_boxed_str();
+        resolved
+    }
+
+    pub(crate) fn attach_to_pipeline(
+        mut self,
+        pipeline_identity: &Rc<()>,
+        pipeline_configuration: &str,
+    ) -> Self {
+        self.pipeline_identity = Rc::clone(pipeline_identity);
+        self.pipeline_configuration = pipeline_configuration.to_owned().into_boxed_str();
+        self.fingerprint = self.compute_fingerprint().into_boxed_str();
+        self
+    }
+
+    pub(crate) fn validate_for_pipeline(
+        &self,
+        pipeline_identity: &Rc<()>,
+        pipeline_configuration: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.fingerprint.as_ref() == self.compute_fingerprint().as_str(),
+            "resolved input fingerprint does not match its structure"
+        );
+        anyhow::ensure!(
+            self.pipeline_configuration.as_ref() == pipeline_configuration,
+            "resolved input durable configuration does not match the pipeline"
+        );
+        anyhow::ensure!(
+            Rc::ptr_eq(&self.pipeline_identity, pipeline_identity),
+            "resolved input belongs to a different pipeline instance"
+        );
+        Ok(())
     }
 
     pub(crate) fn sources(&self) -> &[ResolvedSource] {
         &self.sources
     }
 
-    pub(crate) fn into_sources(self) -> Vec<ResolvedSource> {
-        self.sources.into_vec()
+    fn compute_fingerprint(&self) -> String {
+        format!(
+            "pipeline_identity={:p};pipeline_configuration={:?};sources={:?}",
+            Rc::as_ptr(&self.pipeline_identity),
+            self.pipeline_configuration,
+            self.sources,
+        )
     }
 }
 
@@ -982,77 +1066,77 @@ mod tests {
     }
 
     #[test]
-    fn monitor_config_compact_routes_round_trip() {
-        let cases = [
-            r#"{
-                "spec": "in pressure",
-                "source": "telemetry",
-                "inputs": {
-                    "pressure": "/pressure",
-                    "pose": ["/pose", "geometry_msgs/msg/Pose"]
-                },
-                "outputs": {"alarm": ["/alarm", "json"]}
-            }"#,
-            r#"{
-                "spec": "in pressure",
-                "sources": {
-                    "telemetry": {"pressure": "/pressure"},
-                    "robot": {"pose": ["/pose", "geometry_msgs/msg/Pose"]}
-                }
-            }"#,
-        ];
+    fn resolved_input_fingerprint_rejects_tampering() {
+        let identity = Rc::new(());
+        let mut resolved = ResolvedInput::new([ResolvedSource::new(
+            "source".to_owned(),
+            [ResolvedBinding::new(
+                VarName::new("x"),
+                "/x".into(),
+                CodecId::new("json"),
+            )],
+        )])
+        .attach_to_pipeline(&identity, "configuration");
+        resolved.sources[0].bindings[0].route = "tampered".into();
 
-        for json in cases {
-            let config = MonitorConfig::from_json(json).unwrap();
-            let serialized = serde_json::to_value(&config).unwrap();
-            assert_eq!(
-                serialized,
-                serde_json::from_str::<serde_json::Value>(json).unwrap()
-            );
-            assert_eq!(
-                serde_json::from_value::<MonitorConfig>(serialized).unwrap(),
-                config
-            );
-        }
+        let error = resolved
+            .validate_for_pipeline(&identity, "configuration")
+            .expect_err("tampered resolutions must fail their integrity check");
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolved input fingerprint does not match its structure")
+        );
     }
 
     #[test]
-    fn monitor_config_accepts_json5_syntax() {
-        let config = MonitorConfig::from_json(
+    fn reconfiguration_request_has_explicit_validated_defaults() {
+        let request =
+            ReconfigurationRequest::from_json(r#"{specification: "in pressure"}"#).unwrap();
+        assert_eq!(request, ReconfigurationRequest::new("in pressure"));
+        assert_eq!(request.input, InputConfiguration::default());
+        assert_eq!(request.output, OutputConfiguration::default());
+        request.input.validate().unwrap();
+        request.output.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "specification": "in pressure",
+                "input": {},
+                "output": {}
+            })
+        );
+    }
+
+    #[test]
+    fn reconfiguration_request_accepts_json5_and_rejects_unknown_fields() {
+        let config = ReconfigurationRequest::from_json(
             r#"{
                 // Reconfiguration messages use the same JSON5 parser as files and streams.
-                spec: "in pressure",
-                inputs: {pressure: "/pressure",},
+                specification: "in pressure",
+                input: {inputs: {pressure: "/pressure",}},
             }"#,
         )
         .unwrap();
-        assert_eq!(config.spec, "in pressure");
+        assert_eq!(config.specification, "in pressure");
         assert_eq!(
-            config.inputs.unwrap()[&VarName::new("pressure")]
+            config.input.inputs.unwrap()[&VarName::new("pressure")]
                 .route
                 .as_ref(),
             "/pressure"
         );
-    }
 
-    #[test]
-    fn monitor_config_omits_absent_optional_fields() {
-        let config = MonitorConfig::from_json(r#"{"spec":"in pressure"}"#).unwrap();
-        assert_eq!(
-            serde_json::to_value(config).unwrap(),
-            serde_json::json!({"spec": "in pressure"})
-        );
-    }
-
-    #[test]
-    fn monitor_config_rejects_unknown_and_obsolete_fields() {
-        let cases = [
-            r#"{"spec":"in pressure","revision":1}"#,
-            r#"{"spec":"in pressure","bogus":true}"#,
-        ];
-
-        for json in cases {
-            assert!(MonitorConfig::from_json(json).is_err(), "accepted {json}");
+        for json in [
+            r#"{specification:"in pressure",revision:1}"#,
+            r#"{specification:"in pressure",bogus:true}"#,
+            r#"{spec:"in pressure"}"#,
+            r#"{specification:"in pressure",inputs:{pressure:"/pressure"}}"#,
+        ] {
+            assert!(
+                ReconfigurationRequest::from_json(json).is_err(),
+                "accepted {json}"
+            );
         }
     }
 

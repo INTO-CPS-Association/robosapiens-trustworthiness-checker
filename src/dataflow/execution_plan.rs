@@ -1,8 +1,8 @@
 use super::compiler::pipeline::NamedDependencies;
 use super::environment::EnvironmentSlot;
 use super::error::DataflowCompilationError;
-use super::ir::{BoundRef, DynamicExpressionMode, NodeId, StreamProgram};
-use super::reconfiguration::RegionAddress;
+use super::ir::{BoundRef, NodeId, ReconfigurableExpressionKind, StreamProgram};
+use super::reconfiguration::ExpressionStateKey;
 use super::{Value, VarName};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -110,38 +110,39 @@ impl ExpressionSource {
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct ReconfigurationPointId(usize);
+pub struct ReconfigurableExpressionId(usize);
 
-impl ReconfigurationPointId {
+impl ReconfigurableExpressionId {
     #[inline]
     pub(super) fn new(index: usize) -> Self {
         Self(index)
     }
 
+    /// Return the dense plan index carried by this expression identity.
     #[inline]
-    pub(super) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         self.0
     }
 }
 
 #[derive(Clone)]
-pub(super) struct ReconfigurationPoint {
-    pub(super) id: ReconfigurationPointId,
+pub(super) struct ReconfigurableExpression {
+    pub(super) id: ReconfigurableExpressionId,
     pub(super) stream: StreamId,
     pub(super) node: NodeId,
-    pub(super) address: RegionAddress,
+    pub(super) address: ExpressionStateKey,
     pub(super) source: ExpressionSource,
-    pub(super) mode: DynamicExpressionMode,
+    pub(super) kind: ReconfigurableExpressionKind,
     source_prerequisites: StreamSet,
 }
 
-impl ReconfigurationPoint {
+impl ReconfigurableExpression {
     #[inline]
-    pub(super) fn id(&self) -> ReconfigurationPointId {
+    pub(super) fn id(&self) -> ReconfigurableExpressionId {
         self.id
     }
 
-    pub(super) fn address(&self) -> &RegionAddress {
+    pub(super) fn address(&self) -> &ExpressionStateKey {
         &self.address
     }
 }
@@ -178,7 +179,7 @@ impl DependencyGraph {
         let reconfigurable_streams =
             StreamSet::from_streams(programs.iter().enumerate().filter_map(|(index, program)| {
                 program
-                    .has_reconfiguration_points()
+                    .has_reconfigurable_expressions()
                     .then(|| StreamId::new(index))
             }));
 
@@ -222,14 +223,14 @@ fn source_prerequisite_closure(producer: StreamId, dependencies: &DependencyGrap
     )
 }
 
-pub(super) struct ReconfigurationPlan {
+pub(super) struct ReconfigurableExpressionPlan {
     evaluation_streams: StreamSet,
     evaluation_order: Vec<StreamId>,
-    points: Vec<ReconfigurationPoint>,
-    point_ranges_by_stream: Vec<Range<usize>>,
+    expressions: Vec<ReconfigurableExpression>,
+    expression_ranges_by_stream: Vec<Range<usize>>,
 }
 
-impl ReconfigurationPlan {
+impl ReconfigurableExpressionPlan {
     fn build(
         stream_slots: StreamSlots,
         dependencies: &DependencyGraph,
@@ -245,13 +246,13 @@ impl ReconfigurationPlan {
             }
         }
 
-        let mut points = Vec::new();
-        let mut point_ranges_by_stream = Vec::with_capacity(programs.len());
+        let mut expressions = Vec::new();
+        let mut expression_ranges_by_stream = Vec::with_capacity(programs.len());
         for (index, program) in programs.iter().enumerate() {
             let stream = StreamId::new(index);
-            let start = points.len();
+            let start = expressions.len();
             let mut owner_occurrences = BTreeMap::<String, usize>::new();
-            for (node, source, mode) in program.reconfiguration_points() {
+            for (node, source, kind) in program.reconfigurable_expressions() {
                 let (source, owner) = match source {
                     BoundRef::Const(value) => (
                         ExpressionSource::Constant(value.clone()),
@@ -273,40 +274,39 @@ impl ReconfigurationPlan {
                     }
                 };
                 let occurrence = owner_occurrences.entry(owner.clone()).or_insert(0);
-                let address =
-                    RegionAddress::dynamic_body_owner(&stream_vars[index], owner, *occurrence);
+                let address = ExpressionStateKey::new(&stream_vars[index], owner, *occurrence);
                 *occurrence += 1;
-                points.push(ReconfigurationPoint {
-                    id: ReconfigurationPointId::new(points.len()),
+                expressions.push(ReconfigurableExpression {
+                    id: ReconfigurableExpressionId::new(expressions.len()),
                     stream,
                     node,
                     address,
                     source,
-                    mode,
+                    kind,
                     source_prerequisites: StreamSet::empty(),
                 });
             }
-            point_ranges_by_stream.push(start..points.len());
+            expression_ranges_by_stream.push(start..expressions.len());
         }
 
         let stream_count = programs.len();
         let mut all_prerequisites = vec![false; stream_count];
-        for point in &mut points {
-            let ExpressionSource::Environment(source) = point.source else {
+        for expression in &mut expressions {
+            let ExpressionSource::Environment(source) = expression.source else {
                 continue;
             };
             let Some(producer) = stream_slots.stream(source) else {
                 if source.index() >= stream_slots.start.index() {
                     return Err(DataflowCompilationError::UnsupportedReconfiguration {
-                        stream: stream_vars[point.stream.index()].clone(),
+                        stream: stream_vars[expression.stream.index()].clone(),
                         reason: "expression source references an invalid environment slot",
                     });
                 }
                 continue;
             };
 
-            point.source_prerequisites = source_prerequisite_closure(producer, dependencies);
-            for prerequisite in point.source_prerequisites.iter() {
+            expression.source_prerequisites = source_prerequisite_closure(producer, dependencies);
+            for prerequisite in expression.source_prerequisites.iter() {
                 all_prerequisites[prerequisite.index()] = true;
             }
         }
@@ -319,10 +319,10 @@ impl ReconfigurationPlan {
         );
         for stream in evaluation_streams.iter() {
             let program = &programs[stream.index()];
-            if program.has_reconfiguration_points() {
+            if program.has_reconfigurable_expressions() {
                 return Err(DataflowCompilationError::UnsupportedReconfiguration {
                     stream: stream_vars[stream.index()].clone(),
-                    reason: "expression-source evaluation streams cannot contain reconfiguration points",
+                    reason: "expression-source evaluation streams cannot contain reconfigurable expressions",
                 });
             }
             debug_assert!(program.is_infallible());
@@ -335,20 +335,20 @@ impl ReconfigurationPlan {
         Ok(Self {
             evaluation_streams,
             evaluation_order,
-            points,
-            point_ranges_by_stream,
+            expressions,
+            expression_ranges_by_stream,
         })
     }
 
     #[inline]
     pub(super) fn is_empty(&self) -> bool {
-        self.points.is_empty()
+        self.expressions.is_empty()
     }
 
     #[cfg(test)]
     #[inline]
-    pub(super) fn points(&self) -> &[ReconfigurationPoint] {
-        &self.points
+    pub(super) fn expressions(&self) -> &[ReconfigurableExpression] {
+        &self.expressions
     }
 
     #[inline]
@@ -372,45 +372,62 @@ impl ReconfigurationPlan {
     }
 
     #[inline]
-    pub(super) fn points_for(&self, stream: StreamId) -> &[ReconfigurationPoint] {
-        &self.points[self.point_ranges_by_stream[stream.index()].clone()]
+    pub(super) fn expressions_for(&self, stream: StreamId) -> &[ReconfigurableExpression] {
+        &self.expressions[self.expression_ranges_by_stream[stream.index()].clone()]
+    }
+
+    /// Resolve a plan identity to the exact dense execution location it owns.
+    ///
+    /// The identity is not trusted as an unchecked vector index: the descriptor at that index must
+    /// carry the same identity. This keeps a stale or misaddressed expression from being interpreted as
+    /// another stream/node pair by the execution layer.
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn lookup(
+        &self,
+        expression_id: ReconfigurableExpressionId,
+    ) -> Option<(StreamId, NodeId)> {
+        self.expressions
+            .get(expression_id.index())
+            .filter(|expression| expression.id() == expression_id)
+            .map(|expression| (expression.stream, expression.node))
     }
 }
 
 #[derive(Clone)]
-pub(super) struct ReconfigurationState {
-    sealed_defer_points: Vec<bool>,
-    pending_releases: Vec<ReconfigurationPointId>,
+pub(super) struct ReconfigurableExpressionState {
+    sealed_deferred_expressions: Vec<bool>,
+    pending_releases: Vec<ReconfigurableExpressionId>,
     release_prerequisites: Vec<Option<StreamSet>>,
-    point_streams: Vec<StreamId>,
+    expression_streams: Vec<StreamId>,
     source_user_refcounts: Vec<usize>,
-    live_point_refcounts: Vec<usize>,
+    live_expression_refcounts: Vec<usize>,
     resolution_streams: StreamSet,
     source_streams: StreamSet,
     source_order: Vec<StreamId>,
 }
 
-impl ReconfigurationState {
-    pub(super) fn new(plan: &ReconfigurationPlan, stream_count: usize) -> Self {
+impl ReconfigurableExpressionState {
+    pub(super) fn new(plan: &ReconfigurableExpressionPlan, stream_count: usize) -> Self {
         let mut source_user_refcounts = vec![0usize; stream_count];
-        let mut live_point_refcounts = vec![0usize; stream_count];
-        let mut release_prerequisites = Vec::with_capacity(plan.points.len());
-        let mut point_streams = Vec::with_capacity(plan.points.len());
-        for point in &plan.points {
-            debug_assert_eq!(point.id.index(), release_prerequisites.len());
-            point_streams.push(point.stream);
-            live_point_refcounts[point.stream.index()] += 1;
-            for stream in point.source_prerequisites.iter() {
+        let mut live_expression_refcounts = vec![0usize; stream_count];
+        let mut release_prerequisites = Vec::with_capacity(plan.expressions.len());
+        let mut expression_streams = Vec::with_capacity(plan.expressions.len());
+        for expression in &plan.expressions {
+            debug_assert_eq!(expression.id.index(), release_prerequisites.len());
+            expression_streams.push(expression.stream);
+            live_expression_refcounts[expression.stream.index()] += 1;
+            for stream in expression.source_prerequisites.iter() {
                 source_user_refcounts[stream.index()] += 1;
             }
             release_prerequisites.push(
-                (point.mode == DynamicExpressionMode::Defer)
-                    .then(|| point.source_prerequisites.clone()),
+                matches!(expression.kind, ReconfigurableExpressionKind::Deferred)
+                    .then(|| expression.source_prerequisites.clone()),
             );
         }
 
         let resolution_streams = StreamSet::from_streams(
-            live_point_refcounts
+            live_expression_refcounts
                 .iter()
                 .enumerate()
                 .filter_map(|(index, count)| (*count != 0).then(|| StreamId::new(index))),
@@ -424,12 +441,12 @@ impl ReconfigurationState {
         debug_assert_eq!(&source_streams, plan.initial_source_streams());
 
         Self {
-            sealed_defer_points: vec![false; plan.points.len()],
+            sealed_deferred_expressions: vec![false; plan.expressions.len()],
             pending_releases: Vec::new(),
             release_prerequisites,
-            point_streams,
+            expression_streams,
             source_user_refcounts,
-            live_point_refcounts,
+            live_expression_refcounts,
             resolution_streams,
             source_streams,
             source_order: plan.initial_source_order().to_vec(),
@@ -452,45 +469,51 @@ impl ReconfigurationState {
     }
 
     #[inline]
-    pub(super) fn is_sealed(&self, point_id: ReconfigurationPointId) -> bool {
-        self.sealed_defer_points
-            .get(point_id.index())
+    pub(super) fn is_sealed(&self, expression_id: ReconfigurableExpressionId) -> bool {
+        self.sealed_deferred_expressions
+            .get(expression_id.index())
             .copied()
             .unwrap_or(false)
     }
 
-    pub(super) fn mark_defer_activated(&mut self, point_id: ReconfigurationPointId) -> bool {
-        let index = point_id.index();
+    pub(super) fn mark_deferred_activated(
+        &mut self,
+        expression_id: ReconfigurableExpressionId,
+    ) -> bool {
+        let index = expression_id.index();
         let Some(prerequisites) = self.release_prerequisites.get(index) else {
             return false;
         };
-        if prerequisites.is_none() || self.sealed_defer_points[index] {
+        if prerequisites.is_none() || self.sealed_deferred_expressions[index] {
             return false;
         }
 
-        self.sealed_defer_points[index] = true;
-        self.pending_releases.push(point_id);
+        self.sealed_deferred_expressions[index] = true;
+        self.pending_releases.push(expression_id);
         true
     }
 
-    pub(super) fn sealed_addresses(&self, plan: &ReconfigurationPlan) -> Vec<RegionAddress> {
-        plan.points
+    pub(super) fn sealed_addresses(
+        &self,
+        plan: &ReconfigurableExpressionPlan,
+    ) -> Vec<ExpressionStateKey> {
+        plan.expressions
             .iter()
-            .filter(|point| self.is_sealed(point.id()))
-            .map(|point| point.address().clone())
+            .filter(|expression| self.is_sealed(expression.id()))
+            .map(|expression| expression.address().clone())
             .collect()
     }
 
-    /// Reconstruct lifecycle-derived routing for an imported root monitor. Defer source release
+    /// Reconstruct lifecycle-derived routing for an imported root monitor. Deferred-source release
     /// remains on the pending path below so a failed tick cannot release sources early.
     pub(super) fn restore_sealed_addresses(
         &mut self,
-        plan: &ReconfigurationPlan,
-        sealed: &[RegionAddress],
+        plan: &ReconfigurableExpressionPlan,
+        sealed: &[ExpressionStateKey],
     ) {
-        for point in &plan.points {
-            if sealed.iter().any(|address| address == point.address()) {
-                self.mark_defer_activated(point.id());
+        for expression in &plan.expressions {
+            if sealed.iter().any(|address| address == expression.address()) {
+                self.mark_deferred_activated(expression.id());
             }
         }
         self.apply_pending_releases();
@@ -503,16 +526,16 @@ impl ReconfigurationState {
 
         let mut membership_changed = false;
         let mut resolution_membership_changed = false;
-        for point_id in self.pending_releases.drain(..) {
-            let point_stream = self.point_streams[point_id.index()];
-            let live_count = &mut self.live_point_refcounts[point_stream.index()];
+        for expression_id in self.pending_releases.drain(..) {
+            let expression_stream = self.expression_streams[expression_id.index()];
+            let live_count = &mut self.live_expression_refcounts[expression_stream.index()];
             debug_assert!(*live_count != 0);
             *live_count -= 1;
             resolution_membership_changed |= *live_count == 0;
 
-            let prerequisites = self.release_prerequisites[point_id.index()]
+            let prerequisites = self.release_prerequisites[expression_id.index()]
                 .as_ref()
-                .expect("only defer points can have pending source releases");
+                .expect("only deferred expressions can have pending source releases");
             for stream in prerequisites.iter() {
                 let count = &mut self.source_user_refcounts[stream.index()];
                 debug_assert!(*count != 0);
@@ -526,7 +549,7 @@ impl ReconfigurationState {
         if resolution_membership_changed {
             self.resolution_streams
                 .streams
-                .retain(|stream| self.live_point_refcounts[stream.index()] != 0);
+                .retain(|stream| self.live_expression_refcounts[stream.index()] != 0);
         }
         if membership_changed {
             self.source_streams
@@ -543,28 +566,31 @@ impl ReconfigurationState {
 mod tests {
     use super::*;
 
-    fn point(
+    fn expression(
         id: usize,
-        mode: DynamicExpressionMode,
+        kind: ReconfigurableExpressionKind,
         prerequisites: &[usize],
-    ) -> ReconfigurationPoint {
-        ReconfigurationPoint {
-            id: ReconfigurationPointId::new(id),
+    ) -> ReconfigurableExpression {
+        ReconfigurableExpression {
+            id: ReconfigurableExpressionId::new(id),
             stream: StreamId::new(id),
             node: NodeId::new(0),
-            address: RegionAddress::dynamic_body_owner(&VarName::new("stream"), "test", id),
+            address: ExpressionStateKey::new(&VarName::new("stream"), "test", id),
             source: ExpressionSource::Constant(Value::Int(0)),
-            mode,
+            kind,
             source_prerequisites: StreamSet::from_streams(
                 prerequisites.iter().copied().map(StreamId::new),
             ),
         }
     }
 
-    fn plan(points: Vec<ReconfigurationPoint>, stream_count: usize) -> ReconfigurationPlan {
+    fn plan(
+        expressions: Vec<ReconfigurableExpression>,
+        stream_count: usize,
+    ) -> ReconfigurableExpressionPlan {
         let mut refcounts = vec![0usize; stream_count];
-        for point in &points {
-            for stream in point.source_prerequisites.iter() {
+        for expression in &expressions {
+            for stream in expression.source_prerequisites.iter() {
                 refcounts[stream.index()] += 1;
             }
         }
@@ -575,19 +601,69 @@ mod tests {
                 .filter_map(|(index, count)| (*count != 0).then(|| StreamId::new(index))),
         );
         let source_order = source_streams.as_slice().to_vec();
-        let point_count = points.len();
-        ReconfigurationPlan {
+        let expression_count = expressions.len();
+        ReconfigurableExpressionPlan {
             evaluation_streams: source_streams,
             evaluation_order: source_order,
-            points,
-            point_ranges_by_stream: (0..stream_count)
-                .map(|index| index.min(point_count)..(index + 1).min(point_count))
+            expressions,
+            expression_ranges_by_stream: (0..stream_count)
+                .map(|index| index.min(expression_count)..(index + 1).min(expression_count))
                 .collect(),
         }
     }
 
     #[test]
-    fn source_prerequisite_closure_is_transitive_and_per_point() {
+    fn expression_ids_are_dense_and_stream_ranges_use_the_dense_storage() {
+        let plan = plan(
+            vec![
+                expression(0, ReconfigurableExpressionKind::Dynamic, &[]),
+                expression(1, ReconfigurableExpressionKind::Deferred, &[]),
+            ],
+            2,
+        );
+
+        assert_eq!(
+            plan.expressions()
+                .iter()
+                .map(|expression| expression.id().index())
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(plan.expressions_for(StreamId::new(0))[0].id().index(), 0);
+        assert_eq!(plan.expressions_for(StreamId::new(1))[0].id().index(), 1);
+    }
+
+    #[test]
+    fn expression_lookup_rejects_mismatched_dense_ids() {
+        let mut mismatched = expression(0, ReconfigurableExpressionKind::Dynamic, &[]);
+        mismatched.id = ReconfigurableExpressionId::new(1);
+        let malformed = plan(vec![mismatched], 1);
+
+        assert_eq!(
+            malformed.lookup(ReconfigurableExpressionId::new(0)),
+            None,
+            "an ID must match the descriptor stored at its dense index"
+        );
+
+        let plan = plan(
+            vec![
+                expression(0, ReconfigurableExpressionKind::Dynamic, &[]),
+                expression(1, ReconfigurableExpressionKind::Dynamic, &[]),
+            ],
+            2,
+        );
+        assert_eq!(
+            plan.lookup(ReconfigurableExpressionId::new(0)),
+            Some((StreamId::new(0), NodeId::new(0)))
+        );
+        assert_ne!(
+            plan.lookup(ReconfigurableExpressionId::new(0)),
+            Some((StreamId::new(1), NodeId::new(0)))
+        );
+    }
+
+    #[test]
+    fn source_prerequisite_closure_is_transitive_and_per_expression() {
         let dependencies = DependencyGraph {
             static_dependencies: vec![
                 StreamSet::empty(),
@@ -615,13 +691,20 @@ mod tests {
     }
 
     #[test]
-    fn defer_source_release_is_delayed_until_explicitly_applied() {
-        let plan = plan(vec![point(0, DynamicExpressionMode::Defer, &[0, 1])], 2);
-        let mut state = ReconfigurationState::new(&plan, 2);
-        let point_id = plan.points()[0].id;
+    fn deferred_source_release_is_delayed_until_explicitly_applied() {
+        let plan = plan(
+            vec![expression(
+                0,
+                ReconfigurableExpressionKind::Deferred,
+                &[0, 1],
+            )],
+            2,
+        );
+        let mut state = ReconfigurableExpressionState::new(&plan, 2);
+        let expression_id = plan.expressions()[0].id;
 
-        assert!(state.mark_defer_activated(point_id));
-        assert!(state.is_sealed(point_id));
+        assert!(state.mark_deferred_activated(expression_id));
+        assert!(state.is_sealed(expression_id));
         assert_eq!(state.source_streams().as_slice().len(), 2);
         assert_eq!(state.source_order().len(), 2);
 
@@ -632,17 +715,17 @@ mod tests {
     }
 
     #[test]
-    fn shared_defer_and_dynamic_sources_use_refcounts() {
+    fn shared_deferred_and_dynamic_sources_use_refcounts() {
         let plan = plan(
             vec![
-                point(0, DynamicExpressionMode::Defer, &[0, 1]),
-                point(1, DynamicExpressionMode::Dynamic, &[1, 2]),
+                expression(0, ReconfigurableExpressionKind::Deferred, &[0, 1]),
+                expression(1, ReconfigurableExpressionKind::Dynamic, &[1, 2]),
             ],
             3,
         );
-        let mut state = ReconfigurationState::new(&plan, 3);
+        let mut state = ReconfigurableExpressionState::new(&plan, 3);
 
-        assert!(state.mark_defer_activated(plan.points()[0].id));
+        assert!(state.mark_deferred_activated(plan.expressions()[0].id));
         assert!(state.apply_pending_releases());
         assert_eq!(
             state
@@ -661,26 +744,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2]
         );
-        assert!(!state.mark_defer_activated(plan.points()[0].id));
-        assert!(!state.mark_defer_activated(plan.points()[1].id));
+        assert!(!state.mark_deferred_activated(plan.expressions()[0].id));
+        assert!(!state.mark_deferred_activated(plan.expressions()[1].id));
     }
 
     #[test]
-    fn one_shared_defer_release_does_not_change_source_membership() {
+    fn one_shared_deferred_release_does_not_change_source_membership() {
         let plan = plan(
             vec![
-                point(0, DynamicExpressionMode::Defer, &[1]),
-                point(1, DynamicExpressionMode::Defer, &[1]),
+                expression(0, ReconfigurableExpressionKind::Deferred, &[1]),
+                expression(1, ReconfigurableExpressionKind::Deferred, &[1]),
             ],
             2,
         );
-        let mut state = ReconfigurationState::new(&plan, 2);
+        let mut state = ReconfigurableExpressionState::new(&plan, 2);
 
-        state.mark_defer_activated(plan.points()[0].id);
+        state.mark_deferred_activated(plan.expressions()[0].id);
         assert!(!state.apply_pending_releases());
         assert!(state.source_streams().contains(StreamId::new(1)));
 
-        state.mark_defer_activated(plan.points()[1].id);
+        state.mark_deferred_activated(plan.expressions()[1].id);
         assert!(state.apply_pending_releases());
         assert!(!state.source_streams().contains(StreamId::new(1)));
     }
@@ -699,14 +782,14 @@ pub(super) mod test_support {
         }
     }
 
-    pub(in crate::dataflow) fn empty_reconfiguration_plan(
+    pub(in crate::dataflow) fn empty_reconfigurable_expression_plan(
         stream_count: usize,
-    ) -> ReconfigurationPlan {
-        ReconfigurationPlan {
+    ) -> ReconfigurableExpressionPlan {
+        ReconfigurableExpressionPlan {
             evaluation_streams: StreamSet::empty(),
             evaluation_order: Vec::new(),
-            points: Vec::new(),
-            point_ranges_by_stream: vec![0..0; stream_count],
+            expressions: Vec::new(),
+            expression_ranges_by_stream: vec![0..0; stream_count],
         }
     }
 }
@@ -714,7 +797,7 @@ pub(super) mod test_support {
 pub(super) struct MonitorPlan {
     pub(super) stream_slots: StreamSlots,
     pub(super) dependencies: DependencyGraph,
-    pub(super) reconfiguration: ReconfigurationPlan,
+    pub(super) reconfigurable_expressions: ReconfigurableExpressionPlan,
     pub(super) temporal_streams: StreamSet,
 }
 
@@ -729,8 +812,12 @@ impl MonitorPlan {
         debug_assert_eq!(stream_vars.len(), programs.len());
 
         let dependencies = DependencyGraph::build(stream_vars, named_dependencies, programs);
-        let reconfiguration =
-            ReconfigurationPlan::build(stream_slots, &dependencies, stream_vars, programs)?;
+        let reconfigurable_expressions = ReconfigurableExpressionPlan::build(
+            stream_slots,
+            &dependencies,
+            stream_vars,
+            programs,
+        )?;
         let temporal_streams =
             StreamSet::from_streams(programs.iter().enumerate().filter_map(|(index, program)| {
                 program
@@ -740,7 +827,7 @@ impl MonitorPlan {
         Ok(Self {
             stream_slots,
             dependencies,
-            reconfiguration,
+            reconfigurable_expressions,
             temporal_streams,
         })
     }

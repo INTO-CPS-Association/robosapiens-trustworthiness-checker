@@ -1,13 +1,13 @@
 use super::super::ir::*;
 use super::super::*;
+use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::lifting::propagated_special;
-use super::stream_evaluator::{EvaluationContext, StreamEvaluator};
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
 pub(in crate::dataflow) fn evaluate_function(
     func: &StreamFunction,
-    context: EvaluationContext<'_>,
+    context: EvaluationEnvironment<'_>,
     function: &mut Option<RuntimeFunction>,
     captures: &Rc<RefCell<Vec<Value>>>,
 ) -> Value {
@@ -21,7 +21,7 @@ pub(in crate::dataflow) fn evaluate_function(
         let parameter_count = func.parameters.len();
         let temporal = func.program.requires_temporal_commit();
         RuntimeFunction::value_factory(display, temporal, move || {
-            let evaluator = Rc::new(RefCell::new(StreamEvaluator::new(Rc::clone(&program))));
+            let evaluator = Rc::new(RefCell::new(Evaluator::new(Rc::clone(&program))));
             let captures = Rc::clone(&captures);
             Rc::new(move |args| {
                 if args.len() != parameter_count {
@@ -51,12 +51,12 @@ struct RecursiveCall {
 }
 
 struct CallFrame {
-    evaluator: StreamEvaluator,
+    evaluator: Evaluator,
     environment_values: Vec<Value>,
 }
 
 impl RecursiveCall {
-    fn new(func: &StreamFunction, context: EvaluationContext<'_>) -> Self {
+    fn new(func: &StreamFunction, context: EvaluationEnvironment<'_>) -> Self {
         let mut values = func
             .capture_slots
             .iter()
@@ -76,7 +76,7 @@ impl RecursiveCall {
 
     fn new_frame(&self) -> CallFrame {
         CallFrame {
-            evaluator: StreamEvaluator::new(Rc::clone(&self.program)),
+            evaluator: Evaluator::new(Rc::clone(&self.program)),
             environment_values: self.environment_template.clone(),
         }
     }
@@ -153,8 +153,8 @@ pub(in crate::dataflow) fn evaluate_apply(
 pub(in crate::dataflow) fn evaluate_direct_apply(
     func: &StreamFunction,
     args: EcoVec<Value>,
-    context: EvaluationContext<'_>,
-    evaluator: &mut StreamEvaluator,
+    context: EvaluationEnvironment<'_>,
+    evaluator: &mut Evaluator,
     environment_values: &mut [Value],
 ) -> Value {
     let capture_count = func.capture_slots.len();
@@ -182,7 +182,7 @@ pub(in crate::dataflow) fn evaluate_direct_apply(
 pub(in crate::dataflow) fn evaluate_recursive_apply(
     func: &StreamFunction,
     args: EcoVec<Value>,
-    context: EvaluationContext<'_>,
+    context: EvaluationEnvironment<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;
@@ -195,7 +195,7 @@ pub(in crate::dataflow) fn evaluate_recursive_apply(
 
 pub(in crate::dataflow) fn evaluate_recursive_call(
     args: EcoVec<Value>,
-    context: EvaluationContext<'_>,
+    context: EvaluationEnvironment<'_>,
 ) -> Value {
     if let Some(value) = propagated_special(args.iter()) {
         return value;

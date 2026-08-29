@@ -1,14 +1,14 @@
 //! Sink-based Redis output.
 
-use std::{collections::BTreeMap, marker::PhantomData, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter,
-    REDIS_HOSTNAME, VarName,
+    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface,
+    OutputInterfaceReconfigurationHandle, OutputWriter, REDIS_HOSTNAME, VarName,
 };
 
 use super::sinks::LocalBatchSink;
@@ -72,15 +72,37 @@ impl<V: JsonStreamValue> OutputBackend for RedisOutputBackend<V> {
                 OutputError::backend(format!("failed to connect to Redis at `{uri}`: {error}"))
             })?;
         let connection = Rc::new(connection);
-        let interface = Rc::new(interface);
-        Ok(OutputWriter::from_sink(LocalBatchSink::new(
-            move |batch: OutputBatch<V>| {
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            LocalBatchSink::new(move |batch: OutputBatch<V>| {
                 let connection = Rc::clone(&connection);
                 let interface = Rc::clone(&interface);
-                async move { publish_batch(connection, interface, batch).await }
-            },
-        )))
+                async move {
+                    let interface = interface.borrow().clone();
+                    publish_batch(connection, interface, batch).await
+                }
+            }),
+            Some(interface_reconfiguration),
+        ))
     }
+}
+
+fn make_reconfigurable_interface(
+    interface: OutputInterface,
+) -> (
+    Rc<RefCell<OutputInterface>>,
+    OutputInterfaceReconfigurationHandle,
+) {
+    let interface = Rc::new(RefCell::new(interface));
+    let handle_interface = Rc::clone(&interface);
+    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
+        let interface = Rc::clone(&handle_interface);
+        Box::pin(async move {
+            *interface.borrow_mut() = replacement;
+            Ok(())
+        })
+    });
+    (interface, handle)
 }
 
 fn payload_for<V: JsonStreamValue>(topic: &str, value: &V) -> Result<Option<String>, OutputError> {
@@ -129,7 +151,7 @@ fn collect_messages<V: JsonStreamValue>(
 
 async fn publish_batch<V: JsonStreamValue>(
     connection: LocalRedisConnection,
-    interface: Rc<OutputInterface>,
+    interface: OutputInterface,
     batch: OutputBatch<V>,
 ) -> Result<(), OutputError> {
     let messages = collect_messages(&batch, &interface)?;
@@ -173,6 +195,30 @@ mod tests {
             payload_for("mapped/channel", &Value::Int(42)).unwrap(),
             Some("42".into())
         );
+    }
+
+    #[test]
+    fn redis_interface_reconfiguration_swaps_the_route_view() {
+        smol::block_on(async {
+            let (interface, handle) = make_reconfigurable_interface(
+                OutputInterface::from_routes([crate::core::OutputRoute::new(
+                    var("x"),
+                    Some("old".into()),
+                    None,
+                    crate::core::OutputRole::Output,
+                )])
+                .unwrap(),
+            );
+            let replacement = OutputInterface::from_routes([crate::core::OutputRoute::new(
+                var("x"),
+                Some("new".into()),
+                None,
+                crate::core::OutputRole::Output,
+            )])
+            .unwrap();
+            handle.reconfigure(replacement.clone()).await.unwrap();
+            assert_eq!(*interface.borrow(), replacement);
+        });
     }
 
     #[test]

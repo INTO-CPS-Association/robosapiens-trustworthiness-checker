@@ -1,10 +1,13 @@
 //! A local, sink-based ROS output backend.
 //!
 //! ROS publishers are synchronous at the `r2r` API boundary, but ROS still
-//! needs a node to be spun while publishers are alive.  The spinner belongs to
-//! the opened sink and is joined by `poll_close`; it is never detached.
+//! needs a node to be spun while publishers are alive.  The opened sink retains
+//! one local ROS session so publisher bindings can be reconciled without
+//! recreating the context or node.  The spinner belongs to the opened sink and
+//! is joined by `poll_close`; it is never detached.
 
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     marker::PhantomData,
     pin::Pin,
@@ -19,8 +22,9 @@ use uuid::Uuid;
 
 use crate::{
     core::{
-        OutputBackend, OutputBatch, OutputError, OutputInterface, OutputRoute, OutputWriter,
-        StreamData, Value, VarName,
+        OutputBackend, OutputBatch, OutputError, OutputInterface,
+        OutputInterfaceReconfigurationHandle, OutputRoute, OutputWriter, StreamData, Value,
+        VarName,
     },
     io::ros::{
         ValuePublisher, create_value_publisher,
@@ -45,8 +49,8 @@ pub(crate) type PublisherFactory<V> =
 /// A reusable local ROS output backend.
 ///
 /// The backend stores only node configuration and type-specific factory
-/// functions.  Every call to [`OutputBackend::open`] receives its own fixed
-/// interface, publishers, node, and joined spinner task.
+/// functions.  Every call to [`OutputBackend::open`] receives its own retained
+/// ROS session and joined spinner task.
 pub struct RosOutputBackend<V: StreamData> {
     executor: Rc<LocalExecutor<'static>>,
     node_name: String,
@@ -72,6 +76,223 @@ impl<V: StreamData> RosOutputBackend<V> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublisherReconciliationChange {
+    Add,
+    Remove,
+    Rebind,
+}
+
+type PublisherReconciliationPlan = BTreeMap<VarName, PublisherReconciliationChange>;
+type PublisherOwner<V> = Rc<dyn RosPublisher<V>>;
+
+/// A publisher owner is reusable only when it still describes the same output
+/// binding.  Comparing the route metadata rather than the parsed ROS type also
+/// keeps the factory contract unchanged for the Value and MSTLO backends.
+fn publisher_routes_are_compatible(old: &OutputRoute, candidate: &OutputRoute) -> bool {
+    !old.role.is_auxiliary()
+        && !candidate.role.is_auxiliary()
+        && old.variable == candidate.variable
+        && old.topic == candidate.topic
+        && old.message_type == candidate.message_type
+}
+
+/// Compute the minimal publisher-owner changes needed for a candidate
+/// interface.  Auxiliary routes are deliberately absent from the plan because
+/// they never own a ROS publisher.
+fn publisher_reconciliation_plan(
+    active: &OutputInterface,
+    candidate: &OutputInterface,
+) -> PublisherReconciliationPlan {
+    let mut plan = BTreeMap::new();
+
+    for old_route in active.routes() {
+        if old_route.role.is_auxiliary() {
+            continue;
+        }
+
+        match candidate.route(&old_route.variable) {
+            Some(candidate_route) if !candidate_route.role.is_auxiliary() => {
+                if !publisher_routes_are_compatible(old_route, candidate_route) {
+                    plan.insert(
+                        old_route.variable.clone(),
+                        PublisherReconciliationChange::Rebind,
+                    );
+                }
+            }
+            _ => {
+                plan.insert(
+                    old_route.variable.clone(),
+                    PublisherReconciliationChange::Remove,
+                );
+            }
+        }
+    }
+
+    for candidate_route in candidate.routes() {
+        if candidate_route.role.is_auxiliary() {
+            continue;
+        }
+
+        match active.route(&candidate_route.variable) {
+            Some(old_route) if !old_route.role.is_auxiliary() => {}
+            _ => {
+                plan.insert(
+                    candidate_route.variable.clone(),
+                    PublisherReconciliationChange::Add,
+                );
+            }
+        }
+    }
+
+    plan
+}
+
+struct RosSessionState<V: StreamData> {
+    interface: OutputInterface,
+    publishers: BTreeMap<VarName, PublisherOwner<V>>,
+}
+
+/// The retained local ROS owner.  The node lives in the session rather than in
+/// the spinner, so publisher creation and spinning use the same node across
+/// every interface reconfiguration.
+struct RosSession<V: StreamData> {
+    node: RefCell<r2r::Node>,
+    state: RosSessionState<V>,
+}
+
+fn create_publishers<V: StreamData>(
+    node: &mut r2r::Node,
+    interface: &OutputInterface,
+    publisher_factory: PublisherFactory<V>,
+) -> Result<BTreeMap<VarName, PublisherOwner<V>>, OutputError> {
+    let mut publishers = BTreeMap::new();
+    for route in interface
+        .routes()
+        .iter()
+        .filter(|route| !route.role.is_auxiliary())
+    {
+        let publisher = (publisher_factory)(node, route)?;
+        let publisher: PublisherOwner<V> = Rc::from(publisher);
+        publishers.insert(route.variable.clone(), publisher);
+    }
+    Ok(publishers)
+}
+
+/// Assemble the candidate owner map without touching the active map.  This is
+/// intentionally node-independent: all node work has already succeeded before
+/// this function is called, and compatible owners are cloned as `Rc`s instead
+/// of being recreated.
+fn reconcile_publisher_owners<V: StreamData>(
+    active: &OutputInterface,
+    candidate: &OutputInterface,
+    active_publishers: &BTreeMap<VarName, PublisherOwner<V>>,
+    created_publishers: &BTreeMap<VarName, PublisherOwner<V>>,
+) -> Result<BTreeMap<VarName, PublisherOwner<V>>, OutputError> {
+    let mut candidate_publishers = BTreeMap::new();
+
+    for route in candidate
+        .routes()
+        .iter()
+        .filter(|route| !route.role.is_auxiliary())
+    {
+        let publisher = match active.route(&route.variable) {
+            Some(active_route) if publisher_routes_are_compatible(active_route, route) => {
+                active_publishers.get(&route.variable).cloned()
+            }
+            _ => created_publishers.get(&route.variable).cloned(),
+        }
+        .ok_or_else(|| {
+            OutputError::backend(format!(
+                "ROS publisher reconciliation did not produce an owner for `{}`",
+                route.variable
+            ))
+        })?;
+        candidate_publishers.insert(route.variable.clone(), publisher);
+    }
+
+    Ok(candidate_publishers)
+}
+
+fn validate_candidate_interface(
+    interface: &OutputInterface,
+    validate_interface: InterfaceValidator,
+) -> Result<(), OutputError> {
+    // OutputInterface is validated by its constructor, but retain this check at
+    // the backend boundary because route metadata is ROS-specific and is not
+    // part of core validation.
+    OutputInterface::validate_routes(interface.routes())?;
+    validate_interface(interface)
+}
+
+fn reconfigure_session<V: StreamData>(
+    session: &Rc<RefCell<RosSession<V>>>,
+    candidate: OutputInterface,
+    validate_interface: InterfaceValidator,
+    publisher_factory: PublisherFactory<V>,
+) -> Result<(), OutputError> {
+    // Validate everything before borrowing or mutating the live session.  A
+    // failed candidate therefore cannot replace the active interface or cause
+    // a partial publisher-map update.
+    validate_candidate_interface(&candidate, validate_interface)?;
+
+    let mut session = session.borrow_mut();
+    let plan = publisher_reconciliation_plan(&session.state.interface, &candidate);
+    if plan.is_empty() && session.state.interface == candidate {
+        return Ok(());
+    }
+
+    // Resolve all routes before touching the node.  These lookups are an
+    // internal invariant of the plan, but returning an error keeps a malformed
+    // plan transactional rather than panicking.
+    let routes_to_create = plan
+        .iter()
+        .filter_map(|(variable, change)| {
+            matches!(
+                change,
+                PublisherReconciliationChange::Add | PublisherReconciliationChange::Rebind
+            )
+            .then_some(variable)
+        })
+        .map(|variable| {
+            candidate.route(variable).ok_or_else(|| {
+                OutputError::backend(format!(
+                    "ROS publisher reconciliation has no candidate route for `{variable}`"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // New/rebound publishers are created while the active session state is
+    // still untouched.  If a factory call fails, dropping this temporary map
+    // leaves the active interface and all compatible owners in place.
+    let mut created_publishers = BTreeMap::new();
+    {
+        let mut node = session.node.borrow_mut();
+        for route in routes_to_create {
+            let publisher = (publisher_factory)(&mut node, route)?;
+            let publisher: PublisherOwner<V> = Rc::from(publisher);
+            created_publishers.insert(route.variable.clone(), publisher);
+        }
+    }
+
+    let candidate_publishers = reconcile_publisher_owners(
+        &session.state.interface,
+        &candidate,
+        &session.state.publishers,
+        &created_publishers,
+    )?;
+
+    // This single state assignment is the commit point.  The handle only
+    // reports success after both the candidate interface and its complete
+    // publisher map are installed together.
+    session.state = RosSessionState {
+        interface: candidate,
+        publishers: candidate_publishers,
+    };
+    Ok(())
+}
+
 #[async_trait(?Send)]
 impl<V: StreamData> OutputBackend for RosOutputBackend<V> {
     type Val = V;
@@ -80,24 +301,7 @@ impl<V: StreamData> OutputBackend for RosOutputBackend<V> {
         &self,
         interface: OutputInterface,
     ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        // OutputInterface is already validated by its constructor, but retain
-        // this check at the backend boundary because route metadata is ROS
-        // specific and is deliberately not part of core validation.
-        OutputInterface::validate_routes(interface.routes())?;
-        (self.validate_interface)(&interface)?;
-
-        let has_outputs = interface
-            .routes()
-            .iter()
-            .any(|route| !route.role.is_auxiliary());
-        if !has_outputs {
-            return Ok(OutputWriter::from_sink(RosSink::new(
-                interface,
-                BTreeMap::new(),
-                CancellationToken::new(),
-                None,
-            )));
-        }
+        validate_candidate_interface(&interface, self.validate_interface)?;
 
         let context = r2r::Context::create().map_err(|error| {
             OutputError::backend(format!("failed to create ROS context: {error:?}"))
@@ -108,36 +312,54 @@ impl<V: StreamData> OutputBackend for RosOutputBackend<V> {
                 "failed to create ROS node `{node_name}`: {error:?}"
             ))
         })?;
+        let publishers = create_publishers(&mut node, &interface, self.publisher_factory)?;
 
-        let mut publishers = BTreeMap::new();
-        for route in interface
-            .routes()
-            .iter()
-            .filter(|route| !route.role.is_auxiliary())
-        {
-            let publisher = (self.publisher_factory)(&mut node, route)?;
-            publishers.insert(route.variable.clone(), publisher);
-        }
+        let session = Rc::new(RefCell::new(RosSession {
+            node: RefCell::new(node),
+            state: RosSessionState {
+                interface,
+                publishers,
+            },
+        }));
 
         let cancellation = CancellationToken::new();
         let cancellation_for_spinner = cancellation.clone();
+        let session_for_spinner = Rc::clone(&session);
         let spinner = self.executor.spawn(async move {
             let mut spin_ticks = smol::Timer::interval(crate::io::ros::ROS_SPIN_INTERVAL);
             let mut cancelled = cancellation_for_spinner.cancelled().fuse();
             loop {
                 futures::select_biased! {
                     _ = cancelled => break,
-                    _ = spin_ticks.next().fuse() => node.spin_once(crate::io::ros::ROS_SPIN_TIMEOUT),
+                    _ = spin_ticks.next().fuse() => {
+                        // `spin_once` is synchronous.  The node borrow ends
+                        // before the spinner awaits its next tick, leaving the
+                        // node available for a reconfiguration factory call.
+                        let session = session_for_spinner.borrow();
+                        session
+                            .node
+                            .borrow_mut()
+                            .spin_once(crate::io::ros::ROS_SPIN_TIMEOUT);
+                    },
                 }
             }
         });
 
-        Ok(OutputWriter::from_sink(RosSink::new(
-            interface,
-            publishers,
-            cancellation,
-            Some(spinner),
-        )))
+        let validate_interface = self.validate_interface;
+        let publisher_factory = self.publisher_factory;
+        let session_for_handle = Rc::clone(&session);
+        let interface_reconfiguration =
+            OutputInterfaceReconfigurationHandle::new(move |candidate| {
+                let session = Rc::clone(&session_for_handle);
+                Box::pin(async move {
+                    reconfigure_session(&session, candidate, validate_interface, publisher_factory)
+                })
+            });
+
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            RosSink::new(session, cancellation, Some(spinner)),
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
@@ -209,8 +431,7 @@ pub(crate) fn create_value_ros_publisher(
 }
 
 struct RosSink<V: StreamData> {
-    interface: OutputInterface,
-    publishers: BTreeMap<VarName, Box<dyn RosPublisher<V>>>,
+    session: Rc<RefCell<RosSession<V>>>,
     cancellation: CancellationToken,
     spinner: Option<smol::Task<()>>,
     ready: bool,
@@ -221,14 +442,12 @@ struct RosSink<V: StreamData> {
 
 impl<V: StreamData> RosSink<V> {
     fn new(
-        interface: OutputInterface,
-        publishers: BTreeMap<VarName, Box<dyn RosPublisher<V>>>,
+        session: Rc<RefCell<RosSession<V>>>,
         cancellation: CancellationToken,
         spinner: Option<smol::Task<()>>,
     ) -> Self {
         Self {
-            interface,
-            publishers,
+            session,
             cancellation,
             spinner,
             ready: false,
@@ -251,26 +470,38 @@ impl<V: StreamData> RosSink<V> {
     }
 
     fn publish_batch(&self, batch: &OutputBatch<V>) -> Result<(), OutputError> {
-        self.interface.validate_batch(batch)?;
+        // Publishing is synchronous at the ROS API boundary.  Keep this borrow
+        // entirely within this method; no RefCell borrow reaches an await in
+        // the sink or in the reconfiguration handle.
+        let session = self.session.borrow();
+        session.state.interface.validate_batch(batch)?;
 
         for tick in batch.ticks() {
             for update in tick.updates() {
-                let route = self.interface.route(update.variable).ok_or_else(|| {
-                    OutputError::invalid(format!(
-                        "output update variable `{}` has no ROS route",
-                        update.variable
-                    ))
-                })?;
+                let route = session
+                    .state
+                    .interface
+                    .route(update.variable)
+                    .ok_or_else(|| {
+                        OutputError::invalid(format!(
+                            "output update variable `{}` has no ROS route",
+                            update.variable
+                        ))
+                    })?;
                 if route.role.is_auxiliary() || update.value.is_no_val() {
                     continue;
                 }
 
-                let publisher = self.publishers.get(update.variable).ok_or_else(|| {
-                    OutputError::backend(format!(
-                        "ROS output publisher is missing for `{}`",
-                        update.variable
-                    ))
-                })?;
+                let publisher = session
+                    .state
+                    .publishers
+                    .get(update.variable)
+                    .ok_or_else(|| {
+                        OutputError::backend(format!(
+                            "ROS output publisher is missing for `{}`",
+                            update.variable
+                        ))
+                    })?;
                 publisher.publish(update.value)?;
             }
         }
@@ -362,5 +593,181 @@ impl<V: StreamData> Drop for RosSink<V> {
         // Dropping a task cancels it, but notify the spinner first so a task
         // currently waiting on the cancellation future can observe termination.
         self.cancellation.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::core::{OutputRole, OutputRoute};
+
+    fn var(name: &str) -> VarName {
+        VarName::new(name)
+    }
+
+    fn route(name: &str, topic: &str, message_type: &str, role: OutputRole) -> OutputRoute {
+        OutputRoute::new(
+            var(name),
+            Some(topic.to_owned()),
+            Some(message_type.to_owned()),
+            role,
+        )
+    }
+
+    fn interface(routes: impl IntoIterator<Item = OutputRoute>) -> OutputInterface {
+        OutputInterface::from_routes(routes).expect("test routes should be valid")
+    }
+
+    #[test]
+    fn reconciliation_plan_is_empty_for_unchanged_bindings() {
+        let active = interface([
+            route("x", "/x", "Int32", OutputRole::Output),
+            route("aux", "/aux", "Int32", OutputRole::Auxiliary),
+        ]);
+        // Deliberately change route order: publisher ownership is keyed by
+        // variable, not by the position of a route in the interface.
+        let candidate = interface([
+            route("aux", "/different", "String", OutputRole::Auxiliary),
+            route("x", "/x", "Int32", OutputRole::Output),
+        ]);
+
+        assert_eq!(
+            publisher_reconciliation_plan(&active, &candidate),
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
+    fn reconciliation_plan_is_exact_for_add_and_remove() {
+        let active = interface([
+            route("kept", "/kept", "Int32", OutputRole::Output),
+            route("removed", "/removed", "Int32", OutputRole::Output),
+        ]);
+        let candidate = interface([
+            route("kept", "/kept", "Int32", OutputRole::Output),
+            route("added", "/added", "Int32", OutputRole::Output),
+        ]);
+
+        assert_eq!(
+            publisher_reconciliation_plan(&active, &candidate),
+            BTreeMap::from([
+                (var("added"), PublisherReconciliationChange::Add,),
+                (var("removed"), PublisherReconciliationChange::Remove,),
+            ])
+        );
+    }
+
+    #[test]
+    fn reconciliation_plan_marks_topic_and_message_changes_as_rebinds() {
+        let active = interface([
+            route("topic_changed", "/old", "Int32", OutputRole::Output),
+            route("type_changed", "/same", "Int32", OutputRole::Output),
+        ]);
+        let candidate = interface([
+            route("topic_changed", "/new", "Int32", OutputRole::Output),
+            route("type_changed", "/same", "Float64", OutputRole::Output),
+        ]);
+
+        assert_eq!(
+            publisher_reconciliation_plan(&active, &candidate),
+            BTreeMap::from([
+                (var("topic_changed"), PublisherReconciliationChange::Rebind,),
+                (var("type_changed"), PublisherReconciliationChange::Rebind,),
+            ])
+        );
+    }
+
+    #[test]
+    fn auxiliary_routes_do_not_create_publisher_owners() {
+        let active = interface([route("x", "/x", "Int32", OutputRole::Auxiliary)]);
+        let candidate = interface([
+            route("x", "/x", "Int32", OutputRole::Auxiliary),
+            route("y", "/y", "Int32", OutputRole::Output),
+        ]);
+        let y_publishes = Rc::new(Cell::new(0));
+        let created = BTreeMap::from([(var("y"), fake_owner(Rc::clone(&y_publishes)))]);
+
+        assert_eq!(
+            publisher_reconciliation_plan(&active, &candidate),
+            BTreeMap::from([(var("y"), PublisherReconciliationChange::Add)])
+        );
+        let publishers =
+            reconcile_publisher_owners::<Value>(&active, &candidate, &BTreeMap::new(), &created)
+                .unwrap();
+        assert_eq!(publishers.len(), 1);
+        assert!(publishers.contains_key(&var("y")));
+    }
+
+    #[test]
+    fn reconciliation_reuses_compatible_owner_and_rebinds_changed_owner() {
+        let active = interface([
+            route("kept", "/kept", "Int32", OutputRole::Output),
+            route("rebound", "/old", "Int32", OutputRole::Output),
+        ]);
+        let candidate = interface([
+            route("kept", "/kept", "Int32", OutputRole::Output),
+            route("rebound", "/new", "Int32", OutputRole::Output),
+        ]);
+        let kept_publishes = Rc::new(Cell::new(0));
+        let old_rebound_publishes = Rc::new(Cell::new(0));
+        let new_rebound_publishes = Rc::new(Cell::new(0));
+        let active_publishers = BTreeMap::from([
+            (var("kept"), fake_owner(Rc::clone(&kept_publishes))),
+            (
+                var("rebound"),
+                fake_owner(Rc::clone(&old_rebound_publishes)),
+            ),
+        ]);
+        let created_publishers = BTreeMap::from([(
+            var("rebound"),
+            fake_owner(Rc::clone(&new_rebound_publishes)),
+        )]);
+
+        let publishers = reconcile_publisher_owners(
+            &active,
+            &candidate,
+            &active_publishers,
+            &created_publishers,
+        )
+        .unwrap();
+
+        assert!(Rc::ptr_eq(
+            publishers.get(&var("kept")).unwrap(),
+            active_publishers.get(&var("kept")).unwrap()
+        ));
+        assert!(Rc::ptr_eq(
+            publishers.get(&var("rebound")).unwrap(),
+            created_publishers.get(&var("rebound")).unwrap()
+        ));
+        publishers
+            .get(&var("kept"))
+            .unwrap()
+            .publish(&Value::Int(1))
+            .unwrap();
+        publishers
+            .get(&var("rebound"))
+            .unwrap()
+            .publish(&Value::Int(2))
+            .unwrap();
+        assert_eq!(kept_publishes.get(), 1);
+        assert_eq!(old_rebound_publishes.get(), 0);
+        assert_eq!(new_rebound_publishes.get(), 1);
+    }
+
+    struct FakePublisher {
+        publishes: Rc<Cell<usize>>,
+    }
+
+    impl RosPublisher<Value> for FakePublisher {
+        fn publish(&self, _value: &Value) -> Result<(), OutputError> {
+            self.publishes.set(self.publishes.get() + 1);
+            Ok(())
+        }
+    }
+
+    fn fake_owner(publishes: Rc<Cell<usize>>) -> PublisherOwner<Value> {
+        Rc::new(FakePublisher { publishes })
     }
 }

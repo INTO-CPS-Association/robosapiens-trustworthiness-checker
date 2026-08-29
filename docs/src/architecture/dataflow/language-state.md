@@ -112,11 +112,11 @@ These restrictions allow the monitor to evaluate source prerequisites once, reso
 | Separate branch programs | `StreamOp::If` contains two nested `EvaluationGraph` values; the condition remains in the enclosing graph. |
 | Persistent branch timelines | `NodeState::LazyIf` owns `then_state`, `else_state`, the last condition, and retained outputs for both branches. |
 | Ordinary branch advancement | `evaluate_lazy_if` evaluates both branches, then selects the result. Commit recursively visits both states. |
-| Recursive control flow | An `EvaluationContext` carrying a recursive callback makes `evaluate_lazy_if` evaluate only the selected branch. |
+| Recursive control flow | An `EvaluationEnvironment` carrying a recursive callback makes `evaluate_lazy_if` evaluate only the selected branch. |
 | Bound function definition | `StreamFunction` contains a shared `StreamProgram`, parameters, display text, and outer `capture_slots`. |
 | Runtime function value | `NodeState::Function` retains stable function identity and a shared capture vector refreshed from the current environment. |
 | General call site | `NodeState::CallLift` retains lifted operands, active function identity, and an optional instantiated callable. |
-| Direct persistent call | `NodeState::PersistentCall` owns a nested `StreamEvaluator`, local environment values, and lifted arguments. |
+| Direct persistent call | `NodeState::PersistentCall` owns a nested `Evaluator`, local environment values, and lifted arguments. |
 | Direct recursion | The `StreamOp::RecursiveApply` and `StreamOp::RecursiveCall` operations, the private `functions::RecursiveCall` dispatcher, and pooled resettable `CallFrame` values implement the specialized path. |
 | Reconfiguration restrictions | Binding validation rejects unsupported temporal function contexts; monitor-plan validation requires early dependency resolution; runtime activation rejects nested reconfiguration. |
 

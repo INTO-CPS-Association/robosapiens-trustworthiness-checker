@@ -1,21 +1,26 @@
+use super::super::super::history::HistoryAccess;
 use super::super::super::ir::*;
 use super::super::super::*;
-use super::super::interpreter::{evaluate_node, evaluate_nodes, stage_recursive_delays};
+use super::super::evaluator::EvaluationEnvironment;
+use super::super::evaluator_state::{EvaluatorState, NodeState as CanonicalNodeState};
+use super::super::interpreter::{
+    evaluate_node, evaluate_node_with_history, evaluate_nodes, evaluate_nodes_with_history,
+    stage_recursive_delays,
+};
 use super::super::lifting::retain_last_value;
-use super::super::stream_evaluator::EvaluationContext;
-use super::super::stream_state::{NodeState as CanonicalNodeState, StreamState};
 use super::plan::{Instruction, Plan, SingleScalarPlan, Source};
 use super::scalar::{ScalarValue, apply_binary, apply_unary, retain_last};
 use super::state::{Node, NodeState, State};
 
 /// Executes a quickening plan while preserving canonical graph state.
-pub(in crate::dataflow) fn execute(
+pub(in crate::dataflow) fn execute_plan(
     state: &mut State,
     plan: &Plan,
     graph: &BoundEvaluationGraph,
-    canonical: &mut StreamState,
-    context: EvaluationContext<'_>,
+    canonical: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
     published_scalars: &[Option<ScalarValue>],
+    history_access: Option<HistoryAccess<'_>>,
 ) {
     for (index, op) in graph.nodes.iter().enumerate() {
         let node = NodeId::new(index);
@@ -24,7 +29,8 @@ pub(in crate::dataflow) fn execute(
         let instruction = &plan.instructions[index];
         let outcome = match (instruction, &mut current.state) {
             (Instruction::Canonical, NodeState::Canonical) => {
-                let value = evaluate_node(node, op, canonical, context);
+                let value =
+                    evaluate_node_with_history(node, op, canonical, context, history_access);
                 canonical.node_values[index] = value;
                 continue;
             }
@@ -48,6 +54,7 @@ pub(in crate::dataflow) fn execute(
                     then_state.as_mut(),
                     else_state.as_mut(),
                     published_scalars,
+                    history_access,
                 );
                 canonical.node_values[index] = value;
                 continue;
@@ -124,7 +131,8 @@ pub(in crate::dataflow) fn execute(
                 _ => Outcome::Deopt,
             },
             (_, NodeState::Deoptimized { output_kind }) => {
-                let value = evaluate_node(node, op, canonical, context);
+                let value =
+                    evaluate_node_with_history(node, op, canonical, context, history_access);
                 current.value = ScalarValue::from_value(&value, *output_kind);
                 canonical.node_values[index] = value;
                 continue;
@@ -142,7 +150,8 @@ pub(in crate::dataflow) fn execute(
                 let specialized =
                     std::mem::replace(&mut current.state, NodeState::Deoptimized { output_kind });
                 specialized.restore_canonical_state(&mut canonical.node_states[index]);
-                let value = evaluate_node(node, op, canonical, context);
+                let value =
+                    evaluate_node_with_history(node, op, canonical, context, history_access);
                 current.value = ScalarValue::from_value(&value, output_kind);
                 canonical.node_values[index] = value;
             }
@@ -151,7 +160,7 @@ pub(in crate::dataflow) fn execute(
 }
 
 /// The one representation produced by direct scalar execution.
-pub(in crate::dataflow) enum DirectResult {
+pub(in crate::dataflow) enum DirectScalarResult {
     Scalar(ScalarValue),
     Canonical(Value),
 }
@@ -162,14 +171,14 @@ pub(in crate::dataflow) enum DirectResult {
 /// general traversal above. Sharing that traversal makes the common one-node
 /// stream pay for node selection and measurably regresses scalar chains.
 #[inline]
-pub(in crate::dataflow) fn execute_single(
+pub(in crate::dataflow) fn execute_direct_scalar(
     state: &mut State,
     plan: &SingleScalarPlan,
     graph: &BoundEvaluationGraph,
-    canonical: &mut StreamState,
-    context: EvaluationContext<'_>,
+    canonical: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
     published_scalars: &[Option<ScalarValue>],
-) -> DirectResult {
+) -> DirectScalarResult {
     let instruction = &plan.instruction;
     let state = &mut state.nodes[0];
     let outcome = match (instruction, &mut state.state) {
@@ -239,7 +248,7 @@ pub(in crate::dataflow) fn execute_single(
         },
         (_, NodeState::Deoptimized { output_kind }) => {
             let output_kind = *output_kind;
-            return DirectResult::Canonical(evaluate_deoptimized_single(
+            return DirectScalarResult::Canonical(evaluate_deoptimized_single(
                 state,
                 output_kind,
                 graph,
@@ -254,11 +263,15 @@ pub(in crate::dataflow) fn execute_single(
         Outcome::Value(value) => {
             state.value = Some(value);
             canonical.node_values[0] = value.into_value();
-            DirectResult::Scalar(value)
+            DirectScalarResult::Scalar(value)
         }
-        Outcome::Deopt => {
-            DirectResult::Canonical(deopt_single(state, instruction, graph, canonical, context))
-        }
+        Outcome::Deopt => DirectScalarResult::Canonical(deopt_single(
+            state,
+            instruction,
+            graph,
+            canonical,
+            context,
+        )),
     }
 }
 
@@ -268,8 +281,8 @@ fn deopt_single(
     state: &mut Node,
     instruction: &Instruction,
     graph: &BoundEvaluationGraph,
-    canonical: &mut StreamState,
-    context: EvaluationContext<'_>,
+    canonical: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
 ) -> Value {
     let output_kind = instruction.output_kind();
     let specialized = std::mem::replace(&mut state.state, NodeState::Deoptimized { output_kind });
@@ -283,8 +296,8 @@ fn evaluate_deoptimized_single(
     state: &mut Node,
     output_kind: ScalarKind,
     graph: &BoundEvaluationGraph,
-    canonical: &mut StreamState,
-    context: EvaluationContext<'_>,
+    canonical: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
 ) -> Value {
     let value = evaluate_node(NodeId::new(0), &graph.nodes[0], canonical, context);
     state.value = ScalarValue::from_value(&value, output_kind);
@@ -302,8 +315,8 @@ fn read_source(
     source: &Source,
     kind: ScalarKind,
     nodes: &[Node],
-    state: &StreamState,
-    context: EvaluationContext<'_>,
+    state: &EvaluatorState,
+    context: EvaluationEnvironment<'_>,
     published_scalars: &[Option<ScalarValue>],
 ) -> Option<ScalarValue> {
     match source {
@@ -332,13 +345,14 @@ fn read_source(
 fn evaluate_if(
     node: NodeId,
     op: &BoundOp,
-    canonical: &mut StreamState,
-    context: EvaluationContext<'_>,
+    canonical: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
     then_plan: Option<&Plan>,
     else_plan: Option<&Plan>,
     then_state: Option<&mut State>,
     else_state: Option<&mut State>,
     published_scalars: &[Option<ScalarValue>],
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     let BoundOp::If {
         cond,
@@ -358,19 +372,21 @@ fn evaluate_if(
         return match condition {
             Value::Bool(true) => evaluate_branch(
                 then_branch,
-                &mut lazy.then_state,
+                lazy.then_state.as_mut(),
                 then_plan,
                 then_state,
                 context,
                 published_scalars,
+                history_access,
             ),
             Value::Bool(false) => evaluate_branch(
                 else_branch,
-                &mut lazy.else_state,
+                lazy.else_state.as_mut(),
                 else_plan,
                 else_state,
                 context,
                 published_scalars,
+                history_access,
             ),
             Value::Deferred => Value::Deferred,
             Value::NoVal => Value::NoVal,
@@ -380,20 +396,22 @@ fn evaluate_if(
 
     let then_value = evaluate_branch(
         then_branch,
-        &mut lazy.then_state,
+        lazy.then_state.as_mut(),
         then_plan,
         then_state,
         context,
         published_scalars,
+        history_access,
     );
     let then_value = retain_last_value(then_value, &mut lazy.last_then_value);
     let else_value = evaluate_branch(
         else_branch,
-        &mut lazy.else_state,
+        lazy.else_state.as_mut(),
         else_plan,
         else_state,
         context,
         published_scalars,
+        history_access,
     );
     let else_value = retain_last_value(else_value, &mut lazy.last_else_value);
 
@@ -411,17 +429,29 @@ fn evaluate_if(
 
 fn evaluate_branch(
     graph: &BoundEvaluationGraph,
-    canonical: &mut StreamState,
+    canonical: &mut EvaluatorState,
     plan: Option<&Plan>,
     state: Option<&mut State>,
-    context: EvaluationContext<'_>,
+    context: EvaluationEnvironment<'_>,
     published_scalars: &[Option<ScalarValue>],
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     match (plan, state) {
-        (Some(plan), Some(state)) => {
-            execute(state, plan, graph, canonical, context, published_scalars)
-        }
-        (None, None) => evaluate_nodes(&graph.nodes, canonical, context),
+        (Some(plan), Some(state)) => execute_plan(
+            state,
+            plan,
+            graph,
+            canonical,
+            context,
+            published_scalars,
+            history_access,
+        ),
+        (None, None) => match history_access {
+            Some(history_access) => {
+                evaluate_nodes_with_history(&graph.nodes, canonical, context, Some(history_access))
+            }
+            None => evaluate_nodes(&graph.nodes, canonical, context),
+        },
         _ => unreachable!("branch quickening plan and state must be present together"),
     }
     let output = context.read_value(canonical, &graph.output);
@@ -439,22 +469,23 @@ mod tests {
         graph: &BoundEvaluationGraph,
         plan: &Plan,
         quickening: &mut State,
-        canonical: &mut StreamState,
+        canonical: &mut EvaluatorState,
         environment_values: &[Value],
         environment_layout: &Rc<EnvironmentLayout>,
     ) -> Value {
-        execute(
+        execute_plan(
             quickening,
             plan,
             graph,
             canonical,
-            EvaluationContext {
+            EvaluationEnvironment {
                 environment_values,
                 environment_layout,
                 retained_environment_values: None,
                 recursive_call: None,
             },
             &[],
+            None,
         );
         canonical.node_values.last().unwrap().clone()
     }
@@ -486,7 +517,7 @@ mod tests {
         );
         let plan = Plan::new(&graph).unwrap();
         let mut quickening = State::new(&plan);
-        let mut canonical = StreamState::new(&graph);
+        let mut canonical = EvaluatorState::new(&graph);
         let layout = Rc::new(EnvironmentLayout::default());
 
         assert_eq!(
@@ -528,7 +559,7 @@ mod tests {
         );
         let plan = Plan::new(&graph).unwrap();
         let mut quickening = State::new(&plan);
-        let mut canonical = StreamState::new(&graph);
+        let mut canonical = EvaluatorState::new(&graph);
         let layout = Rc::new(EnvironmentLayout::from_variables([VarName::new("x")]));
 
         assert_eq!(

@@ -16,7 +16,7 @@ mod integration_tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use async_unsync::oneshot;
+    use async_unsync::{bounded, oneshot};
     use futures::FutureExt;
     use futures::StreamExt;
     use futures::stream;
@@ -34,11 +34,18 @@ mod integration_tests {
     use tracing::{debug, info};
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::{
-        InputBatch, OutputBatch, OutputWriter, RosStreamValue, Value, VarName,
-        core::{JsonStreamValue, REDIS_HOSTNAME},
+        DsrvSpecification, InputBatch, OutputBatch, OutputWriter, RosStreamValue, Value, VarName,
+        core::{ExecutionPolicy, JsonStreamValue, REDIS_HOSTNAME, Runtime, RuntimeSpec, Semantics},
         io::redis::{self as tc_redis},
-        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
-        runtime::mstlo::{MstloTimedValue, MstloValue},
+        io::{
+            InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
+            OutputDestination, Route,
+        },
+        runtime::{
+            builder::GeneralRuntimeBuilder,
+            dataflow::ReconfigurationAck,
+            mstlo::{MstloTimedValue, MstloValue},
+        },
     };
 
     async fn open_redis_output<V: JsonStreamValue + RosStreamValue>(
@@ -246,6 +253,126 @@ mod integration_tests {
         }
         writer.close().await?;
         Ok(())
+    }
+
+    #[apply(async_test)]
+    async fn test_reconfigurable_dataflow_redis_switches_routes(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let port = redis.get_host_port_ipv4(6379).await?;
+        let suffix = uuid::Uuid::new_v4();
+        let input_a = format!("dataflow_input_a_{suffix}");
+        let input_b = format!("dataflow_input_b_{suffix}");
+        let control = format!("dataflow_control_{suffix}");
+        let output_a = format!("dataflow_output_a_{suffix}");
+        let output_b = format!("dataflow_output_b_{suffix}");
+
+        let client = redis::Client::open(format!("redis://{REDIS_HOSTNAME}:{port}"))?;
+        let mut output_pubsub = client.get_async_pubsub().await?;
+        output_pubsub
+            .subscribe(&[output_a.as_str(), output_b.as_str()])
+            .await?;
+        let mut output_messages = output_pubsub.into_on_message();
+
+        let input_source = InputSource::<Value>::redis(
+            Some(BTreeMap::from([(
+                VarName::new("x"),
+                Route::new(input_a.clone().into_boxed_str(), None)?,
+            )])),
+            Some(port),
+        )
+        .with_reconfiguration_route(control.clone().into_boxed_str())?;
+        let output_builder = OutputBackendBuilder::<Value>::from_destination(
+            OutputDestination::new(
+                "redis",
+                OutputBackendConfig::redis(REDIS_HOSTNAME, Some(port)),
+            )
+            .with_route_catalog(BTreeMap::from([(
+                VarName::new("z"),
+                Route::new(output_a.clone().into_boxed_str(), None)?,
+            )])),
+        );
+        let specification = "in x: Int\nout z: Int\nz = x + 1";
+        let spec = specification.parse::<DsrvSpecification>()?;
+        let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
+
+        let runtime = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input_pipeline(InputPipeline::new(input_source))?
+            .output_pipeline_builder(output_builder)
+            .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
+            .semantics(Semantics::TypedUntimed)
+            .acknowledgements(ack_tx)
+            .build()
+            .await?;
+        let runtime_task = executor.spawn(runtime.run());
+        let mut connection = client.get_multiplexed_async_connection().await?;
+
+        let initial_input = Value::Int(1);
+        connection
+            .publish(&input_a, initial_input.encode_json()?)
+            .await?;
+
+        let message = with_timeout(output_messages.next(), 5, "Redis dataflow initial output")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Redis dataflow output ended before reconfiguration"))?;
+        assert_eq!(message.get_channel_name(), output_a.as_str());
+        assert_eq!(decode_redis_value(&message)?, Value::Int(2));
+
+        let request = serde_json::json!({
+            "specification": specification,
+            "input": {"inputs": {"x": input_b}},
+            "output": {"outputs": {"z": output_b}},
+        })
+        .to_string();
+        connection.publish(&control, request).await?;
+        let acknowledgement = with_timeout(ack_rx.recv(), 5, "Redis dataflow reconfiguration ack")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Redis dataflow acknowledgement channel closed"))?;
+        assert!(!acknowledgement.monitor_changed);
+        assert!(acknowledgement.interface_changed);
+
+        let old_input = Value::Int(100);
+        let new_input = Value::Int(3);
+        connection
+            .publish(&input_a, old_input.encode_json()?)
+            .await?;
+        connection
+            .publish(&input_b, new_input.encode_json()?)
+            .await?;
+
+        let message = with_timeout(
+            output_messages.next(),
+            5,
+            "Redis dataflow post-barrier output",
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Redis dataflow output ended after reconfiguration"))?;
+        assert_eq!(message.get_channel_name(), output_b.as_str());
+        assert_eq!(decode_redis_value(&message)?, Value::Int(4));
+
+        let unexpected = futures::select! {
+            message = output_messages.next().fuse() => message,
+            _ = futures::FutureExt::fuse(smol::Timer::after(Duration::from_millis(200))) => None,
+        };
+        assert!(
+            unexpected.is_none(),
+            "the old Redis input channel must be ignored after the acknowledgement barrier"
+        );
+
+        if let Some(runtime_result) =
+            with_timeout(runtime_task.cancel(), 5, "Redis dataflow shutdown").await?
+        {
+            runtime_result?;
+        }
+        Ok(())
+    }
+
+    fn decode_redis_value(message: &redis::Msg) -> anyhow::Result<Value> {
+        let payload = message.get_payload::<String>()?;
+        Value::decode_json(payload.as_bytes())
     }
 
     /// Tests Redis input using integer values.

@@ -1,15 +1,15 @@
 //! Scheduled scalar temporal operations over evaluator-owned canonical state.
 //!
 //! Evaluation steps read the previous temporal state and materialize typed scalar boundary values
-//! for a native region. Commit steps remain explicit in the scheduler's semantic plan and run only
+//! for a native fragment. Commit steps remain explicit in the scheduler's semantic plan and run only
 //! at its logical end-of-tick barrier. This interpreter is the fallback physical view of those
 //! steps; a schedule-wide native artifact may use a packed state layout mapped to the same stable
 //! plan slots.
 
+use crate::dataflow::execution::evaluator::EvaluationEnvironment;
+use crate::dataflow::execution::evaluator_state::{EvaluatorState, NodeState};
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::execution::scheduled_plan::{TemporalCommit, TemporalOperation, TemporalPlan};
-use crate::dataflow::execution::stream_evaluator::EvaluationContext;
-use crate::dataflow::execution::stream_state::{NodeState, StreamState};
 use crate::dataflow::ir::{BoundRef, NodeId};
 
 #[derive(Clone)]
@@ -35,7 +35,7 @@ impl ScheduledTemporalPlan {
         }
     }
 
-    pub(super) fn promote(&self, state: &mut StreamState) -> bool {
+    pub(super) fn promote(&self, state: &mut EvaluatorState) -> bool {
         for step in self.plan.operations.iter() {
             let node = step.node();
             let replacement = match &state.node_states[node.index()] {
@@ -75,8 +75,8 @@ impl ScheduledTemporalPlan {
     #[inline]
     pub(super) fn evaluate(
         &self,
-        state: &mut StreamState,
-        context: EvaluationContext<'_>,
+        state: &mut EvaluatorState,
+        context: EvaluationEnvironment<'_>,
         scalar_values: &mut [Option<ScalarValue>],
     ) -> bool {
         for step in self.plan.operations.iter() {
@@ -154,8 +154,8 @@ impl ScheduledTemporalPlan {
     #[inline]
     pub(super) fn commit(
         &self,
-        state: &mut StreamState,
-        context: EvaluationContext<'_>,
+        state: &mut EvaluatorState,
+        context: EvaluationEnvironment<'_>,
         scalar_values: &[Option<ScalarValue>],
     ) -> bool {
         for step in self.plan.commits.iter() {
@@ -185,17 +185,17 @@ impl ScheduledTemporalPlan {
         true
     }
 
-    pub(super) fn has_temporal_state(&self) -> bool {
+    pub(super) fn has_commit_steps(&self) -> bool {
         !self.plan.commits.is_empty()
     }
 
-    pub(super) fn has_scheduled_state(&self) -> bool {
+    pub(super) fn has_evaluation_steps(&self) -> bool {
         !self.plan.operations.is_empty()
     }
 
     pub(super) fn materialize(
         &self,
-        state: &mut StreamState,
+        state: &mut EvaluatorState,
         scalar_values: &[Option<ScalarValue>],
     ) {
         for step in self.plan.operations.iter() {
@@ -206,7 +206,7 @@ impl ScheduledTemporalPlan {
         }
     }
 
-    pub(super) fn deopt(&self, state: &mut StreamState) {
+    pub(super) fn deopt(&self, state: &mut EvaluatorState) {
         for step in self.plan.operations.iter() {
             let node = step.node();
             let replacement = match &state.node_states[node.index()] {
@@ -226,8 +226,8 @@ impl ScheduledTemporalPlan {
 #[inline]
 fn read_scalar(
     reference: &BoundRef,
-    state: &StreamState,
-    context: EvaluationContext<'_>,
+    state: &EvaluatorState,
+    context: EvaluationEnvironment<'_>,
     scalar_values: &[Option<ScalarValue>],
 ) -> Option<ScalarValue> {
     if let BoundRef::Node(node) = reference

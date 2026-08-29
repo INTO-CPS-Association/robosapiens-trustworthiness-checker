@@ -20,8 +20,8 @@ use async_unsync::bounded;
 use futures::{Sink, future::LocalBoxFuture};
 
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputRole,
-    OutputWriter, StreamData, VarName,
+    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface,
+    OutputInterfaceReconfigurationHandle, OutputRole, OutputWriter, StreamData, VarName,
 };
 
 /// A local sink that runs one asynchronous operation for each accepted batch.
@@ -210,6 +210,24 @@ impl<T: 'static> Sink<T> for AsyncFnSink<T> {
 
 pub type LocalBatchSink<V> = AsyncFnSink<OutputBatch<V>>;
 
+fn make_reconfigurable_interface(
+    interface: OutputInterface,
+) -> (
+    Rc<RefCell<OutputInterface>>,
+    OutputInterfaceReconfigurationHandle,
+) {
+    let interface = Rc::new(RefCell::new(interface));
+    let handle_interface = Rc::clone(&interface);
+    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
+        let interface = Rc::clone(&handle_interface);
+        Box::pin(async move {
+            *interface.borrow_mut() = replacement;
+            Ok(())
+        })
+    });
+    (interface, handle)
+}
+
 pub fn local_batch_sink<V, F, Fut>(operation: F) -> LocalBatchSink<V>
 where
     V: 'static,
@@ -251,21 +269,25 @@ impl<V: StreamData> OutputBackend for ManualOutputBackend<V> {
         &self,
         interface: OutputInterface,
     ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let interface = Rc::new(interface);
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
         let sender = self.sender.clone();
-        Ok(OutputWriter::from_sink(LocalBatchSink::new(
-            move |batch: OutputBatch<V>| {
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            LocalBatchSink::new(move |batch: OutputBatch<V>| {
                 let sender = sender.clone();
                 let interface = Rc::clone(&interface);
-                async move { send_manual_batch(sender, interface, batch).await }
-            },
-        )))
+                async move {
+                    let interface = interface.borrow().clone();
+                    send_manual_batch(sender, interface, batch).await
+                }
+            }),
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
 async fn send_manual_batch<V: StreamData>(
     sender: ManualOutputSender<V>,
-    interface: Rc<OutputInterface>,
+    interface: OutputInterface,
     batch: OutputBatch<V>,
 ) -> Result<(), OutputError> {
     interface.validate_batch(&batch)?;
@@ -290,6 +312,7 @@ impl<V: StreamData> NullOutputBackend<V> {
 }
 
 struct NullSink {
+    _interface: Rc<RefCell<OutputInterface>>,
     ready: bool,
     closed: bool,
 }
@@ -349,12 +372,17 @@ impl<V: StreamData> OutputBackend for NullOutputBackend<V> {
 
     async fn open(
         &self,
-        _interface: OutputInterface,
+        interface: OutputInterface,
     ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        Ok(OutputWriter::from_sink(NullSink {
-            ready: false,
-            closed: false,
-        }))
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            NullSink {
+                _interface: interface,
+                ready: false,
+                closed: false,
+            },
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
@@ -381,6 +409,7 @@ impl<V: StreamData> LimitedNullOutputBackend<V> {
 }
 
 struct LimitedNullSink {
+    _interface: Rc<RefCell<OutputInterface>>,
     limit: usize,
     ticks: usize,
     ready: bool,
@@ -443,14 +472,19 @@ impl<V: StreamData> OutputBackend for LimitedNullOutputBackend<V> {
 
     async fn open(
         &self,
-        _interface: OutputInterface,
+        interface: OutputInterface,
     ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        Ok(OutputWriter::from_sink(LimitedNullSink {
-            limit: self.limit,
-            ticks: 0,
-            ready: false,
-            closed: false,
-        }))
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            LimitedNullSink {
+                _interface: interface,
+                limit: self.limit,
+                ticks: 0,
+                ready: false,
+                closed: false,
+            },
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
@@ -532,27 +566,26 @@ impl<V: JsonStreamValue> OutputBackend for StdoutOutputBackend<V> {
         &self,
         interface: OutputInterface,
     ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let interface = Rc::new(interface);
-        let auxiliary = Rc::new(
-            interface
-                .routes_for(OutputRole::Auxiliary)
-                .map(|route| route.variable.clone())
-                .collect::<BTreeSet<_>>(),
-        );
+        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
         let target = self.target.clone();
         let row_number = Rc::new(Cell::new(0usize));
-        Ok(OutputWriter::from_sink(LocalBatchSink::new(
-            move |batch: OutputBatch<V>| {
+        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            LocalBatchSink::new(move |batch: OutputBatch<V>| {
                 let interface = Rc::clone(&interface);
-                let auxiliary = Rc::clone(&auxiliary);
                 let target = target.clone();
                 let row_number = Rc::clone(&row_number);
                 async move {
+                    let interface = interface.borrow().clone();
                     interface.validate_batch(&batch)?;
+                    let auxiliary = interface
+                        .routes_for(OutputRole::Auxiliary)
+                        .map(|route| route.variable.clone())
+                        .collect::<BTreeSet<_>>();
                     write_stdout_batch(batch, &auxiliary, &target, &row_number)
                 }
-            },
-        )))
+            }),
+            Some(interface_reconfiguration),
+        ))
     }
 }
 
@@ -657,6 +690,26 @@ mod tests {
             assert_eq!(first[&var("x")], 1);
             assert_eq!(second[&var("y")], 20);
             writer.close().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn manual_backend_applies_interface_updates_without_reopening() {
+        smol::block_on(async {
+            let (backend, mut receiver) = ManualOutputBackend::<i32>::channel(8);
+            let mut writer = backend.open(interface(&["x"])).await.unwrap();
+            writer
+                .interface_reconfiguration()
+                .expect("manual backend exposes interface reconfiguration")
+                .reconfigure(interface(&["y"]))
+                .await
+                .unwrap();
+
+            writer.send(OutputBatch::update(var("y"), 7)).await.unwrap();
+            let row = receiver.recv().await.unwrap();
+            assert_eq!(row[&var("y")], 7);
+            assert!(writer.send(OutputBatch::update(var("x"), 8)).await.is_err());
+            let _ = writer.close().await;
         });
     }
 

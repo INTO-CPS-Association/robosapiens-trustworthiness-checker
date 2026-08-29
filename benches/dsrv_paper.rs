@@ -231,14 +231,16 @@ async fn run_reconf_bench(
                 spec_1.to_string()
             };
             let reconf_json = serde_json::json!({
-                "spec": spec
+                "specification": spec
             })
             .to_string()
             .into();
             tx_fans[&VarName::new(RECONF_TOPIC)]
                 .send(Value::Str(reconf_json))
                 .await;
-            wait_for_input_stream_subscription(&tx_fans).await;
+            if matches!(runtime, ReconfigurationRuntime::Semisync) {
+                wait_for_input_stream_subscription(&tx_fans).await;
+            }
         }
 
         for (name, val) in &inputs {

@@ -1,3 +1,3 @@
 {
-    "spec": "in x\nout z\nz = x"
+    "specification": "in x\nout z\nz = x"
 }

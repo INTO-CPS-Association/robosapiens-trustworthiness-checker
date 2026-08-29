@@ -1,19 +1,30 @@
+use super::super::history::{HistoryAccess, HistoryId};
 use super::super::ir::*;
 use super::super::*;
 use super::dynamic_expressions::*;
+use super::evaluator::*;
+use super::evaluator_state::*;
 use super::functions::*;
 use super::lifting::*;
 use super::quickening::ScalarValue;
-use super::stream_evaluator::*;
-use super::stream_state::*;
 use crate::core::values::operations as value_operations;
 
 /// Evaluates one node and is shared by every execution mode.
 pub(in crate::dataflow) fn evaluate_node(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+) -> Value {
+    evaluate_node_with_history(node_id, op, state, context, None)
+}
+
+pub(in crate::dataflow) fn evaluate_node_with_history(
+    node_id: NodeId,
+    op: &BoundOp,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     match op {
         StreamOp::Unary { op, arg } => {
@@ -36,7 +47,9 @@ pub(in crate::dataflow) fn evaluate_node(
             };
             lift_binary_with_state(*op, lhs, rhs, last_left, last_right)
         }
-        StreamOp::If { .. } => evaluate_lazy_if(node_id, op, state, context),
+        StreamOp::If { .. } => {
+            evaluate_lazy_if_with_history(node_id, op, state, context, history_access)
+        }
         StreamOp::Delay { input, offset } => {
             if *offset == 0 {
                 let current = context.read_value(state, input);
@@ -45,6 +58,38 @@ pub(in crate::dataflow) fn evaluate_node(
                     NodeState::ScalarDelay(history) => ScalarValue::from_untyped_value(&current)
                         .map(|value| history.retain_current_value(value).into_value())
                         .unwrap_or_else(|| panic!("scalar delay received {current:?}")),
+                    _ => unreachable!("delay node has incompatible runtime state"),
+                }
+            } else if let (Some(history_access), BoundRef::External(slot)) = (history_access, input)
+                && history_access.has_binding(*slot)
+            {
+                let value = history_access.read(
+                    *slot,
+                    usize::try_from(*offset).expect("sindex offset does not fit usize"),
+                );
+                let node_index = node_id.index();
+                let node_state = std::mem::replace(
+                    &mut state.node_states[node_index],
+                    NodeState::Delay(DelayState::new_shared()),
+                );
+                match node_state {
+                    NodeState::Delay(mut history) => {
+                        let result = history.read_shared_value(value);
+                        state.node_states[node_index] = NodeState::Delay(history);
+                        result
+                    }
+                    NodeState::ScalarDelay(mut history) => {
+                        if let Some(value) = ScalarValue::from_untyped_value(&value) {
+                            let result = history.read_shared_value(value).into_value();
+                            state.node_states[node_index] = NodeState::ScalarDelay(history);
+                            result
+                        } else {
+                            let mut history = history.to_canonical();
+                            let result = history.read_shared_value(value);
+                            state.node_states[node_index] = NodeState::Delay(history);
+                            result
+                        }
+                    }
                     _ => unreachable!("delay node has incompatible runtime state"),
                 }
             } else {
@@ -318,8 +363,11 @@ pub(in crate::dataflow) fn evaluate_node(
             let args = lift_call_args(args, last_arguments);
             evaluate_apply(func, args, active_function, callable)
         }
-        StreamOp::DirectApply { func, args } => {
-            let args = args
+        StreamOp::DirectApply {
+            func,
+            args: argument_refs,
+        } => {
+            let args = argument_refs
                 .iter()
                 .map(|arg| context.read_value(state, arg))
                 .collect::<Vec<_>>();
@@ -332,7 +380,19 @@ pub(in crate::dataflow) fn evaluate_node(
                 unreachable!("direct apply node has incompatible runtime state")
             };
             let args = lift_call_args(args, last_arguments);
-            evaluate_direct_apply(func, args, context, evaluator, environment_values)
+            if let Some(history_access) = history_access {
+                evaluate_direct_apply_with_history(
+                    func,
+                    args,
+                    argument_refs,
+                    context,
+                    evaluator,
+                    environment_values,
+                    history_access,
+                )
+            } else {
+                evaluate_direct_apply(func, args, context, evaluator, environment_values)
+            }
         }
         StreamOp::RecursiveApply { func, args } => {
             let args = args
@@ -426,21 +486,31 @@ pub(in crate::dataflow) fn evaluate_node(
 
 pub(in crate::dataflow) fn evaluate_nodes(
     nodes: &[BoundOp],
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+) {
+    evaluate_nodes_with_history(nodes, state, context, None);
+}
+
+pub(in crate::dataflow) fn evaluate_nodes_with_history(
+    nodes: &[BoundOp],
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
-        let value = evaluate_node(node_id, op, state, context);
+        let value = evaluate_node_with_history(node_id, op, state, context, history_access);
         state.node_values[index] = value;
     }
 }
 
-fn evaluate_lazy_if(
+fn evaluate_lazy_if_with_history(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     let StreamOp::If {
         cond,
@@ -457,16 +527,36 @@ fn evaluate_lazy_if(
     let condition = retain_last_value(condition, &mut lazy_if.last_condition);
     if context.recursive_call.is_some() {
         return match condition {
-            Value::Bool(true) => evaluate_branch(then_branch, &mut lazy_if.then_state, context),
-            Value::Bool(false) => evaluate_branch(else_branch, &mut lazy_if.else_state, context),
+            Value::Bool(true) => evaluate_branch_with_history(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            ),
+            Value::Bool(false) => evaluate_branch_with_history(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            ),
             Value::Deferred => Value::Deferred,
             Value::NoVal => Value::NoVal,
             other => panic!("if condition must be bool, got {:?}", other),
         };
     }
-    let then_value = evaluate_branch(then_branch, &mut lazy_if.then_state, context);
+    let then_value = evaluate_branch_with_history(
+        then_branch,
+        lazy_if.then_state.as_mut(),
+        context,
+        history_access,
+    );
     let then_value = retain_last_value(then_value, &mut lazy_if.last_then_value);
-    let else_value = evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+    let else_value = evaluate_branch_with_history(
+        else_branch,
+        lazy_if.else_state.as_mut(),
+        context,
+        history_access,
+    );
     let else_value = retain_last_value(else_value, &mut lazy_if.last_else_value);
 
     if then_value == Value::NoVal || else_value == Value::NoVal {
@@ -482,21 +572,23 @@ fn evaluate_lazy_if(
     }
 }
 
-fn evaluate_branch(
+fn evaluate_branch_with_history(
     branch: &BoundEvaluationGraph,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
-    evaluate_nodes(&branch.nodes, state, context);
+    evaluate_nodes_with_history(&branch.nodes, state, context, history_access);
     let output = context.read_value(state, &branch.output);
     stage_recursive_delays(&branch.recursive_delays, state, &output);
     output
 }
 
-pub(in crate::dataflow) fn try_evaluate_nodes(
+pub(in crate::dataflow) fn try_evaluate_nodes_with_history(
     nodes: &[BoundOp],
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Result<(), DataflowEvaluationError> {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
@@ -507,10 +599,12 @@ pub(in crate::dataflow) fn try_evaluate_nodes(
                     unreachable!("dynamic node has incompatible runtime state")
                 };
                 let current = retain_last_value(current, &mut dynamic.last_source_value);
-                evaluate_dynamic_expression(current, spec, dynamic, context)?
+                evaluate_dynamic_expression(current, spec, dynamic, context, history_access)?
             }
-            StreamOp::If { .. } => try_evaluate_lazy_if(node_id, op, state, context)?,
-            _ => evaluate_node(node_id, op, state, context),
+            StreamOp::If { .. } => {
+                try_evaluate_lazy_if(node_id, op, state, context, history_access)?
+            }
+            _ => evaluate_node_with_history(node_id, op, state, context, history_access),
         };
         state.node_values[index] = value;
     }
@@ -520,8 +614,9 @@ pub(in crate::dataflow) fn try_evaluate_nodes(
 fn try_evaluate_lazy_if(
     node_id: NodeId,
     op: &BoundOp,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Result<Value, DataflowEvaluationError> {
     let StreamOp::If {
         cond,
@@ -539,8 +634,18 @@ fn try_evaluate_lazy_if(
 
     match condition {
         Value::Bool(true) => {
-            let selected = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
-            let unselected = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+            let selected = try_evaluate_branch(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            );
+            let unselected = try_evaluate_branch(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            );
             let selected =
                 selected.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let unselected =
@@ -553,8 +658,18 @@ fn try_evaluate_lazy_if(
             }
         }
         Value::Bool(false) => {
-            let unselected = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
-            let selected = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+            let unselected = try_evaluate_branch(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            );
+            let selected = try_evaluate_branch(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            );
             let unselected =
                 unselected.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let selected =
@@ -566,8 +681,18 @@ fn try_evaluate_lazy_if(
             }
         }
         Value::Deferred => {
-            let then_value = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
-            let else_value = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+            let then_value = try_evaluate_branch(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            );
+            let else_value = try_evaluate_branch(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            );
             let then_value =
                 then_value.map(|value| retain_last_value(value, &mut lazy_if.last_then_value));
             let else_value =
@@ -579,8 +704,18 @@ fn try_evaluate_lazy_if(
             }
         }
         Value::NoVal => {
-            let then_value = try_evaluate_branch(then_branch, &mut lazy_if.then_state, context);
-            let else_value = try_evaluate_branch(else_branch, &mut lazy_if.else_state, context);
+            let then_value = try_evaluate_branch(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            );
+            let else_value = try_evaluate_branch(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            );
             if let Ok(value) = then_value {
                 retain_last_value(value, &mut lazy_if.last_then_value);
             }
@@ -595,11 +730,14 @@ fn try_evaluate_lazy_if(
 
 fn try_evaluate_branch(
     branch: &BoundEvaluationGraph,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) -> Result<Value, DataflowEvaluationError> {
     let snapshot = state.clone();
-    if let Err(error) = try_evaluate_nodes(&branch.nodes, state, context) {
+    if let Err(error) =
+        try_evaluate_nodes_with_history(&branch.nodes, state, context, history_access)
+    {
         *state = snapshot;
         return Err(error);
     }
@@ -608,9 +746,65 @@ fn try_evaluate_branch(
     Ok(output)
 }
 
+fn evaluate_direct_apply_with_history(
+    func: &StreamFunction,
+    args: EcoVec<Value>,
+    argument_refs: &[BoundRef],
+    context: EvaluationEnvironment<'_>,
+    evaluator: &mut Evaluator,
+    environment_values: &mut [Value],
+    history_access: HistoryAccess<'_>,
+) -> Value {
+    let capture_count = func.capture_slots.len();
+    debug_assert_eq!(
+        environment_values.len(),
+        capture_count + func.parameters.len()
+    );
+    debug_assert_eq!(args.len(), func.parameters.len());
+
+    for (slot, source) in environment_values[..capture_count]
+        .iter_mut()
+        .zip(&func.capture_slots)
+    {
+        *slot = context.environment_values[source.index()].clone();
+    }
+    for (slot, value) in environment_values[capture_count..].iter_mut().zip(args) {
+        *slot = value;
+    }
+
+    let history_bindings = function_history_bindings(history_access, func, argument_refs);
+    evaluator
+        .evaluate_and_stage_with_history(
+            environment_values,
+            Some(history_access.with_bindings(&history_bindings)),
+        )
+        .expect("direct function programs cannot contain fallible dynamic operators")
+}
+
+fn function_history_bindings(
+    history_access: HistoryAccess<'_>,
+    func: &StreamFunction,
+    argument_refs: &[BoundRef],
+) -> Vec<Option<HistoryId>> {
+    let capture_count = func.capture_slots.len();
+    let mut bindings = vec![None; capture_count + func.parameters.len()];
+    for (binding, source) in bindings[..capture_count]
+        .iter_mut()
+        .zip(&func.capture_slots)
+    {
+        *binding = history_access.binding(*source);
+    }
+    for (binding, argument) in bindings[capture_count..].iter_mut().zip(argument_refs) {
+        if let BoundRef::External(source) = argument {
+            *binding = history_access.binding(*source);
+        }
+    }
+    bindings
+}
+
 pub(in crate::dataflow) fn stage_recursive_delays(
     delays: &[NodeId],
-    state: &mut StreamState,
+    state: &mut EvaluatorState,
     output: &Value,
 ) {
     for delay in delays {
@@ -626,10 +820,11 @@ pub(in crate::dataflow) fn stage_recursive_delays(
     }
 }
 
-pub(in crate::dataflow) fn commit_staged_temporal_state(
+pub(in crate::dataflow) fn commit_staged_temporal_state_with_history(
     body: &BoundEvaluationGraph,
-    state: &mut StreamState,
-    context: EvaluationContext<'_>,
+    state: &mut EvaluatorState,
+    context: EvaluationEnvironment<'_>,
+    history_access: Option<HistoryAccess<'_>>,
 ) {
     for (index, op) in body.nodes.iter().enumerate() {
         match op {
@@ -658,10 +853,23 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
                 let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
                     unreachable!("if node has incompatible runtime state")
                 };
-                commit_staged_temporal_state(then_branch, &mut lazy_if.then_state, context);
-                commit_staged_temporal_state(else_branch, &mut lazy_if.else_state, context);
+                commit_staged_temporal_state_with_history(
+                    then_branch,
+                    lazy_if.then_state.as_mut(),
+                    context,
+                    history_access,
+                );
+                commit_staged_temporal_state_with_history(
+                    else_branch,
+                    lazy_if.else_state.as_mut(),
+                    context,
+                    history_access,
+                );
             }
-            StreamOp::DirectApply { func, .. } => {
+            StreamOp::DirectApply {
+                func,
+                args: argument_refs,
+            } => {
                 let NodeState::PersistentCall {
                     evaluator,
                     environment_values,
@@ -677,7 +885,17 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
                 {
                     *slot = context.environment_values[source.index()].clone();
                 }
-                evaluator.commit_temporal_state(environment_values);
+                if let Some(history_access) = history_access {
+                    let history_bindings =
+                        function_history_bindings(history_access, func, argument_refs);
+                    evaluator.commit_temporal_state_with_history(
+                        environment_values,
+                        None,
+                        Some(history_access.with_bindings(&history_bindings)),
+                    );
+                } else {
+                    evaluator.commit_temporal_state(environment_values);
+                }
             }
             StreamOp::Dynamic(_) => {
                 let NodeState::Dynamic(dynamic) = &mut state.node_states[index] else {
@@ -696,9 +914,11 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
                         .active_expression
                         .as_mut()
                         .expect("active dynamic expression disappeared before commit");
-                    active
-                        .evaluator
-                        .commit_temporal_state(&dynamic.environment_values);
+                    active.evaluator.commit_temporal_state_with_history(
+                        &dynamic.environment_values,
+                        None,
+                        None,
+                    );
                 }
             }
             _ => {}
@@ -708,7 +928,7 @@ pub(in crate::dataflow) fn commit_staged_temporal_state(
 
 pub(in crate::dataflow) fn discard_staged_temporal_state(
     body: &BoundEvaluationGraph,
-    state: &mut StreamState,
+    state: &mut EvaluatorState,
 ) {
     for (index, op) in body.nodes.iter().enumerate() {
         match op {
@@ -730,8 +950,8 @@ pub(in crate::dataflow) fn discard_staged_temporal_state(
                 let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
                     unreachable!("if node has incompatible runtime state")
                 };
-                discard_staged_temporal_state(then_branch, &mut lazy_if.then_state);
-                discard_staged_temporal_state(else_branch, &mut lazy_if.else_state);
+                discard_staged_temporal_state(then_branch, lazy_if.then_state.as_mut());
+                discard_staged_temporal_state(else_branch, lazy_if.else_state.as_mut());
             }
             StreamOp::DirectApply { .. } => {
                 let NodeState::PersistentCall { evaluator, .. } = &mut state.node_states[index]
@@ -763,7 +983,7 @@ fn lift_call_args(mut args: Vec<Value>, last: &mut [Option<Value>]) -> EcoVec<Va
 
 fn lift_value_operands(
     node_id: NodeId,
-    state: &mut StreamState,
+    state: &mut EvaluatorState,
     mut values: Vec<Value>,
 ) -> Vec<Value> {
     let NodeState::OperandLift { last_operands } = &mut state.node_states[node_id.index()] else {
