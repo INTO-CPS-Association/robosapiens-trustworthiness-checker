@@ -21,6 +21,8 @@ COPY libs ./libs
 COPY src/lib.rs src/main.rs ./src/
 COPY src/bin ./src/bin
 COPY benches ./benches
+COPY integrations/python/Cargo.toml ./integrations/python/Cargo.toml
+COPY integrations/python/src ./integrations/python/src
 
 # Pre-fetch dependencies into persistent BuildKit caches.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -29,11 +31,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Copy full compile inputs after dependency resolution for better layer reuse.
 COPY src ./src
+# `src/dataflow/mod.rs` embeds these documentation figures with `include_str!`.
+COPY docs/src/assets/dataflow ./docs/src/assets/dataflow
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \
-    cargo build --release --locked --target-dir /cargo-target \
+    cargo build --release --locked --package trustworthiness_checker --features jemalloc --target-dir /cargo-target \
     && cp /cargo-target/release/trustworthiness_checker /opt/trustworthiness-checker/trustworthiness_checker \
     && strip /opt/trustworthiness-checker/trustworthiness_checker
 

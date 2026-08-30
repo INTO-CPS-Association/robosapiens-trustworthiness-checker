@@ -1,0 +1,183 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 980 480"
+     width="100%"
+     role="img"
+     aria-labelledby="dynamic-defer-user-ticks-title dynamic-defer-user-ticks-desc"
+     style="width:100%; max-width:980px; height:auto; background:#ffffff;">
+  <title id="dynamic-defer-user-ticks-title">Dynamic replaces a body; defer seals the first body</title>
+  <desc id="dynamic-defer-user-ticks-desc">Read left to right at four shared logical ticks. The input x is 1, 2, 3, and 4, while source p supplies the strings x plus 1, x plus 1, x times 2, and x plus 1. Dynamic p keeps body A while the string is unchanged, replaces it with body B at tick 2, and creates a new body C when the old text returns at tick 3; its displayed results are 2, 3, 6, and 5, and C does not revive A. Defer p activates body A from the first accepted string at tick 0, seals it across all later ticks, and displays 2, 3, 4, and 5 while later source strings are ignored. Thin colored spans show active-body lifetimes; the shared baseline and short marks show logical positions. The spans are not serial phase steps.</desc>
+
+  <defs>
+    <marker id="dynamic-defer-user-ticks-arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="9"
+            refY="5"
+            viewBox="0 0 10 10"
+            orient="auto"
+            markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="978.5" height="478.5" rx="6"
+        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
+
+  <text x="24" y="30"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="15"
+        font-weight="700">Dynamic replaces a body; defer seals the first body</text>
+
+  <g text-anchor="middle"
+     fill="#52606d"
+     font-family="system-ui, sans-serif"
+     font-size="11">
+    <text x="300" y="63">tick 0</text>
+    <text x="450" y="63">tick 1</text>
+    <text x="600" y="63">tick 2</text>
+    <text x="750" y="63">tick 3</text>
+  </g>
+
+  <g fill="#17212b">
+    <text x="24" y="111"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">source p</text>
+    <text x="24" y="173"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">input x</text>
+  </g>
+
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="12"
+     font-weight="600"
+     fill="#17212b">
+    <rect x="244" y="87" width="112" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="300" y="114">&quot;x + 1&quot;</text>
+    <rect x="394" y="87" width="112" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="450" y="114">&quot;x + 1&quot;</text>
+    <rect x="544" y="87" width="112" height="44" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="600" y="114">&quot;x * 2&quot;</text>
+    <rect x="694" y="87" width="112" height="44" rx="5"
+          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+    <text x="750" y="114">&quot;x + 1&quot;</text>
+
+    <rect x="258" y="151" width="84" height="42" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="300" y="177">1</text>
+    <rect x="408" y="151" width="84" height="42" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="450" y="177">2</text>
+    <rect x="558" y="151" width="84" height="42" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="600" y="177">3</text>
+    <rect x="708" y="151" width="84" height="42" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="750" y="177">4</text>
+  </g>
+
+  <text x="24" y="263"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="13"
+        font-weight="600">dynamic(p)</text>
+  <g fill="none" stroke-width="3" stroke-linecap="butt">
+    <line x1="300" y1="221" x2="600" y2="221" stroke="#147d64" />
+    <line x1="600" y1="221" x2="750" y2="221" stroke="#b54708" />
+    <line x1="750" y1="221" x2="850" y2="221" stroke="#8055a3" />
+  </g>
+  <g text-anchor="middle"
+     fill="#17212b"
+     font-family="ui-monospace, monospace"
+     font-size="11"
+     font-weight="600">
+    <text x="450" y="208">A · x + 1</text>
+    <text x="675" y="208">B · x * 2</text>
+    <text x="800" y="208">C · x + 1</text>
+  </g>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="12"
+     font-weight="600"
+     fill="#17212b">
+    <rect x="258" y="239" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="300" y="265">2</text>
+    <rect x="408" y="239" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="450" y="265">3</text>
+    <rect x="558" y="239" width="84" height="42" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="600" y="265">6</text>
+    <rect x="708" y="239" width="84" height="42" rx="5"
+          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+    <text x="750" y="265">5</text>
+  </g>
+  <text x="575" y="305"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">changed text replaces at that tick; returning text creates C, not A</text>
+
+  <text x="24" y="375"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="13"
+        font-weight="600">defer(p)</text>
+  <line x1="300" y1="335" x2="850" y2="335"
+        fill="none"
+        stroke="#147d64"
+        stroke-width="3"
+        stroke-linecap="butt" />
+  <text x="575" y="322"
+        text-anchor="middle"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="11"
+        font-weight="600">A · sealed at tick 0</text>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="12"
+     font-weight="600"
+     fill="#17212b">
+    <rect x="258" y="351" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="300" y="377">2</text>
+    <rect x="408" y="351" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="450" y="377">3</text>
+    <rect x="558" y="351" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="600" y="377">4</text>
+    <rect x="708" y="351" width="84" height="42" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="750" y="377">5</text>
+  </g>
+  <text x="575" y="410"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">later source strings are ignored; active A continues to evaluate</text>
+
+  <line x1="215" y1="445" x2="900" y2="445"
+        fill="none"
+        stroke="#65758b"
+        stroke-width="1.5"
+        marker-end="url(#dynamic-defer-user-ticks-arrow)" />
+  <g stroke="#65758b" stroke-width="1.5">
+    <line x1="300" y1="439" x2="300" y2="451" />
+    <line x1="450" y1="439" x2="450" y2="451" />
+    <line x1="600" y1="439" x2="600" y2="451" />
+    <line x1="750" y1="439" x2="750" y2="451" />
+  </g>
+  <text x="912" y="449"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">logical time</text>
+</svg>

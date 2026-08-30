@@ -1,37 +1,29 @@
 # Redis knowledge-state input
 
-The Redis knowledge-state provider lets the Trustworthiness Checker monitor
-current values stored in the Knowledge part of a MAPLE-K adaptation loop. In a
-typical RoboSAPIENS Adaptive Platform deployment, components publish transient
-phase events through Redis Pub/Sub channels and store current shared knowledge,
-such as the selected plan or adaptation state, in Redis keys.
+Use Redis knowledge input when the Trustworthiness Checker needs the current
+value of selected Redis keys, such as a current plan, mode, or adaptation state.
+Use ordinary Redis Pub/Sub input (`redis`) for transient events such as “Analyse
+completed”. The two sources are different:
 
-The Trustworthiness Checker can use both kinds of input:
+| Information | Redis mechanism | Checker source kind |
+|---|---|---|
+| Current mode, plan, anomaly, or adaptation state | Selected key plus keyspace notification | `redis-knowledge` |
+| Phase completion or component event | Pub/Sub channel | `redis` |
+
+A keyspace notification is an invalidation, not the new value. The provider
+rereads each selected key and emits the decoded value only when it differs from
+the last value it emitted. It does not infer a key by changing a variable name;
+every knowledge key must be mapped explicitly.
 
 ![MAPLE-K phase events and current Knowledge state entering the Trustworthiness Checker through Redis](assets/redis-knowledge-overview.svg)
 
-| Information | Redis mechanism | Input source kind |
-|---|---|---|
-| Current robot mode, anomaly, plan, or adaptation state | Key | `redis-knowledge` |
-| Phase completion or component event | Pub/Sub channel | `redis` |
+## Quickstart: monitor one key
 
-A keyspace notification tells the Trustworthiness Checker that a selected key
-may have changed. The provider reads the key's current value and emits it only
-when the decoded value differs from the last value it emitted. Use Redis
-Pub/Sub for events such as "Analyse completed" and Redis knowledge input for
-state such as "the currently selected plan is return-to-base".
+This walkthrough runs the checker on the host and a disposable Redis server in a
+Docker container. Run all host commands from the repository root. Docker may
+pull `redis:7-alpine`; Podman can replace `docker` in these commands.
 
-The Redis names on this page are representative, and should be configured to match a particular MAPLE-K and RoboSAPIENS Adaptive Platform configuration.
-
-## Quickstart: monitor one Redis key
-
-This walkthrough runs the Trustworthiness Checker on the host and Redis in a
-Docker container. It uses Redis database 2, which is also the default database
-for Redis knowledge input.
-
-### Start Redis
-
-Start a disposable Redis server with the required keyspace notifications:
+### Start and check Redis
 
 ```sh
 docker run --rm -d \
@@ -41,68 +33,45 @@ docker run --rm -d \
   redis-server --notify-keyspace-events KEA
 ```
 
-Redis is now available to the host at `localhost:6379`. The `KEA` setting
-enables the keyspace notifications used by this provider. The Trustworthiness
-Checker does not change this server-wide setting itself.
-
-Check that Redis is ready:
+The `KEA` setting enables the keyspace notifications used by this provider; the
+checker does not set it on the server. Check the Redis service and setting:
 
 ```sh
 docker exec tc-redis-knowledge redis-cli ping
+docker exec tc-redis-knowledge \
+  redis-cli CONFIG GET notify-keyspace-events
 ```
 
-The result should be:
+The first command should return:
 
 ```text
 PONG
 ```
 
-You can also inspect the notification setting:
+`PONG` proves that Redis is reachable. It does not prove that the
+Trustworthiness Checker is running, subscribed, or ready to evaluate input.
 
-```sh
-docker exec tc-redis-knowledge \
-  redis-cli CONFIG GET notify-keyspace-events
-```
+### Seed and run the checker
 
-Podman is supported as well. For this walkthrough, replace `docker` with
-`podman` in the commands above and below. Docker Compose is not required.
-
-### Use the example model
-
-From the repository root, use the checked-in DSRV specification at
-`examples/redis-knowledge/robot-mode.dsrv`:
+This DSRV program exposes the selected state without changing it:
 
 ```dsrv
 in robot_mode
 out observed_mode
-
 observed_mode = robot_mode
 ```
 
-The model passes the selected state through directly. A missing Redis key is
-emitted as `Value::NoVal`.
-
-### Seed the selected key
-
-Store a JSON string in database 2:
+The repository stores this program as `examples/redis-knowledge/robot-mode.dsrv`. Store a JSON string in Redis database 2, the knowledge-source default:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 SET robot:mode '"idle"'
 ```
 
-The example maps this Redis layout to the checker:
-
-| Database | Redis key | Initial value | Checker input |
-|---:|---|---|---|
-| 2 | `robot:mode` | `"idle"` | `robot_mode` |
-
-### Run the Trustworthiness Checker
-
-From the repository root, run the checked-in example with Cargo:
+From the repository root, start the foreground checker:
 
 ```sh
-cargo run -- examples/redis-knowledge/robot-mode.dsrv \
+cargo run --quiet -- examples/redis-knowledge/robot-mode.dsrv \
   --redis-knowledge-input \
   --redis-knowledge-key robot_mode=robot:mode \
   --redis-knowledge-database 2 \
@@ -110,29 +79,48 @@ cargo run -- examples/redis-knowledge/robot-mode.dsrv \
   --output-stdout
 ```
 
-The provider reads the current value at startup, so stdout should report an
-`observed_mode` value of `idle` without waiting for another `SET` command.
+`publish_initial` defaults to `true`, so the provider reads the existing key at
+startup. The stdout sink's exact framing is:
 
-### Change the value
+```text
+<output-variable>[<zero-based-output-index>] = <Debug-style-value>
+```
 
-In a second terminal, update the key:
+For the sequence in this walkthrough, representative stdout is:
+
+```text
+observed_mode[0] = Str("idle")
+```
+
+The first expected line is the useful readiness observation for the checker: it
+shows that the source connection, initial snapshot, model evaluation, and local
+stdout admission have progressed. A running checker process alone proves only
+liveness.
+
+### Change, repeat, and delete the key
+
+In another terminal, still using the repository's Docker container, write a new
+value:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 SET robot:mode '"active"'
 ```
 
-The Trustworthiness Checker should report the new `observed_mode` on stdout.
+The checker should emit a second line. With no other visible updates, the
+representative output is:
 
-Write the same decoded value again:
+```text
+observed_mode[1] = Str("active")
+```
+
+Writing the same decoded value again sends a Redis notification but does not
+produce another checker input:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 SET robot:mode '"active"'
 ```
-
-Redis sends another notification, but the current value is unchanged. The
-provider therefore does not send another `robot_mode` input to the checker.
 
 Delete the key:
 
@@ -141,37 +129,28 @@ docker exec tc-redis-knowledge \
   redis-cli -n 2 DEL robot:mode
 ```
 
-A missing selected key is represented by `Value::NoVal`. The provider emits
-that state, but the stdout output handler intentionally suppresses `NoVal`.
-Therefore the visible output is an `observed_mode` line for `idle`, then one for
-`active`, followed by no line for the `DEL`; neither `NoVal` nor a replacement
-string is printed. API consumers can inspect the emitted `Value::NoVal`
-directly.
+A missing selected key becomes `Value::NoVal`. The stdout sink suppresses
+`NoVal`, so deletion produces no replacement line. API consumers can still
+observe the emitted `NoVal` state. The checker remains running after each
+change; it waits for another notification until you stop it.
 
-## Representative MAPLE-K example
 
-The one-key walkthrough tests the knowledge provider in isolation. This example
-combines current Knowledge with phase events in a small MAPLE-K flow.
+## MAPLE-K: current Knowledge plus phase events
 
-MAPLE-K extends the conventional MAPE-K loop with a **Legitimate** phase added
-by the RoboSAPIENS research project. In this example, both Analyse completion and
-Legitimate completion arrive as Redis Pub/Sub events, while the selected plan is
-current state stored in a Redis key.
+The one-key run tests current state. A MAPLE-K flow commonly combines that state
+with transient phase events: in this representative layout, Analyse and
+Legitimate completion use Pub/Sub, while the selected plan uses a database-2
+knowledge key. The names are deployment choices, not canonical Redis names.
 
-![Analyse and Legitimate events combined with the current selected plan](assets/redis-knowledge-maple-example.svg)
-
-The representative Redis layout is:
-
-| MAPLE-K information | Redis kind | Representative Redis name | Checker input |
+| MAPLE-K information | Redis kind | Representative name | Checker input |
 |---|---|---|---|
 | Analyse completed | Pub/Sub channel | `maple:analyse:completed` | `analyse_completed` |
 | Current selected plan | Key in database 2 | `maple:plan:current` | `current_plan` |
 | Legitimate completed | Pub/Sub channel | `maple:legitimate:completed` | `legitimate_completed` |
 
-### Create the MAPLE-K model
+![Analyse and Legitimate events combined with the current selected plan](assets/redis-knowledge-maple-example.svg)
 
-Use the checked-in DSRV specification at
-`examples/redis-knowledge/maple-plan.dsrv`:
+The MAPLE-K example exposes the current plan only after both phase-completion events are true:
 
 ```dsrv
 in analyse_completed: Bool
@@ -179,25 +158,13 @@ in current_plan: Str
 in legitimate_completed: Bool
 
 out legitimate_plan: Str
-
 legitimate_plan = if analyse_completed && legitimate_completed then current_plan else "plan-not-legitimate"
 ```
 
-Without an input window, the selected plan snapshot and each phase-completion
-event remain independent singleton ticks. The runtime retains the latest value
-of each sparse input. Once both completion inputs have been observed as `true`,
-a later selected-plan update can therefore be evaluated immediately using those
-retained phase values; another pair of phase events is not required and does not
-implicitly start a new MAPLE-K cycle.
-
-### Create the input configuration
-
-Use the checked-in source configuration at
-`examples/redis-knowledge/maple-inputs.json5`:
+The repository stores this program as `examples/redis-knowledge/maple-plan.dsrv`. Its mixed-source configuration, `examples/redis-knowledge/maple-inputs.json5`, connects the two event channels and current-plan key:
 
 ```json5
 {
-  // These names are representative, not canonical MAPLE-K Redis names.
   sources: {
     "maple-events": {
       kind: "redis",
@@ -220,35 +187,20 @@ Use the checked-in source configuration at
 }
 ```
 
-The `redis` source maps checker inputs to transient Pub/Sub channels. The
-`redis-knowledge` source maps checker inputs to keys whose current values are
-read from database 2. The per-source port is omitted so `--redis-port 6379`
-applies to both sources.
-
-### Seed the selected plan
+Stop the one-key checker first if it is still running, then seed and start the
+mixed-input checker from the repository root:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 SET maple:plan:current '"inspect-area"'
-```
 
-### Run the mixed-input checker
-
-From the repository root, run the checked-in mixed-input example with Cargo:
-
-```sh
-cargo run -- examples/redis-knowledge/maple-plan.dsrv \
+cargo run --quiet -- examples/redis-knowledge/maple-plan.dsrv \
   --input-config examples/redis-knowledge/maple-inputs.json5 \
   --redis-port 6379 \
   --output-stdout
 ```
 
-This initial MAPLE-K command deliberately does not configure an input window.
-The selected plan snapshot and each phase event remain independent logical ticks.
-
-### Publish the phase events
-
-In another terminal, publish the representative Analyse and Legitimate events:
+Publish the two phase events from another terminal:
 
 ```sh
 docker exec tc-redis-knowledge \
@@ -258,46 +210,49 @@ docker exec tc-redis-knowledge \
   redis-cli PUBLISH maple:legitimate:completed true
 ```
 
-Stdout should report `inspect-area` as the legitimate plan after the phase
-inputs have been observed.
+After both `true` values have been observed, stdout should contain a line framed
+like:
 
-Change the selected plan:
+```text
+legitimate_plan[<zero-based-output-index>] = Str("inspect-area")
+```
+
+The exact index is representative rather than fixed because it depends on which
+input ticks produce a visible output. Change the selected plan:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 SET maple:plan:current '"return-to-base"'
 ```
 
-Because the runtime retains the latest input values with most-recent-value semantics, both completion
-inputs are still `true` from the preceding events. The Redis knowledge update
-therefore causes the Trustworthiness Checker to report `return-to-base` as soon
-as the provider reads the changed key.
+The latest phase values remain retained for the sparse inputs, so the later key
+update can produce a line framed like:
 
-The observable flow is:
+```text
+legitimate_plan[<later-zero-based-index>] = Str("return-to-base")
+```
 
-1. The provider publishes the initial selected-plan state.
-2. Analyse and Legitimate each publish an independent completion event.
-3. Once both retained phase values are `true`, the Trustworthiness Checker
-   reports the selected plan.
-4. A later selected-plan update is evaluated against those retained phase values
-   and can produce another result immediately.
+Without an input window, the key snapshot and each Pub/Sub event are independent
+logical ticks. A later plan update does not implicitly start a new MAPLE-K cycle;
+it is evaluated using the latest retained input values.
 
-### Optional atomic-step window
+### The atomic-step window is a timing reduction, not a transaction
 
-If an application needs a complete MAPEL-K iteration to be treated as a coherent composite state update, configure a post-composition atomic-step
-window. This changes the default independent event-based updates into composite row-based update. This can be done using a fixed step size:
+A count-bounded variant is:
 
 ```sh
-cargo run -- examples/redis-knowledge/maple-plan.dsrv \
+cargo run --quiet -- examples/redis-knowledge/maple-plan.dsrv \
   --input-config examples/redis-knowledge/maple-inputs.json5 \
   --redis-port 6379 \
   --input-window-mode atomic-step \
   --input-window-update-limit 3 \
   --output-stdout
 ```
-or alternatively, with a timeout window, which treats all updates within 10ms as a simultaneous batch update:
+
+A time-bounded variant is:
+
 ```sh
-cargo run -- examples/redis-knowledge/maple-plan.dsrv \
+cargo run --quiet -- examples/redis-knowledge/maple-plan.dsrv \
   --input-config examples/redis-knowledge/maple-inputs.json5 \
   --redis-port 6379 \
   --input-window-mode atomic-step \
@@ -305,69 +260,19 @@ cargo run -- examples/redis-knowledge/maple-plan.dsrv \
   --output-stdout
 ```
 
-The window is applied after Redis Pub/Sub and Redis knowledge sources are
-composed. It intentionally changes the independent updates into one simultaneous
-tick with last-update-wins reduction.
+`atomic-step` is applied after the sources have been composed. The `10 ms`
+option is a local timing window: updates observed within that window are reduced
+with last-update-wins per variable. Events near the boundary can fall into
+different windows. The window does not provide cross-source or global atomicity,
+does not make Redis writes transactional, and does not guarantee that all events
+of one MAPLE-K iteration are grouped together. An update limit is likewise a
+flush threshold; a logical tick is never split merely to satisfy the limit.
 
-## Applying the pattern across MAPLE-K
+## Values, options, and limits
 
-The appropriate Redis mechanism depends on whether a value is current state or
-a transient event:
+Knowledge keys are decoded as JSON5 first, then as plain UTF-8 text:
 
-| MAPLE-K phase or store | Example information | Suggested Redis mechanism |
-|---|---|---|
-| Monitor | New observation available | Pub/Sub event |
-| Analyse | Analysis completed or anomaly detected | Pub/Sub event |
-| Plan | Current selected plan | Knowledge key |
-| Legitimate | Legitimacy check completed | Pub/Sub event |
-| Execute | Execution completed | Pub/Sub event |
-| Knowledge | Current anomaly, plan, mode, or adaptation state | Knowledge key |
-
-The Trustworthiness Checker does not prescribe how MAPLE-K components implement
-their communication or name their Redis resources. Its input configuration maps
-the deployment's chosen names to checker input variables.
-
-For example:
-
-```json5
-{
-  sources: {
-    events: {
-      kind: "redis",
-      host: "redis",
-      routes: {
-        analyse_completed: "<Analyse completion channel>",
-        legitimate_completed: "<Legitimate completion channel>",
-        execute_completed: "<Execute completion channel>",
-      },
-    },
-    knowledge: {
-      kind: "redis-knowledge",
-      host: "redis",
-      database: 2,
-      keys: {
-        current_plan: "<selected plan key>",
-        adaptation_state: "<adaptation state key>",
-      },
-    },
-  },
-}
-```
-
-`host: "localhost"` is appropriate for the walkthrough because the
-Trustworthiness Checker runs on the host. A deployment where Redis and the
-checker share a container network can instead use Redis's service name, such as
-`host: "redis"`.
-
-## Supported values
-
-Present values are decoded in this order (standard JSON is valid JSON5):
-
-```text
-JSON5 → plain UTF-8 string
-```
-
-| Stored Redis value | Checker value |
+| Stored value | Checker value |
 |---|---|
 | `true` | Boolean |
 | `42` | Integer |
@@ -378,147 +283,83 @@ JSON5 → plain UTF-8 string
 | `inspection robot` | Plain string fallback |
 | Missing key | `NoVal` |
 
-Values such as `true`, `42`, and `null` are decoded as typed values before the
-plain-text fallback is considered. A stored JSON5 `null` follows normal checker
-value decoding and is distinct from a missing key. Python pickle and arbitrary
-binary values are not supported.
+Python pickle and arbitrary binary values are not supported. A stored JSON5
+`null` is a decoded value and is distinct from a missing key.
 
-## Configuration reference
-
-### Simple source options
-
-| Option | Purpose |
+| Option | Effect |
 |---|---|
-| `--redis-knowledge-input` | Select Redis knowledge as the single input source |
-| `--redis-knowledge-key INPUT=KEY` | Map a checker input to a Redis key; repeat for multiple keys |
-| `--redis-knowledge-database N` | Select the Redis database; default is 2 |
-| `--redis-knowledge-publish-initial true\|false` | Control whether current key values are emitted at startup |
+| `--redis-knowledge-input` | Select knowledge keys as the single input source |
+| `--redis-knowledge-key INPUT=KEY` | Explicitly map a checker input to a key; repeat it |
+| `--redis-knowledge-database N` | Select the database; default is 2 |
+| `--redis-knowledge-publish-initial true\|false` | Override startup snapshot emission |
 | `--redis-knowledge-no-initial` | Disable the startup snapshot |
-| `--redis-port PORT` | Use this port when the source configuration does not specify one |
+| `--input-config PATH` | Combine named `redis-knowledge` and other sources |
+| `--redis-port PORT` | Fallback port when a source has no port |
 
-### Named source configuration
+With `--redis-knowledge-no-initial`, no startup output is expected from the
+knowledge snapshot; the first visible result must follow a changed-key
+notification. The provider subscribes before taking a snapshot and refetches
+dirty keys, but keyspace notifications are not a durable change log. Rapid writes
+may be coalesced, so every transient state is not guaranteed to be observed.
 
-Use `--input-config` when a checker combines Redis knowledge with Pub/Sub or
-other input sources. A `redis-knowledge` source accepts:
+Transport failures retry indefinitely by default, starting at 250 ms and backing
+off to a maximum of 5 seconds. `--redis-knowledge-retry-max-attempts N`,
+`--redis-knowledge-retry-forever`,
+`--redis-knowledge-retry-initial-delay-ms N`, and
+`--redis-knowledge-retry-max-delay-ms N` adjust that policy. A knowledge source
+carries data only; it cannot declare the reconfiguration control route.
 
-| Field | Purpose |
-|---|---|
-| `host` | Redis hostname or address |
-| `port` | Optional per-source port |
-| `database` | Redis database; default is 2 |
-| `publish_initial` | Emit current selected values at startup; default is `true` |
-| `keys` | Map checker input variables to exact Redis keys |
-| `retry` | Configure connection retry behaviour |
+Redis knowledge is incompatible with MSTLO. `--language mstlo` uses a dedicated
+MSTLO runtime, while this provider produces ordinary `Value` input; the checker
+rejects the combination with:
 
-For example:
-
-```json5
-{
-  sources: {
-    knowledge: {
-      kind: "redis-knowledge",
-      host: "redis",
-      database: 2,
-      publish_initial: true,
-      keys: {
-        current_plan: "maple:plan:current",
-      },
-      retry: {
-        max_attempts: null,
-        initial_delay_ms: 250,
-        max_delay_ms: 5000,
-      },
-    },
-  },
-}
+```text
+Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO
 ```
 
-A per-source port takes precedence over the global `--redis-port` fallback.
-Focused CLI knowledge options override the selected configured knowledge source.
-When several knowledge sources are configured, use
-`--redis-knowledge-source SOURCE_ID` to select the one to override. A knowledge
-source cannot declare `reconfiguration_route`; reconfiguration remains on a
-separate control-capable source. Extra catalog entries may remain configured for
-later monitors.
-
-### Long-running deployments
-
-By default, the provider retries transport failures indefinitely, beginning at
-250 milliseconds and increasing to a maximum of 5 seconds. Configure this with:
-
-- `--redis-knowledge-retry-max-attempts N` for a finite number of attempts.
-- `--redis-knowledge-retry-forever` for unbounded retries.
-- `--redis-knowledge-retry-initial-delay-ms N` for the initial delay.
-- `--redis-knowledge-retry-max-delay-ms N` for the maximum delay.
-
-`max_attempts` includes the first connection attempt. Invalid local source and
-retry configuration is reported before Redis is opened.
-
-## Behaviour and limitations
-
-- Current values are read at startup unless initial emission is disabled.
-- Startup and reconnect use subscribe-before-snapshot ordering; notifications
-  during `MGET` remain dirty and are refetched.
-- Missing selected keys produce `NoVal` (`Value::NoVal`).
-- Writing an equivalent decoded value does not produce another checker input.
-- Notifications are invalidations, not values; the provider reads the key's
-  current state after a notification.
-- Rapid writes may be coalesced. The latest observed state is exposed, but every
-  transient state is not guaranteed to be seen.
-- Keyspace notifications are not a durable change log.
-- After reconnecting, the provider compares current selected values with the
-  values it emitted previously.
-- Each changed key is an independent logical tick. `InputStage::Batch` preserves
-  those ticks; `WindowToStep` with `LastUpdateWins` intentionally makes the
-  configured window one simultaneous tick after source composition.
-- A read or decoding error is reported through the input stream and terminates
-  the configured source through the normal `InputSource` error path.
-- A Redis knowledge key is data, not a checker reconfiguration signal; the
-  private control barrier must come from a separate control-capable source.
+Use an MSTLO-compatible source and codec instead of a Redis knowledge key when
+monitoring an MSTLO model.
 
 ## Troubleshooting
 
 ### No update appears after `SET`
 
-Check that keyspace notifications are enabled:
+Check the notification setting and the exact database/key used by the checker:
 
 ```sh
 docker exec tc-redis-knowledge \
   redis-cli CONFIG GET notify-keyspace-events
-```
-
-### The initial value is missing
-
-Check the configured database and key:
-
-```sh
 docker exec tc-redis-knowledge \
   redis-cli -n 2 GET robot:mode
 ```
 
-### Pub/Sub works but knowledge updates do not
+`KEA` must be enabled for this provider, and a knowledge mapping must name the
+same key explicitly.
 
-Pub/Sub channels and knowledge keys are separate. Check that an event is listed
-under `routes`, a knowledge value is listed under `keys`, and the knowledge
-source uses the database in which the key was written.
+### The initial value is missing
 
-You can inspect subscribers for the representative Analyse channel with:
+Check whether `--redis-knowledge-no-initial` was supplied. If it was not, verify
+the selected database and key, then distinguish `PONG` (Redis reachability) from
+the first checker stdout line (source snapshot and evaluation progress).
 
-```sh
-docker exec tc-redis-knowledge \
-  redis-cli PUBSUB NUMSUB maple:analyse:completed
-```
+### Pub/Sub works but knowledge does not
 
-### The example container name is already in use
+Check that the event is under a source's `routes`, the current value is under a
+`redis-knowledge` source's `keys`, and the key was written in that source's
+database. Pub/Sub channels do not replace knowledge-key mappings.
 
-```sh
-docker rm -f tc-redis-knowledge
-```
+## Stop and clean up
 
-## Stop the example
-
-Stop and remove the disposable Redis container:
+Stop the foreground Trustworthiness Checker with `Ctrl-C` before stopping Redis.
+Then remove the disposable container:
 
 ```sh
 docker stop tc-redis-knowledge
+```
+
+Because it was started with `--rm`, Docker removes the container after it stops.
+If an interrupted run leaves the name occupied, use the explicit cleanup:
+
+```sh
+docker rm -f tc-redis-knowledge
 ```

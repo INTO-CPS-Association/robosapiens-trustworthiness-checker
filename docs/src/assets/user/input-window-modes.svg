@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 930 420"
+     width="100%"
+     role="img"
+     aria-labelledby="input-window-modes-title input-window-modes-desc"
+     style="width:100%; max-width:930px; height:auto; background:#ffffff;">
+  <title id="input-window-modes-title">Input window modes preserve or reduce logical ticks</title>
+  <desc id="input-window-modes-desc">Read left to right along one shared baseline. The incoming window contains tick 1 with simultaneous x equals 1 and y equals 2, then tick 2 with x equals 3. Batch mode emits the same two logical ticks at the same x-positions inside one physical batch. Atomic-step mode applies last-update-wins reduction and emits one new simultaneous evaluation tick after the physical flush boundary, retaining y equals 2 and replacing x equals 1 with x equals 3. Earlier updates are reduced into that emitted tick; omitted input positions do not become output or evaluation ticks. The dashed vertical guide is the physical flush, not incoming logical data.</desc>
+
+  <defs>
+    <marker id="input-window-modes-arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="9"
+            refY="5"
+            viewBox="0 0 10 10"
+            orient="auto"
+            markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="928.5" height="418.5" rx="6"
+        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
+
+  <text x="24" y="30"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="15"
+        font-weight="700">Input window modes preserve or reduce logical ticks</text>
+
+  <!-- This boundary is physical window work, not a regular logical tick. -->
+  <line x1="700" y1="48" x2="700" y2="374"
+        stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4" />
+  <text x="700" y="49"
+        text-anchor="middle"
+        fill="#8055a3"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        font-weight="600">physical flush</text>
+  <text x="700" y="65"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">not an incoming tick</text>
+
+  <line x1="185" y1="100" x2="820" y2="100"
+        fill="none"
+        stroke="#65758b"
+        stroke-width="1.5"
+        marker-end="url(#input-window-modes-arrow)" />
+  <text x="831" y="104"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">logical order</text>
+
+  <g stroke="#65758b" stroke-width="1.5">
+    <line x1="300" y1="92" x2="300" y2="108" />
+    <line x1="500" y1="92" x2="500" y2="108" />
+  </g>
+  <g text-anchor="middle"
+     fill="#52606d"
+     font-family="system-ui, sans-serif"
+     font-size="11">
+    <text x="300" y="81">tick 1</text>
+    <text x="500" y="81">tick 2</text>
+  </g>
+
+  <g fill="#17212b">
+    <text x="24" y="153"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">incoming window</text>
+    <text x="24" y="237"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">batch mode</text>
+    <text x="24" y="333"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">atomic-step mode</text>
+    <text x="24" y="351"
+          font-family="system-ui, sans-serif"
+          font-size="11"
+          fill="#52606d">last-update-wins reduction</text>
+  </g>
+
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="11.5"
+     font-weight="600"
+     fill="#17212b">
+    <rect x="215" y="130" width="170" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="300" y="157">{ x = 1, y = 2 }</text>
+    <rect x="455" y="130" width="90" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="500" y="157">{ x = 3 }</text>
+
+    <rect x="215" y="214" width="170" height="44" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="300" y="241">{ x = 1, y = 2 }</text>
+    <rect x="455" y="214" width="90" height="44" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="500" y="241">{ x = 3 }</text>
+
+    <rect x="730" y="313" width="170" height="44" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="815" y="340">{ x = 3, y = 2 }</text>
+  </g>
+
+  <path d="M 205 268 V 276 H 595 V 268"
+        fill="none"
+        stroke="#65758b"
+        stroke-width="1.3" />
+  <text x="400" y="294"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">one physical batch · two logical ticks</text>
+
+  <line x1="708" y1="335" x2="721" y2="335"
+        stroke="#b54708" stroke-width="1.5"
+        marker-end="url(#input-window-modes-arrow)" />
+  <text x="815" y="300"
+        text-anchor="middle"
+        fill="#b54708"
+        font-family="system-ui, sans-serif"
+        font-size="11">one emitted evaluation tick</text>
+
+  <text x="465" y="402"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">Batch keeps both positions; atomic-step reduces them to the latest update per variable.</text>
+</svg>

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1000 410"
+     width="100%"
+     role="img"
+     aria-labelledby="mstlo-delayed-horizon-title mstlo-delayed-horizon-desc"
+     style="width:100%; max-width:1000px; height:auto; background:#ffffff;">
+  <title id="mstlo-delayed-horizon-title">A delayed MSTLO verdict is timestamped at the start of its completed future horizon</title>
+  <desc id="mstlo-delayed-horizon-desc">Read left to right on a shared dense-time baseline from zero through five seconds. Input x has values 5, 4, 6, 2, 5, and 7. The globally property G from zero to two seconds of x greater than 3 evaluates the window starting at time zero after the sample at time two arrives, and emits true timestamped at time zero. The next window completes at time three and emits false timestamped at time one because x equals 2. Output cells align with verdict timestamps, while dashed guides and horizon brackets show when enough future input exists to emit them.</desc>
+
+  <defs>
+    <marker id="mstlo-delayed-horizon-arrow"
+            markerWidth="7" markerHeight="7" refX="9" refY="5"
+            viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="998.5" height="408.5" rx="6"
+        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
+  <text x="24" y="30" fill="#17212b" font-family="system-ui, sans-serif"
+        font-size="15" font-weight="700">Delayed verdicts retain their original dense-time timestamp</text>
+  <text x="24" y="52" fill="#52606d" font-family="ui-monospace, monospace"
+        font-size="11.5">always_x: G[0,2](x &gt; 3)</text>
+
+  <line x1="205" y1="96" x2="920" y2="96" stroke="#65758b" stroke-width="1.5"
+        marker-end="url(#mstlo-delayed-horizon-arrow)" />
+  <text x="932" y="100" fill="#52606d" font-family="system-ui, sans-serif"
+        font-size="11">dense time</text>
+  <g stroke="#65758b" stroke-width="1.5">
+    <line x1="280" y1="90" x2="280" y2="102" />
+    <line x1="390" y1="90" x2="390" y2="102" />
+    <line x1="500" y1="90" x2="500" y2="102" />
+    <line x1="610" y1="90" x2="610" y2="102" />
+    <line x1="720" y1="90" x2="720" y2="102" />
+    <line x1="830" y1="90" x2="830" y2="102" />
+  </g>
+  <g text-anchor="middle" fill="#52606d" font-family="system-ui, sans-serif" font-size="11">
+    <text x="280" y="82">t = 0 s</text><text x="390" y="82">1 s</text>
+    <text x="500" y="82">2 s</text><text x="610" y="82">3 s</text>
+    <text x="720" y="82">4 s</text><text x="830" y="82">5 s</text>
+  </g>
+
+  <text x="24" y="151" fill="#17212b" font-family="ui-monospace, monospace"
+        font-size="13" font-weight="600">input x</text>
+  <g text-anchor="middle" fill="#17212b" font-family="ui-monospace, monospace"
+     font-size="12" font-weight="600">
+    <rect x="244" y="126" width="72" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" /><text x="280" y="152">5</text>
+    <rect x="354" y="126" width="72" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" /><text x="390" y="152">4</text>
+    <rect x="464" y="126" width="72" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" /><text x="500" y="152">6</text>
+    <rect x="574" y="126" width="72" height="42" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5" /><text x="610" y="152">2</text>
+    <rect x="684" y="126" width="72" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" /><text x="720" y="152">5</text>
+    <rect x="794" y="126" width="72" height="42" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" /><text x="830" y="152">7</text>
+  </g>
+
+  <g fill="none" stroke-width="2">
+    <path d="M 280 199 V 189 H 500 V 199" stroke="#147d64" />
+    <path d="M 390 239 V 229 H 610 V 239" stroke="#b54708" />
+  </g>
+  <g text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600">
+    <text x="390" y="184" fill="#147d64">window for verdict timestamp 0 s</text>
+    <text x="500" y="215" fill="#147d64">complete when t = 2 s arrives</text>
+    <text x="500" y="254" fill="#b54708">next window includes x = 2 · verdict is false</text>
+  </g>
+
+  <g stroke-width="1.3" stroke-dasharray="6 4">
+    <line x1="500" y1="108" x2="500" y2="350" stroke="#147d64" />
+    <line x1="610" y1="108" x2="610" y2="350" stroke="#b54708" />
+  </g>
+  <text x="24" y="316" fill="#17212b" font-family="ui-monospace, monospace"
+        font-size="13" font-weight="600">always_x verdict</text>
+  <text x="24" y="334" fill="#52606d" font-family="system-ui, sans-serif"
+        font-size="11">aligned by verdict timestamp</text>
+  <g text-anchor="middle" fill="#17212b" font-family="ui-monospace, monospace"
+     font-size="11.5" font-weight="600">
+    <rect x="240" y="291" width="80" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" /><text x="280" y="318">true</text>
+    <rect x="350" y="291" width="80" height="44" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5" /><text x="390" y="318">false</text>
+    <rect x="460" y="291" width="80" height="44" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5" /><text x="500" y="318">false</text>
+    <rect x="570" y="291" width="80" height="44" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5" /><text x="610" y="318">false</text>
+  </g>
+
+  <path d="M 500 264 C 470 276, 350 276, 292 287" fill="none" stroke="#147d64"
+        stroke-width="1.4" marker-end="url(#mstlo-delayed-horizon-arrow)" />
+  <text x="470" y="278" text-anchor="middle" fill="#52606d"
+        font-family="system-ui, sans-serif" font-size="11">emitted later · timestamp remains 0 s</text>
+
+  <text x="500" y="384" text-anchor="middle" fill="#52606d"
+        font-family="system-ui, sans-serif" font-size="11">Samples at 4 s and 5 s complete the remaining verdicts for timestamps 2 s and 3 s.</text>
+</svg>

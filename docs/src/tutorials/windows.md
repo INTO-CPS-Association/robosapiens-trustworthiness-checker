@@ -1,8 +1,18 @@
-# Run and test the TC on Windows
+# Extended Windows usage
 
-This tutorial builds a Windows Trustworthiness Checker (TC) executable and runs a finite monitoring test. You can run it natively on Windows or cross-compile and execute it with Wine on Linux.
+The main [Getting started](../getting-started.md) path is Linux/Unix-first. Use this page when working in Windows Subsystem for Linux (WSL), building the Trustworthiness Checker (TC) as a native Windows executable, connecting that executable to Docker Desktop services, or testing a cross-compiled Windows executable with Wine on Linux.
 
-The test reads the checked-in `tests/fixtures/simple_add_typed.dsrv` model and `tests/fixtures/simple_add_typed.input` trace. It evaluates three logical input ticks, writes their monitor results to stdout, and then exits.
+The native and Wine examples add three pairs of explicitly typed integers, write the results to stdout, and exit. Run commands from the repository root unless a section says otherwise.
+
+## Windows Subsystem for Linux (WSL)
+
+WSL runs the Linux TC toolchain inside a Windows-hosted Linux distribution. Follow the [Linux/Unix Getting started instructions](../getting-started.md#linux-or-unix) inside that distribution: install the Linux build tools and rustup there, clone the repository, and run the running-total example with `cargo`. A Rust or Cargo installation on the Windows host is separate and is not used by the WSL shell.
+
+Keep active source checkouts in the WSL filesystem, such as under `~/src`, rather than under `/mnt/c`, for normal Linux filesystem performance. Windows drives remain available under `/mnt/<drive>` when a command needs to read or write a Windows-hosted file.
+
+Docker Desktop can provide MQTT or Redis containers to WSL when Docker Desktop WSL integration is enabled for that distribution. This is optional for the running-total example in Getting Started. Confirm availability from WSL with `docker version` before following a Docker-backed tutorial.
+
+A successful WSL run proves the Linux target in the selected WSL distribution. It does not build or test the native Windows MSVC executable. Use the next section for a native build, or [Linux with Wine](#linux-with-wine) for the Windows GNU compatibility path.
 
 ## Native Windows
 
@@ -25,11 +35,20 @@ rustc +1.95 --version
 rustup target list --toolchain 1.95 --installed
 ```
 
-The installed-target list must contain `x86_64-pc-windows-msvc`. Run the remaining commands from the repository root.
+The installed-target list must contain `x86_64-pc-windows-msvc`.
 
-### Run with file input
+### Add two values from a file
 
-Start with a finite file-input run before configuring a live broker. Build without the optional MQTT and Redis integrations, then run the native executable with the checked-in model and input trace:
+The Windows example uses explicit integer types while adding `x` and `y`:
+
+```dsrv
+in x : Int
+in y : Int
+out z : Int
+z = x + y
+```
+
+The repository stores this program as `tests/fixtures/simple_add_typed.dsrv` and supplies three input pairs in `tests/fixtures/simple_add_typed.input`. Start with this file-input run before configuring a live broker. Build without the optional MQTT and Redis integrations, then run the native executable:
 
 ```powershell
 cargo +1.95 build `
@@ -51,14 +70,15 @@ z[1] = Int(7)
 z[2] = Int(11)
 ```
 
-This file-input process reaches end of input and exits without manual cleanup. For broader native coverage, check the default feature set before running its tests:
+This file-input process reaches end of input and exits without manual cleanup. To check the broader default feature set on a prepared Windows development host, run:
 
 ```powershell
 cargo +1.95 check --all-targets
 cargo +1.95 test
 ```
 
-The `ros` feature requires a sourced ROS 2 environment and the project message overlay. The `testcontainers` suites require a Docker-compatible Linux-container environment; they are not part of this Windows compatibility test.
+The `ros` feature requires a sourced ROS 2 environment and the project message overlay. The `testcontainers` suites require the Docker-compatible environment described in the project testing instructions; the native Windows compatibility workflow does not run them.
+
 
 ## Linux with Wine
 
@@ -103,7 +123,7 @@ The installed-target list must contain `x86_64-pc-windows-gnu`.
 
 The checked-in `.cargo/config.toml` selects `x86_64-w64-mingw32-gcc` as the linker and Wine as the Cargo runner.
 
-### Initialize Wine and run the finite monitoring test
+### Initialize Wine and run the typed addition example
 
 From the repository root, create a project-local Wine prefix:
 
@@ -226,5 +246,3 @@ docker rm --force tc-redis
 ```
 
 The current MQTT output backend is Paho-only and requires the Cargo `mqtt` feature, which is enabled by default. When combining MQTT output with `--no-default-features`, add `--features mqtt`. Redis output similarly requires the `redis` feature. Select these destinations with `--mqtt-output` or `--redis-output`, respectively. These output paths have different native dependency and remote-observation boundaries from the Rumqttc and Redis input examples above.
-
-**Validation:** The Wine example is an ordinary executable verified on Fedora with `x86_64-pc-windows-gnu`; it produced the three documented stdout lines and exited. The MQTT/Rumqttc and Redis CLI paths were verified on Fedora against temporary Mosquitto and Redis containers with `cargo test --test cli_tests --features testcontainers 'integration_tests::testcontainers::test_add_monitor_' -- --nocapture`; both tests passed. The Docker Desktop commands have not been run on a Windows host.

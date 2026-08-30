@@ -10,7 +10,7 @@ build-dir = "book"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/your-org/robosapiens-trustworthiness-checker"
+git-repository-url = "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker"
 # Mermaid runtime assets are generated locally by `mdbook-mermaid install docs`; the deploy workflow runs it before building.
 additional-js = ["theme/dsrv-highlight.js", "mermaid.min.js", "mermaid-init.js", "theme/diagram-fullscreen.js"]
 additional-css = ["theme/diagram-fullscreen.css"]

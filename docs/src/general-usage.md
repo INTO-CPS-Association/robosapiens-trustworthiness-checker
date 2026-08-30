@@ -1,272 +1,69 @@
-# General Usage
+# General usage: choose an input route
 
-This page gives a short overview of the standard command-line workflow for running the Trustworthiness Checker (TC) with the most common input and output configurations.
+After completing [Getting started](getting-started.md), use this page to choose the shortest command for a monitoring route. The focused
+tutorials contain the complete prerequisites, observations, lifetime, and
+cleanup for each route.
 
-## Basic usage
-The most basic usage of the TC is to run it locally on a model and an input trace.
+## Command shape
 
-Run the TC locally from the repository with `cargo run -- <other options>`. The `--` separates Cargo's own arguments from the arguments passed to the TC itself.
+The command examples on this page use a POSIX shell on Linux or Unix. Run from the repository root:
 
-The general shape of the command is:
-
-```bash
-cargo run -- <model> <input-options> [output-options] [extra options]
+```sh
+cargo run -- <MODEL> <ONE_INPUT_SELECTION> [ONE_OUTPUT_SELECTION]
 ```
 
-In the simplest case, provide a model, and an input source:
+Exactly one input selection is required. The common selections are:
 
-```bash
-cargo run -- examples/simple_add.dsrv --input-file examples/simple_add.input
-```
+| Task | Input selection | Process shape |
+|---|---|---|
+| Replay a checked-in or user-created trace | `--input-file PATH` | Finite; exits after the file |
+| Subscribe to MQTT topics named after model inputs | `--mqtt-input` | Live; waits for messages |
+| Subscribe to Redis Pub/Sub channels | `--redis-input` | Live; waits for messages |
+| Read selected Redis knowledge keys | `--redis-knowledge-input` | Live; key changes and optional startup snapshot |
+| Read ROS 2 topics from a mapping | `--input-ros-file PATH` | Live; requires `--features ros` |
+| Combine named local sources | `--input-config PATH` | Usually live; source lifetime applies |
 
-This starts the TC with the model in `examples/simple_add.dsrv`, reads the trace from `examples/simple_add.input`, and prints the monitoring result to standard output. Printing to standard output can also be explicitly specified with `--output-stdout`.
+With no output option, results go to stdout. Use `--output-stdout` to make that
+choice explicit, or choose one output route such as `--mqtt-output`,
+`--redis-output`, `--output-ros-file PATH`, or `--output-config PATH`.
 
-Additional flags can be added for language selection, parser choice, runtime settings, or distributed monitoring.
+The default language is `dsrv`, with `gradual-typed-untimed` semantics, the
+`async` runtime, and buffered execution. See `cargo run -- --help` for the
+complete option set.
 
-### Getting help
+## Compatibility boundaries
 
-To see the available command-line options, run:
+- `--language mstlo` selects the MSTLO runtime; do not also provide
+  `--runtime`. Redis knowledge input is not compatible with MSTLO because it
+  produces ordinary `Value` input. ROS MSTLO input instead requires the
+  generated `MstloTimedValue` codec.
+- `--input-file` is finite replay input and cannot carry reconfiguration for a
+  reconfigurable runtime. Use a live, control-capable source when runtime
+  reconfiguration is required.
+- `--input-window-mode` needs `--input-window-ms` or
+  `--input-window-update-limit`. `batch` preserves logical ticks;
+  `atomic-step` uses last-update-wins within the local window. It is not a
+  transaction.
+- `--redis-input` means Redis Pub/Sub channels. `--redis-knowledge-input` means
+  selected keys plus keyspace notifications; it does not derive keys from
+  variable names.
 
-```bash
-cargo run -- --help
-```
+## Choose a focused page
 
-The help output shows the supported input and output flags together with the available option values.
-
-## MQTT Usage
-
-For MQTT-based monitoring, use `--mqtt-input` and `--mqtt-output`.
-
-```bash
-cargo run -- examples/simple_add.dsrv --mqtt-input --mqtt-output
-```
-
-With these flags, the TC maps stream names in the specification directly to MQTT topics. For example, if the model has input streams `x` and `y`, the TC subscribes to the topics `x` and `y`. If the model produces an output stream `z`, the TC publishes the result on the topic `z`.
-
-### Message format
-
-Publish MQTT payloads as JSON5 values that match the expected stream type.
-Standard JSON is accepted because it is valid JSON5. Finite output values are
-emitted as compact JSON; non-finite floating-point values use JSON5
-`Infinity` and `NaN` literals so they are not silently converted to `null`. On Linux systems, we suggest using MQTT Explorer to publish and inspect messages. For the `simple_add.lola` example, publish the following value to topic `x` and then to topic `y`:
-
-```json
-42
-```
-
-The result is then published on topic `z` as:
-
-```json
-{
-    "value": 84
-}
-```
-
-File-input trace values use the same JSON5 decoder. The timestamp and
-`variable = value` framing remains unchanged; the value to the right of `=` is
-JSON5.
-
-### Input route catalogs
-
-The generic `--mqtt-input` and `--redis-input` modes are single-source defaults:
-the current specification supplies the input variables and their route names.
-Use a compact route catalog when transport routes differ from model variable
-names:
-
-```json
-{
-  "x": "/robot/input/x",
-  "pose": ["/robot/pose", "Pose2D"]
-}
-```
-
-Pass this form with `--input-mqtt-file`, `--input-redis-file`, or
-`--input-ros-file`. MQTT and Redis normally use string routes with their JSON5
-codec; ROS routes include the message codec in the two-element array. The same
-compact object shape is used by the corresponding output route-file options.
-
-For several named sources, put source ownership and route catalogs in one
-`--input-config` file:
-
-```json
-{
-  "default": "robot-mqtt",
-  "sources": {
-    "robot-mqtt": {
-      "kind": "mqtt",
-      "routes": {
-        "alarm": "/robot/alarm"
-      }
-    },
-    "robot-ros": {
-      "kind": "ros",
-      "routes": {
-        "pose": ["/robot/pose", "Pose2D"]
-      }
-    }
-  }
-}
-```
-
-A variable may be owned by only one source in this owned local source set.
-`--input-config` is exclusive with the other input-selection flags. See
-[Reconfiguration](./reconfiguration.md) for the optional control route and
-compact monitor-configuration messages.
-
-### Input windows
-
-Input windows are applied after source composition. Configure a time bound,
-update bound, or both:
-
-```bash
-cargo run -- examples/simple_add.dsrv --mqtt-input --output-stdout \
-  --input-window-ms 25 --input-window-mode batch
-```
-
-`batch` preserves logical tick and simultaneous-step boundaries. `atomic-step`
-reduces all updates in a window to one simultaneous step using last-update-wins
-for each variable. If a window bound is supplied without a mode, `batch` is
-used. The update limit is a flush threshold and soft bound, not a hard maximum:
-the window flushes after accepting a complete logical tick that reaches or
-exceeds the threshold. One atomic logical tick is never split, so a wide
-simultaneous tick can exceed the nominal limit.
-
-## Output destinations and stages
-
-The single-destination shortcuts remain concise:
-
-```bash
-cargo run -- examples/simple_add.dsrv --input-file examples/simple_add.input --output-stdout
-cargo run -- examples/simple_add.dsrv --mqtt-input --mqtt-output
-cargo run -- examples/simple_add.dsrv --redis-input --redis-output
-```
-
-Use `--output-config` for multiple destinations, explicit mirroring, or buffering
-and coalescing. The file is JSON5 and contains only local configuration. This
-valid example makes the default destination primary and mirrors explicitly:
-
-```json5
-{
-  default: "telemetry",
-  shared_stages: [],
-  destinations: {
-    telemetry: {
-      kind: "mqtt",
-      host: "localhost",
-      port: 1883,
-      routes: { alarm: "/robot/alarm", verdict: "/robot/verdict" },
-      stages: [
-        { kind: "buffer", max_batches: 64, max_updates: 4096 },
-        { kind: "coalesce", max_delay_ms: 2, update_limit: 256 }
-      ]
-    },
-    archive: {
-      kind: "redis",
-      host: "localhost",
-      port: 6379,
-      mirror: true,
-      routes: { alarm: "monitor:alarm", verdict: "monitor:verdict" }
-    }
-  }
-}
-```
-
-`telemetry` is the primary destination; `archive` receives both values only
-because `mirror: true` is explicit. A secondary destination must also declare a
-`partition`, legacy `variables`, `mirror: true`, or a route catalog. The
-`variables`, `partition`, and `mirror` fields cannot be combined. `limited-null`
-requires a positive `limit`, the manual output backend is programmatic-only, and
-MQTT output always uses Paho.
-
-The runtime emits logical ticks independently of the destination. A packed
-producer stays packed; a semi-sync producer stays row-oriented; singleton-heavy
-runtimes preserve every width-one tick. Buffering is bounded and blocking, with
-`max_updates` acting as a pressure threshold that can overshoot by one
-indivisible physical batch. Coalescing count limits are flush thresholds
-evaluated between incoming physical batches: a complete physical batch may
-contain enough ticks or updates to overshoot either limit, because coalescing
-never splits an incoming physical batch and preserves every logical tick. Timed
-coalescing drives the backend from its worker when a deadline or count limit
-fires, even if the producer is idle. Within one destination, duplicate MQTT
-topics and Redis channels are rejected; the same topic or channel may be reused
-by a distinct destination. The router waits for every destination's readiness
-and scans/clones selected values per destination, so destination stages do not
-provide full pressure isolation. A flush or close barrier drains shared stages,
-routing, destination stages, and all destinations. Cross-transport transactions
-are not promised: one external destination may observe a batch before another
-fails.
-
-See [Output Architecture](./output.md) for routing, mirroring, backpressure,
-and benchmark methodology and workload tradeoffs.
-
-## ROS2 Usage
-
-For ROS2-based monitoring, run the TC with the `ros` feature enabled. I.e., `cargo run --features ros -- <other options>`
-
-Before starting the TC, source your ROS2 installation in the terminal, for example:
-
-```bash
-source /opt/ros/<distro>/setup.bash
-```
-
-Then build the custom messages from the ROS interface workspace and source the generated overlay:
-
-```bash
-cd ros_interfaces
-colcon build
-source install/setup.bash
-cd ..
-```
-
-You can then start the TC with a ROS mapping file. The current CLI names are `--input-ros-file` and `--output-ros-file`:
-
-```bash
-cargo run --features ros -- examples/simple_add.dsrv \
-  --input-ros-file examples/ros/simple_add_mapping.json \
-  --output-ros-file examples/ros/simple_add_output_mapping.json
-```
-
-In a second terminal, source ROS again and subscribe to the z topic:
-
-```bash
-source /opt/ros/<distro>/setup.bash
-ros2 topic echo /z
-```
-
-In a third terminal, publish to the x and y topics:
-```bash
-source /opt/ros/<distro>/setup.bash
-ros2 topic pub /x std_msgs/msg/Int32 "{data: 1}"
-ros2 topic pub /y std_msgs/msg/Int32 "{data: 1}"
-```
-
-The second terminal should now show the result.
-
-### MSTLO ROS values
-
-MSTLO uses the generated `robo_sapiens_interfaces/msg/MstloTimedValue` message rather than JSON over ROS. Build and source the interface overlay before compiling with `--features ros`, then use `MstloTimedValue` in both input and output mapping files. The example mapping is [examples/ros/mstlo_timed_value_mapping.json](../../examples/ros/mstlo_timed_value_mapping.json):
-
-```json
-{
-  "x": ["/signals/x", "MstloTimedValue"]
-}
-```
-
-An MSTLO file sample keeps the outer delivery tick separate from the inner signal timestamp:
-
-```text
-0: x = {"time": 0, "value": 7.0}
-1: x = {"time": 1000, "value": 4.0}
-```
-
-The ROS message carries quantitative, qualitative, and robustness-interval outputs in its tagged fields. `NoVal` is an internal sparse-stream marker and is never published.
-
-## Redis usage
-
-The Trustworthiness Checker supports two Redis input modes:
-
-- Redis Pub/Sub channels for transient events.
-- Redis knowledge-state input for current selected-key values.
-
-See [Redis knowledge-state input](./redis-knowledge-input.md) for a complete
-Docker walkthrough, CLI examples, and a representative MAPLE-K configuration.
+- [Extended Windows usage](tutorials/windows.md) — WSL, native PowerShell setup and invocation, Docker Desktop transport examples, and Wine-based testing of a cross-compiled Windows build.
+- [Add two input streams from a trace](tutorials/finite-trace.md) — add timestamped values, then interpret simultaneous inputs, ticks, and history.
+- [Write a DSRV monitor](tutorials/write-dsrv-monitor.md) — declarations,
+  history, `defer`, and cautious `dynamic` guidance.
+- [Monitor timed signals with MSTLO](tutorials/mstlo-monitor.md) — STL formulas, embedded dense-time timestamps, delayed and early verdicts, robustness, and synchronization.
+- [Live MQTT](tutorials/live-mqtt.md) — broker, topics, JSON5 inputs, and wrapped
+  MQTT outputs.
+- [ROS input/output](tutorials/ros-input-output.md) — ROS 2 features, mappings,
+  live messages, and MSTLO codec separation.
+- [Redis knowledge input](redis-knowledge-input.md) — one-key state and a
+  mixed Redis/MAPLE-K example.
+- [Input configuration](reference/input-configuration.md) and [output
+  configuration](reference/output-configuration.md) — route catalogues and
+  multi-destination schemas.
+- [Reconfigure a running monitor](tutorials/reconfigure-running-monitor.md) and
+  [run distributed monitoring](tutorials/distributed-monitoring.md) — live
+  control and graph-localized workflows.

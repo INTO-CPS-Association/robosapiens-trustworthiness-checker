@@ -5,6 +5,20 @@ on:
     branches: ["main"]
     paths:
       - "docs/**"
+      - "src/bin/generate_cli_reference.rs"
+      - "src/cli/**"
+      - "src/core/**"
+      - "src/io/**"
+      - "src/runtime/**"
+      - "examples/**"
+      - "docker/DockerfileDeploy"
+      - ".cargo/config.toml"
+      - ".github/workflows/windows-test.yaml"
+      - "docs/benchmark-dashboard/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/check_cli_reference.sh"
+      - "scripts/check_user_docs.py"
       - ".github/workflows/deploy-docs.yaml"
   workflow_run:
     workflows: ["Rust only workflow"]
@@ -39,6 +53,9 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Validate user documentation
+        run: python3 scripts/check_user_docs.py
 
       - name: Install mdBook tooling
         run: |

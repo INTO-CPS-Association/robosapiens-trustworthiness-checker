@@ -60,6 +60,19 @@ impl RuntimeKind {
     }
 }
 
+/// Argument-to-argument requirements that Clap 4.6 does not expose through
+/// `CommandFactory` reflection. Documentation tooling validates these stable IDs
+/// against the built command before emitting the CLI reference.
+#[doc(hidden)]
+pub const CLI_ARGUMENT_REQUIREMENTS: &[(&str, &str)] = &[
+    ("mqtt_static_optimized", "distribution_constraints"),
+    ("mqtt_dynamic_optimized", "distribution_constraints"),
+    ("ros_static_optimized", "distribution_constraints"),
+    ("ros_dynamic_optimized", "distribution_constraints"),
+    ("distributed_work", "local_node"),
+    ("scheduler_reconf_topic", "scheduler_ros_node_name"),
+];
+
 const DSRV_TYPED_SEMANTICS: &[Semantics] = &[
     Semantics::Untimed,
     Semantics::TypedUntimed,
@@ -844,6 +857,60 @@ mod runtime_tests {
                 .to_string()
                 .contains("ordinary `Value` input and is unsupported for MSTLO")
         );
+    }
+
+    #[test]
+    fn documented_argument_requirements_are_enforced_by_clap() {
+        let cases = [
+            (
+                "mqtt_static_optimized",
+                "--mqtt-static-optimized",
+                Some("node"),
+            ),
+            (
+                "mqtt_dynamic_optimized",
+                "--mqtt-dynamic-optimized",
+                Some("node"),
+            ),
+            (
+                "ros_static_optimized",
+                "--ros-static-optimized",
+                Some("node"),
+            ),
+            (
+                "ros_dynamic_optimized",
+                "--ros-dynamic-optimized",
+                Some("node"),
+            ),
+            ("distributed_work", "--distributed-work", None),
+            (
+                "scheduler_reconf_topic",
+                "--scheduler-reconf-topic",
+                Some("updates"),
+            ),
+        ];
+
+        assert_eq!(cases.len(), CLI_ARGUMENT_REQUIREMENTS.len());
+        for ((id, spelling, value), (registered_id, _)) in
+            cases.into_iter().zip(CLI_ARGUMENT_REQUIREMENTS)
+        {
+            assert_eq!(id, *registered_id);
+            let mut arguments = vec![
+                "trustworthiness_checker",
+                "checker.dsrv",
+                "--mqtt-input",
+                "--output-stdout",
+                spelling,
+            ];
+            if let Some(value) = value {
+                arguments.push(value);
+            }
+            let error = Cli::try_parse_from(arguments).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+        }
     }
 
     #[test]

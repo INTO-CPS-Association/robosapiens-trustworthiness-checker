@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 940 470"
+     width="100%"
+     role="img"
+     aria-labelledby="reconfiguration-observation-ticks-title reconfiguration-observation-ticks-desc"
+     style="width:100%; max-width:940px; height:auto; background:#ffffff;">
+  <title id="reconfiguration-observation-ticks-title">Local control delivery leaves an old-side drain interval</title>
+  <desc id="reconfiguration-observation-ticks-desc">Read left to right as one illustrative local observation sequence, not as a global order across independent data and control producers. The old definition is active for observed data ticks d0 and d1. A delivered control item marks a local barrier between d1 and d2. Data d2 and d3 were already admitted and remain on the old side during the old-side drain and local cutover interval. The old definition span ends when the candidate becomes active locally at the second dashed boundary. The first new-definition tick d4 follows that boundary. Dashed vertical guides are physical control and activation boundaries, not logical ticks; the shared baseline marks only the five data positions. The interval is ordered but not an atomic or global cross-owner cutover.</desc>
+
+  <defs>
+    <marker id="reconfiguration-observation-ticks-arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="9"
+            refY="5"
+            viewBox="0 0 10 10"
+            orient="auto"
+            markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="938.5" height="468.5" rx="6"
+        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
+
+  <text x="24" y="30"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="15"
+        font-weight="700">Local control delivery leaves an old-side drain interval</text>
+
+  <g fill="none" stroke-linecap="round">
+    <line x1="170" y1="62" x2="710" y2="62"
+          stroke="#2563a6" stroke-width="3" />
+    <line x1="710" y1="62" x2="875" y2="62"
+          stroke="#147d64" stroke-width="3" />
+  </g>
+  <text x="440" y="51"
+        text-anchor="middle"
+        fill="#2563a6"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        font-weight="600">OLD definition</text>
+  <text x="792" y="51"
+        text-anchor="middle"
+        fill="#147d64"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        font-weight="600">CANDIDATE definition</text>
+
+  <!-- These are physical boundaries; neither is a regular data tick. -->
+  <g fill="none" stroke-width="1.3" stroke-dasharray="6 4">
+    <line x1="430" y1="45" x2="430" y2="421" stroke="#b54708" />
+    <line x1="710" y1="45" x2="710" y2="421" stroke="#147d64" />
+  </g>
+
+  <g text-anchor="middle">
+    <rect x="365" y="78" width="130" height="43" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="430" y="96"
+          fill="#17212b"
+          font-family="system-ui, sans-serif"
+          font-size="11.5"
+          font-weight="600">control delivered</text>
+    <text x="430" y="112"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">local barrier</text>
+
+    <rect x="640" y="78" width="140" height="43" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="710" y="96"
+          fill="#17212b"
+          font-family="system-ui, sans-serif"
+          font-size="11.5"
+          font-weight="600">candidate active</text>
+    <text x="710" y="112"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">locally</text>
+  </g>
+
+  <line x1="150" y1="150" x2="875" y2="150"
+        fill="none"
+        stroke="#65758b"
+        stroke-width="1.5"
+        marker-end="url(#reconfiguration-observation-ticks-arrow)" />
+  <text x="858" y="154"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">logical order</text>
+
+  <g stroke="#65758b" stroke-width="1.5">
+    <line x1="220" y1="144" x2="220" y2="156" />
+    <line x1="360" y1="144" x2="360" y2="156" />
+    <line x1="500" y1="144" x2="500" y2="156" />
+    <line x1="640" y1="144" x2="640" y2="156" />
+    <line x1="780" y1="144" x2="780" y2="156" />
+  </g>
+  <g text-anchor="middle"
+     fill="#52606d"
+     font-family="system-ui, sans-serif"
+     font-size="11">
+    <text x="220" y="134">tick 0</text>
+    <text x="360" y="134">tick 1</text>
+    <text x="500" y="134">tick 2</text>
+    <text x="640" y="134">tick 3</text>
+    <text x="780" y="134">tick 4</text>
+  </g>
+
+  <g fill="#17212b">
+    <text x="24" y="214"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">observed data</text>
+    <text x="24" y="289"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">old-side drain</text>
+    <text x="24" y="364"
+          font-family="system-ui, sans-serif"
+          font-size="13"
+          font-weight="600">first new-definition tick</text>
+  </g>
+
+  <g text-anchor="middle">
+    <rect x="174" y="184" width="92" height="54" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="220" y="206"
+          fill="#17212b"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">d0</text>
+    <text x="220" y="224"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">observed · OLD</text>
+
+    <rect x="314" y="184" width="92" height="54" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="360" y="206"
+          fill="#17212b"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">d1</text>
+    <text x="360" y="224"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">observed · OLD</text>
+
+    <rect x="454" y="259" width="92" height="54" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="500" y="281"
+          fill="#17212b"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">d2</text>
+    <text x="500" y="299"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">admitted · OLD</text>
+
+    <rect x="594" y="259" width="92" height="54" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="640" y="281"
+          fill="#17212b"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">d3</text>
+    <text x="640" y="299"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">admitted · OLD</text>
+
+    <rect x="730" y="334" width="100" height="54" rx="5"
+          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+    <text x="780" y="356"
+          fill="#17212b"
+          font-family="ui-monospace, monospace"
+          font-size="13"
+          font-weight="600">d4</text>
+    <text x="780" y="374"
+          fill="#52606d"
+          font-family="system-ui, sans-serif"
+          font-size="11">first · NEW</text>
+  </g>
+
+  <path d="M 430 407 V 415 H 710 V 407"
+        fill="none"
+        stroke="#a8b3bf"
+        stroke-width="1.3" />
+  <text x="570" y="400"
+        text-anchor="middle"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">old-side drain / local cutover interval</text>
+
+  <text x="470" y="453"
+        text-anchor="middle"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        font-weight="600">local order only · not a global atomic cutover</text>
+</svg>
