@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788126551517,
+  "lastUpdate": 1788133496374,
   "repoUrl": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker",
   "entries": {
     "RoboSAPIENS Criterion benchmarks": [
@@ -69495,6 +69495,588 @@ window.BENCHMARK_DATA = {
             "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
             "value": 3545816,
             "range": "± 12151",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "committer": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "distinct": true,
+          "id": "3d27a69cdd8e184c7c1abb8ae508eb96e79a9417",
+          "message": "Expand user and architectural documentation",
+          "timestamp": "2026-08-31T01:01:06+02:00",
+          "tree_id": "2f4a95a941d82a943f4ab7f46b13176edf943056",
+          "url": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/commit/3d27a69cdd8e184c7c1abb8ae508eb96e79a9417"
+        },
+        "date": 1788133495892,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "maple_sequence/maple_sequence_untyped_async/25000",
+            "value": 491176657,
+            "range": "± 1191472",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_semisync/25000",
+            "value": 203269966,
+            "range": "± 544177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_untyped/25000",
+            "value": 45377216,
+            "range": "± 329194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow/25000",
+            "value": 45386542,
+            "range": "± 429609",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_quickened/25000",
+            "value": 40019163,
+            "range": "± 738469",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_jit/25000",
+            "value": 40303158,
+            "range": "± 736925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50/100000",
+            "value": 614817371,
+            "range": "± 4345867",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_semisync/100000",
+            "value": 302112521,
+            "range": "± 1178645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_untyped/100000",
+            "value": 74488187,
+            "range": "± 365785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow/100000",
+            "value": 69963739,
+            "range": "± 306058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_quickened/100000",
+            "value": 69962969,
+            "range": "± 320270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_jit/100000",
+            "value": 70246976,
+            "range": "± 334930",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_async/25000",
+            "value": 154504990,
+            "range": "± 1142196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_untyped/25000",
+            "value": 10970962,
+            "range": "± 39768",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow/25000",
+            "value": 10959931,
+            "range": "± 31486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_quickened/25000",
+            "value": 10987434,
+            "range": "± 24863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_jit/25000",
+            "value": 11002805,
+            "range": "± 13604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_semisync/25000",
+            "value": 70785557,
+            "range": "± 220487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_untyped/1024",
+            "value": 33409765,
+            "range": "± 102197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow/1024",
+            "value": 31421603,
+            "range": "± 68423",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_quickened/1024",
+            "value": 31330938,
+            "range": "± 90566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_jit/1024",
+            "value": 31241042,
+            "range": "± 66192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_semisync/1024",
+            "value": 1736061140,
+            "range": "± 8966226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_untyped/1024",
+            "value": 44266045,
+            "range": "± 82508",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow/1024",
+            "value": 42132944,
+            "range": "± 124472",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_quickened/1024",
+            "value": 39663871,
+            "range": "± 130136",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_jit/1024",
+            "value": 39750672,
+            "range": "± 159737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_semisync/1024",
+            "value": 238382518,
+            "range": "± 1330164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_untyped/25000",
+            "value": 87239081,
+            "range": "± 115607",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow/25000",
+            "value": 159555001,
+            "range": "± 208035",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_quickened/25000",
+            "value": 55140700,
+            "range": "± 236276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_jit/25000",
+            "value": 19256583,
+            "range": "± 54437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_untyped/25000",
+            "value": 1678423731,
+            "range": "± 11212758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_typed/25000",
+            "value": 1538733137,
+            "range": "± 4318843",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_1/1000",
+            "value": 13366188,
+            "range": "± 1882275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_1/1000",
+            "value": 8184658,
+            "range": "± 1188710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_10/1000",
+            "value": 22807647,
+            "range": "± 3609735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_10/1000",
+            "value": 18057017,
+            "range": "± 1877563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_50/1000",
+            "value": 73874588,
+            "range": "± 5309894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_50/1000",
+            "value": 62468375,
+            "range": "± 3443802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_100/1000",
+            "value": 136818602,
+            "range": "± 8275585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_100/1000",
+            "value": 131218174,
+            "range": "± 4009873",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_1/1000",
+            "value": 4416797,
+            "range": "± 20496",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_1/1000",
+            "value": 5460940,
+            "range": "± 1188407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000",
+            "value": 11978584,
+            "range": "± 837075",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_10/1000",
+            "value": 12023798,
+            "range": "± 793184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_50/1000",
+            "value": 32682117,
+            "range": "± 467765",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_50/1000",
+            "value": 29124934,
+            "range": "± 150511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_100/1000",
+            "value": 42369522,
+            "range": "± 292935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_100/1000",
+            "value": 40632810,
+            "range": "± 201249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_1/1000",
+            "value": 4510620,
+            "range": "± 174813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_1/1000",
+            "value": 4501315,
+            "range": "± 1056099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_10/1000",
+            "value": 12537279,
+            "range": "± 303904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_10/1000",
+            "value": 12355902,
+            "range": "± 701736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_50/1000",
+            "value": 33622353,
+            "range": "± 1117424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_50/1000",
+            "value": 33401122,
+            "range": "± 1018042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_100/1000",
+            "value": 45064540,
+            "range": "± 139963",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_100/1000",
+            "value": 46762004,
+            "range": "± 1154991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_1/1000",
+            "value": 4451884,
+            "range": "± 476861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_1/1000",
+            "value": 4402806,
+            "range": "± 635490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000",
+            "value": 12167976,
+            "range": "± 642424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000",
+            "value": 11771896,
+            "range": "± 40388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_50/1000",
+            "value": 32297903,
+            "range": "± 878202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_50/1000",
+            "value": 31168200,
+            "range": "± 1270763",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_100/1000",
+            "value": 45065263,
+            "range": "± 805974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_100/1000",
+            "value": 43026081,
+            "range": "± 225292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_0/1000",
+            "value": 7244118,
+            "range": "± 1119838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_0/1000",
+            "value": 7425799,
+            "range": "± 266516",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_0/1000",
+            "value": 5453565,
+            "range": "± 1492595",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_0/1000",
+            "value": 4063337,
+            "range": "± 1548154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000",
+            "value": 4001295,
+            "range": "± 37594",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/dynamic_transitions/schedule_repair",
+            "value": 1779659,
+            "range": "± 36549",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/runtime_reconfiguration/candidate_compile_and_transfer/16",
+            "value": 67104,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/runtime_reconfiguration/state_transfer_only/16",
+            "value": 3275,
+            "range": "± 171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_small_varied_inputs/parsing_lalrpop/10000",
+            "value": 16128345,
+            "range": "± 35729",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_and_validate_specification/1024",
+            "value": 2947967,
+            "range": "± 29132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/strict_type_check/1024",
+            "value": 740326,
+            "range": "± 22858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/typed_dependency_graph/1024",
+            "value": 272904,
+            "range": "± 4037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 12764320,
+            "range": "± 32285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_semisync/10000",
+            "value": 17315259,
+            "range": "± 114454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_untyped/10000",
+            "value": 1353428,
+            "range": "± 9603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow/10000",
+            "value": 1785892,
+            "range": "± 13403",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_quickened/10000",
+            "value": 1119895,
+            "range": "± 9015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_jit/10000",
+            "value": 1039566,
+            "range": "± 9172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_runtime_qual/10000",
+            "value": 3062598,
+            "range": "± 5078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_direct_qual/10000",
+            "value": 2159288,
+            "range": "± 5591",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_semisync/10000",
+            "value": 26843613,
+            "range": "± 63017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
+            "value": 5615465,
+            "range": "± 43366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow/10000",
+            "value": 5622876,
+            "range": "± 46971",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_quickened/10000",
+            "value": 4284567,
+            "range": "± 47870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
+            "value": 1684429,
+            "range": "± 15473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_globally_window_qual/10000",
+            "value": 4501221,
+            "range": "± 5574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+            "value": 3591083,
+            "range": "± 12647",
             "unit": "ns/iter"
           }
         ]
