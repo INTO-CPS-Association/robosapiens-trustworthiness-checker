@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
@@ -7,12 +8,14 @@ use std::{
 use futures::Sink;
 use smol::LocalExecutor;
 
+use crate::fingerprint::FingerprintBuilder;
 use crate::io::config::{CodecId, OutputConfiguration, Route};
 use crate::{
     VarName,
     core::{
-        JsonStreamValue, OutputBatch, OutputError, OutputInterface, OutputRole, OutputRoute,
-        OutputWriter, RosStreamValue,
+        JsonStreamValue, OutputBatch, OutputError, OutputInterface,
+        OutputInterfaceReconfigurationHandle, OutputRole, OutputRoute, OutputWriter,
+        RosStreamValue,
     },
 };
 
@@ -319,26 +322,22 @@ impl<V> OutputPipeline<V> {
         &self.configuration_identity
     }
 
-    fn configuration_fingerprint(&self) -> String {
-        let destinations = self
-            .destinations
-            .destinations
-            .values()
-            .map(|destination| {
-                format!(
-                    "id={:?};backend={};selection={:?};routes={:?};stages={:?}",
-                    destination.id,
-                    backend_configuration_identity(&destination.backend),
-                    destination.selection,
-                    destination.routes,
-                    destination.stages,
-                )
-            })
-            .collect::<Vec<_>>();
-        format!(
-            "default={:?};shared={:?};destinations={destinations:?}",
-            self.destinations.default, self.shared_stages,
-        )
+    fn configuration_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("output-pipeline-v1");
+        match &self.destinations.default {
+            Some(default) => {
+                key.write_bool(true);
+                key.write_str(default);
+            }
+            None => key.write_bool(false),
+        }
+        write_output_stages(&mut key, &self.shared_stages);
+        key.write_usize(self.destinations.destinations.len());
+        for (id, destination) in &self.destinations.destinations {
+            key.write_str(id);
+            key.write_u128(destination_configuration_key(destination));
+        }
+        key.finish()
     }
 
     pub fn destinations(&self) -> &OutputDestinations<V> {
@@ -494,7 +493,7 @@ impl<V> OutputPipeline<V> {
             }))
             .map_err(anyhow::Error::from)?;
 
-            resolved_destinations.push(ResolvedDestination {
+            let mut resolved_destination = ResolvedDestination {
                 id: destination.id.clone(),
                 bindings: bindings.into_boxed_slice(),
                 interface,
@@ -502,7 +501,10 @@ impl<V> OutputPipeline<V> {
                 primary: primary
                     .values()
                     .any(|primary_id| primary_id == &destination.id),
-            });
+                configuration_key: 0,
+            };
+            resolved_destination.configuration_key = resolved_destination.compute_key();
+            resolved_destinations.push(resolved_destination);
         }
 
         let mut resolved = ResolvedOutput {
@@ -514,11 +516,106 @@ impl<V> OutputPipeline<V> {
             destinations: resolved_destinations.into_boxed_slice(),
             shared_stages: self.shared_stages.clone(),
             pipeline_identity: Rc::clone(self.configuration_identity()),
-            pipeline_configuration: self.configuration_fingerprint().into_boxed_str(),
-            fingerprint: String::new().into_boxed_str(),
+            pipeline_configuration: self.configuration_fingerprint(),
+            fingerprint: 0,
         };
-        resolved.fingerprint = resolved.compute_fingerprint().into_boxed_str();
+        resolved.fingerprint = resolved.compute_fingerprint();
         Ok(resolved)
+    }
+
+    /// Plan the smallest transition between two pure resolutions.
+    ///
+    /// Destination IDs are durable owner identities: the pipeline opens that
+    /// registry once, and requests only change the resolved bindings and
+    /// interfaces of those owners. A changed owner receives one
+    /// `Reconfigure`; unchanged owners are implicit. The returned plan performs
+    /// no backend work.
+    pub(crate) fn plan_reconfiguration(
+        &self,
+        active: &ResolvedOutput,
+        candidate: ResolvedOutput,
+    ) -> anyhow::Result<OutputPipelineReconfigurationPlan> {
+        self.validate_resolution_for_reconfiguration(active, "active")?;
+        self.validate_resolution_for_reconfiguration(&candidate, "candidate")?;
+
+        let active_by_id = active
+            .destinations
+            .iter()
+            .map(|destination| (&destination.id, destination))
+            .collect::<BTreeMap<_, _>>();
+        let mut changed = Vec::new();
+        for candidate_destination in &candidate.destinations {
+            let active_destination =
+                active_by_id.get(&candidate_destination.id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "candidate output destination `{}` is not an active pipeline owner",
+                        candidate_destination.id
+                    )
+                })?;
+            if active_destination.configuration_key() != candidate_destination.configuration_key() {
+                changed.push(candidate_destination.id.clone());
+            }
+        }
+
+        Ok(OutputPipelineReconfigurationPlan {
+            active_fingerprint: active.fingerprint,
+            candidate,
+            changed: changed.into_boxed_slice(),
+        })
+    }
+
+    fn validate_resolution_for_reconfiguration(
+        &self,
+        resolved: &ResolvedOutput,
+        side: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            resolved.fingerprint == resolved.compute_fingerprint(),
+            "{side} resolved output fingerprint does not match its structure"
+        );
+        anyhow::ensure!(
+            resolved.pipeline_configuration == self.configuration_fingerprint(),
+            "{side} resolved output durable configuration does not match the pipeline"
+        );
+        anyhow::ensure!(
+            Rc::ptr_eq(&resolved.pipeline_identity, self.configuration_identity()),
+            "{side} resolved output belongs to a different pipeline instance"
+        );
+        anyhow::ensure!(
+            resolved.destinations.len() == self.destinations.destinations.len(),
+            "{side} resolved output destination count does not match the pipeline"
+        );
+        let mut ids = BTreeSet::new();
+        for destination in &resolved.destinations {
+            anyhow::ensure!(
+                ids.insert(destination.id.clone()),
+                "{side} resolved output destination `{}` is duplicated",
+                destination.id
+            );
+            let configured = self.destinations.get(&destination.id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{side} resolved output destination `{}` is not configured",
+                    destination.id
+                )
+            })?;
+            anyhow::ensure!(
+                destination.stages.as_ref() == configured.stages.as_slice(),
+                "{side} resolved output stages for destination `{}` do not match the pipeline",
+                destination.id
+            );
+            anyhow::ensure!(
+                destination.configuration_key() == destination.compute_key(),
+                "{side} resolved output destination `{}` key does not match its structure",
+                destination.id
+            );
+            OutputInterface::validate_routes(destination.interface.routes())
+                .map_err(anyhow::Error::from)?;
+        }
+        anyhow::ensure!(
+            resolved.shared_stages.as_ref() == self.shared_stages.as_ref(),
+            "{side} resolved shared output stages do not match the pipeline"
+        );
+        Ok(())
     }
 
     /// Resolve and open a writer in one operation. Resolution still completes
@@ -543,10 +640,22 @@ impl<V> OutputPipeline<V> {
     }
 
     /// Open a resolved output and return its live writer without session state.
+    /// A single destination keeps the direct fast path; sessions use the router
+    /// because they may update destination bindings in place later.
     pub async fn open(&self, resolved: ResolvedOutput) -> Result<OutputWriter<V>, OutputError>
     where
         V: JsonStreamValue + RosStreamValue,
     {
+        self.validate_resolved_for_open(&resolved)?;
+        if resolved.destinations.len() == 1 {
+            let opened = self.open_destination(&resolved.destinations[0]).await?;
+            return apply_stages_in_order(
+                opened.writer,
+                &resolved.shared_stages,
+                self.executor.as_ref(),
+            )
+            .await;
+        }
         self.open_session(resolved)
             .await
             .map(OutputPipelineSession::into_writer)
@@ -561,21 +670,40 @@ impl<V> OutputPipeline<V> {
     where
         V: JsonStreamValue + RosStreamValue,
     {
-        if resolved.fingerprint.as_ref() != resolved.compute_fingerprint().as_str() {
-            return Err(OutputError::invalid(
-                "resolved output fingerprint does not match its structure",
-            ));
+        self.validate_resolved_for_open(&resolved)?;
+
+        let mut opened = Vec::with_capacity(resolved.destinations.len());
+        for resolved_destination in resolved.destinations.iter() {
+            match self.open_destination(resolved_destination).await {
+                Ok(destination) => opened.push(destination),
+                Err(error) => {
+                    let cleanup = close_opened(&mut opened).await;
+                    return Err(with_cleanup(error, cleanup));
+                }
+            }
         }
-        if resolved.pipeline_configuration.as_ref() != self.configuration_fingerprint().as_str() {
-            return Err(OutputError::invalid(
-                "resolved output durable configuration does not match the pipeline",
-            ));
-        }
-        if !Rc::ptr_eq(&resolved.pipeline_identity, self.configuration_identity()) {
-            return Err(OutputError::invalid(
-                "resolved output belongs to a different pipeline instance",
-            ));
-        }
+
+        let router = OutputRouter::new(opened);
+        let router_state = router.state();
+        let writer = OutputWriter::from_sink(router);
+        let writer =
+            match apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref())
+                .await
+            {
+                Ok(writer) => writer,
+                Err(error) => return Err(error),
+            };
+        Ok(OutputPipelineSession::new(
+            self.clone(),
+            resolved,
+            writer,
+            router_state,
+        ))
+    }
+
+    fn validate_resolved_for_open(&self, resolved: &ResolvedOutput) -> Result<(), OutputError> {
+        self.validate_resolution_for_reconfiguration(resolved, "resolved")
+            .map_err(OutputError::from)?;
         self.destinations
             .validate_ids()
             .map_err(OutputError::from)?;
@@ -585,111 +713,39 @@ impl<V> OutputPipeline<V> {
                 .validate_local()
                 .map_err(OutputError::from)?;
         }
-        if resolved.destinations.len() != self.destinations.destinations.len() {
-            return Err(OutputError::invalid(
-                "resolved output destination count does not match the pipeline",
-            ));
-        }
-        let mut resolved_ids = BTreeSet::new();
-        for destination in resolved.destinations.iter() {
-            if !resolved_ids.insert(destination.id.clone()) {
-                return Err(OutputError::invalid(format!(
-                    "resolved output destination `{}` is duplicated",
-                    destination.id
-                )));
-            }
-            let Some(configured) = self.destinations.get(&destination.id) else {
-                return Err(OutputError::invalid(format!(
-                    "resolved output destination `{}` is not configured",
-                    destination.id
-                )));
-            };
-            if destination.stages.as_ref() != configured.stages.as_slice() {
-                return Err(OutputError::invalid(format!(
-                    "resolved output stages for destination `{}` do not match the pipeline",
-                    destination.id
-                )));
-            }
-        }
-        if resolved.shared_stages.as_ref() != self.shared_stages.as_ref() {
-            return Err(OutputError::invalid(
-                "resolved shared output stages do not match the pipeline",
-            ));
-        }
         for destination in &resolved.destinations {
             validate_stage_executor(&destination.stages, self.executor.as_ref())?;
         }
         validate_stage_executor(&resolved.shared_stages, self.executor.as_ref())?;
+        Ok(())
+    }
 
-        let mut opened = Vec::with_capacity(resolved.destinations.len());
-        for resolved_destination in resolved.destinations.iter() {
-            let Some(destination) = self.destinations.get(&resolved_destination.id) else {
-                let error = OutputError::invalid(format!(
-                    "resolved output destination `{}` is not configured",
-                    resolved_destination.id
-                ));
-                let cleanup = close_opened(&mut opened).await;
-                return Err(match cleanup {
-                    Some(cleanup) => super::combine_errors(error, cleanup),
-                    None => error,
-                });
-            };
-            let writer = match destination
-                .backend
-                .open(resolved_destination.interface.clone())
-                .await
-            {
-                Ok(writer) => writer,
-                Err(error) => {
-                    let cleanup = close_opened(&mut opened).await;
-                    return Err(match cleanup {
-                        Some(cleanup) => super::combine_errors(error, cleanup),
-                        None => error,
-                    });
-                }
-            };
-            let writer = match apply_stages_in_order(
-                writer,
-                &resolved_destination.stages,
-                self.executor.as_ref(),
-            )
-            .await
-            {
-                Ok(writer) => writer,
-                Err(error) => {
-                    let cleanup = close_opened(&mut opened).await;
-                    return Err(with_cleanup(error, cleanup));
-                }
-            };
-            opened.push(OpenedDestination {
-                variables: resolved_destination
-                    .bindings
-                    .iter()
-                    .map(|binding| binding.variable.clone())
-                    .collect(),
-                writer,
-            });
-        }
-
-        if opened.len() == 1 {
-            let Some(opened) = opened.pop() else {
-                return Err(OutputError::invalid(
-                    "output pipeline opened no destinations",
-                ));
-            };
-            let writer = apply_stages_in_order(
-                opened.writer,
-                &resolved.shared_stages,
-                self.executor.as_ref(),
-            )
-            .await?;
-            return Ok(OutputPipelineSession::new(resolved, writer));
-        }
-
-        let writer = OutputWriter::from_sink(OutputRouter::new(opened));
+    async fn open_destination(
+        &self,
+        resolved: &ResolvedDestination,
+    ) -> Result<OpenedDestination<V>, OutputError>
+    where
+        V: JsonStreamValue + RosStreamValue,
+    {
+        let destination = self.destinations.get(&resolved.id).ok_or_else(|| {
+            OutputError::invalid(format!(
+                "resolved output destination `{}` is not configured",
+                resolved.id
+            ))
+        })?;
+        let writer = destination.backend.open(resolved.interface.clone()).await?;
         let writer =
-            apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref()).await?;
-        Ok(OutputPipelineSession::new(resolved, writer))
+            match apply_stages_in_order(writer, &resolved.stages, self.executor.as_ref()).await {
+                Ok(writer) => writer,
+                Err(error) => return Err(error),
+            };
+        let interface_reconfiguration = writer.interface_reconfiguration();
+        Ok(OpenedDestination {
+            id: resolved.id.clone(),
+            variables: variables_for_destination(resolved),
+            interface_reconfiguration,
+            writer,
+        })
     }
 }
 
@@ -1254,8 +1310,18 @@ async fn apply_stages_in_order<V: 'static>(
     Ok(writer)
 }
 
+fn variables_for_destination(resolved: &ResolvedDestination) -> BTreeSet<VarName> {
+    resolved
+        .bindings
+        .iter()
+        .map(|binding| binding.variable.clone())
+        .collect()
+}
+
 struct OpenedDestination<V> {
+    id: DestinationId,
     variables: BTreeSet<VarName>,
+    interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
     writer: OutputWriter<V>,
 }
 
@@ -1307,6 +1373,7 @@ pub struct ResolvedDestination {
     interface: OutputInterface,
     stages: Box<[OutputStage]>,
     primary: bool,
+    configuration_key: u128,
 }
 
 impl ResolvedDestination {
@@ -1329,6 +1396,19 @@ impl ResolvedDestination {
     pub fn is_primary(&self) -> bool {
         self.primary
     }
+
+    pub(crate) fn configuration_key(&self) -> u128 {
+        self.configuration_key
+    }
+
+    fn compute_key(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("output-destination-resolution-v1");
+        key.write_str(&self.id);
+        write_output_bindings(&mut key, &self.bindings);
+        write_output_interface(&mut key, &self.interface);
+        write_output_stages(&mut key, &self.stages);
+        key.finish()
+    }
 }
 
 /// Complete deterministic output resolution for one active monitor.
@@ -1339,8 +1419,8 @@ pub struct ResolvedOutput {
     destinations: Box<[ResolvedDestination]>,
     shared_stages: Box<[OutputStage]>,
     pipeline_identity: Rc<()>,
-    pipeline_configuration: Box<str>,
-    fingerprint: Box<str>,
+    pipeline_configuration: u128,
+    fingerprint: u128,
 }
 
 impl ResolvedOutput {
@@ -1366,32 +1446,74 @@ impl ResolvedOutput {
             .find(|destination| &destination.id == id)
     }
 
-    pub fn fingerprint(&self) -> &str {
-        &self.fingerprint
+    pub fn fingerprint(&self) -> u128 {
+        self.fingerprint
     }
 
-    fn compute_fingerprint(&self) -> String {
-        format!(
-            "pipeline_identity={:p};pipeline_configuration={:?};model={:?};aux={:?};shared={:?};destinations={:?}",
-            Rc::as_ptr(&self.pipeline_identity),
-            self.pipeline_configuration,
-            self.model_outputs,
-            self.auxiliary,
-            self.shared_stages,
-            self.destinations,
-        )
+    fn compute_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("output-resolution-v1");
+        key.write_u128(self.pipeline_configuration);
+        write_var_names(&mut key, &self.model_outputs);
+        write_var_names(&mut key, &self.auxiliary);
+        write_output_stages(&mut key, &self.shared_stages);
+        key.write_usize(self.destinations.len());
+        for destination in &self.destinations {
+            key.write_u128(destination.configuration_key());
+            key.write_bool(destination.primary);
+        }
+        key.finish()
     }
 }
 
-/// An opened output pipeline together with the resolution it was opened from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OutputPipelineReconfigurationPlan {
+    active_fingerprint: u128,
+    candidate: ResolvedOutput,
+    changed: Box<[DestinationId]>,
+}
+
+impl OutputPipelineReconfigurationPlan {
+    pub(crate) fn candidate(&self) -> &ResolvedOutput {
+        &self.candidate
+    }
+
+    pub(crate) fn changed_destinations(&self) -> &[DestinationId] {
+        &self.changed
+    }
+
+    pub(crate) fn is_changed(&self) -> bool {
+        !self.changed.is_empty()
+    }
+
+    pub(crate) fn active_fingerprint(&self) -> u128 {
+        self.active_fingerprint
+    }
+}
+
+/// An opened output pipeline together with its pure resolution and the live
+/// router state used to update fixed destination bindings.
 pub struct OutputPipelineSession<V> {
+    pipeline: OutputPipeline<V>,
     resolved: ResolvedOutput,
     writer: OutputWriter<V>,
+    router_state: Rc<RefCell<OutputRouterState<V>>>,
+    sticky_error: Option<OutputError>,
 }
 
 impl<V> OutputPipelineSession<V> {
-    fn new(resolved: ResolvedOutput, writer: OutputWriter<V>) -> Self {
-        Self { resolved, writer }
+    fn new(
+        pipeline: OutputPipeline<V>,
+        resolved: ResolvedOutput,
+        writer: OutputWriter<V>,
+        router_state: Rc<RefCell<OutputRouterState<V>>>,
+    ) -> Self {
+        Self {
+            pipeline,
+            resolved,
+            writer,
+            router_state,
+            sticky_error: None,
+        }
     }
 
     pub fn resolved(&self) -> &ResolvedOutput {
@@ -1411,69 +1533,162 @@ impl<V> OutputPipelineSession<V> {
     }
 
     pub async fn send(&mut self, batch: OutputBatch<V>) -> Result<(), OutputError> {
+        if let Some(error) = &self.sticky_error {
+            return Err(error.clone());
+        }
         self.writer.send(batch).await
     }
 
     pub async fn flush(&mut self) -> Result<(), OutputError> {
+        if let Some(error) = &self.sticky_error {
+            return Err(error.clone());
+        }
         self.writer.flush().await
     }
 
     pub async fn close(&mut self) -> Result<(), OutputError> {
-        self.writer.close().await
+        let close = self.writer.close().await;
+        match self.sticky_error.clone() {
+            Some(error) => match close {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(super::combine_errors(error, cleanup)),
+            },
+            None => close,
+        }
+    }
+
+    /// Apply a pure pipeline plan at the caller's ordered barrier. Only the
+    /// affected existing owners are flushed and updated. An interface update
+    /// must be supported by the opened owner; there is no hidden replacement
+    /// fallback.
+    pub(crate) async fn apply_reconfiguration(
+        &mut self,
+        plan: OutputPipelineReconfigurationPlan,
+    ) -> Result<(), OutputError>
+    where
+        V: JsonStreamValue + RosStreamValue,
+    {
+        if let Some(error) = &self.sticky_error {
+            return Err(error.clone());
+        }
+        if plan.active_fingerprint() != self.resolved.fingerprint() {
+            return Err(self.fail(OutputError::invalid(
+                "stale output pipeline reconfiguration plan does not match the active resolution",
+            )));
+        }
+        if let Err(error) = self
+            .pipeline
+            .validate_resolution_for_reconfiguration(plan.candidate(), "candidate")
+        {
+            return Err(self.fail(OutputError::from(error)));
+        }
+
+        let affected = plan
+            .changed_destinations()
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !affected.is_empty() {
+            let result = if self.resolved.shared_stages.is_empty() {
+                OutputRouterState::flush_destinations(&self.router_state, &affected).await
+            } else {
+                self.writer.flush().await
+            };
+            if let Err(error) = result {
+                return Err(self.fail(error));
+            }
+        }
+
+        for destination in plan.changed_destinations() {
+            let target = plan
+                .candidate()
+                .destinations
+                .iter()
+                .find(|target| target.id() == destination)
+                .ok_or_else(|| {
+                    self.fail(OutputError::invalid(format!(
+                        "changed output destination `{destination}` is absent from the candidate resolution",
+                    )))
+                })?;
+            let handle = {
+                let state = RefCell::borrow(self.router_state.as_ref());
+                state.interface_reconfiguration(destination)
+            }
+            .ok_or_else(|| {
+                OutputError::invalid(format!(
+                    "output destination `{destination}` does not support interface reconfiguration",
+                ))
+            });
+            let handle = match handle {
+                Ok(handle) => handle,
+                Err(error) => return Err(self.fail(error)),
+            };
+            if let Err(error) = handle.reconfigure(target.interface.clone()).await {
+                return Err(self.fail(error));
+            }
+            let variables = variables_for_destination(target);
+            let update = {
+                let mut state = RefCell::borrow_mut(self.router_state.as_ref());
+                state.replace_variables(destination, variables)
+            };
+            if let Err(error) = update {
+                return Err(self.fail(error));
+            }
+        }
+
+        self.resolved = plan.candidate().clone();
+        Ok(())
+    }
+
+    fn fail(&mut self, error: OutputError) -> OutputError {
+        if self.sticky_error.is_none() {
+            self.sticky_error = Some(error);
+        }
+        self.sticky_error
+            .as_ref()
+            .expect("output session retains a failure")
+            .clone()
     }
 }
 
-#[derive(Default)]
 struct OutputRouterSelection {
-    variables: Vec<BTreeSet<VarName>>,
-    routing: BTreeMap<VarName, Vec<usize>>,
+    variables: BTreeSet<VarName>,
 }
 
 impl OutputRouterSelection {
-    fn new<V>(destinations: &[OpenedDestination<V>]) -> Self {
+    fn new<V>(destinations: &BTreeMap<DestinationId, OpenedDestination<V>>) -> Self {
         let mut selection = Self {
-            variables: destinations
-                .iter()
-                .map(|destination| destination.variables.clone())
-                .collect(),
-            routing: BTreeMap::new(),
+            variables: BTreeSet::new(),
         };
-        selection.rebuild_routing();
+        selection.rebuild(destinations);
         selection
     }
 
-    fn rebuild_routing(&mut self) {
-        self.routing.clear();
-        for (index, variables) in self.variables.iter().enumerate() {
-            for variable in variables {
-                self.routing
-                    .entry(variable.clone())
-                    .or_default()
-                    .push(index);
-            }
+    fn rebuild<V>(&mut self, destinations: &BTreeMap<DestinationId, OpenedDestination<V>>) {
+        self.variables.clear();
+        for destination in destinations.values() {
+            self.variables.extend(destination.variables.iter().cloned());
         }
     }
 }
 
-/// Fan out one logical batch under global backpressure. `poll_ready` is ready
-/// only when every opened destination writer is ready, including destinations
-/// that receive no variable from the next batch. `start_send` then clones each
-/// value once per destination selected for that value; primary partitions use
-/// the same cloning contract as mirrors rather than moving values specially.
-struct OutputRouter<V> {
-    destinations: Vec<OpenedDestination<V>>,
+struct OutputRouterState<V> {
+    destinations: BTreeMap<DestinationId, OpenedDestination<V>>,
     selection: OutputRouterSelection,
     ready: bool,
     failure: Option<OutputError>,
     closing: bool,
     closed: bool,
-    close_done: Vec<bool>,
+    close_done: BTreeSet<DestinationId>,
 }
 
-impl<V> OutputRouter<V> {
+impl<V> OutputRouterState<V> {
     fn new(destinations: Vec<OpenedDestination<V>>) -> Self {
+        let destinations = destinations
+            .into_iter()
+            .map(|destination| (destination.id.clone(), destination))
+            .collect::<BTreeMap<_, _>>();
         let selection = OutputRouterSelection::new(&destinations);
-        let close_done = vec![false; destinations.len()];
         Self {
             destinations,
             selection,
@@ -1481,7 +1696,7 @@ impl<V> OutputRouter<V> {
             failure: None,
             closing: false,
             closed: false,
-            close_done,
+            close_done: BTreeSet::new(),
         }
     }
 
@@ -1502,8 +1717,84 @@ impl<V> OutputRouter<V> {
             .expect("router retains an error")
             .clone()
     }
+
+    fn replace_variables(
+        &mut self,
+        id: &DestinationId,
+        variables: BTreeSet<VarName>,
+    ) -> Result<(), OutputError> {
+        let Some(destination) = self.destinations.get_mut(id) else {
+            return Err(OutputError::invalid(format!(
+                "output destination `{id}` is not active"
+            )));
+        };
+        destination.variables = variables;
+        self.selection.rebuild(&self.destinations);
+        self.ready = false;
+        Ok(())
+    }
+
+    fn interface_reconfiguration(
+        &self,
+        id: &DestinationId,
+    ) -> Option<OutputInterfaceReconfigurationHandle> {
+        self.destinations
+            .get(id)
+            .and_then(|destination| destination.interface_reconfiguration.clone())
+    }
 }
 
+struct OutputRouter<V> {
+    state: Rc<RefCell<OutputRouterState<V>>>,
+}
+
+impl<V> OutputRouter<V> {
+    fn new(destinations: Vec<OpenedDestination<V>>) -> Self {
+        Self {
+            state: Rc::new(RefCell::new(OutputRouterState::new(destinations))),
+        }
+    }
+
+    fn state(&self) -> Rc<RefCell<OutputRouterState<V>>> {
+        Rc::clone(&self.state)
+    }
+}
+
+impl<V: 'static> OutputRouterState<V> {
+    async fn flush_destinations(
+        state: &Rc<RefCell<Self>>,
+        destinations: &BTreeSet<DestinationId>,
+    ) -> Result<(), OutputError> {
+        for id in destinations {
+            let mut destination = {
+                let mut state_ref = state.borrow_mut();
+                if let Some(error) = state_ref.state_error() {
+                    return Err(error);
+                }
+                state_ref.destinations.remove(id).ok_or_else(|| {
+                    OutputError::invalid(format!("output destination `{id}` is not active"))
+                })?
+            };
+            let result = destination.writer.flush().await;
+            let mut state_ref = state.borrow_mut();
+            assert!(
+                state_ref
+                    .destinations
+                    .insert(id.clone(), destination)
+                    .is_none(),
+                "flushed destination was removed temporarily"
+            );
+            if let Err(error) = result {
+                return Err(state_ref.remember(error));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Fan out one logical batch under global backpressure. The router's mutable
+/// state is shared with its owning pipeline session so fixed destination owners
+/// can receive new bindings without replacing their live writers.
 impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
     type Error = OutputError;
 
@@ -1512,12 +1803,13 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
-        if let Some(error) = this.state_error() {
+        let mut state = this.state.borrow_mut();
+        if let Some(error) = state.state_error() {
             return std::task::Poll::Ready(Err(error));
         }
         let mut pending = false;
         let mut error = None;
-        for destination in &mut this.destinations {
+        for destination in state.destinations.values_mut() {
             match std::pin::Pin::new(&mut destination.writer).poll_ready(context) {
                 std::task::Poll::Pending => pending = true,
                 std::task::Poll::Ready(Ok(())) => {}
@@ -1527,12 +1819,12 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
             }
         }
         if let Some(error) = error {
-            return std::task::Poll::Ready(Err(this.remember(error)));
+            return std::task::Poll::Ready(Err(state.remember(error)));
         }
         if pending {
             std::task::Poll::Pending
         } else {
-            this.ready = true;
+            state.ready = true;
             std::task::Poll::Ready(Ok(()))
         }
     }
@@ -1542,42 +1834,46 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
         batch: OutputBatch<V>,
     ) -> Result<(), Self::Error> {
         let this = self.get_mut();
-        if let Some(error) = this.state_error() {
+        let mut state = this.state.borrow_mut();
+        if let Some(error) = state.state_error() {
             return Err(error);
         }
-        if !this.ready {
-            return Err(this.remember(OutputError::backend(
+        if !state.ready {
+            return Err(state.remember(OutputError::backend(
                 "output router was not ready for start_send",
             )));
         }
-        this.ready = false;
-        let missing_variable = {
-            let selection = &this.selection;
-            batch
-                .updates()
-                .find(|update| !selection.routing.contains_key(update.variable))
-                .map(|update| update.variable.clone())
-        };
-        if let Some(variable) = missing_variable {
-            return Err(this.remember(OutputError::invalid(format!(
+        state.ready = false;
+        if let Some(variable) = batch
+            .updates()
+            .find(|update| !state.selection.variables.contains(update.variable))
+            .map(|update| update.variable.clone())
+        {
+            return Err(state.remember(OutputError::invalid(format!(
                 "output update variable `{variable}` has no resolved destination"
             ))));
         }
-
-        for (index, destination) in this.destinations.iter_mut().enumerate() {
-            let selected_result = {
-                let selection = &this.selection;
-                batch.select_variables_cloned(&selection.variables[index])
-            };
-            let selected = match selected_result {
+        if state.destinations.len() == 1 {
+            let destination = state
+                .destinations
+                .values_mut()
+                .next()
+                .expect("destination count checked above");
+            if let Err(error) = std::pin::Pin::new(&mut destination.writer).start_send(batch) {
+                return Err(state.remember(error));
+            }
+            return Ok(());
+        }
+        for destination in state.destinations.values_mut() {
+            let selected = match batch.select_variables_cloned(&destination.variables) {
                 Ok(selected) => selected,
-                Err(error) => return Err(this.remember(error)),
+                Err(error) => return Err(state.remember(error)),
             };
             if selected.is_empty() {
                 continue;
             }
             if let Err(error) = std::pin::Pin::new(&mut destination.writer).start_send(selected) {
-                return Err(this.remember(error));
+                return Err(state.remember(error));
             }
         }
         Ok(())
@@ -1588,12 +1884,13 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
-        if this.closed {
+        let mut state = this.state.borrow_mut();
+        if state.closed {
             return std::task::Poll::Ready(Err(OutputError::Closed));
         }
         let mut pending = false;
         let mut error = None;
-        for destination in &mut this.destinations {
+        for destination in state.destinations.values_mut() {
             match std::pin::Pin::new(&mut destination.writer).poll_flush(context) {
                 std::task::Poll::Pending => pending = true,
                 std::task::Poll::Ready(Ok(())) => {}
@@ -1603,7 +1900,7 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
             }
         }
         if let Some(error) = error {
-            return std::task::Poll::Ready(Err(this.remember(error)));
+            return std::task::Poll::Ready(Err(state.remember(error)));
         }
         if pending {
             std::task::Poll::Pending
@@ -1617,68 +1914,246 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
-        if this.closed {
-            return std::task::Poll::Ready(Err(this
+        let mut state = this.state.borrow_mut();
+        if state.closed {
+            return std::task::Poll::Ready(Err(state
                 .failure
                 .clone()
                 .unwrap_or(OutputError::Closed)));
         }
-        this.closing = true;
+        state.closing = true;
         let mut pending = false;
         let mut cleanup_error = None;
-        for (index, destination) in this.destinations.iter_mut().enumerate() {
-            if this.close_done[index] {
+        let destination_ids = state.destinations.keys().cloned().collect::<Vec<_>>();
+        for id in destination_ids {
+            if state.close_done.contains(&id) {
                 continue;
             }
-            match std::pin::Pin::new(&mut destination.writer).poll_close(context) {
+            let result = {
+                let destination = state
+                    .destinations
+                    .get_mut(&id)
+                    .expect("destination ID came from the active registry");
+                std::pin::Pin::new(&mut destination.writer).poll_close(context)
+            };
+            match result {
                 std::task::Poll::Pending => pending = true,
-                std::task::Poll::Ready(Ok(())) => this.close_done[index] = true,
+                std::task::Poll::Ready(Ok(())) => {
+                    state.close_done.insert(id);
+                }
                 std::task::Poll::Ready(Err(error)) => {
-                    this.close_done[index] = true;
+                    state.close_done.insert(id);
                     super::remember_error(&mut cleanup_error, error);
                 }
             }
         }
         if pending {
             if let Some(error) = cleanup_error {
-                super::remember_error(&mut this.failure, error);
+                super::remember_error(&mut state.failure, error);
             }
             return std::task::Poll::Pending;
         }
         if let Some(error) = cleanup_error {
-            super::remember_error(&mut this.failure, error);
+            super::remember_error(&mut state.failure, error);
         }
-        this.closed = true;
-        this.closing = false;
-        match this.failure.clone() {
+        state.closed = true;
+        state.closing = false;
+        match state.failure.clone() {
             Some(error) => std::task::Poll::Ready(Err(error)),
             None => std::task::Poll::Ready(Ok(())),
         }
     }
 }
 
-fn backend_configuration_identity<V>(backend: &OutputBackendConfig<V>) -> String {
+fn write_var_names(key: &mut FingerprintBuilder, variables: &[VarName]) {
+    let mut names = variables.iter().map(VarName::name).collect::<Vec<_>>();
+    names.sort();
+    key.write_usize(names.len());
+    for name in names {
+        key.write_str(&name);
+    }
+}
+
+fn write_optional_string(key: &mut FingerprintBuilder, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            key.write_bool(true);
+            key.write_str(value);
+        }
+        None => key.write_bool(false),
+    }
+}
+
+fn write_output_routes(key: &mut FingerprintBuilder, routes: &BTreeMap<VarName, Route>) {
+    let mut routes = routes.iter().collect::<Vec<_>>();
+    routes.sort_by(|(left, _), (right, _)| left.name().cmp(&right.name()));
+    key.write_usize(routes.len());
+    for (variable, route) in routes {
+        key.write_str(&variable.name());
+        key.write_str(&route.route);
+        write_optional_string(key, route.codec.as_ref().map(|codec| codec.0.as_ref()));
+    }
+}
+
+fn write_output_stages(key: &mut FingerprintBuilder, stages: &[OutputStage]) {
+    key.write_usize(stages.len());
+    for stage in stages {
+        match stage {
+            OutputStage::Buffer(config) => {
+                key.write_str("buffer");
+                key.write_usize(config.max_batches.get());
+                match config.max_updates {
+                    Some(limit) => {
+                        key.write_bool(true);
+                        key.write_usize(limit.get());
+                    }
+                    None => key.write_bool(false),
+                }
+            }
+            OutputStage::Coalesce(config) => {
+                key.write_str("coalesce");
+                match config.max_delay {
+                    Some(delay) => {
+                        key.write_bool(true);
+                        key.write_u128(delay.as_nanos());
+                    }
+                    None => key.write_bool(false),
+                }
+                match config.tick_limit {
+                    Some(limit) => {
+                        key.write_bool(true);
+                        key.write_usize(limit.get());
+                    }
+                    None => key.write_bool(false),
+                }
+                match config.update_limit {
+                    Some(limit) => {
+                        key.write_bool(true);
+                        key.write_usize(limit.get());
+                    }
+                    None => key.write_bool(false),
+                }
+            }
+        }
+    }
+}
+
+fn write_output_bindings(key: &mut FingerprintBuilder, bindings: &[ResolvedOutputBinding]) {
+    let mut bindings = bindings.iter().collect::<Vec<_>>();
+    bindings.sort_by(|left, right| left.variable.name().cmp(&right.variable.name()));
+    key.write_usize(bindings.len());
+    for binding in bindings {
+        key.write_str(&binding.variable.name());
+        key.write_bool(binding.role == OutputRole::Auxiliary);
+        match &binding.route {
+            Some(route) => {
+                key.write_bool(true);
+                key.write_str(&route.route);
+                write_optional_string(key, route.codec.as_ref().map(|codec| codec.0.as_ref()));
+            }
+            None => key.write_bool(false),
+        }
+    }
+}
+
+fn write_output_interface(key: &mut FingerprintBuilder, interface: &OutputInterface) {
+    let mut routes = interface.routes().iter().collect::<Vec<_>>();
+    routes.sort_by(|left, right| left.variable.name().cmp(&right.variable.name()));
+    key.write_usize(routes.len());
+    for route in routes {
+        key.write_str(&route.variable.name());
+        write_optional_string(key, route.topic.as_deref());
+        write_optional_string(key, route.message_type.as_deref());
+        key.write_bool(route.role == OutputRole::Auxiliary);
+    }
+}
+
+fn write_selection(key: &mut FingerprintBuilder, selection: &OutputDestinationSelection) {
+    match selection {
+        OutputDestinationSelection::All => key.write_str("all"),
+        OutputDestinationSelection::MirrorAll => key.write_str("mirror-all"),
+        OutputDestinationSelection::Partition(variables) => {
+            key.write_str("partition");
+            let variables = variables.iter().map(VarName::name).collect::<Vec<_>>();
+            key.write_usize(variables.len());
+            for variable in variables {
+                key.write_str(&variable);
+            }
+        }
+        OutputDestinationSelection::Mirror(variables) => {
+            key.write_str("mirror");
+            let variables = variables.iter().map(VarName::name).collect::<Vec<_>>();
+            key.write_usize(variables.len());
+            for variable in variables {
+                key.write_str(&variable);
+            }
+        }
+    }
+}
+
+fn backend_configuration_key<V>(backend: &OutputBackendConfig<V>) -> u128 {
+    let mut key = FingerprintBuilder::new("output-backend-v1");
     match backend {
-        OutputBackendConfig::Stdout => "stdout".to_owned(),
-        OutputBackendConfig::Null => "null".to_owned(),
-        OutputBackendConfig::LimitedNull(limit) => format!("limited-null(limit={limit})"),
+        OutputBackendConfig::Stdout => key.write_str("stdout"),
+        OutputBackendConfig::Null => key.write_str("null"),
+        OutputBackendConfig::LimitedNull(limit) => {
+            key.write_str("limited-null");
+            key.write_usize(*limit);
+        }
         OutputBackendConfig::Manual(sender) => {
-            format!("manual(max_capacity={})", sender.max_capacity())
+            key.write_str("manual");
+            key.write_usize(sender.max_capacity());
         }
         OutputBackendConfig::Mqtt {
             host,
             port,
             backend,
-        } => format!("mqtt(host={host:?},port={port:?},client={backend:?})"),
+        } => {
+            key.write_str("mqtt");
+            key.write_str(host);
+            match port {
+                Some(port) => {
+                    key.write_bool(true);
+                    key.write_u64(*port as u64);
+                }
+                None => key.write_bool(false),
+            }
+            key.write_str(match backend {
+                super::MqttOutputBackendKind::Paho => "paho",
+            });
+        }
         OutputBackendConfig::Redis { host, port } => {
-            format!("redis(host={host:?},port={port:?})")
+            key.write_str("redis");
+            key.write_str(host);
+            match port {
+                Some(port) => {
+                    key.write_bool(true);
+                    key.write_u64(*port as u64);
+                }
+                None => key.write_bool(false),
+            }
         }
         #[cfg(feature = "ros")]
-        OutputBackendConfig::Ros { node_name, .. } => format!("ros(node_name={node_name:?})"),
-        OutputBackendConfig::Custom(backend) => {
-            format!("custom(identity={:p})", Rc::as_ptr(backend))
+        OutputBackendConfig::Ros { node_name, .. } => {
+            key.write_str("ros");
+            key.write_str(node_name);
         }
+        OutputBackendConfig::Custom(_) => key.write_str("custom"),
     }
+    key.finish()
+}
+
+fn destination_configuration_key<V>(destination: &OutputDestination<V>) -> u128 {
+    let mut key = FingerprintBuilder::new("output-destination-v1");
+    key.write_str(&destination.id);
+    key.write_u128(backend_configuration_key(&destination.backend));
+    write_output_routes(
+        &mut key,
+        destination.routes.as_ref().unwrap_or(&BTreeMap::new()),
+    );
+    write_selection(&mut key, &destination.selection);
+    write_output_stages(&mut key, &destination.stages);
+    key.finish()
 }
 
 trait BackendKindName {
@@ -2700,6 +3175,71 @@ mod tests {
     }
 
     #[test]
+    fn reconfiguration_updates_only_changed_destination_in_place() {
+        smol::block_on(async {
+            let first_backend = ReconfigurableRecordingBackend::new();
+            let second_backend = ReconfigurableRecordingBackend::new();
+            let pipeline = pipeline(vec![
+                OutputDestination::new("first", OutputBackendConfig::custom(first_backend.clone()))
+                    .partition([VarName::new("x")])
+                    .with_routes([(VarName::new("x"), route("/old"))]),
+                OutputDestination::new(
+                    "second",
+                    OutputBackendConfig::custom(second_backend.clone()),
+                )
+                .partition([VarName::new("y")])
+                .with_routes([(VarName::new("y"), route("/same"))]),
+            ]);
+            let active = pipeline
+                .resolve(
+                    [VarName::new("x"), VarName::new("y")],
+                    std::iter::empty::<VarName>(),
+                    None,
+                )
+                .unwrap();
+            let candidate_configuration = OutputConfiguration {
+                outputs: None,
+                destination: None,
+                destinations: Some(BTreeMap::from([
+                    (
+                        "first".into(),
+                        BTreeMap::from([(VarName::new("x"), route("/new"))]),
+                    ),
+                    (
+                        "second".into(),
+                        BTreeMap::from([(VarName::new("y"), route("/same"))]),
+                    ),
+                ])),
+            };
+            let candidate = pipeline
+                .resolve(
+                    [VarName::new("x"), VarName::new("y")],
+                    std::iter::empty::<VarName>(),
+                    Some(&candidate_configuration),
+                )
+                .unwrap();
+            let plan = pipeline.plan_reconfiguration(&active, candidate).unwrap();
+            assert_eq!(plan.changed_destinations().len(), 1);
+
+            let mut session = pipeline.open_session(active).await.unwrap();
+            session.apply_reconfiguration(plan).await.unwrap();
+
+            assert_eq!(first_backend.opened.get(), 1);
+            assert_eq!(first_backend.closed.get(), 0);
+            assert_eq!(first_backend.flushes.get(), 1);
+            assert_eq!(first_backend.interface_updates.get(), 1);
+            assert_eq!(second_backend.opened.get(), 1);
+            assert_eq!(second_backend.closed.get(), 0);
+            assert_eq!(second_backend.flushes.get(), 0);
+            assert_eq!(second_backend.interface_updates.get(), 0);
+
+            session.close().await.unwrap();
+            assert_eq!(first_backend.closed.get(), 1);
+            assert_eq!(second_backend.closed.get(), 1);
+        });
+    }
+
+    #[test]
     fn flat_monitor_bindings_override_unused_local_catalogs() {
         let selected = OutputDestination::new("selected", OutputBackendConfig::null())
             .with_routes([(VarName::new("x"), route("/local/x"))]);
@@ -2803,14 +3343,18 @@ mod tests {
         let already_ready = Rc::new(Cell::new(true));
         let mut router = OutputRouter::new(vec![
             OpenedDestination {
+                id: "left".into(),
                 variables: BTreeSet::from([VarName::new("x")]),
+                interface_reconfiguration: None,
                 writer: OutputWriter::from_sink(GateSink {
                     gate: Rc::clone(&already_ready),
                     ready: false,
                 }),
             },
             OpenedDestination {
+                id: "right".into(),
                 variables: BTreeSet::new(),
+                interface_reconfiguration: None,
                 writer: OutputWriter::from_sink(GateSink {
                     gate: Rc::clone(&blocked),
                     ready: false,
@@ -2828,6 +3372,38 @@ mod tests {
             Pin::new(&mut router).poll_ready(&mut context),
             Poll::Ready(Ok(()))
         ));
+    }
+
+    #[test]
+    fn single_destination_router_moves_the_original_batch() {
+        smol::block_on(async {
+            let clones = Rc::new(Cell::new(0));
+            let batches: Rc<RefCell<Vec<OutputBatch<CloneCountingValue>>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let destination = OutputWriter::from_sink(GenericRecordingSink {
+                closed: Rc::new(Cell::new(0)),
+                batches: Rc::clone(&batches),
+                ready: false,
+            });
+            let mut writer = OutputWriter::from_sink(OutputRouter::new(vec![OpenedDestination {
+                id: "only".into(),
+                variables: BTreeSet::from([VarName::new("x")]),
+                interface_reconfiguration: None,
+                writer: destination,
+            }]));
+            let batch = OutputBatch::tick(vec![OutputUpdate::new(
+                VarName::new("x"),
+                CloneCountingValue {
+                    clones: Rc::clone(&clones),
+                    value: 1,
+                },
+            )])
+            .unwrap();
+            writer.send(batch).await.unwrap();
+            assert_eq!(clones.get(), 0);
+            writer.close().await.unwrap();
+            assert_eq!(RefCell::borrow(batches.as_ref()).len(), 1);
+        });
     }
 
     #[test]
@@ -2850,11 +3426,15 @@ mod tests {
             });
             let mut writer = OutputWriter::from_sink(OutputRouter::new(vec![
                 OpenedDestination {
+                    id: "left".into(),
                     variables: BTreeSet::from([VarName::new("x")]),
+                    interface_reconfiguration: None,
                     writer: left,
                 },
                 OpenedDestination {
+                    id: "right".into(),
                     variables: BTreeSet::from([VarName::new("x")]),
+                    interface_reconfiguration: None,
                     writer: right,
                 },
             ]));

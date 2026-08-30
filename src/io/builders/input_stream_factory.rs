@@ -13,6 +13,7 @@ use crate::core::{
     FileInputValue, InputBatch, InputStream, MQTT_HOSTNAME, REDIS_HOSTNAME, RosStreamValue, Value,
     VarName, input,
 };
+use crate::fingerprint::FingerprintBuilder;
 use crate::io::RedisKnowledgeConfig;
 use crate::io::config::{
     CodecId, InputConfigFile, InputConfiguration, ReconfigurationRequest, ResolvedBinding,
@@ -20,7 +21,7 @@ use crate::io::config::{
 };
 use crate::io::mqtt::MqttInputBackend;
 use crate::io::reconfigurable_input::{
-    ReconfigurableInputItem, ReconfigurableInputStream, ReconfigurationControl,
+    OpenedInputSource, ReconfigurableInputItem, ReconfigurableInputStream, ReconfigurationControl,
 };
 use crate::stream_utils::Fanout;
 use ::core::cfg_select;
@@ -167,9 +168,27 @@ impl<V> InputSources<V> {
         sources
     }
 
-    pub fn insert(mut self, source: impl Into<SourceId>, input: InputSource<V>) -> Self {
-        self.sources.insert(source.into(), input);
-        self
+    /// Insert a source while rejecting duplicate or empty stable IDs.
+    pub fn try_insert(
+        mut self,
+        source: impl Into<SourceId>,
+        input: InputSource<V>,
+    ) -> anyhow::Result<Self> {
+        let source = source.into();
+        anyhow::ensure!(!source.trim().is_empty(), "input source ID cannot be empty");
+        anyhow::ensure!(
+            self.sources.insert(source, input).is_none(),
+            "input source ID is declared more than once"
+        );
+        Ok(self)
+    }
+
+    /// Infallible convenience form for programmatic construction. Configuration
+    /// loading uses [`Self::try_insert`] so malformed input is reported instead
+    /// of being able to overwrite an earlier source.
+    pub fn insert(self, source: impl Into<SourceId>, input: InputSource<V>) -> Self {
+        self.try_insert(source, input)
+            .expect("input source IDs must be non-empty and unique")
     }
 
     pub fn default_source(mut self, source: impl Into<SourceId>) -> anyhow::Result<Self> {
@@ -198,13 +217,21 @@ impl<V> InputSources<V> {
         self.sources.get_mut(source)
     }
 
-    fn configuration_fingerprint(&self) -> String {
-        let sources = self
-            .sources
-            .iter()
-            .map(|(id, source)| (id, source.configuration_fingerprint()))
-            .collect::<Vec<_>>();
-        format!("default={:?};sources={sources:?}", self.default)
+    fn configuration_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("input-sources-v1");
+        match &self.default {
+            Some(default) => {
+                key.write_bool(true);
+                key.write_str(default);
+            }
+            None => key.write_bool(false),
+        }
+        key.write_usize(self.sources.len());
+        for (id, source) in &self.sources {
+            key.write_str(id);
+            key.write_u128(source.configuration_fingerprint());
+        }
+        key.finish()
     }
 
     fn sole_reconfigurable_source_id(&self) -> Option<SourceId> {
@@ -371,7 +398,7 @@ impl<V> InputSources<V> {
             } else {
                 input
             };
-            sources = sources.insert(id, input);
+            sources = sources.try_insert(id, input)?;
         }
         if let Some(default) = config.default {
             sources = sources.default_source(default)?;
@@ -588,60 +615,106 @@ impl<V> InputSource<V> {
         }
     }
 
-    fn configuration_fingerprint(&self) -> String {
-        let kind = match &self.kind {
-            InputSourceKind::File { path } => format!("file:path={path:?}"),
+    fn configuration_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("input-source-v1");
+        match &self.kind {
+            InputSourceKind::File { path } => {
+                key.write_str("file");
+                key.write_str(path);
+            }
             InputSourceKind::InMemoryRows { columns } => {
-                let columns = columns
-                    .iter()
-                    .map(|(variable, values)| (variable.to_string(), values.len()))
-                    .collect::<Vec<_>>();
-                format!("in-memory-rows:columns={columns:?}")
+                key.write_str("in-memory-rows");
+                key.write_usize(columns.len());
+                for (variable, values) in columns {
+                    key.write_str(&variable.name());
+                    key.write_usize(values.len());
+                }
             }
             InputSourceKind::InMemoryTicks { batches } => {
-                let batches = batches
-                    .iter()
-                    .map(|batch| {
-                        batch
-                            .updates()
-                            .map(|update| update.variable.to_string())
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                format!("in-memory-ticks:batches={batches:?}")
+                key.write_str("in-memory-ticks");
+                key.write_usize(batches.len());
+                for batch in batches {
+                    key.write_usize(batch.update_count());
+                    for update in batch.updates() {
+                        key.write_str(&update.variable.name());
+                    }
+                }
             }
-            InputSourceKind::Ros { routes, executor } => {
-                format!("ros:routes={routes:?};executor={:p}", Rc::as_ptr(executor))
+            InputSourceKind::Ros { routes, .. } => {
+                key.write_str("ros");
+                write_input_routes(&mut key, routes);
             }
             InputSourceKind::Mqtt {
                 host,
                 routes,
                 port,
                 backend,
-            } => format!("mqtt:host={host:?};routes={routes:?};port={port:?};backend={backend:?}"),
+            } => {
+                key.write_str("mqtt");
+                key.write_str(host);
+                write_optional_u16(&mut key, *port);
+                key.write_str(match backend {
+                    MqttInputBackend::Rumqttc => "rumqttc",
+                    MqttInputBackend::Paho => "paho",
+                });
+                match routes {
+                    Some(routes) => {
+                        key.write_bool(true);
+                        write_input_routes(&mut key, routes);
+                    }
+                    None => key.write_bool(false),
+                }
+            }
             InputSourceKind::Redis { host, routes, port } => {
-                format!("redis:host={host:?};routes={routes:?};port={port:?}")
+                key.write_str("redis");
+                key.write_str(host);
+                write_optional_u16(&mut key, *port);
+                match routes {
+                    Some(routes) => {
+                        key.write_bool(true);
+                        write_input_routes(&mut key, routes);
+                    }
+                    None => key.write_bool(false),
+                }
             }
             InputSourceKind::RedisKnowledge(config) => {
-                format!("redis-knowledge:{config:?}")
+                key.write_str("redis-knowledge");
+                key.write_str(&config.host);
+                write_optional_u16(&mut key, config.port);
+                key.write_u64(config.database as u64);
+                key.write_bool(config.publish_initial);
+                key.write_usize(config.keys.len());
+                for (variable, redis_key) in &config.keys {
+                    key.write_str(&variable.name());
+                    key.write_str(redis_key);
+                }
+                match config.retry.max_attempts {
+                    Some(attempts) => {
+                        key.write_bool(true);
+                        key.write_u64(attempts.get() as u64);
+                    }
+                    None => key.write_bool(false),
+                }
+                key.write_u128(config.retry.initial_delay.as_nanos());
+                key.write_u128(config.retry.max_delay.as_nanos());
             }
             InputSourceKind::Manual { fanouts, control } => {
-                let fanouts = fanouts
-                    .iter()
-                    .map(|(variable, fanout)| {
-                        (variable.to_string(), format!("{:p}", Rc::as_ptr(fanout)))
-                    })
-                    .collect::<Vec<_>>();
-                let control = control
-                    .as_ref()
-                    .map(|control| format!("{:p}", Rc::as_ptr(control)));
-                format!("manual:fanouts={fanouts:?};control={control:?}")
+                key.write_str("manual");
+                key.write_usize(fanouts.len());
+                for variable in fanouts.keys() {
+                    key.write_str(&variable.name());
+                }
+                key.write_bool(control.is_some());
             }
-        };
-        format!(
-            "kind={kind};reconfiguration_route={:?}",
-            self.reconfiguration_route
-        )
+        }
+        match &self.reconfiguration_route {
+            Some(route) => {
+                key.write_bool(true);
+                key.write_str(route);
+            }
+            None => key.write_bool(false),
+        }
+        key.finish()
     }
 
     /// Set the transport-local route carrying monitor reconfiguration messages.
@@ -1264,6 +1337,25 @@ fn validate_ros_control_route(
     Ok(())
 }
 
+fn contextualize_reconfigurable_stream<V: 'static>(
+    stream: ReconfigurableInputStream<V>,
+    source: SourceId,
+) -> ReconfigurableInputStream<V> {
+    Box::pin(stream.map(move |item| {
+        item.map_err(|error| error.context(format!("input source `{source}` emitted an error")))
+    }))
+}
+
+fn compose_reconfigurable_input_streams<V: 'static>(
+    mut streams: Vec<ReconfigurableInputStream<V>>,
+) -> ReconfigurableInputStream<V> {
+    match streams.len() {
+        0 => Box::pin(futures::stream::empty()),
+        1 => streams.pop().expect("source count checked above"),
+        _ => Box::pin(futures::stream::select_all(streams)),
+    }
+}
+
 fn controlled_input_stream<V: 'static>(
     mut data: Option<InputStream<V>>,
     control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>>,
@@ -1293,6 +1385,48 @@ pub struct InputPipeline<V = Value> {
     sources: InputSources<V>,
     stages: Box<[InputStage]>,
     configuration_identity: Rc<()>,
+}
+
+fn write_optional_u16(key: &mut FingerprintBuilder, value: Option<u16>) {
+    match value {
+        Some(value) => {
+            key.write_bool(true);
+            key.write_u64(value as u64);
+        }
+        None => key.write_bool(false),
+    }
+}
+
+fn write_input_routes(key: &mut FingerprintBuilder, routes: &BTreeMap<VarName, Route>) {
+    key.write_usize(routes.len());
+    for (variable, route) in routes {
+        key.write_str(&variable.name());
+        key.write_str(&route.route);
+        match &route.codec {
+            Some(codec) => {
+                key.write_bool(true);
+                key.write_str(&codec.0);
+            }
+            None => key.write_bool(false),
+        }
+    }
+}
+
+fn write_input_stage(key: &mut FingerprintBuilder, stage: &InputStage) {
+    let window = stage.window();
+    key.write_u128(window.max_delay.map_or(0, |delay| delay.as_nanos()));
+    match window.update_limit {
+        Some(limit) => {
+            key.write_bool(true);
+            key.write_usize(limit.get());
+        }
+        None => key.write_bool(false),
+    }
+    if matches!(stage, InputStage::WindowToStep { .. }) {
+        key.write_str("window-to-step");
+    } else {
+        key.write_str("batch");
+    }
 }
 
 impl<V> InputPipeline<V> {
@@ -1337,18 +1471,20 @@ impl<V> InputPipeline<V> {
         &self.configuration_identity
     }
 
-    fn configuration_fingerprint(&self) -> String {
-        format!(
-            "sources={};stages={:?}",
-            self.sources.configuration_fingerprint(),
-            self.stages
-        )
+    fn configuration_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("input-pipeline-v1");
+        key.write_u128(self.sources.configuration_fingerprint());
+        key.write_usize(self.stages.len());
+        for stage in &self.stages {
+            write_input_stage(&mut key, stage);
+        }
+        key.finish()
     }
 
     fn validate_resolved(
         &self,
         resolved: &ResolvedInput,
-        pipeline_configuration: &str,
+        pipeline_configuration: u128,
     ) -> anyhow::Result<()> {
         resolved.validate_for_pipeline(self.configuration_identity(), pipeline_configuration)?;
 
@@ -1383,6 +1519,57 @@ impl<V> InputPipeline<V> {
         Ok(())
     }
 
+    /// Plan the source-owner changes between two pure resolutions.
+    ///
+    /// Unchanged source IDs are implicit. A changed owner appears in both the
+    /// removed and added sets, which gives application a simple
+    /// break-drain-make ordering without a separate replacement operation.
+    pub(crate) fn plan_reconfiguration(
+        &self,
+        active: &ResolvedInput,
+        candidate: ResolvedInput,
+    ) -> anyhow::Result<InputPipelineReconfigurationPlan> {
+        let pipeline_configuration = self.configuration_fingerprint();
+        self.validate_resolved(active, pipeline_configuration)?;
+        self.validate_resolved(&candidate, pipeline_configuration)?;
+        let active_by_id = active
+            .sources()
+            .iter()
+            .map(|source| (source.source(), source))
+            .collect::<BTreeMap<_, _>>();
+        let candidate_by_id = candidate
+            .sources()
+            .iter()
+            .map(|source| (source.source(), source))
+            .collect::<BTreeMap<_, _>>();
+        let mut removed = Vec::new();
+        let mut added = Vec::new();
+
+        for active_source in active.sources() {
+            match candidate_by_id.get(active_source.source()) {
+                Some(candidate_source)
+                    if active_source.configuration_key()
+                        == candidate_source.configuration_key() => {}
+                _ => removed.push(active_source.source().clone()),
+            }
+        }
+        for candidate_source in candidate.sources() {
+            match active_by_id.get(candidate_source.source()) {
+                Some(active_source)
+                    if active_source.configuration_key()
+                        == candidate_source.configuration_key() => {}
+                _ => added.push(candidate_source.clone()),
+            }
+        }
+
+        Ok(InputPipelineReconfigurationPlan {
+            active_fingerprint: active.fingerprint(),
+            candidate,
+            removed: removed.into_boxed_slice(),
+            added: added.into_boxed_slice(),
+        })
+    }
+
     pub(crate) fn ensure_reconfigurable(
         &self,
         requested_route: Option<&str>,
@@ -1407,7 +1594,7 @@ impl<V> InputPipeline<V> {
             None => self.sources.resolve_default(model_inputs),
         }?;
         let pipeline_configuration = self.configuration_fingerprint();
-        Ok(resolved.attach_to_pipeline(self.configuration_identity(), &pipeline_configuration))
+        Ok(resolved.attach_to_pipeline(self.configuration_identity(), pipeline_configuration))
     }
 
     pub fn into_sources(self) -> InputSources<V> {
@@ -1463,46 +1650,89 @@ impl<V> InputPipeline<V> {
         Ok(stream)
     }
 
-    fn select_reconfiguration_source(
+    async fn open_reconfigurable_source_plan(
+        &self,
+        source_plan: &ResolvedSource,
+        control: &ReconfigurationControl,
+    ) -> anyhow::Result<OpenedInputSource<V>>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
+        let source = self
+            .sources
+            .sources
+            .get(source_plan.source())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "resolved input source `{}` is not registered",
+                    source_plan.source()
+                )
+            })?
+            .clone();
+        let description = source_plan.source().clone();
+        let bindings = source_plan.bindings().to_vec();
+        let variables = bindings
+            .iter()
+            .map(|binding| binding.variable().clone())
+            .collect::<BTreeSet<_>>();
+        let stream = if source_plan.source() == &control.source {
+            source
+                .open_with_control(bindings, variables, control.route.clone())
+                .await
+                .with_context(|| {
+                    format!("reconfiguration source `{description}` could not be opened")
+                })?
+        } else {
+            let stream = source
+                .open(bindings, variables)
+                .await
+                .with_context(|| format!("input source `{description}` could not be opened"))?;
+            let stream: ReconfigurableInputStream<V> =
+                Box::pin(stream.map(|item| item.map(ReconfigurableInputItem::Data)));
+            stream
+        };
+        Ok(OpenedInputSource {
+            id: description.clone(),
+            stream: contextualize_reconfigurable_stream(stream, description),
+        })
+    }
+
+    pub(crate) async fn open_reconfigurable_source_plans(
+        &self,
+        plans: &[ResolvedSource],
+        control: &ReconfigurationControl,
+    ) -> anyhow::Result<Vec<OpenedInputSource<V>>>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
+        let mut opened = Vec::with_capacity(plans.len());
+        for plan in plans {
+            opened.push(self.open_reconfigurable_source_plan(plan, control).await?);
+        }
+        Ok(opened)
+    }
+
+    pub(crate) async fn open_reconfigurable_sources(
         &self,
         resolved: &ResolvedInput,
         control: &ReconfigurationControl,
-    ) -> anyhow::Result<ResolvedSource> {
-        // A reconfiguration command is ordered only when data and control are
-        // delivered by the same source-owned item stream. Validate the whole
-        // resolution before looking up or opening any transport so a control
-        // barrier cannot be associated with one source while another active
-        // source still has data pending.
+    ) -> anyhow::Result<Vec<OpenedInputSource<V>>>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
         let pipeline_configuration = self.configuration_fingerprint();
-        self.validate_resolved(resolved, &pipeline_configuration)?;
-        match resolved.sources() {
-            [] => Ok(ResolvedSource::new(control.source.clone(), [])),
-            [source_plan] => {
-                anyhow::ensure!(
-                    source_plan.source() == &control.source,
-                    "reconfigurable input data source `{}` differs from selected control source `{}` (route `{}`); bind every active model input to `{}` or select a control route owned by `{}`",
-                    source_plan.source(),
-                    control.source,
-                    control.route,
-                    control.source,
-                    source_plan.source()
-                );
-                Ok(source_plan.clone())
-            }
-            source_plans => {
-                let active_sources = source_plans
-                    .iter()
-                    .map(|source| source.source().as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                anyhow::bail!(
-                    "reconfigurable input has active model bindings across sources [{active_sources}]; data and the control route `{}` must use one source (selected control source `{}`). Bind all active inputs to `{}` or select a control route on their single source",
-                    control.route,
-                    control.source,
-                    control.source
-                );
-            }
+        self.validate_resolved(resolved, pipeline_configuration)?;
+        let mut opened = self
+            .open_reconfigurable_source_plans(resolved.sources(), control)
+            .await?;
+        if opened.iter().all(|source| source.id != control.source) {
+            let control_plan = ResolvedSource::new(control.source.clone(), []);
+            opened.push(
+                self.open_reconfigurable_source_plan(&control_plan, control)
+                    .await?,
+            );
         }
+        Ok(opened)
     }
 
     pub(crate) async fn open_reconfigurable(
@@ -1513,33 +1743,40 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        let source_plan = self.select_reconfiguration_source(&resolved, control)?;
-        let source = self.sources.sources.get(&control.source).ok_or_else(|| {
-            anyhow::anyhow!("input source `{}` is not registered", control.source)
-        })?;
-        let description = control.source.clone();
-        let bindings = source_plan.bindings().to_vec();
-        let variables = bindings
-            .iter()
-            .map(|binding| binding.variable().clone())
-            .collect::<BTreeSet<_>>();
-        let control_stream = source
-            .clone()
-            .open_with_control(bindings, variables, control.route.clone())
-            .await
-            .with_context(|| {
-                format!("reconfiguration source `{description}` could not be opened")
-            })?;
-        Ok(Box::pin(async_stream::stream! {
-            let mut control_stream = control_stream;
-            while let Some(item) = control_stream.next().await {
-                yield item.map_err(|error| {
-                    error.context(format!(
-                        "reconfiguration source `{description}` emitted an error"
-                    ))
-                });
-            }
-        }))
+        let opened = self.open_reconfigurable_sources(&resolved, control).await?;
+        Ok(compose_reconfigurable_input_streams(
+            opened.into_iter().map(|source| source.stream).collect(),
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InputPipelineReconfigurationPlan {
+    active_fingerprint: u128,
+    candidate: ResolvedInput,
+    removed: Box<[SourceId]>,
+    added: Box<[ResolvedSource]>,
+}
+
+impl InputPipelineReconfigurationPlan {
+    pub(crate) fn candidate(&self) -> &ResolvedInput {
+        &self.candidate
+    }
+
+    pub(crate) fn is_changed(&self) -> bool {
+        !self.removed.is_empty() || !self.added.is_empty()
+    }
+
+    pub(crate) fn removed_sources(&self) -> &[SourceId] {
+        &self.removed
+    }
+
+    pub(crate) fn added_sources(&self) -> &[ResolvedSource] {
+        &self.added
+    }
+
+    pub(crate) fn active_fingerprint(&self) -> u128 {
+        self.active_fingerprint
     }
 }
 
@@ -1800,18 +2037,92 @@ mod resolution_tests {
     }
 
     #[test]
-    fn reconfigurable_input_rejects_data_source_different_from_control_before_opening() {
+    fn input_reconfiguration_plan_retains_adds_removes_and_moves_sources() {
+        let (_x_sender, x_fanout) = Fanout::<Value>::new();
+        let (_y_sender, y_fanout) = Fanout::<Value>::new();
+        let (_control_sender, control_fanout) = Fanout::<Value>::new();
+        let pipeline = InputPipeline::from_sources(
+            InputSources::new()
+                .insert(
+                    "a",
+                    InputSource::<Value>::manual_with_control(
+                        BTreeMap::from([("x".into(), x_fanout.clone())]),
+                        Some(control_fanout),
+                    )
+                    .with_reconfiguration_route("control")
+                    .unwrap(),
+                )
+                .insert(
+                    "b",
+                    InputSource::<Value>::manual(BTreeMap::from([
+                        ("x".into(), x_fanout),
+                        ("y".into(), y_fanout),
+                    ])),
+                ),
+        );
+        let x = BTreeSet::from([VarName::new("x")]);
+        let xy = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
+        let on_a = InputConfiguration {
+            source: None,
+            inputs: None,
+            sources: Some(BTreeMap::from([(
+                "a".into(),
+                BTreeMap::from([("x".into(), Route::new("x", None).unwrap())]),
+            )])),
+        };
+        let split = InputConfiguration {
+            source: None,
+            inputs: None,
+            sources: Some(BTreeMap::from([
+                (
+                    "a".into(),
+                    BTreeMap::from([("x".into(), Route::new("x", None).unwrap())]),
+                ),
+                (
+                    "b".into(),
+                    BTreeMap::from([("y".into(), Route::new("y", None).unwrap())]),
+                ),
+            ])),
+        };
+        let on_b = InputConfiguration {
+            source: None,
+            inputs: None,
+            sources: Some(BTreeMap::from([(
+                "b".into(),
+                BTreeMap::from([("x".into(), Route::new("x", None).unwrap())]),
+            )])),
+        };
+
+        let active = pipeline.resolve(&x, Some(&on_a)).unwrap();
+        let added = pipeline.resolve(&xy, Some(&split)).unwrap();
+        let add_plan = pipeline
+            .plan_reconfiguration(&active, added.clone())
+            .unwrap();
+        assert!(add_plan.removed_sources().is_empty());
+        assert_eq!(add_plan.added_sources()[0].source(), "b");
+
+        let moved = pipeline.resolve(&x, Some(&on_b)).unwrap();
+        let move_plan = pipeline.plan_reconfiguration(&active, moved).unwrap();
+        assert_eq!(move_plan.removed_sources(), &[SourceId::from("a")]);
+        assert_eq!(move_plan.added_sources()[0].source(), "b");
+
+        let no_op = pipeline
+            .plan_reconfiguration(&added, added.clone())
+            .unwrap();
+        assert!(!no_op.is_changed());
+    }
+
+    #[test]
+    fn reconfigurable_input_composes_data_and_control_from_different_sources() {
         smol::block_on(async {
             let (data_sender, data_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let data_source =
-                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout.clone())]));
-            let control_source = InputSource::<Value>::manual_with_control(
-                BTreeMap::new(),
-                Some(control_fanout.clone()),
-            )
-            .with_reconfiguration_route("control")
-            .unwrap();
+                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout)]));
+            let control_source =
+                InputSource::<Value>::manual_with_control(BTreeMap::new(), Some(control_fanout))
+                    .with_reconfiguration_route("control")
+                    .unwrap();
             let pipeline = InputPipeline::from_sources(
                 InputSources::new()
                     .insert("data", data_source)
@@ -1820,41 +2131,41 @@ mod resolution_tests {
             let variables = BTreeSet::from([VarName::new("x")]);
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
+            let mut stream = pipeline
+                .open_reconfigurable(resolved, &control)
+                .await
+                .unwrap();
 
-            // Both values are pending before the attempted open. The source
-            // ownership check must reject the resolution without subscribing
-            // to either fanout, rather than returning a stream that could let
-            // the command terminate over pending data from `data`.
             data_sender.send(Value::Int(7)).await;
             control_sender
                 .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
-            let error = match pipeline.open_reconfigurable(resolved, &control).await {
-                Ok(_) => panic!("data/control source mismatch must be rejected before opening"),
-                Err(error) => error,
-            };
 
-            assert!(
-                error
-                    .to_string()
-                    .contains("data source `data` differs from selected control source `control`")
-            );
-            assert_eq!(data_fanout.sub_events(), 0);
-            assert_eq!(control_fanout.sub_events(), 0);
+            let mut saw_data = false;
+            let mut saw_control = false;
+            for _ in 0..2 {
+                match stream.next().await.unwrap().unwrap() {
+                    ReconfigurableInputItem::Data(batch) => {
+                        saw_data = *batch.updates().next().unwrap().value == Value::Int(7)
+                    }
+                    ReconfigurableInputItem::Reconfigure(_) => saw_control = true,
+                }
+            }
+            assert!(saw_data && saw_control);
         });
     }
 
     #[test]
-    fn reconfigurable_input_rejects_bindings_spanning_sources_before_opening() {
+    fn reconfigurable_input_composes_bindings_spanning_sources() {
         smol::block_on(async {
-            let (data_sender, data_fanout) = Fanout::<Value>::new();
-            let (_control_data_sender, control_data_fanout) = Fanout::<Value>::new();
+            let (x_sender, x_fanout) = Fanout::<Value>::new();
+            let (y_sender, y_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let data_source =
-                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout.clone())]));
+                InputSource::<Value>::manual(BTreeMap::from([("x".into(), x_fanout)]));
             let control_source = InputSource::<Value>::manual_with_control(
-                BTreeMap::from([("y".into(), control_data_fanout)]),
-                Some(control_fanout.clone()),
+                BTreeMap::from([("y".into(), y_fanout)]),
+                Some(control_fanout),
             )
             .with_reconfiguration_route("control")
             .unwrap();
@@ -1866,23 +2177,29 @@ mod resolution_tests {
             let variables = BTreeSet::from([VarName::new("x"), VarName::new("y")]);
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
+            let mut stream = pipeline
+                .open_reconfigurable(resolved, &control)
+                .await
+                .unwrap();
 
-            data_sender.send(Value::Int(1)).await;
+            x_sender.send(Value::Int(1)).await;
+            y_sender.send(Value::Int(2)).await;
             control_sender
                 .send(Value::Str(r#"{"specification":"in x\nin y"}"#.into()))
                 .await;
-            let error = match pipeline.open_reconfigurable(resolved, &control).await {
-                Ok(_) => panic!("cross-source resolution must be rejected before opening"),
-                Err(error) => error,
-            };
 
-            assert!(
-                error
-                    .to_string()
-                    .contains("active model bindings across sources")
-            );
-            assert_eq!(data_fanout.sub_events(), 0);
-            assert_eq!(control_fanout.sub_events(), 0);
+            let mut variables = BTreeSet::new();
+            let mut saw_control = false;
+            for _ in 0..3 {
+                match stream.next().await.unwrap().unwrap() {
+                    ReconfigurableInputItem::Data(batch) => {
+                        variables.insert(batch.updates().next().unwrap().variable.clone());
+                    }
+                    ReconfigurableInputItem::Reconfigure(_) => saw_control = true,
+                }
+            }
+            assert_eq!(variables, BTreeSet::from(["x".into(), "y".into()]));
+            assert!(saw_control);
         });
     }
 
@@ -2103,7 +2420,7 @@ mod resolution_tests {
                 .contains("multiple sources, but none declares `reconfiguration_route`")
         );
 
-        let sources = sources
+        let sources = InputSources::<Value>::new()
             .insert(
                 "data",
                 InputSource::mqtt(None, None)

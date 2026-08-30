@@ -37,7 +37,7 @@ The control item carries a parsed `ReconfigurationRequest`, not a model variable
 3. resolves the complete target `ResolvedInput` and `ResolvedOutput` values; and
 4. asks `DataflowMonitor::plan_reconfiguration` for a `MonitorReconfigurationPlan`.
 
-It produces a private `RuntimeReconfigurationPlan` holding the monitor plan, both resolved interfaces, and whether the effective I/O interface changed. Nothing in the plan owns a resource, so a planning failure leaves the active runtime untouched.
+It produces a private `RuntimeReconfigurationPlan` holding the monitor plan and the concrete input/output pipeline plans. Nothing in the plan owns a resource, so a planning failure leaves the active runtime untouched.
 
 The monitor result is a pure plan, not a stateful target monitor. Its variants are:
 
@@ -51,29 +51,39 @@ The monitor result is a pure plan, not a stateful target monitor. Its variants a
 
 ## Root cutover order
 
-Every accepted request replaces the complete input and output, including a request that is an exact no-op for both. The owner applies a typed control item in this order:
+Every accepted request plans both pipeline changes, including the possibility that both plans are empty. The owner applies a typed control item in this order:
 
 ```text
 ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)
-→ plan_runtime_reconfiguration (program, monitor plan, complete resolved I/O)
-→ flush pending engine rows and the active output session
-→ close the active output session and drop the active input session
-→ open the complete target input and output
+→ plan_runtime_reconfiguration (program, monitor plan, input/output plans)
+→ drain removed input streams through the old monitor
+→ submit pending engine rows
+→ retain unchanged input streams and install additions
+→ flush only changed output owners (or one shared stage)
+→ update existing output interfaces and routing
 → apply MonitorReconfigurationPlan and rebuild the monitor layout
 → send ReconfigurationAck
 ```
 
-The planning phase can fail without mutating the monitor or opening resources. Once the destructive part begins, any error is terminal: there is no rollback path and no partially applied fallback. The output flush is the handoff barrier for rows already accepted by the engine.
+The durable output destination registry is fixed by `OutputPipeline`; a request
+cannot create or remove an output owner. Existing owners must support in-place
+interface updates. Input changes retain unchanged source streams, drain removed
+streams, and open only additions; a changed source ID is break-drain-make.
+Planning can fail
+without mutating the monitor or opening resources. Once application begins, any
+error is terminal: there is no rollback or replacement fallback. The row
+submission and affected-owner flushes form the handoff boundary for output
+already accepted by the engine.
 
 Applying the monitor plan is where it becomes stateful. `RetainExact` keeps the live monitor's execution state. `InstallCold` and `Transfer` call `DataflowMonitor::from_program`; only the latter then performs the destructive context handoff. A failed root operation terminates the owner loop after its cleanup path; it does not restore a previous monitor by copying state back.
 
-`DataflowMonitor` is the sole revision authority. Every accepted request advances `MonitorRevision`; `InterfaceRevision` advances only when the effective monitor or I/O interface actually changed. Acknowledgement is sent only after both the monitor and the replacement I/O are in place, and a failed acknowledgement is terminal.
+`DataflowMonitor` is the sole revision authority. Every accepted request advances `MonitorRevision`; `InterfaceRevision` advances only when the effective monitor or I/O interface actually changed. Acknowledgement is sent only after the monitor and both pipeline plans have been applied, and a failed acknowledgement is terminal.
 
 ## The input barrier remains live
 
 The input window stage flushes pending data before forwarding `ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)`. The control item is a barrier in the ordered item stream, not an end-of-stream marker: the replacement `InputPipelineSession` opened after the cutover continues to deliver data and further control items.
 
-The active model-data bindings and the control route must resolve to one source owner. The runtime rejects a multi-source live input arrangement instead of pretending that independent streams have a total order. Transport-specific external coordination is still needed when data and control are delivered by independent subscriptions.
+Active model-data bindings may span multiple source owners. Exactly one source carries the control route, and the session composes all active source streams into one observed order without claiming a total order between independent transports. Source moves use break-drain-make and therefore require external producer quiescence or transport replay during the subscription gap.
 
 ## Nested expression reconfiguration
 

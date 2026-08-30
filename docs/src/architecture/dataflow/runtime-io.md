@@ -10,24 +10,29 @@ This page describes how those plans and sessions are resolved, opened, and updat
 
 `InputPipeline` and `OutputBackendBuilder` are reusable configuration; `ResolvedInput` and `ResolvedOutput` describe one active binding set. An `InputPipelineSession` and an `OutputPipelineSession` are the opened resources for one such pair.
 
-Every accepted reconfiguration replaces both sessions completely, including a request that changes neither interface. Opened resources never overlap: the old output is flushed and closed and the old input is dropped before the replacement is opened.
+Every accepted reconfiguration resolves and plans both sessions, including a
+request that changes neither interface. Unchanged source streams and output
+owners remain live. Input additions are inserted into the composed stream;
+removals drain their ready backlog before break-before-make replacement. Output
+owners are fixed by `OutputPipeline` and changed interfaces are updated in place.
 
 ```text
 active InputPipelineSession + OutputPipelineSession
                   │
-                  ├─ flush and close old output, drop old input
-                  └─ open complete replacement input and output
+                  ├─ drain removed input sources under the old monitor
+                  ├─ retain unchanged streams and insert additions
+                  └─ flush/update only affected output owners
 ```
 
 ## Input resolution and control binding
 
 `InputPipeline` is reusable configuration: registered sources, route catalogs, codecs, and window stages. It opens no source until a `ResolvedInput` is passed to an open method.
 
-`ReconfigurableInput` wraps the pipeline with one validated `ReconfigurationControl`. Construction resolves the selected control source and route; `open_session` then opens that source and creates an `InputPipelineSession` holding the active resolution and its control-aware stream.
+`ReconfigurableInput` wraps the pipeline with one validated `ReconfigurationControl`. Construction resolves the selected control source and route; `open_session` opens every resolved data source, opens the selected source with control enabled, and creates an `InputPipelineSession` that retains those source streams by `SourceId`.
 
 `InputPipeline::resolve` is pure. It resolves the model's current input variables against an optional `InputConfiguration` and attaches the pipeline identity and configuration fingerprint to the resulting `ResolvedInput`. Root reconfiguration calls it before any replacement resource is opened.
 
-Only the selected control source is opened for a reconfigurable input. A resolved model with no bindings may use the control source alone. If model bindings exist, they must belong to the same source as the control route; a multi-source live input is rejected because data and control need one source-owned ordered stream.
+A resolved model may use any number of data sources. Exactly one configured source owns the control route; it is opened as a control-only source when it has no active model binding. Source composition defines the runtime's observed item order but does not claim a total order between independent transports.
 
 ## The typed control boundary
 
@@ -44,18 +49,11 @@ Transport adapters parse JSON5 into a `ReconfigurationRequest` before yielding t
 
 The same live stream can yield data after a control item. For manual and ROS-style independent data/control fanouts, the external controller must establish the required ordering; a poll priority or a quiet interval is not an ordering guarantee.
 
-## One source, one order
+## One logical boundary over multiple sources
 
-`InputPipeline::open_reconfigurable` validates the whole resolved input before looking up or opening a transport:
+`InputPipeline::open_reconfigurable` validates every resolved source before opening any transport. It opens each source independently and composes whole `InputBatch` values; the single-source case returns the source stream directly, preserving packed input without composition overhead.
 
-| Resolved model bindings | Result |
-|---|---|
-| None | Open the selected control source with no model bindings. |
-| One source equal to the control source | Accepted. |
-| One source different from the control source | Rejected before opening. |
-| More than one source | Rejected before opening. |
-
-The check prevents a control route on one source from being treated as an ordering barrier for data pending on another. It does not create a cross-transport total order. MQTT and Redis can expose a source-owned item stream; independent subscriptions still require external coordination.
+The control item begins one logical runtime transition. Independent transports still have no inherent total order. Applications requiring a deterministic source move must quiesce the affected producer, issue the command, wait for acknowledgement, and then resume it. The current break-drain-make implementation drains source items already ready at the local boundary before dropping the old stream; a future distributed handoff may strengthen that boundary with durable transport cursors.
 
 ## The window barrier stage
 
@@ -68,7 +66,7 @@ Reconfigure(req)  → WindowEvent::Control(req)      → Reconfigure(req)
 
 The stage flushes pending batch or atomic-step data before forwarding a control item. The control item is a logical barrier, not an end-of-stream marker: the replacement session opened after the cutover continues to deliver data and further control items.
 
-## Replacement resolution
+## Target resolution and pipeline plans
 
 Both resolvers are resource-free and run before anything is closed or opened.
 
@@ -78,24 +76,40 @@ Because planning owns no resource, a request that fails validation or resolution
 
 ## The output handoff barrier
 
-The dataflow owner submits pending engine rows and calls the active output session's flush before closing it. This ensures rows already accepted by the writer reach its sink boundary before the old destinations go away. The session is then closed, on normal runtime shutdown as well as at every cutover.
+The dataflow owner submits pending engine rows before applying a pipeline
+plan. For an output change, the session flushes only the affected destination
+owners, or flushes the shared stage once when one exists, before updating their
+interfaces and routing. Unrelated destinations are not flushed. The session is
+closed on normal runtime shutdown or when a terminal cutover failure ends the
+runtime.
 
 ```text
-OutputPipelineSession::send(batch)  → submit a packed batch
-OutputPipelineSession::flush()       → flush accepted batches
-OutputPipelineSession::close()       → finalize destinations
+OutputPipelineSession::send(batch)                    → submit a packed batch
+OutputPipelineSession::apply_reconfiguration(plan)    → targeted flush/update
+OutputPipelineSession::flush()                        → flush the whole session
+OutputPipelineSession::close()                        → finalize destinations
 ```
 
 A later send, flush, or close failure is terminal. Cleanup still attempts to preserve already accepted rows where the backend allows.
 
 ## Root acknowledgements
 
-`acknowledge_reconfiguration` publishes a `ReconfigurationAck` with `monitor_changed`, `interface_changed`, `monitor_revision`, and `interface_revision`. It is sent after pure resolution, output flushing, monitor-plan application, live input/output-plan application or required fallback opens, and active-state installation.
+`acknowledge_reconfiguration` publishes a `ReconfigurationAck` with
+`monitor_changed`, `interface_changed`, `monitor_revision`, and
+`interface_revision`. It is sent after pure resolution, pending-row submission,
+input/output plan application, monitor-plan application, and active-state
+installation.
 
 The acknowledgement confirms the local cutover/open handoff. It does not guarantee a later backend publish or remote transport delivery. A producer should wait for the acknowledgement before sending rows for the new interface.
 
 ## Deferred construction failures
 
-`RuntimeBuilder::build` can retain startup failures and return them from `run`. During a root command, pure resolution failures do not mutate the monitor or open replacement resources, but the owner still follows its terminal cleanup policy. Input/output open failures are possible only on initial opening or on a required replacement fallback; partial output opens are cleaned up by the builder.
+`RuntimeBuilder::build` can retain startup failures and return them from `run`.
+During a root command, pure resolution failures do not mutate the monitor or
+open resources, but the owner still follows its terminal cleanup policy. Input
+stream open failures can occur when an added or replacement source is applied;
+output interface failures occur when an existing backend rejects an update. There is
+no output replacement fallback. Partial initial output opens are cleaned up by
+the builder.
 
 [← Previous: The dataflow runtime adapter](runtime-adapter.md) · [Next: The reconfigurable runtime](reconfigurable-runtime.md) →

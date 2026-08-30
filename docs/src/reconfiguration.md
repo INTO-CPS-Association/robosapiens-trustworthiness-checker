@@ -155,8 +155,8 @@ pattern works with `--redis-input` and its Redis route.
 A named multi-source input configuration keeps source transport settings,
 model-data route catalogs, and the fixed control route local to the monitor.
 With multiple configured sources, exactly one source must declare
-`reconfiguration_route` when the reconfigurable runtime is selected. The
-selected source must also own every active model-data binding:
+`reconfiguration_route` when the reconfigurable runtime is selected. Other
+sources may simultaneously own active model-data bindings:
 
 ```json
 {
@@ -181,11 +181,10 @@ selected source must also own every active model-data binding:
 }
 ```
 
-Here `robot-ros` is an additional configured but inactive source for this
-reconfigurable session. Binding `pose` from it together with `x` or `y`
-would fail before any source is opened. Adding or removing streams remains
-supported when the replacement resolves them from the selected source's
-catalog (or explicitly binds them to that source).
+Here `robot-mqtt` carries the control route while `robot-ros` may concurrently
+supply `pose`. The runtime composes both source streams. This observed order is
+not a distributed total order, so a source move still requires producer
+quiescence and acknowledgement.
 
 Start the runtime with:
 
@@ -198,9 +197,8 @@ cargo run --features ros -- --runtime reconf-semi-sync \
 
 `--reconf-topic` overrides the declared route but never changes the selected
 source. A multi-source config with no declaration or more than one declaration
-fails clearly. An empty catalog on the selected source is allowed only when the
-session has no model-data bindings; it cannot act as a control-only provider
-for data owned by another active source. `--input-config` cannot be combined
+fails clearly. The selected source may act as a control-only provider while
+other active sources own model data. `--input-config` cannot be combined
 with another input-selection mode.
 
 ### Input windows
@@ -235,19 +233,17 @@ allowing compatible temporal context to survive changes to the specification.
 Use `--no-context-transfer` when the replacement must start without prior
 history.
 
-Context transfer does not keep the old input source alive. The old session is
-dropped before the replacement source is opened, so old-session data cannot
-feed the new model.
+Context transfer is independent of input ownership. Unchanged source streams
+remain live. Removed streams drain their locally ready backlog through the old
+monitor before matching state is transferred; replacement streams are opened
+after that drain.
 
 ### Source-local ordering and producer acknowledgements
 
-A reconfigurable session has one source-ownership domain: its active model
-bindings and its control route are owned by the same `InputSource`/source ID.
-The runtime rejects bindings that span source IDs, or data bindings that differ
-from the selected control source, before transport setup. Extra configured
-sources are allowed only while inactive for that session. This validation
-prevents an accidental cross-source merge; it does not itself establish an
-order between data and control.
+A reconfigurable session may compose multiple source-ownership domains. One
+selected source carries control while any configured source may carry model
+data. Composition establishes only the order observed by the local runtime; it
+does not establish an intrinsic order between independent transports.
 
 The backend then determines what order can be observed:
 
@@ -300,10 +296,11 @@ implemented.
 
 The reconfigurable dataflow runtime has one persistent owner loop. At any instant it owns exactly one
 `DataflowMonitor`, one `InputPipelineSession`, and one `OutputPipelineSession`. The reusable
-`InputPipeline` and `OutputBackendBuilder` remain configuration. Root reconfiguration is serial, but
-it does not always replace those sessions: pure resolution and mapping happen first, the active output
-is flushed, and compatible mapped owners are updated in place. Only an incompatible or unmatched
-owner causes the corresponding session to be dropped/closed and reopened.
+`InputPipeline` and `OutputBackendBuilder` remain configuration. Root reconfiguration is serial and
+plans both pipeline transitions before application. An unchanged input/output plan leaves the live
+sessions untouched; input changes retain unchanged source streams and use break-drain-make for
+changed owners, while fixed output owners flush and update their bindings/interfaces in place. Unsupported output interface updates are
+terminal rather than falling back to a replacement.
 
 ### Typed input barrier and acknowledgement
 
@@ -326,22 +323,21 @@ barrier stage flushes all pending data items before forwarding the typed
 continues, so post-control data can be delivered after cutover. Data and control remain separate typed
 items at this boundary; the control item is not an end-of-stream marker.
 
-The active model-data bindings and the control route must belong to one source. Input resolution
-rejects a resolution whose active bindings span multiple source IDs or whose data source differs from
-the selected control source before any transport is opened. Other configured sources may remain
-inactive. This source-ID check prevents a cross-source merge: multi-source live input remains
-unsupported because ordered data and control must share one source-owned stream. Independent
-subscriptions still require an external controller to establish the required ordering.
+Active model-data bindings may span multiple source IDs. Exactly one source owns the control route,
+and the input session composes all resolved sources while retaining their ownership identities.
+Independent subscriptions still require an external controller to establish any ordering stronger
+than the runtime's observed item order.
 
-`plan_runtime_reconfiguration` owns the complete resolved `ResolvedInput` and `ResolvedOutput`
-values for the request. Planning opens no resource, so a rejected request leaves the active runtime
-untouched. Every accepted request then replaces the whole input and output, including a request that
-changes neither.
+`plan_runtime_reconfiguration` owns concrete `InputPipelineReconfigurationPlan` and
+`OutputPipelineReconfigurationPlan` values for the request, each built from a complete resolved
+candidate. Planning opens no resource, so a rejected request leaves the active runtime untouched.
+An unchanged plan does no I/O work; output destination owners remain the durable registry declared by
+the pipeline.
 
 An acknowledgement contains `monitor_changed`, `interface_changed`, `monitor_revision`, and
-`interface_revision`. It is sent only after planning, the old engine's pending rows and active output
-session have been flushed, the old output has been closed and the old input dropped, the complete
-replacement input and output have been opened, and the monitor plan has been applied.
+`interface_revision`. It is sent only after planning, pending engine rows have been submitted, the
+input/output plans have been applied, and the monitor plan has been applied. Removed input sources
+have drained and additions have opened, while changed output owners have been flushed and updated in place.
 
 The acknowledgement confirms that the cutover and the replacement open completed. It does not guarantee that a
 future `OutputWriter::send`, backend flush/close, or remote transport publish cannot fail: later send
@@ -354,16 +350,16 @@ does not define a new network acknowledgement protocol. The sink does not prove 
 controller has separately observed the message. No sleep, yield, `Poll::Pending` observation, or
 control-poll priority substitutes for the required quiescence and acknowledgement contract.
 
-### Root replacement sequence
+### Root reconfiguration sequence
 
 The owner performs this sequence synchronously for a typed control item:
 
 ```text
 ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)
-→ plan_runtime_reconfiguration: compile DataflowProgram, plan monitor, resolve complete I/O
-→ submit pending rows and flush the active OutputPipelineSession
-→ close the active output session and drop the active input session
-→ open the complete replacement input and output
+→ plan_runtime_reconfiguration: compile DataflowProgram, plan monitor, resolve and plan I/O
+→ submit pending engine rows
+→ apply the input plan at the ordered input barrier
+→ flush changed output owners (or one shared stage) and update their interfaces/routing
 → apply MonitorReconfigurationPlan and rebuild the monitor layout
 → publish ReconfigurationAck
 ```
@@ -379,11 +375,11 @@ materialization or monitor context mapping. For `Transfer`, `ReconfigurationMapp
 the immutable source and target programs before target construction, and the target destructively calls
 `DataflowMonitor::context_transfer_from`.
 
-The output flush precedes the close, so accepted old rows reach the writer boundary before the old
-session goes away. A success acknowledgement is not sent until the replacement I/O and the monitor
-plan are both in place. Planning errors do not mutate the monitor. Once the destructive part of the
-cutover begins there is no rollback: any later error, including a failed acknowledgement, terminates
-the runtime through its terminal cleanup policy.
+Pending engine rows are submitted before plan application, and changed output owners are flushed
+before their interfaces/routing are updated. A success acknowledgement is not sent until both
+pipeline plans and the monitor plan are in place. Planning errors do not mutate the monitor. Once
+application begins there is no rollback: any later error, including a failed acknowledgement,
+terminates the runtime through its terminal cleanup policy.
 
 ### Monitor and interface revision accounting
 

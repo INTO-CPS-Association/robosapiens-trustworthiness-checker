@@ -8,6 +8,7 @@ pub mod ros;
 
 pub mod testing;
 
+pub(crate) use self::builders::InputPipelineReconfigurationPlan;
 pub use self::builders::{InputPipeline, InputSource, InputSources, OutputBackendBuilder};
 pub mod config;
 pub use config::{

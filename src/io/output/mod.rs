@@ -20,6 +20,7 @@ mod ros;
 mod pump;
 
 pub use backend::{MqttOutputBackendKind, OutputBackendConfig, OutputBackendKind};
+pub(crate) use pipeline::OutputPipelineReconfigurationPlan;
 pub use pipeline::{
     OutputDestination, OutputDestinationSelection, OutputDestinations, OutputPipeline,
     OutputPipelineSession, ResolvedDestination, ResolvedOutput, ResolvedOutputBinding,

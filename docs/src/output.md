@@ -175,29 +175,38 @@ every destination; they are not full pressure isolation.
 ## Lifecycle and reconfiguration
 
 `OutputPipeline::open(ResolvedOutput)` validates the resolved structure, compiles
-routing, opens destinations in deterministic order, and cleans up already-opened
-destinations if a later open fails. No runtime sees a partially opened pipeline.
+routing, and opens destinations in deterministic order. A single destination uses
+the direct writer path; multi-destination pipelines use the router. If a later
+open fails, already-opened destinations are cleaned up, so no runtime sees a
+partially opened pipeline. `open_session` retains the fixed destination owners
+and their routing state for incremental reconfiguration.
 
 `OutputWriter` retains `primary_error` and an explicit open/closing/closed
 lifecycle. After a failure, data operations fail fast, but close still flushes and
 closes every stage and destination. Flush and close barriers propagate through all
 wrappers.
 
-Reconfigurable semi-sync follows this order:
+The reconfigurable dataflow runtime follows this order:
 
 ```text
 final pre-barrier tick
   -> parse/type-check replacement
-  -> resolve both replacement input and output plans without I/O
+  -> resolve and plan input/output changes without I/O
   -> transfer context explicitly
-  -> cancel the active monitor
-  -> drain coalescing and buffer stages
-  -> close old destinations and join workers
-  -> drop old input resources
-  -> replacement builder.build()
-       -> open replacement input and output
-       -> establish input subscriptions
+  -> submit pending engine rows
+  -> apply the input plan at the ordered input barrier
+  -> flush only changed output owners (or one shared stage)
+  -> update existing output interfaces and routing
+  -> apply the monitor plan
+  -> acknowledge
 ```
+
+The durable output destination registry does not change in a request. A request
+may change bindings, routes, codecs, or selection for an existing destination;
+creating or removing an endpoint is unsupported. A backend that cannot update
+its opened interface is likewise rejected rather than silently reopened. An
+input source change opens the candidate stream once at the barrier; unchanged
+input and output sessions remain live.
 
 Control messages are not `OutputBatch` variants. Wire reconfiguration can change
 bindings, routes, codecs, destination selection, and output shape, but it

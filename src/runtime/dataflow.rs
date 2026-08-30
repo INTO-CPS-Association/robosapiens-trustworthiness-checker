@@ -109,7 +109,8 @@ use crate::dataflow::{
     InterfaceRevision, MonitorReconfigurationPlan, MonitorRevision, ReconfigurationReport,
 };
 
-use crate::io::output::OutputPipelineSession;
+use crate::io::InputPipelineReconfigurationPlan;
+use crate::io::output::{OutputPipelineReconfigurationPlan, OutputPipelineSession};
 use crate::io::reconfigurable_input::{
     InputPipelineSession, ReconfigurableInput, ReconfigurableInputItem,
 };
@@ -165,9 +166,8 @@ impl ExecutionConfiguration {
 
 struct RuntimeReconfigurationPlan {
     monitor: MonitorReconfigurationPlan,
-    input: crate::io::config::ResolvedInput,
-    output: crate::io::output::ResolvedOutput,
-    io_interface_changed: bool,
+    input: InputPipelineReconfigurationPlan,
+    output: OutputPipelineReconfigurationPlan,
 }
 
 struct RuntimeReconfigurationContext {
@@ -191,17 +191,23 @@ fn plan_runtime_reconfiguration(
 ) -> anyhow::Result<RuntimeReconfigurationPlan> {
     request.validate_structure()?;
     let compiled = (context.compiler)(&request.specification)?;
-    let input = context
+    let input_resolution = context
         .input
         .pipeline()
         .resolve(&compiled.input_vars, Some(&request.input))?;
-    let output = context.output_builder.resolve(
+    let input = context
+        .input
+        .pipeline()
+        .plan_reconfiguration(active.input.active(), input_resolution)?;
+    let output_resolution = context.output_builder.resolve(
         &compiled.output_vars,
         &compiled.auxiliary_vars,
         Some(&request.output),
     )?;
-    let io_interface_changed =
-        input != *active.input.active() || output != *active.engine.output.resolved();
+    let output = context
+        .output_builder
+        .pipeline()
+        .plan_reconfiguration(active.engine.output.resolved(), output_resolution)?;
     let monitor = active
         .engine
         .monitor
@@ -211,7 +217,6 @@ fn plan_runtime_reconfiguration(
         monitor,
         input,
         output,
-        io_interface_changed,
     })
 }
 enum DataflowInput {
@@ -933,7 +938,6 @@ async fn flush_reconfiguration_barrier(
     if engine.pending_rows != 0 {
         engine.flush().await?;
     }
-    engine.output.flush_output().await?;
     if writer_is_closed(&engine.output) {
         return Err(OutputError::Closed);
     }
@@ -1024,7 +1028,8 @@ async fn run_reconfigurable_dataflow(
                         return Err(reconfiguration_failure(active.engine, error).await);
                     }
                 };
-                active = apply_runtime_reconfiguration(active, &context, plan).await?;
+                active =
+                    apply_runtime_reconfiguration(active, &context, plan, execution_policy).await?;
             }
         }
     }
@@ -1034,46 +1039,48 @@ async fn apply_runtime_reconfiguration(
     active: ActiveRuntime,
     context: &RuntimeReconfigurationContext,
     plan: RuntimeReconfigurationPlan,
+    execution_policy: ExecutionPolicy,
 ) -> anyhow::Result<ActiveRuntime> {
-    let ActiveRuntime { mut engine, input } = active;
+    let ActiveRuntime {
+        mut engine,
+        mut input,
+    } = active;
     let RuntimeReconfigurationPlan {
         monitor,
-        input: target_input,
-        output: target_output,
-        io_interface_changed,
+        input: input_plan,
+        output: output_plan,
     } = plan;
+    let io_interface_changed = input_plan.is_changed() || output_plan.is_changed();
+
+    let drained = match input.drain_removed_sources(&input_plan).await {
+        Ok(drained) => drained,
+        Err(error) => {
+            drop(input);
+            return Err(reconfiguration_failure(engine, error).await);
+        }
+    };
+    for batch in &drained {
+        if let Err(error) =
+            evaluate_reconfigurable_batch(&mut engine, batch, execution_policy).await
+        {
+            drop(input);
+            return Err(reconfiguration_failure(engine, error).await);
+        }
+    }
 
     if let Err(error) = flush_reconfiguration_barrier(&mut engine).await {
+        drop(input);
         return Err(reconfiguration_failure(engine, error.into()).await);
     }
-    if let Err(error) = engine.output.close_output().await
-        && !error.is_closed()
-    {
-        return Err(reconfiguration_failure(engine, error.into()).await);
-    }
-    drop(input);
 
-    let next_input = match context.input.open_session(target_input).await {
-        Ok(input) => input,
-        Err(error) => {
-            return Err(reconfiguration_failure(
-                engine,
-                error.context("replacement input pipeline could not be opened"),
-            )
-            .await);
-        }
-    };
-    let mut next_output = match context.output_builder.open_session(target_output).await {
-        Ok(output) => output,
-        Err(error) => {
-            drop(next_input);
-            return Err(reconfiguration_failure(
-                engine,
-                anyhow::anyhow!("replacement output pipeline could not be opened: {error}"),
-            )
-            .await);
-        }
-    };
+    if let Err(error) = input.apply_reconfiguration(input_plan).await {
+        drop(input);
+        return Err(reconfiguration_failure(engine, error).await);
+    }
+    if let Err(error) = engine.output.apply_reconfiguration(output_plan).await {
+        drop(input);
+        return Err(reconfiguration_failure(engine, error.into()).await);
+    }
 
     let report = match engine.monitor.apply_reconfiguration_plan(
         monitor,
@@ -1082,25 +1089,18 @@ async fn apply_runtime_reconfiguration(
     ) {
         Ok(report) => report,
         Err(error) => {
-            drop(next_input);
-            let error = finish_reconfigurable_output_session(&mut next_output, Some(error.into()))
-                .await
-                .expect_err("a primary monitor error must be returned");
-            return Err(error);
+            drop(input);
+            return Err(reconfiguration_failure(engine, error.into()).await);
         }
     };
 
-    engine.output = next_output;
     engine.rebuild_monitor_layout();
     if let Err(error) = acknowledge_reconfiguration(context, &report).await {
-        drop(next_input);
+        drop(input);
         return Err(reconfiguration_failure(engine, error).await);
     }
 
-    Ok(ActiveRuntime {
-        engine,
-        input: next_input,
-    })
+    Ok(ActiveRuntime { engine, input })
 }
 async fn evaluate_reconfigurable_batch(
     engine: &mut DirectDataflowEngine<OutputPipelineSession<Value>>,
@@ -1597,12 +1597,11 @@ mod tests {
     }
 
     #[apply(async_test)]
-    async fn accepted_reconfiguration_replaces_input_and_output_before_acknowledging(
+    async fn accepted_noop_reconfiguration_keeps_input_and_output_live(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        // An accepted request always replaces the whole input and output, even
-        // when the request is an exact no-op for both the monitor and the I/O
-        // interface.
+        // An exact no-op keeps both pipeline sessions open; only the monitor
+        // revision advances for the accepted request.
         let spec_src = "in x: Int\nout z: Int\nz = x";
         let model = spec_src.parse::<DsrvSpecification>().unwrap();
         let (x_sender, x_fanout) = Fanout::<Value>::new();
@@ -1646,10 +1645,11 @@ mod tests {
             .await
             .expect("an exact request is still accepted and acknowledged");
 
-        // Acknowledgement happens only after the replacement I/O is in place.
+        // Acknowledgement happens after the no-op plan is committed without
+        // opening or closing another output owner.
         let counts = counts.borrow();
-        assert_eq!(counts.opens, 2, "a second output session must be opened");
-        assert_eq!(counts.closes, 1, "the first output session must be closed");
+        assert_eq!(counts.opens, 1, "the output owner should stay open");
+        assert_eq!(counts.closes, 0, "the output owner should stay unclosed");
         drop(counts);
 
         assert!(!ack.monitor_changed);
@@ -1657,14 +1657,14 @@ mod tests {
         assert_eq!(ack.monitor_revision, MonitorRevision(1));
         assert_eq!(ack.interface_revision, InterfaceRevision::INITIAL);
 
-        // The replacement input session is the one now feeding the monitor.
+        // The original input session remains the one feeding the monitor.
         x_sender.send(Value::Int(2)).await;
         drop(x_sender);
         drop(control_sender);
-        tc_testutils::streams::with_timeout(task, 5, "complete replacement runtime")
+        tc_testutils::streams::with_timeout(task, 5, "no-op reconfiguration runtime")
             .await
-            .expect("complete replacement runtime should terminate")
-            .expect("complete replacement runtime should succeed");
+            .expect("no-op reconfiguration runtime should terminate")
+            .expect("no-op reconfiguration runtime should succeed");
     }
 
     #[apply(async_test)]

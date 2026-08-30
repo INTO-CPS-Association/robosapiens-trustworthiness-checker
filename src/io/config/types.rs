@@ -7,6 +7,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::fingerprint::FingerprintBuilder;
 use crate::io::{RedisKnowledgeConfig, RedisKnowledgeRetry};
 use crate::{VarName, core::REDIS_HOSTNAME};
 
@@ -987,6 +988,20 @@ impl ResolvedSource {
     pub(crate) fn bindings(&self) -> &[ResolvedBinding] {
         &self.bindings
     }
+
+    pub(crate) fn configuration_key(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("input-source-resolution-v1");
+        key.write_str(&self.source);
+        let mut bindings = self.bindings.iter().collect::<Vec<_>>();
+        bindings.sort_by(|left, right| left.variable().name().cmp(&right.variable().name()));
+        key.write_usize(bindings.len());
+        for binding in bindings {
+            key.write_str(&binding.variable().name());
+            key.write_str(binding.route());
+            key.write_str(&binding.codec().0);
+        }
+        key.finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -995,9 +1010,9 @@ pub(crate) struct ResolvedInput {
     #[serde(skip)]
     pipeline_identity: Rc<()>,
     #[serde(skip)]
-    pipeline_configuration: Box<str>,
+    pipeline_configuration: u128,
     #[serde(skip)]
-    fingerprint: Box<str>,
+    fingerprint: u128,
 }
 
 impl ResolvedInput {
@@ -1005,35 +1020,35 @@ impl ResolvedInput {
         let mut resolved = Self {
             sources: sources.into_iter().collect(),
             pipeline_identity: Rc::new(()),
-            pipeline_configuration: String::new().into_boxed_str(),
-            fingerprint: String::new().into_boxed_str(),
+            pipeline_configuration: 0,
+            fingerprint: 0,
         };
-        resolved.fingerprint = resolved.compute_fingerprint().into_boxed_str();
+        resolved.fingerprint = resolved.compute_fingerprint();
         resolved
     }
 
     pub(crate) fn attach_to_pipeline(
         mut self,
         pipeline_identity: &Rc<()>,
-        pipeline_configuration: &str,
+        pipeline_configuration: u128,
     ) -> Self {
         self.pipeline_identity = Rc::clone(pipeline_identity);
-        self.pipeline_configuration = pipeline_configuration.to_owned().into_boxed_str();
-        self.fingerprint = self.compute_fingerprint().into_boxed_str();
+        self.pipeline_configuration = pipeline_configuration;
+        self.fingerprint = self.compute_fingerprint();
         self
     }
 
     pub(crate) fn validate_for_pipeline(
         &self,
         pipeline_identity: &Rc<()>,
-        pipeline_configuration: &str,
+        pipeline_configuration: u128,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.fingerprint.as_ref() == self.compute_fingerprint().as_str(),
+            self.fingerprint == self.compute_fingerprint(),
             "resolved input fingerprint does not match its structure"
         );
         anyhow::ensure!(
-            self.pipeline_configuration.as_ref() == pipeline_configuration,
+            self.pipeline_configuration == pipeline_configuration,
             "resolved input durable configuration does not match the pipeline"
         );
         anyhow::ensure!(
@@ -1047,13 +1062,20 @@ impl ResolvedInput {
         &self.sources
     }
 
-    fn compute_fingerprint(&self) -> String {
-        format!(
-            "pipeline_identity={:p};pipeline_configuration={:?};sources={:?}",
-            Rc::as_ptr(&self.pipeline_identity),
-            self.pipeline_configuration,
-            self.sources,
-        )
+    pub(crate) fn fingerprint(&self) -> u128 {
+        self.fingerprint
+    }
+
+    fn compute_fingerprint(&self) -> u128 {
+        let mut key = FingerprintBuilder::new("input-resolution-v1");
+        key.write_u128(self.pipeline_configuration);
+        let mut sources = self.sources.iter().collect::<Vec<_>>();
+        sources.sort_by(|left, right| left.source().cmp(right.source()));
+        key.write_usize(sources.len());
+        for source in sources {
+            key.write_u128(source.configuration_key());
+        }
+        key.finish()
     }
 }
 
@@ -1076,11 +1098,11 @@ mod tests {
                 CodecId::new("json"),
             )],
         )])
-        .attach_to_pipeline(&identity, "configuration");
+        .attach_to_pipeline(&identity, 1);
         resolved.sources[0].bindings[0].route = "tampered".into();
 
         let error = resolved
-            .validate_for_pipeline(&identity, "configuration")
+            .validate_for_pipeline(&identity, 1)
             .expect_err("tampered resolutions must fail their integrity check");
 
         assert!(

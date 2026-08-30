@@ -820,16 +820,15 @@ where
 /// Compose data-only child streams in observed completion order. A completed
 /// child never terminates its siblings and child errors retain their source
 /// context at the source boundary.
-pub fn compose_input_streams<V>(streams: Vec<InputStream<V>>) -> InputStream<V>
+pub fn compose_input_streams<V>(mut streams: Vec<InputStream<V>>) -> InputStream<V>
 where
     V: 'static,
 {
-    let mut streams = futures::stream::select_all(streams);
-    Box::pin(async_stream::stream! {
-        while let Some(batch) = streams.next().await {
-            yield batch;
-        }
-    })
+    match streams.len() {
+        0 => Box::pin(futures::stream::empty()),
+        1 => streams.pop().expect("source count checked above"),
+        _ => Box::pin(futures::stream::select_all(streams)),
+    }
 }
 
 /// Expand a data-only batch into owned logical ticks at a runtime fanout or

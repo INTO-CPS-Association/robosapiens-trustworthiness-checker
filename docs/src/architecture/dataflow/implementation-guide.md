@@ -161,7 +161,7 @@ To follow one tick from semantics down to optimization:
 10. **`src/dataflow/execution/jit/runtime.rs`**, **`scheduled_state.rs`**, then **`backend.rs`** — trace promotion, native execution, side exits, replay, and generated commit placement.
 11. **Collocated tests** plus `src/dataflow/tests.rs` — use differential and lifecycle tests to verify the inferred contract.
 12. **`src/dataflow/reconfiguration.rs`**, **`src/dataflow/reconfiguration_mapping.rs`**, and **`src/dataflow/monitor/reconfiguration.rs`** — read stable identities and reporting, target-indexed correspondence, then the prepared destructive `context_transfer_from` handoff.
-13. **`src/runtime/dataflow.rs` owner loop** — trace `plan_runtime_reconfiguration` and `apply_runtime_reconfiguration`, noting that resource-free planning precedes the output flush, and that every accepted request then replaces the complete input and output.
+13. **`src/runtime/dataflow.rs` owner loop** — trace `plan_runtime_reconfiguration` and `apply_runtime_reconfiguration`, noting that resource-free planning precedes pending-row submission, and that the concrete input/output plans update only the resources they own.
 
 Shorter routes: steps 2–7 cover `dynamic` and `defer`; steps 6–10 cover fused replay and the temporal JIT; steps 0, 2, 12, and 13 cover reconfiguration.
 
@@ -200,7 +200,7 @@ Most of the detail in this guide follows from eight properties. If a change brea
 
 **One tick in, one row out.** One logical input tick produces exactly one `evaluate` call. A successful evaluation contributes exactly one value to every output stream; a failed one contributes to none. Flush policy changes timing only.
 
-**One live definition.** The reconfigurable owner loop holds one monitor, one `InputPipelineSession`, and one `OutputPipelineSession`; the reusable `InputPipeline` and `OutputBackendBuilder` are configuration. Pure resolution creates owned candidate plans first, the active output is flushed, and mapped input/output owners are updated in place when compatible. Only unmatched or unsupported owners trigger session replacement.
+**One live definition.** The reconfigurable owner loop holds one monitor, one `InputPipelineSession`, and one `OutputPipelineSession`; the reusable `InputPipeline` and `OutputBackendBuilder` are configuration. Pure resolution creates owned candidate plans first. The input plan reopens a changed source, while the output plan flushes and updates only changed existing destination owners. Unsupported updates terminate the owner loop rather than triggering a hidden replacement.
 
 ## Continue reading
 
