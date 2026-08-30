@@ -42,7 +42,7 @@ jobs:
           dyn_paper	^dyn_paper/(dyn_paper_50_dataflow_untyped|dyn_paper_50_dataflow|dyn_paper_50_dataflow_quickened|dyn_paper_50_dataflow_jit|dyn_paper_50_semisync|dyn_paper_50)/100000$
           dup_defer	^(dup_defer/(dup_defer_dataflow_untyped|dup_defer_dataflow|dup_defer_dataflow_quickened|dup_defer_dataflow_jit|dup_defer_untyped_semisync|dup_defer_untyped_async)/25000|hard_dynamic_defer/(automatic_scope|explicit_components)_(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync)/1024)$
           arithmetic_heavy	^arithmetic_heavy/(dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit|semisync_untyped|semisync_typed)/25000$
-          dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened)_reconf_ct_(on|off)_percent_10/1000$
+          dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened)_reconf_ct_(on|off)_percent_(1|10|50|100)/1000$
           dsrv_paper	^rec_moving_average/(semisync|dataflow_untyped|dataflow|dataflow_quickened|dataflow_jit)_reconf_ct_on_percent_0/1000$
           dataflow_runtime	^dataflow/(runtime_reconfiguration/(candidate_compile_and_transfer|state_transfer_only)/16|dynamic_transitions/schedule_repair)$
           parsing	^parse_small_varied_inputs/parsing_lalrpop/10000$
@@ -98,6 +98,19 @@ jobs:
           arithmetic_heavy/dataflow_jit/25000
           arithmetic_heavy/semisync_untyped/25000
           arithmetic_heavy/semisync_typed/25000
+          rec_moving_average/semisync_reconf_ct_on_percent_0/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_on_percent_0/1000
+          rec_moving_average/dataflow_reconf_ct_on_percent_0/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_on_percent_0/1000
+          rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000
+          rec_moving_average/semisync_reconf_ct_on_percent_1/1000
+          rec_moving_average/semisync_reconf_ct_off_percent_1/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_on_percent_1/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_off_percent_1/1000
+          rec_moving_average/dataflow_reconf_ct_on_percent_1/1000
+          rec_moving_average/dataflow_reconf_ct_off_percent_1/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_on_percent_1/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_off_percent_1/1000
           rec_moving_average/semisync_reconf_ct_on_percent_10/1000
           rec_moving_average/semisync_reconf_ct_off_percent_10/1000
           rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000
@@ -106,7 +119,22 @@ jobs:
           rec_moving_average/dataflow_reconf_ct_off_percent_10/1000
           rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000
           rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000
-          rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000
+          rec_moving_average/semisync_reconf_ct_on_percent_50/1000
+          rec_moving_average/semisync_reconf_ct_off_percent_50/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_on_percent_50/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_off_percent_50/1000
+          rec_moving_average/dataflow_reconf_ct_on_percent_50/1000
+          rec_moving_average/dataflow_reconf_ct_off_percent_50/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_on_percent_50/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_off_percent_50/1000
+          rec_moving_average/semisync_reconf_ct_on_percent_100/1000
+          rec_moving_average/semisync_reconf_ct_off_percent_100/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_on_percent_100/1000
+          rec_moving_average/dataflow_untyped_reconf_ct_off_percent_100/1000
+          rec_moving_average/dataflow_reconf_ct_on_percent_100/1000
+          rec_moving_average/dataflow_reconf_ct_off_percent_100/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_on_percent_100/1000
+          rec_moving_average/dataflow_quickened_reconf_ct_off_percent_100/1000
           dataflow/runtime_reconfiguration/candidate_compile_and_transfer/16
           dataflow/runtime_reconfiguration/state_transfer_only/16
           dataflow/dynamic_transitions/schedule_repair

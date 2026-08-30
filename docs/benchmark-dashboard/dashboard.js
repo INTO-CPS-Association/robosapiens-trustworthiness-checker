@@ -1,5 +1,27 @@
 "use strict";
 
+const RECONFIGURATION_PERCENTAGES = [1, 10, 50, 100];
+const RECONFIGURATION_RUNTIMES = [
+    ["SemiSync", "semisync"],
+    ["Dataflow untyped", "dataflow_untyped"],
+    ["Dataflow", "dataflow"],
+    ["Dataflow quickened", "dataflow_quickened"],
+];
+
+function movingAverageReconfigurationCard(percent) {
+    return {
+        title: `Stateful reconfiguration — moving average, ${percent}% reconfiguration`,
+        description:
+            "End-to-end runtime reconfiguration over 1,000 inputs, comparing execution tiers with and without compatible context transfer.",
+        series: RECONFIGURATION_RUNTIMES.flatMap(([label, name]) =>
+            ["on", "off"].map((contextTransfer) => ({
+                label: `${label} — context transfer ${contextTransfer}`,
+                name: `rec_moving_average/${name}_reconf_ct_${contextTransfer}_percent_${percent}/1000`,
+            })),
+        ),
+    };
+}
+
 const IMPORTANT_SECTIONS = [
     {
         title: "Overall runtime",
@@ -181,45 +203,7 @@ const IMPORTANT_SECTIONS = [
                     },
                 ],
             },
-            {
-                title: "Stateful reconfiguration — moving average, 10% reconfiguration",
-                description:
-                    "End-to-end runtime reconfiguration over 1,000 inputs, comparing execution tiers with and without compatible context transfer.",
-                series: [
-                    {
-                        label: "SemiSync — context transfer on",
-                        name: "rec_moving_average/semisync_reconf_ct_on_percent_10/1000",
-                    },
-                    {
-                        label: "SemiSync — context transfer off",
-                        name: "rec_moving_average/semisync_reconf_ct_off_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow untyped — context transfer on",
-                        name: "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow untyped — context transfer off",
-                        name: "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow — context transfer on",
-                        name: "rec_moving_average/dataflow_reconf_ct_on_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow — context transfer off",
-                        name: "rec_moving_average/dataflow_reconf_ct_off_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow quickened — context transfer on",
-                        name: "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000",
-                    },
-                    {
-                        label: "Dataflow quickened — context transfer off",
-                        name: "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000",
-                    },
-                ],
-            },
+            ...RECONFIGURATION_PERCENTAGES.map(movingAverageReconfigurationCard),
             {
                 title: "Stateful runtime steady state — moving average, 1,000 inputs",
                 description:
