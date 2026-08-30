@@ -10,6 +10,32 @@
 //! delay is filling). Operator state, including delay history and lifted operands, survives from
 //! one call to the next.
 //!
+//! ## Organising concepts
+//!
+//! This module follows the synchronous dataflow model exemplified by Lustre [[2]]: equations define
+//! streams, current producer-to-consumer dependencies form a directed graph, and one logical tick
+//! evaluates that graph in a dependency-valid order before temporal state is committed. DSRV extends
+//! that foundation with sparse/special values, runtime-defined expressions, and live replacement.
+//!
+//! A **dataflow graph** contains declared inputs and computed streams as vertices. A current edge
+//! `a → b` means that `b` consumes `a` from the same tick. Inputs are loaded before execution, so the
+//! implementation schedules only computed-stream vertices. A positive historical read such as
+//! `a[1]` reads committed earlier-tick state and does not add a current scheduling edge.
+//!
+//! | Concept | Responsibility | Main Rust entities |
+//! |:--------|:---------------|:-------------------|
+//! | **Graph** | Represent stream equations and current dependency edges independently of execution order. | `DataflowProgram`, `StreamProgram` |
+//! | **Scheduling** | Produce a topological order for the fixed and currently active dynamic edges. | `Scheduler`, `ScheduledExecutionPlan` |
+//! | **Independent evaluators** | Retain canonical operation and language state for each computed stream at a stable identity. | `MonitorExecution`, `Evaluator`, `EvaluatorState` |
+//! | **Canonical execution** | Define special values, errors, publication, history, and the common temporal commit. | [`DataflowMonitor`] and canonical interpreter |
+//! | **Quickening** | Accelerate eligible scalar operations with a mixed route that preserves canonical state and fallback. | `QuickPlan`, `PlanBundle` |
+//! | **JIT tier** | When enabled, execute eligible scheduled work through guarded native artifacts with canonical fallback. | JIT coordinator and artifacts |
+//!
+//! Scheduling and acceleration are deliberately separate. The `Scheduler` may replace physical order
+//! when active dependencies change, while evaluator-owned state remains attached to stable stream
+//! identities. Quickening and JIT are accelerators over that scheduled machine; neither defines a
+//! second language semantics.
+//!
 //! ## Running example
 //!
 //! Consider three interdependent output streams declared in reverse dependency order:
@@ -247,20 +273,21 @@
 //! later in the same tick could observe a current value as though it belonged to the past. The runtime
 //! therefore separates computing a tick from making that tick historical.
 //!
-//! During evaluation, delays read only committed history. **Staging** records that a temporal write is
-//! due without exposing the new sample in the ring. An ordinary delay marks a pending capture; its
-//! operand is read later from the completed environment row. A recursive delay stages the enclosing
-//! stream result after that result is known.
+//! During evaluation, delays read only committed history. Storage has two owners. A direct top-level
+//! delay of an external environment variable reads the monitor's bounded `HistoryStore` through
+//! `HistoryAccess`; its local delay commit is a no-op. Runtime-defined, internal, and recursive delays
+//! use evaluator-local `NodeState::Delay(DelayState)` rings. Local ordinary delays stage their
+//! completed operands, while recursive delays stage the enclosing stream result after it is known.
 //!
 //! After all scheduled streams have produced the current row, the monitor performs the **temporal
-//! commit**. It traverses stateful evaluators and pushes ordinary and recursive captures into their
-//! respective rings. Those samples become visible as history on the next logical tick. This is a
+//! commit**. It records completed monitor values in `HistoryStore` and pushes staged local samples into
+//! `DelayState` rings. Those samples become visible as history on the next logical tick. This is a
 //! temporal visibility boundary, not a general transaction: non-temporal state changes are not rolled
 //! back if evaluation fails.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/history-retention.svg")]
-//! <figcaption>Both delay forms read history committed before tick n. A recursive self-delay feeds an earlier stream output into the body and stages the completed output back to its ring; both delay forms commit their new samples after row n completes.</figcaption>
+//! <figcaption>A direct top-level external delay reads monitor HistoryStore, while internal and recursive delays read evaluator-local DelayState rings. Successful current samples become historical only at the common post-row commit.</figcaption>
 //! </figure>
 //!
 //! The canonical path uses `evaluate_nodes` for infallible programs. Fallible programs use
@@ -303,13 +330,17 @@
 //!
 //! ## History management
 //!
-//! ### Per-index delay history
+//! ### Monitor history and evaluator-local rings
 //!
-//! The dataflow runtime does not retain complete environment rows or a shared historical sequence for
-//! every variable. Instead, each positive `Delay` or `RecursiveDelay` node owns a
+//! The dataflow runtime does not retain complete environment rows. It keeps bounded monitor history
+//! only for outer environment variables required by direct top-level historical reads or projected
+//! nested requirements. Such a delay binds to `HistoryAccess` and reads `HistoryStore` rather than
+//! owning a duplicate local ring.
+//!
+//! Runtime-defined and internal positive `Delay` nodes, and every `RecursiveDelay`, own
 //! `NodeState::Delay(DelayState)`: a circular buffer with exactly as many entries as the requested
-//! offset, together with read/write cursors, a lifted last output, and pending-write state. For
-//! example, a statically compiled `x[3]` behaves as follows:
+//! offset, together with read/write cursors, lifted output, and pending-write state. For example, a
+//! local or recursive `x[3]` behaves as follows:
 //!
 //! | logical tick | current `x` | ring before commit | result |
 //! |-------------:|------------:|:-------------------|:-------|
@@ -319,20 +350,20 @@
 //! | 4 | 40 | `[10, 20, 30]` | 10 |
 //!
 //! An offset of zero lifts the current value without allocating a ring. A positive delay returns
-//! `Deferred` until its ring has received enough samples. `Deferred` is stored as a sample; when a
-//! stored `NoVal` emerges, ordinary output lifting applies. Each syntactic index owns a separate
-//! ring, so repeated indices such as `x[2] + x[2]` have independent equivalent histories rather than
-//! sharing a per-variable buffer.
+//! `Deferred` until its storage has received enough samples. `Deferred` is stored as a sample; when a
+//! stored `NoVal` emerges, ordinary output lifting applies. Separate local syntactic indices such as
+//! `x[2] + x[2]` own independent equivalent `DelayState` rings. Direct top-level external indices can
+//! instead share the monitor's per-variable `HistoryStore` while retaining independent lifting state.
 //!
 //! ### How delay nodes participate
 //!
-//! A positive ordinary delay reads its existing ring during evaluation and stages a write. During
-//! the post-row temporal commit, it reads its operand from the completed environment and pushes that
-//! value into the ring. A `RecursiveDelay` similarly reads retained history during the forward pass,
-//! but stages the enclosing stream's completed output. The same post-row traversal commits that
-//! value.
+//! A direct top-level external delay reads `HistoryStore`; monitor commit records the completed
+//! environment value centrally, and the delay's local commit is a no-op. A local positive ordinary
+//! delay reads its `DelayState` ring and stages its completed operand. A `RecursiveDelay` reads its
+//! local ring during the forward pass and stages the enclosing stream's completed output. The common
+//! post-row traversal commits both monitor history and local staged values.
 //!
-//! If a tick fails before temporal commit, pending writes do not enter the rings. Other node state
+//! If a tick fails before temporal commit, monitor history and pending local writes are not committed. Other node state
 //! may already have changed because evaluation errors are terminal and the complete evaluator is not
 //! transactionally rolled back.
 //!
@@ -342,7 +373,7 @@
 //!
 //! | owner | retained state |
 //! |:------|:---------------|
-//! | Positive delay in a top-level stream | A binding into the monitor's bounded `HistoryStore`; runtime-defined, internal, and recursive delays keep local rings. |
+//! | Direct top-level delay of an external environment variable | A binding into the monitor's bounded `HistoryStore`; runtime-defined, internal, and recursive delays keep local rings. |
 //! | Ordinary `if` | Independent boxed `EvaluatorState` values for both branches. |
 //! | Persistent function call site | A nested `Evaluator`, including delay rings in the function body. |
 //! | Recursive function call | Resettable frames used for the active recursive evaluation. |
@@ -388,11 +419,12 @@
 //! owners only after preparation validates the complete rewrite; it does not require a monitor-wide
 //! state snapshot.
 //!
-//! Recursive function evaluation is the supported exception to advancing both branches. When
-//! `EvaluationEnvironment` contains the recursive callback, `Bool(true)` evaluates only the
-//! then-branch and `Bool(false)` evaluates only the else-branch. A `Deferred` or `NoVal` condition
-//! returns that value without evaluating either branch. This genuinely lazy selection lets a
-//! recursive base case return without entering the recursive branch.
+//! Recursive function evaluation is the supported exception to advancing both branches. It first
+//! applies `retain_last_value` to the condition, so `NoVal` after an earlier Boolean can reuse that
+//! Boolean. When `EvaluationEnvironment` contains the recursive callback, an effective `Bool(true)`
+//! evaluates only the then-branch and `Bool(false)` evaluates only the else-branch. `Deferred`, or
+//! effective `NoVal` without a retained Boolean, returns without evaluating either branch. This
+//! genuinely lazy selection lets a recursive base case return without entering the recursive branch.
 //!
 //! Reconfigurable expressions are not supported inside lazy branches: compilation rejects an `if`
 //! branch containing `dynamic` or `defer`. Supported branch evaluation is therefore infallible and
@@ -401,7 +433,7 @@
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/lazy-if.svg")]
-//! <figcaption>Ordinary stream evaluation advances both independent branch states; recursive evaluation follows only a Boolean-selected branch and skips both branches for a deferred or absent condition.</figcaption>
+//! <figcaption>Ordinary stream evaluation advances both independent branch states. Recursive evaluation first retains the last Boolean across NoVal, follows only the effective Boolean-selected branch, and skips both branches for Deferred or NoVal without a retained Boolean.</figcaption>
 //! </figure>
 //!
 //! # Function handling
@@ -676,7 +708,7 @@
 //! the active body's local delay rings.
 //!
 //! Reusing an evaluator preserves its operation state and delay rings. A changed `Dynamic` source
-//! constructs a new local evaluator from a cached immutable template or a fresh compilation. Under
+//! constructs a new local evaluator from a cached immutable template or a fresh compilation.
 //! `ContextTransferPolicy::MatchingStreamState` transfers state only when the replacement body is
 //! semantically identical; changed owners start cold. `None` keeps the new evaluator cold. Temporal
 //! operators in the fixed surrounding specification are unaffected.
@@ -717,7 +749,7 @@
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/dynamic-lifecycle.svg")]
-//! <figcaption>Equal source text keeps one evaluator timeline; changed text installs a new local evaluator without carrying partial state forward.</figcaption>
+//! <figcaption>Equal source text keeps one evaluator timeline. Changed text installs a replacement that can take compatible state only from the immediately previous evaluator; otherwise it starts cold, and returning to older text never revives an archived evaluator.</figcaption>
 //! </figure>
 //!
 //! ## Source values and evaluator advancement
@@ -803,13 +835,13 @@
 //! Thus `defer` has exactly one evaluator timeline. Positive-delay history starts on the activation
 //! tick and remains continuous across later strings, `NoVal`, and `Deferred`. If `"x[1]"` is the
 //! first accepted definition, a later string such as `"x * 100"` does not change the program: the
-//! next output still comes from the continuing `x[1]` timeline. If the evaluator returns `NoVal`,
-//! result lifting repeats its previous result; if it returns `Deferred`, that value replaces the
-//! retained result.
+//! next output still comes from the continuing `x[1]` timeline. On post-activation source `NoVal` or
+//! `Deferred`, the sealed evaluator still advances and `defer` retains its last non-`NoVal`
+//! published result.
 //!
 //! <figure style="margin:1.25rem 0">
 #![doc = include_str!("../../docs/src/assets/dataflow/defer-lifecycle.svg")]
-//! <figcaption>The first accepted string creates one evaluator. Its delay history starts on that activation tick and continues across every later source value without recompilation.</figcaption>
+//! <figcaption>The first accepted string creates one evaluator. Its state advances across every later source value without recompilation; NoVal or Deferred source ticks retain the last non-NoVal published defer result.</figcaption>
 //! </figure>
 //!
 //! For `z = defer(source: Int)`, the later `"x * 100"` source does not reconfigure the active

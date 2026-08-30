@@ -288,6 +288,43 @@ impl<V> OutputDestinations<V> {
 
 /// A branching pipeline whose resolution is pure and whose opening phase
 /// exposes one [`OutputWriter`] to the runtime.
+///
+/// The example separates resource-free planning from opening and from the
+/// writer's admission and completion boundaries:
+///
+/// ```
+/// use trustworthiness_checker::{OutputBatch, Value, VarName};
+/// use trustworthiness_checker::io::output::{
+///     OutputBackendConfig, OutputDestination, OutputPipeline,
+/// };
+///
+/// # fn main() -> anyhow::Result<()> {
+/// smol::block_on(async {
+///     let destination = OutputDestination::<Value>::new(
+///         "local-null",
+///         OutputBackendConfig::null(),
+///     );
+///     let pipeline = OutputPipeline::from_destination(destination)?;
+///     let resolved = pipeline.resolve(
+///         [VarName::new("alert"), VarName::new("total"), VarName::new("scaled")],
+///         std::iter::empty::<VarName>(),
+///         None,
+///     )?;
+///     let mut writer = pipeline.open(resolved).await?;
+///
+///     writer
+///         .send(OutputBatch::update("total", Value::Int(8)))
+///         .await?;
+///     writer.flush().await?;
+///     writer.close().await?;
+///     Ok(())
+/// })
+/// # }
+/// ```
+///
+/// [`OutputWriter::send`] admits a complete batch after readiness;
+/// [`OutputWriter::flush`] is the downstream completion barrier. A transport
+/// backend's completion contract does not necessarily imply remote persistence.
 #[derive(Clone, Debug)]
 pub struct OutputPipeline<V = crate::Value> {
     destinations: OutputDestinations<V>,

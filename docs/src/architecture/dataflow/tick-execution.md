@@ -1,114 +1,126 @@
-# Dataflow tick execution
+# Tick execution
 
-[← Previous: Runtime ownership](runtime-ownership.md) · [Next: Temporal state](temporal-state.md) →
+One `DataflowMonitor` tick computes one current row. Scheduled evaluators publish current values during the row, then staged temporal state becomes historical at one shared commit boundary.
 
-One successful `DataflowMonitor::evaluate` call is one logical tick. The caller that makes those calls, and decides nothing about their meaning, is described in [Runtime adapter](runtime-adapter.md). Static and reconfigurable monitors use different phase shapes, but both must publish one current result per logical stream and cross one temporal commit boundary after the complete row succeeds.
+## Tick and source barriers
+
+The **tick barrier** is the logical end of scheduled evaluator execution. At this boundary, `MonitorExecution::commit_active_plan` commits staged evaluator temporal state, making it readable by later ticks. Output projection and the `DataflowMonitor`'s `HistoryStore` commit follow successful evaluator execution; they are not part of the evaluator temporal commit itself.
+
+The **source barrier** is an internal boundary used only by ticks containing `dynamic` or unsealed `defer`. `MonitorExecution` first evaluates the source range. The monitor then resolves nested bodies, collects their exact active dependencies, and asks `Scheduler` to retain or repair the order before the disjoint main range runs. This boundary changes the active body and execution order, not logical time.
+
+![A static tick and a split reconfiguration tick distinguish the source barrier from the temporal-commit tick barrier](../../assets/dataflow/tick-barriers.svg)
+
+**Reading rule.** Time runs left to right. Work on both sides of the source barrier belongs to one logical tick: no new tick begins and no temporal write commits there. Source and main ranges are disjoint and together evaluate every computed stream exactly once; current values published in the source range remain visible to the main range. Temporal writes may be staged in either range, but only the later tick barrier commits them. Root reconfiguration control barriers, input-window boundaries, and output delivery boundaries are separate concepts.
 
 ## Static tick
 
+| # | Phase | Responsible entity | Effect and visibility |
+|---:|---|---|---|
+| 1 | Prepare current row | `DataflowMonitor` | Validate widths, clear the environment, and load all input slots. |
+| 2 | Evaluate computed streams | `MonitorExecution` and each `Evaluator` | Run once per stream in the dependency order supplied by `Scheduler`; publish current values to stable slots. |
+| 3 | Stage temporal writes | stateful `Evaluator` operations | Record samples that may become historical without exposing them yet. |
+| 4 | Commit temporal state | `MonitorExecution` | Push every staged sample at one shared post-row boundary. |
+| 5 | Project outputs | `DataflowMonitor` | Read the complete output projection from stable environment slots. |
+| 6 | Commit monitor history | `HistoryStore` | Retain the successful row only after output projection succeeds. |
 
-**What to notice.** A static monitor has no source barrier. The fixed main range contains every computed stream exactly once. Temporal writes are staged during stream execution and become visible only at the commit boundary; outputs are projected afterward from stable environment slots.
+Phases 3 and 4 are distinct visibility boundaries. Staging records future historical samples; only phase 4 makes them readable by the next tick.
 
-### Phase order
+## Tick with nested reconfiguration
 
-1. **Validate the call.** Reject a previously failed monitor or input/output slices with the wrong lengths.
-2. **Load inputs.** Copy the input row into the initial environment slots. Static monitors do not allocate a retained row and do not clear the stream portion first; every computed stream slot will be overwritten by this tick's execution.
-3. **Begin the logical tick.** Mark execution in progress and advance JIT activation hotness once for the tick when configured.
-4. **Evaluate the main range.** Follow the fixed scheduled order. Each logical stream computes and publishes one current result to its stable environment slot.
-5. **Commit temporal state.** If canonical or per-stream execution staged temporal writes, traverse the fixed commit set once after all streams succeed. A complete native temporal artifact may implement the same logical commit internally at the end of its successful run.
-6. **Project outputs.** Copy values from saved output slots into caller order. Projection performs no expression evaluation.
+| # | Phase | Responsible entity | Effect and visibility |
+|---:|---|---|---|
+| 1 | Prepare current and retained rows | `DataflowMonitor` | Load current inputs and the sparse retained environment needed by nested expressions. |
+| 2 | Evaluate source prerequisites | `MonitorExecution` | Run only the fixed streams needed to obtain each `dynamic` or `defer` source value. |
+| 3 | Resolve nested programs | nested `Evaluator` owners | Retain, compile, select, transfer, or initialize the active nested body. |
+| 4 | Repair active order | `Scheduler` | Merge exact active dependencies with fixed dependencies and produce a valid main-range order. |
+| 5 | Evaluate the main range | `MonitorExecution` | Run the disjoint remaining stream set exactly once. |
+| 6 | Commit temporal state | `MonitorExecution` | Make staged samples visible to the next tick at the same boundary used by a static tick. |
+| 7 | Apply defer sealing | nested reconfiguration state | Retain the first active `defer` body and release source-only prerequisites for later ticks. |
+| 8 | Project and retain the row | `DataflowMonitor` and `HistoryStore` | Project outputs and commit monitor history after successful execution. |
 
-The physical executor may be fused, per-stream native, quickened, or canonical. That choice can change dispatch and state representation, but not publication order, current-versus-historical visibility, or the single logical commit.
+Phases 2 and 5 are disjoint and together cover every computed stream exactly once. There is no temporal commit between them; phase 6 remains the single commit boundary.
 
-## Reconfigurable tick
+The interaction view shows which owner controls each boundary while one `evaluate` call remains active:
 
+```mermaid
+sequenceDiagram
+    accTitle: One reconfigurable DataflowMonitor evaluation
+    accDescr: A caller asks DataflowMonitor to evaluate one row. MonitorExecution evaluates the source range through stable Evaluator owners. DataflowMonitor resolves nested bodies and asks Scheduler to validate or repair the active order. MonitorExecution then evaluates the disjoint main range and commits evaluator temporal state. Only after that success does DataflowMonitor project outputs and commit HistoryStore values. A dynamic cycle aborts the tick and makes the monitor terminal.
 
-**What to notice.** The source and main ranges are disjoint and together cover every logical stream. Reconfiguration and schedule repair happen between them, before main-range state advances. There is no commit at the barrier. Pending `defer` releases are applied only after successful main execution and the shared commit, so they affect the next tick's ranges.
+    participant monitor as DataflowMonitor
+    participant execution as MonitorExecution
+    participant evaluator as Evaluator owners
+    participant scheduler as Scheduler
+    participant history as HistoryStore
 
-### Phase order
+    Note over monitor,history: DataflowMonitor::evaluate(input, output) is active
+    monitor->>execution: evaluate_source_prelude_with_history()
+    loop Source-range StreamId values
+        execution->>evaluator: evaluate and publish current value
+        evaluator-->>execution: published source prerequisite
+    end
+    execution-->>monitor: source range complete
+    loop Reconfigurable expressions in resolution order
+        monitor->>execution: expression_requires_reconfiguration()
+        execution->>evaluator: inspect active source value
+        evaluator-->>execution: changed or retained
+        execution-->>monitor: resolution requirement
+        opt active body changes
+            monitor->>execution: reconfigure_expression()
+            execution->>evaluator: compile and install nested body
+            evaluator-->>execution: activation and dependency slots
+            execution-->>monitor: activation and exact dependencies
+        end
+    end
+    monitor->>scheduler: update_schedule(dependencies, source streams)
+    alt dependency-valid order exists
+        scheduler-->>monitor: retained or repaired order
+        opt source or main order changed
+            monitor->>execution: select_schedule_ranges()
+            execution-->>monitor: active PlanBundle selected
+        end
+        monitor->>execution: evaluate_main_and_commit_with_history()
+        loop Main-range StreamId values
+            execution->>evaluator: evaluate, publish, and stage temporal writes
+            evaluator-->>execution: current value published
+        end
+        loop Scheduled commit streams
+            execution->>evaluator: commit_temporal_state_with_history()
+        end
+        execution-->>monitor: tick barrier complete
+        monitor->>monitor: write_outputs(output)
+        monitor->>history: commit_histories()
+        history-->>monitor: row retained
+        monitor->>monitor: return Ok
+    else active dependency cycle
+        scheduler-->>monitor: DynamicDependencyCycle
+        monitor->>execution: abort_tick()
+        monitor->>monitor: failed = true, return error
+    end
+```
 
-1. **Validate the call.** Apply the same public failure and arity checks as a static monitor.
-2. **Prepare current and retained rows.** Clear the current environment to `NoVal`, load inputs, and update retained input slots only for values other than `NoVal`.
-3. **Evaluate the source range.** `evaluate_source_prelude` begins the logical tick and executes the currently required computed source prerequisites. Each source-range stream publishes once and updates retention for a non-`NoVal` result.
-4. **Resolve reconfiguration points.** For every still-live point, read its source value and activate, preserve, or replace the nested expression. A successfully activated `defer` is marked sealed and queues a release; the release is not applied yet.
-5. **Update exact active dependencies.** If an activation changed dependency slots, rebuild the containing stream's union across all active points. Merge those edges with static dependencies, detect cycles, and repair the scheduled order when needed.
-6. **Select source/main routing.** If order changed, select a cached `PlanBundle` or build a new one for the repaired, disjoint ranges.
-7. **Evaluate the main range.** Run every stream not already evaluated in the source range exactly once, using the repaired dependency-valid order.
-8. **Commit temporal state.** After the main range succeeds, commit the active plan's complete temporal stream set once. Source-range staging and main-range staging cross the same boundary.
-9. **Apply pending `defer` releases.** Decrement source-user and live-point reference counts. If source membership changes, refresh and select the schedule ranges for the next tick.
-10. **Project outputs.** Publish the completed row to the caller only after `execute_tick` returns successfully.
+**Reading rule.** Solid arrows are calls or state-changing requests; dashed arrows are returned values, completed ranges, or outcomes. The source-range return is the source barrier, not a temporal commit. The main-range return follows `commit_active_plan` at the tick barrier; output projection and `HistoryStore` retention occur afterward. A source-resolution or evaluator error follows the same abort-and-terminal-monitor path shown for `DynamicDependencyCycle`. Lifeline spacing is interaction order, not a second logical-time scale.
 
-A reconfigurable monitor may eventually have an empty source range—for example, after every `defer` point that needed computed source prerequisites has sealed. The orchestration path remains reconfiguration-aware, but the active scheduled plan then has no source barrier and all logical streams are in the main range.
+## Current-row publication
 
-## Static and reconfigurable phases compared
+Before execution, the monitor validates input and output widths, clears the current environment, and loads the supplied row. Omitted sparse updates have already become `NoVal` at the runtime adapter.
 
-| Concern | Static monitor | Reconfigurable monitor |
-|---|---|---|
-| Current row preparation | Overwrite input slots; stream slots are overwritten during execution. | Clear the row to `NoVal`, load inputs, and update retained inputs. |
-| Retained outer row | Not allocated. | Allocated for sparse current-or-retained values used by active nested programs. |
-| Source range | Empty. | Computed prerequisites still needed by live source users. |
-| Resolution barrier | None. | Compile/activate nested expressions and discover exact active edges. |
-| Main range | Every logical stream. | Every logical stream not in the source range. |
-| Schedule changes | None after compilation. | Repair only when active edges or source membership require it. |
-| Whole-plan fusion | Eligible when other requirements hold. | Blocked while a non-empty source barrier exists. |
-| Temporal commit | Once after main execution, or equivalent successful complete native commit. | Once after both ranges; never between them. |
-| Post-tick release | None. | Apply pending `defer` releases after commit for the next tick. |
+Each `Evaluator` publishes its result once to its assigned environment slot. A current consumer therefore reads a value produced earlier in the active order. Output projection reads completed slots after all computed streams have run.
 
-## Source and main ranges form one partition
+## Temporal and monitor commits
 
-`ScheduledExecutionPlan::new` asserts that the lengths of the source and main orders sum to the number of programs and that each `StreamId` appears exactly once. This turns the “evaluate once” rule into a plan invariant rather than a convention in the phase loop.
+Evaluator operations stage ordinary-delay captures or recursive-delay outputs during the forward pass. The post-row temporal commit pushes those samples into their rings. The `DataflowMonitor` commits its `HistoryStore` only after output projection succeeds.
 
-The source range contains only streams needed to obtain current expression sources. It is not a speculative prefix of the main range. A stream in the source range is omitted from the main range, even if ordinary consumers also need its value; they read its already published environment slot.
+These are visibility boundaries rather than a general transaction over every internal mutation. If evaluation fails, the monitor is marked failed, no output row is published, and monitor history is not committed. The failed monitor accepts no later tick.
 
-When a sealed `defer` releases its final claim on a prerequisite, that stream is not deleted. It moves from the source range to the main range of a subsequently selected plan. Its `StreamId`, environment slot, evaluator, and temporal state remain unchanged.
+## Reconfiguration work within a tick
 
-Quickened scalar availability may carry across the barrier, but a scalar run does not. Per-stream native artifacts are reached through the evaluator selected by stable stream identity and may execute on either side; their scheduled temporal operations still use the shared end-of-tick commit. Whole-plan fused execution is rejected whenever the plan has a source barrier.
+Nested source values may compile or select a new body. Active dependencies are extracted from that body and merged with fixed dependencies before the main range runs. Earlier nested activations in the same resolution pass are not rolled back if a later activation fails; the resulting tick failure makes the monitor terminal.
 
-## One current evaluation and publication per stream
+A newly sealed `defer` body no longer needs its source prerequisites on later ticks. Their release occurs after the successful execution boundary so the activation tick still observes a complete valid schedule.
 
-For the current logical row, every stream has one semantic evaluation and one canonical publication point:
+## Execution routes
 
-- static execution visits each stream in the main range;
-- reconfigurable execution visits each stream in exactly one of the source or main ranges; and
-- schedule repair occurs between ranges rather than restarting work already performed.
+Canonical, quickened, and native routes all enter the same tick phases and must preserve publication, temporal commit, output projection, and failure boundaries. Route-specific guards and fallback cannot create a second logical evaluation of a stream.
 
-Optimized side exits may perform bounded reconstruction work. In particular, canonical replay can evaluate a previous successful native row to reconstruct lifting state before the current row falls back. That replay is not a second evaluation of the current logical stream row: temporal node state is snapshotted and restored so replay neither stages nor commits the previous row again. The current row still publishes once and commits once.
-
-A native attempt may also begin and side-exit before canonical fallback. Such physical work is constrained to preserve the same semantic publication and state boundary; checked native temporal writes are placed after all checked work so a failed native attempt cannot expose a partial commit.
-
-## One temporal commit per successful tick
-
-Temporal evaluation has two operations:
-
-1. read history committed before the current tick and stage the current sample; and
-2. make staged samples historical after the row succeeds.
-
-The source barrier never separates these operations into two timelines. `evaluate_source_prelude` sets `tick_in_progress`, while `evaluate_main_and_commit` completes the same tick. The latter traverses `commit_streams` only when main execution returns `Ok`.
-
-![Historical reads and writes around the common post-row commit](../../assets/dataflow/history-retention.svg)
-
-**What to notice.** Every historical read in both source and main ranges sees the same pre-tick state. Current samples become history only after the complete row succeeds, so main-range evaluation cannot observe a temporal write staged by a source-range stream on the same tick.
-
-The commit set is derived from `StreamProgram::requires_temporal_commit` and is independent of current schedule position. Commit traversal can descend into branch state, persistent calls, and active runtime-defined evaluators. A schedule change may reorder forward evaluation, but it does not change which stable evaluators require commit.
-
-## Why `defer` release is post-tick
-
-A successful first `defer` activation marks the point sealed immediately so it is not resolved again. Its source prerequisites nevertheless remain in the active source range through the rest of that tick.
-
-This delayed release preserves three properties:
-
-- the active `PlanBundle` remains valid while the main range executes;
-- a source stream that has already advanced is not moved into and re-evaluated in the current main range; and
-- temporal commit uses the same complete plan under which the row was computed.
-
-Only after `evaluate_main_and_commit` succeeds does `apply_pending_releases` update reference counts. Shared prerequisites remain in the source range while any other `dynamic` or unsealed `defer` still needs them. If membership changes, the monitor selects new ranges for the next tick.
-
-A failed activation does not seal a `defer`, and a failed tick never reaches release application.
-
-## Failed ticks
-
-An input or output count mismatch is rejected before `execute_tick` begins, so no evaluator advances and the caller may retry.
-
-Any error that escapes `execute_tick` is terminal: the monitor sets `failed`, later calls return `MonitorFailed`, and the tick projects no outputs, commits no temporal writes, and applies no pending `defer` releases. This is a deliberate simplification rather than a set of boundaries to reason about case by case — see [Failure and termination](failure-model.md).
-
-[← Previous: Runtime ownership](runtime-ownership.md) · [Next: Temporal state](temporal-state.md) →
+Continue with [scheduling](scheduling.md) for dependency order and source/main range construction, [temporal state](temporal-state.md), [dynamic properties](dynamic-properties.md), or [execution tiers](execution-tiers.md).

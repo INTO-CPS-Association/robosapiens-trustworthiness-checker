@@ -1,59 +1,66 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 525" role="img" aria-labelledby="history-arrow-title history-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="history-arrow-title">Temporal delay staging and commit</title>
-<desc id="history-arrow-desc">During tick n, an ordinary Delay and a RecursiveDelay each read only their own ring committed through tick n minus one. The recursive delay supplies a previous stream output to the stream body; after the body combines it with current operands, the completed stream output is staged for that same self-delay. The ordinary delay captures its operand from the completed row. The temporal commit pushes both staged samples into their respective rings, where they become readable at tick n plus one.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 620" role="img" aria-labelledby="history-retention-title history-retention-desc" style="width:100%;max-width:1080px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<title id="history-retention-title">Temporal state ownership and common commit</title>
+<desc id="history-retention-desc">Three panels distinguish delay storage. A direct top-level delay of an external environment variable reads monitor HistoryStore through HistoryAccess; its local delay commit is a no-op. A runtime-defined or internal delay owns an evaluator-local DelayState ring. A recursive self-delay also owns a local DelayState ring and stages the completed enclosing output. Positive delays return Deferred until their storage contains enough committed samples. All successful current-row samples become historical only at the common post-row commit.</desc>
 <defs>
-  <marker id="history-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
-  </marker>
+<marker id="history-retention-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+</marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Read old state; commit new samples</text>
-<rect x="25" y="48" width="440" height="350" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
-<rect x="495" y="48" width="440" height="350" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
-<text x="45" y="76" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">ordinary delay</text>
-<text x="515" y="76" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">recursive self-delay</text>
-<rect x="55" y="95" width="170" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="140" y="122" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ring through n - 1</text>
-<text x="140" y="140" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">committed history</text>
-<rect x="265" y="95" width="170" height="58" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="350" y="122" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Delay</text>
-<text x="350" y="140" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">read; mark pending</text>
-<line x1="225" y1="124" x2="265" y2="124" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<rect x="55" y="270" width="170" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="140" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">row operand n</text>
-<text x="140" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">completed row</text>
-<rect x="265" y="270" width="170" height="58" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="350" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ordinary capture</text>
-<text x="350" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">sample for this delay</text>
-<line x1="225" y1="299" x2="265" y2="299" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<line x1="350" y1="153" x2="350" y2="270" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-arrow)"/>
-<text x="362" y="218" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">pending</text>
-<rect x="525" y="95" width="170" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="610" y="122" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">ring through n - 1</text>
-<text x="610" y="140" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">committed history</text>
-<rect x="735" y="95" width="170" height="58" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="820" y="122" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">RecursiveDelay</text>
-<text x="820" y="140" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">previous output</text>
-<line x1="695" y1="124" x2="735" y2="124" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<rect x="525" y="190" width="170" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="610" y="224" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">current operands n</text>
-<rect x="735" y="190" width="170" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="820" y="217" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">stream body</text>
-<text x="820" y="235" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">combine current + previous</text>
-<line x1="695" y1="219" x2="735" y2="219" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<line x1="820" y1="153" x2="820" y2="190" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<rect x="735" y="285" width="170" height="58" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="820" y="312" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">stream output n</text>
-<text x="820" y="330" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">stage for self-delay</text>
-<line x1="820" y1="248" x2="820" y2="285" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<line x1="25" y1="420" x2="935" y2="420" stroke="#a8b3bf" stroke-width="1"/>
-<text x="35" y="448" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">after row n completes</text>
-<rect x="350" y="445" width="210" height="60" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="455" y="473" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">temporal commit</text>
-<text x="455" y="491" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">push staged samples</text>
-<line x1="350" y1="328" x2="415" y2="445" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<line x1="820" y1="343" x2="505" y2="445" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
-<rect x="650" y="445" width="255" height="60" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="777" y="473" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">rings through n</text>
-<text x="777" y="491" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">readable at tick n + 1</text>
-<line x1="560" y1="475" x2="650" y2="475" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-arrow)"/>
+<rect x="1" y="1" width="1078" height="618" rx="6" fill="#ffffff"/>
+<text x="24" y="30" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Historical reads have two storage owners and one visibility boundary</text>
+<text x="25" y="62" font-family="system-ui, sans-serif" font-size="12" fill="#52606d">During tick n, every positive delay reads state committed through n − 1; an unfilled read yields Value::Deferred.</text>
+
+<g font-family="system-ui, sans-serif">
+<rect x="25" y="86" width="330" height="360" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="45" y="116" font-size="14" font-weight="600" fill="#17212b">1. Direct top-level external delay</text>
+<text x="45" y="138" font-family="ui-monospace, monospace" font-size="12" fill="#52606d">total = default(total[1], 0) + scaled</text>
+<rect x="55" y="165" width="270" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="190" y="190" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">HistoryStore(total)</text>
+<text x="190" y="209" text-anchor="middle" font-size="11" fill="#52606d">monitor-owned bounded history</text>
+<rect x="55" y="260" width="270" height="64" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="190" y="286" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Delay via HistoryAccess</text>
+<text x="190" y="305" text-anchor="middle" font-size="11" fill="#52606d">read committed sample or Deferred</text>
+<path d="M 190 223 V 260" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-retention-arrow)"/>
+<rect x="55" y="360" width="270" height="58" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
+<text x="190" y="385" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">local DelayState commit</text>
+<text x="190" y="404" text-anchor="middle" font-size="11" fill="#52606d">no-op for shared external history</text>
+
+<rect x="375" y="86" width="330" height="360" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="395" y="116" font-size="14" font-weight="600" fill="#17212b">2. Internal or runtime-defined delay</text>
+<text x="395" y="138" font-family="ui-monospace, monospace" font-size="12" fill="#52606d">dynamic body, function body, internal value</text>
+<rect x="405" y="165" width="270" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="540" y="190" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NodeState::Delay</text>
+<text x="540" y="209" text-anchor="middle" font-size="11" fill="#52606d">evaluator-local DelayState ring</text>
+<rect x="405" y="260" width="270" height="64" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+<text x="540" y="286" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Delay</text>
+<text x="540" y="305" text-anchor="middle" font-size="11" fill="#52606d">read ring; stage current operand</text>
+<path d="M 540 223 V 260" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-retention-arrow)"/>
+<rect x="405" y="360" width="270" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="540" y="385" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">pending operand from row n</text>
+<text x="540" y="404" text-anchor="middle" font-size="11" fill="#52606d">push only after row succeeds</text>
+<path d="M 540 324 V 360" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-retention-arrow)"/>
+
+<rect x="725" y="86" width="330" height="360" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
+<text x="745" y="116" font-size="14" font-weight="600" fill="#17212b">3. Recursive self-delay</text>
+<text x="745" y="138" font-family="ui-monospace, monospace" font-size="12" fill="#52606d">previous enclosing stream output</text>
+<rect x="755" y="165" width="270" height="58" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+<text x="890" y="190" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NodeState::Delay</text>
+<text x="890" y="209" text-anchor="middle" font-size="11" fill="#52606d">evaluator-local DelayState ring</text>
+<rect x="755" y="260" width="270" height="64" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+<text x="890" y="286" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">RecursiveDelay</text>
+<text x="890" y="305" text-anchor="middle" font-size="11" fill="#52606d">read previous output or Deferred</text>
+<path d="M 890 223 V 260" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#history-retention-arrow)"/>
+<rect x="755" y="360" width="270" height="58" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="890" y="385" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">pending stream output n</text>
+<text x="890" y="404" text-anchor="middle" font-size="11" fill="#52606d">stage after enclosing output exists</text>
+<path d="M 890 324 V 360" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-retention-arrow)"/>
+</g>
+
+<line x1="25" y1="474" x2="1055" y2="474" stroke="#a8b3bf"/>
+<rect x="80" y="505" width="920" height="78" rx="7" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+<text x="540" y="535" text-anchor="middle" font-family="ui-monospace, monospace" font-size="14" font-weight="600" fill="#17212b">successful post-row temporal commit</text>
+<text x="540" y="558" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#52606d">HistoryStore records completed monitor values; local DelayState rings push staged samples. Both become readable at tick n + 1.</text>
+<path d="M 190 418 C 190 480 270 480 330 505" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-retention-arrow)"/>
+<path d="M 540 418 V 505" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-retention-arrow)"/>
+<path d="M 890 418 C 890 480 810 480 750 505" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#history-retention-arrow)"/>
 </svg>

@@ -1,143 +1,173 @@
 # Dataflow architecture
 
-[Next: Execution model](model.md) →
+The dataflow layer gives DSRV stream equations their synchronous execution model. Its organising model follows the synchronous dataflow tradition exemplified by Lustre: equations define streams, current data dependencies form a graph, and one logical tick evaluates that graph in a dependency-valid order before state becomes visible to the next tick ([Halbwachs et al., 1991](https://doi.org/10.1109/5.97300)). DSRV adds sparse/special values, runtime-defined properties, and live replacement to that foundation.
 
-The dataflow subsystem compiles synchronous stream equations into a machine that advances one coherent input row at a time. Its architecture is easiest to understand by separating four concerns: immutable meaning, persistent language state, mutable scheduling, and replaceable execution routing.
+## Layer responsibility
 
-This page stays at that conceptual level. The following pages first establish the synchronous execution model, then descend through compilation, runtime ownership, and tick execution before examining temporal state, language state, dynamic properties, and acceleration tiers in detail. The later pages leave the synchronous core and cover the asynchronous runtime that drives it, in both its ordinary and reconfigurable variants.
+A **dataflow graph** is a directed graph of computed streams. Each node is one stream equation; a current edge `a → b` means that `b` needs `a`'s value from the same logical tick. Current edges determine execution order and must be acyclic. A positive historical read such as `a[1]` observes committed state from an earlier tick, so it crosses time rather than adding a current graph edge.
 
-The guide therefore spans three source areas: `src/dataflow/` for immutable programs and stateful monitors, `src/runtime/dataflow.rs` for the runtime that drives them, and `src/io/` for the boundary at which inputs and outputs are resolved and opened.
+The layer compiles that graph once, schedules its currently active edges, evaluates each computed stream through an independent persistent state owner, commits temporal effects once, and projects one complete output row. It does not own input transports, output destinations, or asynchronous driving; `DataflowRuntime` adapts those external concerns to the synchronous row interface.
 
-## Architecture at a glance
+## Canonical execution
 
+The canonical view removes asynchronous adapters, runtime-defined dependency changes, execution-tier selection, and root replacement. It shows the synchronous machine that those mechanisms must preserve.
 
-**What to notice.** Compilation fixes the meaning and identity of the machine. Runtime state remains attached to those identities across ticks. Scheduling may change the order in which streams run, and execution routing may select a different physical path, but neither is allowed to redefine the program or relocate its state.
+```mermaid
+flowchart TB
+    accTitle: Canonical execution of one logical dataflow tick
+    accDescr: One logical input row is loaded into DataflowMonitor's current environment. DataflowProgram supplies the immutable stream graph, stable slots, and per-stream StreamProgram values. Scheduler supplies a dependency-valid order over computed streams. MonitorExecution invokes each persistent Evaluator once through canonical graph evaluation, producing a complete current row. Staged temporal writes commit once after ordered evaluation, outputs are projected, and committed state is visible only to a later tick.
 
-## Four boundaries to keep separate
+    input["One logical input row"] --> monitor["DataflowMonitor<br/>load the current environment"]
+    program["DataflowProgram<br/>stream graph · stable slots · StreamProgram values"] --> scheduler["Scheduler<br/>dependency-valid computed-stream order"]
+    program --> owners["Independent per-stream Evaluator owners<br/>persistent EvaluatorState"]
 
-### Immutable semantics
+    monitor --> execute["MonitorExecution<br/>canonical ordered evaluation"]
+    scheduler --> execute
+    owners --> execute
+    previous["Committed earlier-tick state"] -. "historical reads" .-> execute
 
-Compilation turns each stream equation into an ordered expression program, resolves names to stable locations, records same-tick dependencies, identifies temporal work, and validates where runtime-defined expressions may appear. These artifacts describe what evaluation means; they are not the place where history or lifting state lives.
+    execute --> row["Complete current row<br/>each computed stream published once"]
+    row --> commit["One post-row temporal commit"]
+    commit --> outputs["Output projection"]
+    commit -. "visible only later" .-> later["Committed state for a later tick"]
+```
 
-The outer stream set is fixed for the lifetime of a compiled monitor. Runtime reconfiguration can replace a nested expression and can reveal new same-tick edges, but it does not add outer streams, resize the environment, or create a new identity for an existing stream.
+**Reading rule.** Solid arrows are the canonical path through one logical tick. Inputs are loaded before scheduled work and are not computed-stream schedule entries. The evaluator-owner node is separate from `Scheduler` because persistent language state does not belong to an order position. Dashed arrows cross tick boundaries: only committed state can satisfy a later historical read.
 
-### Persistent state
+## Full dataflow architecture
 
-Every logical stream has one long-lived evaluator. Stateful operations—delays, lifted operators, branches, calls, recursion support, and active runtime-defined expressions—retain their mutable state below that evaluator.
+The full view restores the surrounding runtime, active dynamic dependencies, replaceable quickened and native routes, accelerator fallback, and root reconfiguration control. Each added path remains constrained by the canonical model above.
 
-This ownership is semantic. Reordering streams must not reset a delay, exchange state between call sites, or revive the state of a previously replaced runtime expression. Shared immutable programs are safe; shared mutable evaluator state generally is not.
+```mermaid
+flowchart TB
+    accTitle: Dataflow graph, scheduling, evaluator ownership, and acceleration tiers
+    accDescr: Input architecture supplies logical ticks to DataflowRuntime, which presents rows to the synchronous layer. DataflowProgram defines the immutable stream graph and stable layout. Scheduler combines fixed and active dynamic dependencies into a ScheduledExecutionPlan. Canonical, quickened, and feature-gated JIT routes execute against stable independent evaluator state, converge on one row publication and temporal commit, and pass complete rows to output architecture. Quickening and JIT can fall back to canonical execution.
 
-### Mutable scheduling
+    sources["External input sources"] --> input["Input architecture: logical ticks"]
+    input --> runtime["DataflowRuntime: batches to rows"]
 
-The scheduler answers one question: which logical stream may run next while preserving every active same-tick dependency?
+    subgraph layer["Synchronous dataflow layer"]
+        direction TB
+        program["DataflowProgram: immutable stream graph and stable layout"]
+        active["Active dynamic dependency edges"]
+        scheduler["Scheduler: dependency-valid stream order"]
+        plan["ScheduledExecutionPlan"]
+        route{"Physical execution route"}
+        canonical["Canonical graph evaluation"]
+        quick["Quickened mixed execution"]
+        jit["JIT native artifact when enabled"]
+        owners["Independent per-stream Evaluator state owners"]
+        execute["Execute ordered stream work"]
+        commit["Publish complete row and commit temporal state"]
 
-For a fully static monitor, the answer is fixed after compilation. For a reconfigurable monitor, the scheduler combines fixed edges with the exact edges of currently active runtime expressions. It may repair its cached order when an active expression changes, but the identities being ordered remain unchanged.
+        program --> scheduler
+        program --> owners
+        active --> scheduler
+        scheduler --> plan --> route
+        route --> canonical
+        route --> quick
+        route --> jit
+        canonical --> execute
+        quick --> execute
+        jit --> execute
+        owners --> execute
+        execute --> commit
+        execute -. "new active dynamic edges" .-> active
+        quick -. "fallback" .-> canonical
+        jit -. "fallback" .-> canonical
+    end
 
-### Replaceable routing
+    runtime --> execute
+    commit --> output["Output architecture: stages and destination owners"]
+    control["Root reconfiguration control"] -. "ordered cutover" .-> runtime
+```
 
-An execution route is a physical view of a valid schedule. It may partition work into interpreter steps, compact scalar runs, or native artifacts. Routes can be replaced or reused from a cache when schedule order changes.
+**Reading rule.** Solid arrows show graph definition, scheduling, alternative physical routes, evaluation, and complete-row flow. The evaluator-owner node is separate from the schedule because language state does not move when order or execution tier changes. Dashed edges show dynamic schedule feedback, accelerator fallback to canonical semantics, and root control rather than ordinary row data.
 
-A route is therefore disposable. It can refer to stable programs, value locations, and state locations, but it must not become the sole owner of canonical language state. Falling back to a more general executor must recover the same logical machine, not start a new one.
+## Organising concepts
 
-## Stable identity, replaceable order
-
-The central architectural distinction is between **where something lives** and **when it runs**.
-
-Three identity domains remain stable:
-
-1. **Stream identity** selects the persistent evaluator for one computed stream.
-2. **Environment identity** selects the current-row cell for an input or computed stream.
-3. **Operation identity** selects an operation and its matching current value and persistent state within one expression program.
-
-Execution order is a list over stream identities. Replacing that list does not move evaluators, environment cells, or operation state. Outputs are another stable projection over environment identities rather than an additional evaluation pass.
-
-This rule is what lets dynamic dependency repair and execution-tier changes coexist with temporal semantics. History belongs to stable operations; the scheduler only decides when their containing streams are eligible to advance.
-
-## Two tick shapes, one semantic contract
-
-A static monitor has one computation range: load inputs, evaluate the dependency-valid stream order, commit temporal writes, and project outputs.
-
-A reconfigurable monitor introduces a barrier:
-
-1. evaluate the computed prerequisites needed to obtain runtime expression sources;
-2. resolve active expressions and repair dependency order;
-3. evaluate every remaining stream; and
-4. commit once, then release any newly sealed source prerequisites for the next tick.
-
-The source and main ranges are disjoint and together contain every logical stream exactly once. They are phases of one tick, not independent ticks. In particular, there is no temporal commit at the barrier.
-
-## Two runtimes, one monitor
-
-`DataflowMonitor` is a synchronous row function; it does not drive itself. Two runtimes wrap it, sharing one adapter and differing only in what they are allowed to replace while running.
-
-| Concern | Ordinary runtime | Reconfigurable runtime |
+| Concept | Meaning in this layer | Rust names and deeper explanation |
 |---|---|---|
-| Builder | `DataflowRuntimeBuilder` | `ReconfigurableDataflowRuntimeBuilder` |
-| Runtime spec | `RuntimeSpec::Dataflow(policy)` | `RuntimeSpec::ReconfDataflow(policy)` |
-| Input | A caller-supplied `InputStream<Value>` | An `InputPipelineSession`; multiple source streams are retained, drained, added, and composed at the ordered barrier |
-| Output | A caller-supplied `OutputWriter` | An `OutputPipelineSession`; fixed destinations update bindings/interfaces in place |
-| Flush policy | Selected `ExecutionPolicy` | Selected `ExecutionPolicy` (CLI default `Buffered`; direct reconfigurable builder default `Synchronous`) |
-| Executor | Accepted and ignored; the engine and writer are polled cooperatively in the caller's task | Required for opening the reconfigurable output pipeline and its worker-backed stages |
-| Definition | Fixed for the process | Replaceable at a global command barrier |
-| Failure scope | Engine or writer error ends the run | Additionally, any plan-application or acknowledgement failure terminates the owner loop |
+| dataflow graph | Computed streams are nodes; producer-to-consumer current dependencies are directed edges. Historical reads are retained state across ticks, not current edges. | `DataflowProgram`, `StreamProgram`; [execution model](model.md) and [compilation](compilation.md) |
+| scheduling | Convert the active current-dependency graph into an order where every producer runs before its consumers. Runtime-defined expressions may change active edges and require repair. | `Scheduler`, `ScheduledExecutionPlan`; [scheduling](scheduling.md) |
+| independent stream evaluators | Each computed stream has its own `Evaluator` and persistent operation state, keyed by stable stream identity rather than schedule position. | `MonitorExecution`, `Evaluator`; [runtime ownership](runtime-ownership.md), [temporal state](temporal-state.md), and [language state](language-state.md) |
+| canonical execution | The graph interpreter and evaluator state define language meaning, special values, errors, publication, and temporal commit. | `DataflowMonitor`, `EvaluatorState`; [tick execution](tick-execution.md) |
+| quickening | A replaceable mixed scalar/canonical route accelerates eligible operations while preserving canonical state and fallback. | `QuickPlan`, `PlanBundle`; [execution tiers](execution-tiers.md) |
+| JIT tier | When enabled, guarded native artifacts accelerate eligible scheduled work while retaining canonical fallback and the same state/commit contract. | JIT coordinator and artifacts; [execution tiers](execution-tiers.md) |
 
-Both variants use the same `DirectDataflowEngine`, the same packed `OutputBatch` representation, and the same `OutputWriter` backpressure path. The reconfigurable variant carries its selected `ExecutionPolicy` and adds a typed control item, resource-free planning, a serial cutover that applies incremental input/output plans, and context transfer — nothing about ordinary tick evaluation changes.
+## Principal entities
 
-`RuntimeSpec::ReconfSemiSync` is a separate supported implementation in `src/runtime/reconfigurable_semi_sync.rs`. It shares neither this evaluator nor its failure policy and is not described by this guide.
+| Entity | Responsibility |
+|---|---|
+| input pipeline (`InputPipeline`) | Resolves model variables to source owners and delivers ordered logical ticks without exposing transport configuration to evaluation. |
+| runtime adapter (`DataflowRuntime`; direct row engine `DirectDataflowEngine`) | Converts asynchronous `InputBatch` values into synchronous rows and submits complete `OutputBatch` rows under writer backpressure. |
+| compiled monitor (`DataflowMonitor`) | Owns the current row, compiled definition, scheduler, evaluator execution, history, and the common temporal commit boundary. |
+| compiled definition (`DataflowProgram`) | Holds immutable stream programs, environment layout, monitor plan, output projection, and semantic identity produced by compilation. |
+| evaluator execution (`MonitorExecution`) | Owns persistent evaluator instances and replaceable canonical, quickened, or native execution routes. |
+| output pipeline (`OutputPipeline`) | Preserves logical output ticks while staging, selecting, routing, and delivering values to opened destination owners. |
+| reconfigurable runtime (`DataflowRuntime`, configured by `ReconfigurableDataflowRuntimeBuilder`) | Serializes data evaluation and ordered replacement across persistent input, monitor, and output owners. |
 
-## Correctness boundaries
+A compiled monitor does not own transports or drive itself. Input and output batching may change physical granularity, but it must not add, merge, or reorder logical ticks unless an explicit input reduction says so.
 
-Six boundaries hold regardless of which physical path executes a tick:
+## Cross-cutting invariants
 
-- **Row boundary:** one successful public evaluation publishes one coherent output row.
-- **Dependency boundary:** a same-tick consumer runs after its current producer; a historical read observes only an earlier committed tick.
-- **Publication boundary:** each logical stream publishes its current result once to its stable row location.
-- **Commit boundary:** all temporal writes for the row become visible together after successful computation.
-- **State boundary:** mutable language state stays with persistent evaluators, not schedules or cached routes.
-- **Failure boundary:** a failed executing tick publishes no outputs, commits no temporal history, and ends the monitor.
+Every execution route preserves these facts:
 
-These are semantic constraints, not descriptions of one interpreter. Any quickened or native path must preserve the same boundaries, including during deoptimization and replay.
+1. one successful monitor call is one logical tick;
+2. current dependencies are evaluated before their consumers;
+3. historical reads observe only previously committed ticks;
+4. each computed stream publishes once to a stable row location;
+5. temporal writes become historical only at the common post-row commit;
+6. persistent language state belongs to stable evaluator identities, not schedule positions;
+7. a failed tick publishes no output row and commits no monitor history;
+8. optimization may replace routing, never the semantic authority of the canonical program and state.
 
-## Reading this guide
+## One end-to-end row
 
-Use the pages in this order for a top-down architecture review:
+The guide reuses one specification throughout its conceptual pages:
 
-1. [Dataflow execution model](model.md) develops synchronous rows, absence, unavailability, and current versus historical dependencies without assuming implementation details.
-2. [Compilation](compilation.md) follows source expressions through lowering, dependency discovery, binding, executable programs, monitor planning, and source-prerequisite closure construction.
-3. [Runtime ownership](runtime-ownership.md) identifies which objects own immutable meaning, persistent state, mutable scheduling, and replaceable routes.
-4. [Tick execution](tick-execution.md) compares static and reconfigurable phase order and explains commit, release, and terminal failure behavior.
-5. [Temporal state](temporal-state.md), [Language state](language-state.md), and [Dynamic properties](dynamic-properties.md) examine the principal stateful semantics.
-6. [Execution tiers](execution-tiers.md) explains canonical, quickened, and native physical execution.
-7. [The dataflow runtime adapter](runtime-adapter.md) leaves the synchronous core and describes how ticks are actually driven, buffered, and delivered.
-8. [Input and output boundary](runtime-io.md) defines input sessions, resolved output interfaces, request-specific writers, and the flush/close barrier at cutover.
-9. [The reconfigurable runtime](reconfigurable-runtime.md) describes the serial owner loop, resource-free planning, incremental input/output application, and nested expression reconfiguration.
-10. [The replacement contract](replacement-contract.md) defines semantic keys, activation timing, and semantic/interface identity.
-11. [Context transfer](context-transfer.md) explains what state survives a replacement and why.
-12. [Failure and termination](failure-model.md) assembles the containment ladder from node deoptimization to runtime termination.
-13. [Concept-to-code map](implementation-guide.md) connects every concept above to the files and types that implement it.
+```dsrv
+in x: Int
+out alert: Bool
+out total: Int
+out scaled: Int
+alert  = total > 20
+total  = default(total[1], 0) + scaled
+scaled = x * 2
+```
 
-## Map to the current implementation
+For `x = 4`, the monitor evaluates `scaled = 8`, then `total = 8`, then `alert = false`. After the row is complete, `total = 8` becomes available to `total[1]` on the next tick. The [execution model](model.md) traces this scenario in detail.
 
-| Architectural concept | Current implementation | Primary guide |
-|---|---|---|
-| Immutable compilation result | `DataflowProgram` | [Compilation](compilation.md) |
-| Public synchronous machine | `DataflowMonitor::from_program` and `DataflowMonitor` | [Tick execution](tick-execution.md) |
-| Immutable expression semantics | `StreamProgram` and `BoundEvaluationGraph` | [Compilation](compilation.md) |
-| Fixed monitor structure | `MonitorPlan` | [Compilation](compilation.md) |
-| Stable stream, row, and operation identities | `StreamId`, `EnvironmentSlot`, and `NodeId` | [Runtime ownership](runtime-ownership.md) |
-| Persistent per-stream state | `EvaluatorArena`, `Evaluator`, `EvaluatorTierStates`, and `EvaluatorState` | [Runtime ownership](runtime-ownership.md) |
-| Active dependency order | `Scheduler` and `ReconfigurableExpressionState` | [Tick execution](tick-execution.md) |
-| Replaceable schedule-specific routing | `ExecutionEngine`, `PlanBundle`, and `ScheduledExecutionPlan` | [Runtime ownership](runtime-ownership.md) |
-| Runtime-defined nested programs | `DynamicExpressionState` and its active `Evaluator` | [Dynamic properties](dynamic-properties.md) |
-| Shared temporal visibility boundary | `evaluate_main_and_commit` and `commit_active_plan` | [Temporal state](temporal-state.md) |
-| Physical acceleration | evaluator-local quickening/`JittedGraphEvaluator` tiers, `QuickPlan`/`QuickStep`, and Jit's fused artifacts | [Execution tiers](execution-tiers.md) |
-| Asynchronous tick driver and packed output batches | `DataflowRuntime`, `DirectDataflowEngine`, `OutputBatch`, and `OutputWriter` | [Runtime adapter](runtime-adapter.md) |
-| Input sessions and typed control | `InputPipeline`, `ReconfigurableInput`, and `ReconfigurableInputItem` | [Input and output boundary](runtime-io.md) |
-| Resolved output interfaces and opening | `OutputBackendBuilder`, `ResolvedOutput`, and `OutputInterface` | [Input and output boundary](runtime-io.md) |
-| Output flush, replacement, and terminal cleanup | `flush_reconfiguration_barrier`, `finish_dataflow_output`, `reconfiguration_failure`, and `finish_writer` | [Input and output boundary](runtime-io.md) |
-| Serial root replacement and nested reconfiguration | `run_reconfigurable_dataflow`, `plan_runtime_reconfiguration`, `apply_runtime_reconfiguration`, and source-barrier installation | [The reconfigurable runtime](reconfigurable-runtime.md) |
-| Safe activation points and semantic identity | `DataflowMonitor::reconfigure`, `DefinitionKey`, `StreamStateKey`, `MonitorRevision`, and `InterfaceRevision` | [The replacement contract](replacement-contract.md) |
-| State carried across a replacement | `DataflowMonitor::context_transfer_from`, `ReconfigurationMapping`, and `ContextTransferPolicy` | [Context transfer](context-transfer.md) |
-| Failure containment and terminal policy | `DataflowMonitor::failed` and owner-loop termination | [Failure and termination](failure-model.md) |
+## Progressive reading path
 
-[Next: Execution model](model.md) →
+### Canonical semantics
+
+1. [Execution model](model.md) defines rows, absence, dependencies, and the running trace.
+2. [Compilation](compilation.md) explains how equations become immutable programs and plans.
+3. [Scheduling](scheduling.md) explains how fixed and active dependencies become source and main execution orders.
+4. [Runtime ownership](runtime-ownership.md) separates immutable meaning, persistent state, mutable order, and replaceable routing.
+5. [Tick execution](tick-execution.md) establishes phase order and the common commit boundary.
+
+### Stateful language mechanisms
+
+6. [Temporal state](temporal-state.md) explains staging, delay rings, and next-tick visibility.
+7. [Language state](language-state.md) covers lifting, conditionals, functions, and recursive frames.
+8. [Dynamic properties](dynamic-properties.md) covers nested expression activation and exact active dependency discovery.
+
+### Physical execution and external ownership
+
+9. [Execution tiers](execution-tiers.md) places quickening and native execution over the canonical machine.
+10. [Runtime adapter](runtime-adapter.md) connects asynchronous input batches to synchronous rows.
+11. [Input and output sessions](runtime-io.md) defines live transport ownership.
+
+### Replacement and containment
+
+12. [Root cutover](reconfigurable-runtime.md), [replacement identity](replacement-contract.md), and [context transfer](context-transfer.md) explain live replacement.
+13. [Failure and termination](failure-model.md) states containment and resulting runtime state.
+14. [Implementation mapping](implementation-guide.md) maps these concepts and entities to source and tests.
+
+The separate [input architecture](../../input-architecture.md), [output architecture](../../output.md), and [reconfiguration overview](../../reconfiguration.md) place the synchronous machine in the wider runtime.
+
+## Reference
+
+N. Halbwachs, P. Caspi, P. Raymond, and D. Pilaud, “The Synchronous Data Flow Programming Language LUSTRE,” *Proceedings of the IEEE*, 79(9), 1305–1320, 1991. [doi:10.1109/5.97300](https://doi.org/10.1109/5.97300).

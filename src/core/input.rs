@@ -1,3 +1,55 @@
+//! Logical input updates, ticks, batches, and data-only streams.
+//!
+//! # Contract
+//!
+//! An input tick is one nonempty, duplicate-free set of variable updates evaluated
+//! together. [`InputBatch`] stores an ordered sequence of ticks; a physical batch
+//! boundary does not add model time, and packed storage does not change simultaneous
+//! or sequential tick boundaries. [`InputStream`] carries only data batches.
+//! Reconfiguration control uses a separate crate-private adapter.
+//!
+//! # Principal entities
+//!
+//! | Entity | Responsibility |
+//! |---|---|
+//! | [`InputUpdate`] | Names one variable and value inside a logical tick. |
+//! | [`InputBatch`] | Owns zero or more ordered logical ticks while preserving efficient native storage. |
+//! | [`InputTick`] and [`InputUpdateRef`] | Borrow one logical tick and its updates without expanding packed rows. |
+//! | [`InputTicks`], [`InputUpdates`], and [`OwnedInputTicks`] | Traverse logical order independently of physical segment representation. |
+//! | [`InputStream`] | Delivers successful batches or source errors to an ordinary runtime. |
+//!
+//! # Example
+//!
+//! ```
+//! use trustworthiness_checker::{InputBatch, InputUpdate};
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! let batch = InputBatch::from_ticks(vec![
+//!     vec![InputUpdate::new("x".into(), 1)],
+//!     vec![
+//!         InputUpdate::new("x".into(), 2),
+//!         InputUpdate::new("y".into(), 3),
+//!     ],
+//! ])?;
+//!
+//! assert_eq!(batch.tick_count(), 2);
+//! assert_eq!(batch.update_count(), 3);
+//! assert_eq!(batch.ticks().nth(1).unwrap().len(), 2);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The first tick is an independent update. The second tick contains simultaneous
+//! `x` and `y` updates. Delivering both in one [`InputBatch`] does not merge them.
+//!
+//! # Implementation mapping
+//!
+//! `InputSegment` represents singleton runs, simultaneous ticks, and fixed-layout
+//! packed rows. `InputBatchStorage` combines one or several segments without exposing
+//! that representation publicly. The iterator types project those segments onto the
+//! logical tick contract; source resolution, opening, windowing, and live ownership
+//! are implemented by the input pipeline modules under `crate::io`.
+
 use std::{collections::HashSet, slice, vec};
 
 use futures::StreamExt;

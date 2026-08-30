@@ -64,7 +64,7 @@ In this section we will set up a static distribution of a specification across t
 
 **File**: `simple_add_distributable.dsrv`
 
-```ocaml
+```dsrv
 in x: Int
 in y: Int
 in z: Int
@@ -190,7 +190,7 @@ This will use the same specification as before (`simple_add_distributable.dsrv`)
 
 **File**: `simple_add_distributable.dsrv`
 
-```ocaml
+```dsrv
 in x: Int
 in y: Int
 in z: Int
@@ -276,7 +276,7 @@ For optimized distribution based on constraints, create a specification with dis
 
 **File**: `simple_add_dist_constraints.dsrv`
 
-```ocaml
+```dsrv
 in x
 in y
 in z

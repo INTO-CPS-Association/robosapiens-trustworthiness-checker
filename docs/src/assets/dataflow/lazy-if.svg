@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 930 400" role="img" aria-labelledby="if-arrow-title if-arrow-desc" style="width:100%;max-width:930px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
 <title id="if-arrow-title">Conditional evaluation in ordinary and recursive contexts</title>
-<desc id="if-arrow-desc">Ordinary conditionals evaluate both branch EvaluationGraphs so both persistent EvaluatorStates advance before one result is selected. In recursive call context a Boolean evaluates only its selected branch, while Deferred or NoVal evaluates neither branch. Reconfigurable expressions inside lazy branches are rejected during compilation.</desc>
+<desc id="if-arrow-desc">Ordinary conditionals evaluate both branch EvaluationGraphs so both persistent EvaluatorStates advance before one result is selected. In recursive call context the condition first retains the last Boolean across NoVal. An effective Boolean evaluates only its selected branch; Deferred, or NoVal without a retained Boolean, evaluates neither branch. Reconfigurable expressions inside lazy branches are rejected during compilation.</desc>
 <defs>
   <marker id="if-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
@@ -28,10 +28,10 @@
 <text x="155" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">recursive call context</text>
 <text x="155" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">genuinely lazy selection</text>
 <rect x="345" y="265" width="240" height="68" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="465" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Bool condition</text>
-<text x="465" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">evaluate selected branch only</text>
+<text x="465" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">effective Bool</text>
+<text x="465" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">current or retained; select one branch</text>
 <rect x="655" y="265" width="240" height="68" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="775" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred or NoVal</text>
+<text x="775" y="297" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred or unretained NoVal</text>
 <text x="775" y="315" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">evaluate neither branch</text>
 <line x1="275" y1="299" x2="345" y2="299" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>
 <path d="M 275 315 C 430 390, 560 390, 655 315" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#if-arrow)"/>

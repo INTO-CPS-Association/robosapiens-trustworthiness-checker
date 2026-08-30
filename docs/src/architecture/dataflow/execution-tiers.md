@@ -1,175 +1,88 @@
 # Execution tiers
 
-[← Previous: Dynamic properties](dynamic-properties.md) · [Next: Runtime adapter](runtime-adapter.md) →
+Canonical graph evaluation defines dataflow semantics. Quickened and native execution are replaceable physical routes that must preserve the same stable state owners, publication order, [source and tick barriers](tick-execution.md#tick-and-source-barriers), errors, and fallback behavior.
 
-The dataflow runtime has one semantic machine and several physical executors. Bound graphs, stable environment slots, evaluator-owned state, dependency order, and the end-of-tick temporal commit define correctness. Quickening and JIT compilation accelerate eligible work without replacing that model.
+```mermaid
+flowchart TB
+    accTitle: Canonical, quickened, and native execution routes
+    accDescr: A ScheduledExecutionPlan fixes semantic order and stable identities for MonitorExecution. The canonical route evaluates StreamProgram graphs with EvaluatorState. The quickened route uses the PlanBundle quick plan to mix scalar runs with graph steps, while retaining canonical work inside the route. The optional Jit route executes guarded fused or per-stream native artifacts. Quickened type mismatches and native guard misses fall back to canonical evaluation. Every successful route produces the same environment publication, temporal commit, and output projection contract.
 
-![Execution layout](../../assets/dataflow/execution-layout.svg)
+    plan["ScheduledExecutionPlan<br/>semantic order and stable identities"] --> execution["MonitorExecution<br/>one logical tick contract"]
 
-## The architecture in one sentence
+    subgraph routes["Physical execution routes"]
+        direction TB
+        canonical["Canonical route<br/>StreamProgram + EvaluatorState"]
+        quick["Quickened route<br/>PlanBundle::quick"]
+        native["Native route<br/>Jit fused or per-stream artifact"]
+        quick --> mixed["ScalarRun mixed with GraphStep"]
+    end
 
-A backend-neutral `ScheduledExecutionPlan` orders stable logical streams; a `PlanBundle` derives schedule-specific `QuickPlan` and `QuickStep` routing; each `Evaluator` owns `EvaluatorTierStates`; and `Jit` may execute all or part of the same plan while preserving canonical fallback.
+    execution -->|"always available"| canonical
+    execution -->|"quickening enabled"| quick
+    execution -->|"JIT active and guarded"| native
+    mixed -. "kind mismatch or unsupported work" .-> canonical
+    native -. "guard miss or unavailable artifact" .-> canonical
 
-## Tier 0: canonical execution
+    canonical --> contract["Same successful-tick contract<br/>environment publication · one temporal commit · output projection"]
+    mixed --> contract
+    native --> contract
+```
 
-Canonical execution is the reference implementation and the universal fallback.
+**Reading rule.** Solid arrows show available execution paths to the same successful-tick contract, not a required sequence through every tier. The quickened route is deliberately mixed: `ScalarRun` handles eligible streams while `GraphStep` retains quickened or canonical graph evaluation. Dashed arrows are local fallback to canonical evaluation. `ScheduledExecutionPlan` and canonical evaluator state remain the semantic reference regardless of the selected route.
 
-Each `Evaluator` owns an `Rc<StreamProgram>` and `Evaluator.tier_states` (`EvaluatorTierStates`), whose canonical state is `EvaluatorState`. The graph is evaluated in node order, stream results are published as `Value` into stable environment slots, recursive writes are staged, and the monitor commits temporal state only after the logical row is complete.
+## Principal entities
 
-Canonical state is authoritative even when another tier is active. Replacing a schedule does not move evaluators or reset delay rings, branch state, function state, active dynamic expressions, or prior deoptimization decisions.
+| Entity | Responsibility |
+|---|---|
+| semantic scheduled plan (`ScheduledExecutionPlan`) | Records dependency-valid stream order, stable value/state identities, temporal effects, and commit streams without owning mutable evaluator state or a backend artifact. |
+| execution owner (`MonitorExecution`) | Activates tiers, executes the selected source and main ranges, publishes stream results, and preserves the one-tick commit boundary. |
+| mixed route (`PlanBundle::quick`) | Lowers one semantic plan into `QuickStep::ScalarRun` and `QuickStep::Graph` work while retaining canonical handling for unsupported or fallible operations. |
+| persistent stream evaluator (`Evaluator`) | Owns the bound `StreamProgram`, canonical `EvaluatorState`, and evaluator-local quickened or per-stream native state. |
+| native coordinator (`Jit`) | Activates and guards fused or per-stream native artifacts, reports fallback outcomes, and materializes native-owned state when canonical ownership must be restored. |
 
-## Tier 1: quickening
+## Canonical authority
 
-Checked lowering may attach `ScalarSignature` metadata to supported unary and binary nodes. A quickening `Plan` overlays one instruction on every canonical graph node:
+The bound `StreamProgram`, canonical `EvaluatorState`, environment row, and monitor phase order are the semantic authority. Every operation kind has a canonical path capable of representing special values and language errors.
 
-- supported scalar operations get typed scalar instructions;
-- eligible `if` nodes may have quickened branch plans;
-- every unsupported node remains `Canonical`.
+Optimization is enabled only after that model exists. It cannot define a second interpretation of a tick.
 
-The canonical graph is never removed. Quickened nodes publish canonical node values, but compact lifting state may temporarily be the newest physical representation of the operator state. Before that overlay is discarded or a compatible owner is rewritten, it is materialized back into `EvaluatorState`.
+## Quickening
 
-Unchecked, infallible one-node unary and binary graphs can also quicken adaptively. Their first concrete canonical evaluation derives an observed scalar plan and seeds its compact lifting state from the canonical owner. Type changes deoptimize through the same path as statically planned instructions. Adaptive planning is disabled for history-aware execution and whenever quickening is disabled.
+Quickening observes eligible scalar operations and builds a mixed `QuickPlan` inside the active `PlanBundle`, containing scalar and canonical instructions. Scalar results are mirrored to canonical `Value` locations so neighboring canonical work and fallback see one coherent row.
 
-![Quickening is an overlay](../../assets/dataflow/specialization-overlay.svg)
+![Scalar specialization overlays canonical graph and state, with local deoptimization](../../assets/dataflow/specialization-overlay.svg)
 
-### Per-node deoptimization
+**Reading rule.** The canonical graph and state remain underneath the overlay. A runtime kind mismatch materializes retained lifting state and permanently deoptimizes only the affected operation; neighboring scalar operations may continue.
 
-Quickening deoptimizes at node granularity. If a scalar instruction cannot read an operand with its planned kind, that node:
+Evaluator-local adaptive state belongs to the same owner as canonical state. Exact context transfer therefore cannot separate an optimized representation from the evaluator whose semantics it represents.
 
-1. changes its quickening state to `Deoptimized`;
-2. restores its lifting state to the matching canonical node state;
-3. evaluates canonically for the current tick; and
-4. remains canonical on later ticks.
+## Schedule-level routing
 
-Other nodes in the graph remain quickened. `NoVal` and `Deferred` are represented directly by `ScalarValue`; an incompatible concrete value is what generally forces deoptimization.
+A dependency-valid schedule from [`Scheduler`](scheduling.md) is lowered to a `ScheduledExecutionPlan`; the execution engine packages its mixed route in a `PlanBundle`. Contiguous eligible work may become scalar runs; other streams remain graph steps. Dynamic schedule repair selects or creates a route for the new order.
 
-## `PlanBundle`: one schedule, multiple views
+Routes are cacheable and disposable. `PlanId` identifies a route, not monitor state. Cache eviction or route replacement cannot reset delay rings, function frames, nested evaluators, or deoptimization decisions attached to stable owners.
 
-A `PlanBundle` pairs:
+## Native execution
 
-- a semantic `ScheduledExecutionPlan`; and
-- a derived `QuickPlan`.
+JIT coordination builds guarded native artifacts for eligible work and retains a canonical fallback. Before fallback, transfer, or route replacement, native-owned mutable state is materialized into the evaluator's authoritative state representation as required.
 
-The semantic plan records a unique `PlanId`, the source/main boundary, ordered `PlannedStream` entries, stable output and state identities, per-stream effects, temporal operations, and the monitor's commit set. It owns immutable program references but no evaluator state or backend artifact.
+A native guard miss or unsupported case falls back within the same logical tick contract. It must not publish a partial row, commit temporal state twice, or suppress a language error visible on the canonical path.
 
-The quick plan has separate source and main step arrays. Each `QuickStep` is one of:
+## Equivalence and failure
 
-- **`ScalarRun`** — a maximal consecutive run of streams whose entire graph is exactly one supported unary or binary output node;
-- **`Graph`** — entry to the general evaluator, optionally with a mixed per-node quickening plan.
+All tiers preserve:
 
-Every stream still has an individual publication boundary. A scalar result is published both as a canonical environment `Value` and, when possible, as a compact value for later streams. A rich `Graph` step may therefore end a scalar run and still feed a later one.
+- one evaluation per logical stream per tick;
+- stable environment and evaluator identities;
+- exact current dependency order;
+- one temporal commit after the row;
+- one output projection;
+- terminal monitor failure on an unrecovered evaluation error.
 
-The execution engine keeps one active bundle and at most four previous bundles. A matching source/main order can be swapped back without rebuilding its quick plan. Bundle replacement changes routing only; mutable state remains in the fixed evaluator arena.
+Tier-local compilation failure or guard failure can be contained by canonical fallback when the implementation reports it as recoverable. A canonical evaluation failure remains a monitor failure.
 
-## Tier 2: native JIT
+## Implementation mapping
 
-JIT activation is disabled, eager, or delayed by a hotness threshold. Hotness advances once at the beginning of a logical tick, not once per source/main range. On activation, selection proceeds in strict order:
+The implementation mapping leads through `src/dataflow/execution/quickening/`, `src/dataflow/execution/jit/`, `src/dataflow/execution/scheduled_plan.rs`, and monitor execution tier code. Differential and focused tests compare optimized routes with canonical evaluation.
 
-| Attempt | Artifact | Selection requirements | Success behavior |
-|---|---|---|---|
-| 1 | **Fused scalar run** (`JittedRunEvaluator`) | No source barrier; every stream lowers to scalar native code without canonical boundary nodes. | One artifact computes the complete plan and publishes all stream outputs. |
-| 2 | **Fused temporal run** (`JittedTemporalRunEvaluator`) | No source barrier; the plan is infallible and temporal; every stream and every commit stream has supported scheduled temporal lowering. | One artifact computes the complete plan and performs the logical temporal commit at its end. |
-| 3 | **Per-stream graphs** (`JittedGraphEvaluator` in `Evaluator.tier_states`) | Each stream is considered independently. | Supported streams run native regions; unsupported streams use quickened or canonical execution. |
-
-`ExecutionEngine` and its JIT coordinator still own activation, execution-mode selection, fused scalar/temporal artifacts, and schedule-wide replay state. Each per-stream `JittedGraphEvaluator` instead lives in its owning `Evaluator.tier_states`; `NativeExecution::PerStream` is only the mode marker, not a boxed artifact array.
-
-A backend error or unsupported shape falls through to the next attempt. `JitReport` reports `Fused`, `PerStream`, or `Unavailable` plus artifact and temporal coverage details.
-
-### Fused scalar
-
-The fused scalar artifact keeps a packed raw environment between streams, avoiding repeated graph dispatch and native boundary crossings. It materializes canonical stream outputs after a successful tick. Because it has no canonical boundary inputs, every graph in the plan must be fully lowerable.
-
-### Fused temporal
-
-The fused temporal artifact additionally owns packed temporal state. Temporal reads happen during stream computation, but generated writes are sunk past every checked operation in the complete plan. A checked-arithmetic side exit therefore observes pre-tick temporal state; only a successful artifact reaches its native commit sequence.
-
-### Per-stream graphs
-
-The evaluator arena's stable `StreamId` index selects the owning evaluator, so per-stream artifacts do not follow current schedule position. A graph may combine canonical or scheduled temporal boundary nodes with a native scalar region. Temporal evaluation remains in `ScheduledTemporalPlan`, and its writes commit through the monitor's shared end-of-tick traversal; a per-stream artifact never owns a complete internal commit.
-
-Presence failures (`NoVal` or `Deferred`) can fall back for the current tick without necessarily disabling an ordinary per-stream scalar artifact. A concrete type mismatch or native checked-operation failure permanently disables that artifact. Fallback and deoptimization occur per stream; unrelated artifacts continue to run.
-
-## The source barrier
-
-A non-empty source range creates `ScheduledExecutionPlan::has_source_barrier()` because dynamic dependencies must be resolved between the source and main ranges.
-
-The barrier has three consequences:
-
-1. Whole-plan fused scalar and fused temporal compilation are rejected.
-2. Quickening plans remain separate by range; a `ScalarRun` cannot span the barrier.
-3. Compact values published by source-range streams remain available to main-range steps.
-
-Per-stream `JittedGraphEvaluator` tiers are reached through stable stream identities and can be used on either side of the barrier. Their scheduled temporal operations only stage state, so the shared commit still occurs after both ranges. If `defer` sealing removes the last source prerequisite, the next plan has no source barrier and JIT selection may promote the monitor to a fused artifact.
-
-For the dynamic scheduling model itself, see [Dynamic properties](dynamic-properties.md#one-tick-two-disjoint-ranges).
-
-## Artifact and state lifetime
-
-The ownership boundaries are intentional:
-
-| Object | Owns mutable language state? | Lifetime / invalidation |
-|---|---:|---|
-| `StreamProgram` | No | Shared by `Rc`; stable across schedules. |
-| `Evaluator` / `EvaluatorTierStates` | **Yes** | One per logical stream; holds canonical `EvaluatorState`, optional quickening/`quick_plan`, and the JIT per-stream native tier. |
-| `PlanBundle` | No | Active or in the four-entry previous-plan cache. |
-| Fused native artifact | Native scratch/state only | Tied to the `PlanId`; rebuilt when the active schedule or source boundary changes. |
-| Per-stream `JittedGraphEvaluator` | Evaluator-local native state/artifact | Held by the owning `Evaluator.tier_states`; retained across schedule changes. |
-| `CompiledGraph` module | Executable code | Kept alive by the artifact's `Rc`; multiple graph functions may share one finalized module. |
-
-Schedule-independent evaluator-local per-stream artifacts survive `defer` sealing and dynamic order repair. Whole-plan artifacts cannot: their stream order and source boundary are part of their identity.
-
-A root reconfiguration follows its `MonitorReconfigurationPlan`. `RetainExact` keeps the live monitor and its existing execution artifacts. `InstallCold` and `Transfer` materialize a monitor from the target `DataflowProgram`, so their plans and compiled artifacts are built for that new machine; `Transfer` carries semantic owners and evaluator-local tier states accepted by `context_transfer_from`. Required fused/native representations are materialized before transfer. Exact mappings move canonical and quickening state together while retaining native artifacts bound to each target program and environment ABI. Compatible mappings rewrite canonical owners and rebuild or synchronize derived tiers. JIT coordinator state and fused artifacts remain target-owned; see [Context transfer](context-transfer.md#destructive-handoff).
-
-## Temporal promotion and deoptimization
-
-Native temporal execution maps canonical node identities onto scalar or packed physical state rather than creating an independent history model.
-
-1. `ScheduledTemporalPlan` identifies supported `Delay`, `RecursiveDelay`, and `Default` nodes from stable `(stream, node)` plan slots.
-2. Promotion converts canonical `NodeState::Delay` / `Default` values to scalar forms when every retained value is representable.
-3. A fused temporal artifact may pack those scalar forms into `NativeTemporalState`; per-stream artifacts leave scalar temporal state in the evaluator.
-4. On deoptimization, packed fused state is materialized back into evaluator-owned state and scalar node variants are converted back to canonical variants.
-
-Promotion is all-or-safe-fallback. Partial promotion is explicitly reversed. The canonical evaluator always regains a complete state representation before canonical execution resumes.
-
-## Side exits and non-committing replay
-
-Native execution can advance compact lifting state without updating the canonical lifting state on every successful row. On a later side exit, canonical execution must first reconstruct the state that corresponds to the last successful native row.
-
-### Whole-plan replay
-
-The JIT coordinator keeps schedule-wide replay state for fused execution, while fused evaluators retain the previous successful raw input environment. On fallback:
-
-1. A fused temporal evaluator materializes packed temporal state into the evaluator arena and deoptimizes its temporal nodes.
-2. If a prior native row exists, `EvaluatorArena::replay_canonical` evaluates that row through canonical evaluators to reconstruct lifting state.
-3. Before replaying each stream, it snapshots every temporal node state from the semantic `TemporalPlan`.
-4. After replay, it restores those snapshots. Replay therefore **does not stage or commit temporal writes** for a row already represented by materialized native state.
-5. The current row is evaluated canonically and the monitor commits it exactly once.
-
-That snapshot/restore step is the fused replay correctness fix: without it, replay could stage the previous row again and shift temporal history.
-
-### Per-stream replay
-
-A per-stream artifact retains its previous encoded inputs. Fallback materializes any scheduled scalar boundary values, replays only non-boundary nodes to reconstruct lifting state, and preserves the current boundary values. A permanent failure deoptimizes the scheduled scalar temporal state before the shared canonical tier continues. Temporal writes still use the monitor's ordinary commit traversal, so the side exit cannot expose a partial commit.
-
-## What every tier preserves
-
-A tier may change dispatch, state representation, and instruction selection. These observations it may not change:
-
-- every logical stream publishes once per tick;
-- same-tick consumers observe producers from the active schedule;
-- historical reads observe only committed earlier ticks;
-- temporal writes become visible only at the logical commit boundary;
-- canonical environment slots and `(stream, node)` state identities remain stable;
-- fallback reconstructs canonical state before canonical execution continues;
-- replay of an already successful native row never commits or stages its temporal writes again; and
-- changing execution tier cannot change `NoVal`, `Deferred`, lifting, or dynamic-property semantics.
-
-## Continue reading
-
-- [Execution model](model.md) defines the semantic machine shared by every tier.
-- [Temporal state](temporal-state.md) details the canonical stage/commit contract that native temporal execution preserves.
-- [Language state](language-state.md) describes the evaluator-owned state reconstructed during fallback.
-- [Dynamic properties](dynamic-properties.md) explains why plans may have a source barrier and how schedule ranges change.
-- [Concept-to-code map](implementation-guide.md) maps each tier to the files that implement it.
-
-[← Previous: Dynamic properties](dynamic-properties.md) · [Next: Runtime adapter](runtime-adapter.md) →
+Continue with the [runtime adapter](runtime-adapter.md) for asynchronous driving or [failure containment](failure-model.md) for the complete ladder.

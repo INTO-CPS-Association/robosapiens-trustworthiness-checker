@@ -1,3 +1,65 @@
+//! Logical output batches, resolved interfaces, and the runtime-facing writer.
+//!
+//! # Contract
+//!
+//! A logical output tick is one nonempty, duplicate-free set of variable updates.
+//! [`OutputBatch`] preserves an ordered sequence of ticks across singleton,
+//! simultaneous, packed-row, and mixed physical storage. [`OutputWriter`] accepts
+//! complete batches under sink readiness; acceptance is not proof that a remote
+//! destination persisted or consumed them.
+//!
+//! # Principal entities
+//!
+//! | Entity | Responsibility |
+//! |---|---|
+//! | [`OutputUpdate`] | Names one variable and value inside a logical output tick. |
+//! | [`OutputBatch`] | Owns ordered logical ticks while preserving their native physical segments. |
+//! | [`OutputTick`], [`OutputTicks`], and [`OutputUpdates`] | Borrow the logical tick and update views without expanding packed rows. |
+//! | [`OutputInterface`] and [`OutputRoute`] | Describe the resolved variables, roles, and transport routes supported by one opened writer. |
+//! | [`OutputWriter`] | Applies readiness, send, flush, close, and sticky-error semantics to an output sink. |
+//! | [`OutputError`] and [`OutputErrorKind`] | Classify closed, backend, source, and invalid-output failures. |
+//!
+//! # Example
+//!
+//! ```
+//! use trustworthiness_checker::{OutputBatch, OutputUpdate};
+//!
+//! # fn main() -> Result<(), trustworthiness_checker::OutputError> {
+//! let batch = OutputBatch::from_ticks(vec![
+//!     vec![OutputUpdate::new("a".into(), true)],
+//!     vec![
+//!         OutputUpdate::new("a".into(), false),
+//!         OutputUpdate::new("b".into(), true),
+//!     ],
+//! ])?;
+//!
+//! assert_eq!(batch.tick_count(), 2);
+//! assert_eq!(batch.update_count(), 3);
+//! assert_eq!(batch.ticks().nth(1).unwrap().len(), 2);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The batch contains two ordered ticks; its second tick publishes `a` and `b`
+//! simultaneously. Mapping, concatenation, and variable selection preserve remaining
+//! logical boundaries.
+//!
+//! # Writer lifecycle
+//!
+//! [`OutputWriter::send`] admits a batch and drives the wrapped sink back to readiness
+//! without forcing a flush. [`OutputWriter::send_and_flush`] adds a downstream flush
+//! barrier. The first operation failure is retained for later data operations, while
+//! [`OutputWriter::close`] still attempts wrapped cleanup and combines a cleanup error
+//! with the retained primary failure.
+//!
+//! # Implementation mapping
+//!
+//! `OutputSegment` and `OutputBatchStorage` preserve native physical forms behind the
+//! logical iterators. [`OutputInterface`] owns immutable resolved route indexes.
+//! [`OutputWriter`] wraps `DynOutputSink` and owns sticky failure and close state;
+//! destination resolution, stage composition, routing, and live sessions are
+//! implemented by the output pipeline under `crate::io`.
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt,

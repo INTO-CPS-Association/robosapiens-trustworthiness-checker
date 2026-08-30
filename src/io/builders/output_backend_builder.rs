@@ -173,7 +173,7 @@ impl<V> OutputBackendBuilder<V> {
 
     /// Parse durable local output configuration into a resource-free builder.
     /// ROS destinations require an executor and can instead be constructed with
-    /// [`Self::from_config_with_executor`].
+    /// `from_config_with_executor` when the `ros` feature is enabled.
     pub fn from_config(config: OutputConfigFile) -> anyhow::Result<Self> {
         Self::from_config_with_optional_executor(config, None)
     }

@@ -1,61 +1,61 @@
 # Failure and termination
 
-[← Previous: Context transfer](context-transfer.md) · [Next: Concept-to-code map](implementation-guide.md) →
+Failures are contained at different scopes. Recoverable execution-tier failures fall back within one tick; a canonical failure makes the `DataflowMonitor` terminal; input, output, cutover, or acknowledgement failures terminate the `DataflowRuntime` owner loop.
 
-The subsystem makes one simplifying choice about failure:
+```mermaid
+flowchart TB
+    accTitle: Dataflow failure containment ladder
+    accDescr: A tier-local guard or compilation failure may fall back to canonical evaluation. An unrecovered evaluator error fails the tick and permanently fails the monitor. Input, output, root cutover, or acknowledgement errors terminate the runtime. Cleanup still attempts to close I/O owners, but partial external and cutover effects are not rolled back.
 
-> **A failure that escapes a tick ends the monitor. A failure that escapes a replacement ends the runtime.**
+    tier["Tier-local guard or artifact failure"] --> fallback["Canonical fallback"]
+    fallback --> tick["Current logical tick"]
+    tick -->|unrecovered evaluation error| monitor["Monitor terminal"]
+    input["Input/session error"] --> runtime["Runtime terminal"]
+    output["Writer/session error"] --> runtime
+    cutover["Root cutover or acknowledgement error"] --> runtime
+    monitor --> runtime
+    runtime --> cleanup["Attempt I/O cleanup"]
+```
 
-That is the whole rule. This page covers what it buys and the one ordering detail that does not follow from it, then stops — the boundaries are not subtle enough to be worth enumerating on every page.
+**Reading rule.** Downward movement widens the failed ownership scope. Cleanup releases or drains resources; it does not restore a failed monitor, undo external delivery, or roll back a partially applied cutover.
 
-## The one distinction that matters
+## Tier-local containment
 
+A quickened kind mismatch, native guard miss, or recoverable artifact failure can materialize required state and continue through a canonical path. The logical stream still evaluates once and uses the common commit boundary.
 
-**What to notice.** The two innermost levels are not failures in the semantic sense at all — they are how the acceleration tiers stay honest, and the tick still succeeds. Everything outside them is terminal.
+If canonical evaluation returns an error, the tick fails. No output row or monitor-history entry is published for that tick, and the monitor records terminal failure. It rejects subsequent evaluations.
 
-| Level | Trigger | Effect |
-|---|---|---|
-| Node | Quickened operand kind mismatch | Deoptimize that node, restore canonical lifting state, continue. |
-| Artifact | Native presence failure, type mismatch, or checked-operation failure | Fall back with replay; type and checked failures disable the artifact permanently. |
-| Call shape | Input or output slice length mismatch | Rejected before `execute_tick`; nothing advanced, so the caller may retry. |
-| Tick | Any error escaping `execute_tick` | Monitor poisoned; every later `evaluate` returns `MonitorFailed`. |
-| Replacement | Any failure in the root cutover | Owner loop terminates. |
+## Runtime data path
 
-Only the call-shape row is a real exception, and only because it is caught before any state moves.
+An input error stops further ticks. A monitor error discards output rows accumulated since the previous completed adapter flush. An output send, flush, or close error terminates the runtime. `OutputWriter` keeps the first operation error sticky while close continues through all stages and destinations.
 
-## What the choice buys
+Normal input end is not failure: the runtime sends a final non-empty partial batch, flushes, and closes. It does not create extra ticks to drain temporal operators.
 
-Temporal writes are staged and become visible together at the commit boundary, so a failed tick commits none of them. If history were the only mutable state, the row could simply be dropped and evaluated again.
+## Root cutover
 
-It is not. Streams advance as they run: by the time an error surfaces, lifting state, branch timelines, call evaluators, and active dynamic expressions may already hold values for the current row. Restoring them would mean copying the evaluator arena every tick, or recording every state change so it could be reversed. Both were refused on the hot path.
+Planning failures occur before new resources or active monitor state are mutated, but the owner loop still terminates. Once application starts, failure may leave earlier steps applied:
 
-Ending the monitor instead keeps the machine small. There are no per-tick copies to make, no change log to maintain, no partially recovered state to define, and no rules about what a second attempt may observe. A failed tick has exactly one successor state, and it is the same one every time.
+| Failure point | Possible remaining effect |
+|---|---|
+| removed-source drain | input owners already detached |
+| addition open | detached owners not restored; opened additions dropped |
+| output flush/update | output session sticky-failed; earlier destination updates may remain |
+| monitor preparation/application | I/O changes may already be active |
+| destructive state movement | donor cannot be reconstructed by rollback |
+| acknowledgement delivery | complete local cutover may already be active |
 
-The costs are correspondingly narrow. Outputs are not projected, temporal writes are not committed, pending `defer` releases are not applied, and the monitor does not recover. A caller that needs to continue constructs a new monitor.
+The runtime runs cleanup after such failure and does not resume processing from partial state.
 
-A runtime dependency cycle ends the monitor under the same rule even though it is detected before main-range execution, because the source range has already advanced.
+## External containment
 
-## The ordering that is worth knowing
+Output delivery has no transaction across destinations. One destination can observe a batch before another fails. Input composition has no total order across independent transports. A reconfiguration acknowledgement records local cutover completion, not remote producer quiescence or destination persistence.
 
-One operational detail does not follow from the rule and is easy to get wrong.
+## Separate semisynchronous boundary
 
-A terminating reconfigurable owner loop **drains its output first**. Before returning any error — malformed command, input-stream error, failed replacement, or a later output send failure — it submits pending `DirectDataflowEngine` rows where possible, then calls `OutputWriter::flush` and `OutputWriter::close` for the active output session.
+The semisynchronous implementation ends the complete old generation before opening the replacement. Replacement input/output opening failures therefore occur after old-generation teardown and do not use the in-place dataflow acknowledgement/revision protocol.
 
-The rows the old definition already computed are correct, and a later invalid command does not retroactively invalidate them. `reconfiguration_failure` keeps the original error primary and attaches any flush or close failure as context. Rows already accepted by the writer are drained where the backend permits; rows still unsent in the engine buffer are not silently retried against a new output interface.
+## Implementation mapping
 
-A non-closed failure from `OutputWriter::send`, `flush`, or `close` is terminal. The writer retains its first operation failure, so later sends cannot turn a failed output session back into a successful one; cleanup still attempts the close path.
+The implementation mapping spans `src/dataflow/error.rs`, `DataflowMonitor` evaluation, execution-tier outcome handling, `DataflowRuntime`, `InputStream` and `InputPipelineSession`, `OutputWriter` and `OutputPipelineSession`, and runtime integration tests.
 
-For a successful root cutover, pure program/interface resolution and pipeline
-planning happen before this flush. Pending engine rows are submitted first;
-the input plan then reopens only a changed source, and the output plan flushes
-only changed owners (or one shared stage) before updating their interfaces and
-routing. There is no replacement fallback for an unsupported output update. If
-cutover fails, the terminating owner-loop cleanup still flushes and closes the
-active output where possible. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
-
-## Two consequences, not two extra rules
-
-- **Identity advances are checked.** `checked_next` on `MonitorRevision` and `InterfaceRevision` returns `Option`; overflow terminates rather than reusing `u64::MAX`, which would let a stale replacement compare as current.
-- **Revisions already advanced stay advanced.** If several expression bodies install before a later failure, `MonitorRevision` keeps recording what was installed. It is a history of installations, not a position to return to.
-
-[← Previous: Context transfer](context-transfer.md) · [Next: Concept-to-code map](implementation-guide.md) →
+Continue with the [implementation mapping](implementation-guide.md) for exact locations.

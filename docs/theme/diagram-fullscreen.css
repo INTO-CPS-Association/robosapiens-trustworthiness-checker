@@ -1,0 +1,125 @@
+.mermaid-fullscreen-frame {
+    position: relative;
+    margin: 1em 0;
+}
+
+.mermaid-fullscreen-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+}
+
+.mermaid-fullscreen-help,
+.mermaid-zoom-controls {
+    display: none;
+}
+
+.mermaid-fullscreen-help {
+    margin-right: auto;
+    font-size: 0.85em;
+    color: var(--fg);
+}
+
+.mermaid-zoom-controls {
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.mermaid-reset-button {
+    min-width: 4.5em;
+}
+
+.mermaid-fullscreen-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--table-border-color);
+    border-radius: 0.25rem;
+    padding: 0.3rem 0.55rem;
+    color: var(--fg);
+    background: var(--bg);
+    font: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.mermaid-fullscreen-button:hover,
+.mermaid-fullscreen-button:focus-visible {
+    border-color: var(--links);
+    color: var(--links);
+}
+
+.mermaid-fullscreen-frame:fullscreen,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback {
+    box-sizing: border-box;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 1rem;
+    overflow: hidden;
+    color: var(--fg);
+    background: var(--bg);
+}
+
+.mermaid-fullscreen-frame:fullscreen,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback {
+    display: flex;
+    flex-direction: column;
+}
+
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+}
+
+body.mermaid-fullscreen-open {
+    overflow: hidden;
+}
+
+.mermaid-fullscreen-frame:fullscreen .mermaid-fullscreen-toolbar,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback .mermaid-fullscreen-toolbar {
+    flex: 0 0 auto;
+}
+
+.mermaid-fullscreen-frame:fullscreen .mermaid-fullscreen-help,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback .mermaid-fullscreen-help,
+.mermaid-fullscreen-frame:fullscreen .mermaid-zoom-controls,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback .mermaid-zoom-controls {
+    display: flex;
+}
+
+.mermaid-fullscreen-frame:fullscreen pre.mermaid,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.mermaid-fullscreen-frame.mermaid-is-panning pre.mermaid {
+    cursor: grabbing;
+}
+
+.mermaid-fullscreen-frame:fullscreen pre.mermaid svg,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid svg {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+}
+
+@media print {
+    .mermaid-fullscreen-toolbar {
+        display: none;
+    }
+}

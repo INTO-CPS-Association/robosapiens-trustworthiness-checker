@@ -1,368 +1,271 @@
 # Output architecture
 
-The output boundary is a single runtime-facing `OutputWriter<V>`. Runtimes produce
-logical output ticks; destinations and transports consume those ticks without
-choosing their shape.
+The output subsystem accepts complete logical output ticks from a runtime and turns them into configured delivery through local or transport-backed destination owners. It is the architecture layer that hides destination selection, route/codec interfaces, stage ownership, fan-out, backpressure, and writer lifecycle behind one runtime-facing `OutputWriter`.
 
-[![Output pipeline end-to-end flow](assets/output-end-to-end-flow.svg)](assets/output-end-to-end-flow.svg)
+## Scope of the abstraction
 
-## Logical output data
+| Concern | Output subsystem responsibility |
+|---|---|
+| runtime output forms | Accept singleton, simultaneous, packed-row, and mixed `OutputBatch` segments without redefining their logical ticks. |
+| destination configuration | Resolve model outputs and request bindings onto stable `OutputDestination` owners, routes, codecs, and explicit mirrors. |
+| resource ownership | Separate resource-free `ResolvedOutput` planning from opened backend clients, publishers, stage workers, and session state. |
+| delivery topology | Place shared `OutputStage` wrappers before direct/routed delivery and destination-local wrappers around individual backend owners. |
+| fan-out and pressure | Select each destination's variables while exposing one readiness contract to the producer. |
+| lifecycle and replacement | Order send, flush, close, cleanup, sticky failure, and supported in-place interface handoff through `OutputWriter` and `OutputPipelineSession`. |
 
-`OutputBatch<V>` is a physical container for an ordered sequence of logical ticks.
-It is not an atomicity or time contract:
+The subsystem does not choose the runtime's logical output shape, provide an atomic transaction across destinations, or prove that a remote service persisted or consumed an admitted batch.
 
-- `OutputUpdate<V>` is one variable/value update.
-- `OutputBatch::update` is an independent width-one tick.
-- `OutputBatch::tick` is one simultaneous tick containing duplicate-free updates.
-- `OutputBatch::packed_rows` is non-empty fixed-layout row-major storage.
-- batches can contain mixed singleton, simultaneous, and packed segments.
-- empty output is `OutputBatch::empty()`, never a zero-row or zero-width packed segment.
+```mermaid
+flowchart TB
+    accTitle: Output architecture from runtime rows to external destination owners
+    accDescr: Runtime families preserve their native logical tick shapes in OutputBatch. Resource-free OutputPipeline resolution combines model outputs with a stable destination registry to produce ResolvedOutput. Opening creates backend owners and wraps them in destination-local stages. Runtime batches pass through shared stages, then either a direct one-destination writer or a session and multi-destination router. Reconfiguration can update supported interfaces and selected variables on fixed session owners.
 
-Borrowed `ticks()` and `updates()` iteration does not expand packed rows. Owned
-expansion is available only when a consumer needs individual tick vectors. Mapping,
-concatenation, and variable selection retain segment representations; adjacent
-compatible singleton or equal-layout packed segments may be appended, while
-simultaneous ticks are never merged. Every non-empty logical tick is duplicate-free.
+    subgraph producers["Runtime producers"]
+        direction TB
+        dataflow["Dataflow packed rows"]
+        semisync["Semisynchronous rows"]
+        mstlo["MSTLO sparse ticks"]
+        async["Asynchronous or distributed ticks"]
+    end
 
-For independently progressing streams, width-one tick order is the observed merge
-order. It is not a promise of a global model timestamp.
+    subgraph planning["Resource-free output planning"]
+        direction TB
+        model["Model outputs and request bindings"]
+        registry["OutputDestinations registry"]
+        resolve["OutputPipeline::resolve"]
+        plan["ResolvedOutput"]
+        model --> resolve
+        registry --> resolve --> plan
+    end
 
-## Runtime-owned shapes
+    subgraph delivery["Opened delivery architecture"]
+        direction TB
+        open["Open backend owners and apply destination-local stages"]
+        batch["OutputBatch logical ticks"]
+        shared["Shared OutputStage wrappers"]
+        path{"Opened writer path"}
+        direct["Direct one-destination writer"]
+        router["OutputPipelineSession router"]
+        local["Destination-local OutputStage wrappers"]
+        owners["Opened backend owners"]
+        open --> local
+        batch --> shared --> path
+        path -->|"one non-session destination"| direct
+        path -->|"session or several destinations"| router
+        direct --> local
+        router -->|"selected values per destination"| local
+        local --> owners
+    end
 
-Output shape comes from the producer, not from the backend:
-
-| Runtime | Native output representation |
-| --- | --- |
-| Dataflow | packed fixed-layout rows, batched natively |
-| Semi-sync | simultaneous logical rows, including starting-history replay |
-| MSTLO | sparse singleton ticks; repeated verdicts are preserved |
-| Async/distributed | singleton ticks in observed merge order unless an explicit row boundary exists |
-
-The runtime gives the writer a batch. It does not give the writer unresolved
-catalogs, monitor control frames, or a destination-selected output mode.
-
-## Destinations and resolution
-
-`OutputDestination<V>` is unopened local configuration. It contains a backend
-configuration, a durable route catalog, an explicit selection role, and
-destination-local stages. `OutputDestinations<V>` stores destinations in stable
-`BTreeMap` order and optionally names a default destination.
-
-The configured `default` destination is the primary destination for otherwise
-unassigned model outputs; it does not implicitly mirror output to every other
-destination. In a multi-destination configuration, every secondary destination
-must establish an explicit role with a `partition`, `variables`, `mirror: true`,
-or a route catalog. `variables` is the legacy route-free spelling of a primary
-`partition`. The `variables`, `partition`, and `mirror` fields are mutually
-exclusive; repeating a variable in explicit destination roles is what makes
-fan-out/mirroring intentional.
-
-Backends include stdout, null, limited-null, MQTT, Redis, and ROS (when compiled
-with the ROS feature). `limited-null` requires a positive `limit`. The manual
-backend is programmatic-only and cannot be selected in `--output-config`.
-MQTT output is Paho-only; the CLI's MQTT input backend choice does not change
-that output implementation. Configuration is resource-free: opening a
-configuration creates clients, nodes, publishers, and stage workers only after a
-complete output has been resolved.
-
-`OutputPipeline::resolve(model_outputs, auxiliary, monitor_config)` returns a
-complete deterministic `ResolvedOutput`:
-
-1. explicit request bindings win;
-2. otherwise local catalogs and selection roles own variables;
-3. otherwise the sole/default local destination supplies supported primary defaults;
-4. every model output must have at least one primary owner;
-5. additional delivery is explicit through a partition, variables, mirror role,
-   route role, or repeated grouped binding;
-6. extra explicit variables are rejected, except declared auxiliary variables;
-7. route and codec capability checks happen before opening any backend.
-
-Flat `outputs` bindings target an explicit, sole, or default destination and do
-not fan out on their own. Grouped `destinations` bindings cover the model output
-union exactly; a variable occurring in multiple groups is intentionally mirrored.
-MQTT and Redis omitted codecs are normalized to JSON. ROS routes require a codec.
-Local destinations such as stdout and null use `route: None` and do not require
-fake routes. Manual output is available only through the programmatic API.
-Within one destination, duplicate MQTT topics and duplicate Redis channels are
-rejected. The same topic or channel may be reused by distinct destinations;
-uniqueness is destination-local.
-
-`ResolvedOutput` carries process-local resolved-plan integrity data and the
-identity of the `OutputPipeline` instance that produced it. Before opening,
-the pipeline recomputes the integrity data, checks its durable configuration and
-pipeline-instance identity, and rejects a plan from another instance. These
-guards are process-local and are not stable cross-process cache keys.
-
-## Pipeline execution and routing
-
-The execution order is:
-
-```text
-runtime OutputBatch
-  -> shared stages (producer to consumer)
-  -> compiled router
-  -> destination-local stages (producer to consumer)
-  -> backend writer
+    dataflow --> batch
+    semisync --> batch
+    mstlo --> batch
+    async --> batch
+    plan -->|"validated plan"| open
+    control["Reconfiguration request"] -. "flush, then update supported interfaces and selection" .-> router
 ```
 
-Stage arrays are configured in producer-to-consumer order and wrapped in reverse
-when opened. A one-destination pipeline that receives the complete output set
-uses the direct fast path; the no-stage path forwards batches without routing or
-selection allocations.
+**Reading rule.** Solid arrows separate the resource-free planning path from runtime batch delivery and show the two opened writer alternatives. Shared stages are outside routing; destination-local stages wrap each backend owner. The dashed edge is session control, not output data. The focused routing figure below expands router readiness and selection without changing these connection points.
 
-For multiple destinations the router precomputes variable-to-destination
-membership and uses global readiness: `poll_ready` waits for every opened
-destination, including one that receives no value from the next batch. Once the
-batch is admitted, the router scans it and clones the selected values for each
-destination; primary partition routing is not a move-only fast path. A destination
-that receives no variables from a tick receives no empty tick. Per-destination
-order is preserved, but one slow or blocked destination can hold producer
-admission, so destination-local stages do not provide full destination pressure
-isolation. No cross-destination observation order, transaction, rollback, or
-external atomicity is promised:
+## Principal entities
 
-> A batch may have reached one external destination before another destination
-> fails. There is no cross-transport rollback or transaction guarantee.
+| Entity | Responsibility |
+|---|---|
+| logical output (`OutputBatch`) | Carries ordered logical ticks in the native singleton, simultaneous, packed-row, or mixed representation chosen by the runtime. |
+| destination registry (`OutputDestinations`) | Holds stable destination identities and unopened `OutputDestination` backend, selection, route, and local-stage configuration. |
+| output pipeline (`OutputPipeline`) | Resolves model outputs and request bindings, opens backend owners, and places shared stages outside destination-local stages. |
+| resolved output plan (`ResolvedOutput`) | Records complete ownership, mirroring, routes, codecs, stages, interfaces, and destination selection without opening resources. |
+| stage wrapper (`OutputStage`) | Applies bounded buffering or logical-tick-preserving coalescing either before routing or within one destination owner. |
+| backend interface (`OutputBackendConfig`, `OutputInterface`) | Separates reusable backend configuration from the resolved routes supported by an opened owner. |
+| runtime-facing sink (`OutputWriter`) | Applies readiness, send, flush, and close ordering to complete output batches. |
+| live output session (`OutputPipelineSession`) | Retains fixed opened destination owners and router state so supported interfaces and selected variables can change in place. |
 
-A destination failure is fail-fast for producer operations. Close still drives
-every destination and reports the first operation failure together with distinct
-cleanup failures.
+## The logical output contract
 
-## Stages
+`OutputBatch<V>` stores an ordered sequence of non-empty logical ticks. A tick may be a singleton update, a simultaneous set of updates, or a row in fixed-layout packed storage. Physical concatenation, mapping, and variable selection preserve logical boundaries.
 
-`OutputStage` is deliberately a closed enum:
+Output shape belongs to the producing runtime:
 
-- `Buffer(OutputBuffer)` is reliable, bounded, FIFO, and blocking. `max_batches`
-  bounds retained physical batches; `max_updates` is a pressure threshold over
-  queued and in-flight updates, not a numeric hard cap. Readiness admits a batch
-  before seeing its size, so an indivisible batch can cross the threshold; an
-  oversized batch is accepted when the queue is empty and no further batch is
-  admitted until pressure drains. This is the documented one-physical-batch
-  overshoot. The ordinary batch-only buffer owns its downstream writer in an
-  executor task; flush and close are ordered barriers and close joins the task.
-- `Coalesce(OutputCoalescing)` changes only physical batching. It preserves every
-  logical tick and its order, never deduplicates, never applies last-update-wins,
-  and never splits a simultaneous tick to satisfy a bound. `tick_limit` counts
-  ticks and `update_limit` counts updates. Count limits are flush thresholds
-  evaluated between incoming physical batches, not per-tick admission caps: a
-  complete physical batch containing many ticks or updates may overshoot either
-  limit. Coalescing never splits an incoming physical batch and still preserves
-  every logical tick. A delay-bound coalescer owns the downstream writer and a
-  timer worker; when the deadline or a count limit fires, the worker sends the
-  pending batch through the backend even if the producer is idle. Flush and
-  close drain pending data.
+| Producer | Native output representation |
+|---|---|
+| dataflow runtime | packed fixed-layout rows |
+| semisynchronous runtime | simultaneous rows |
+| MSTLO runtime | sparse singleton ticks; a variable may appear in more than one tick |
+| asynchronous and distributed runtimes | singleton ticks in observed merge order |
 
-A timed stage requires the runtime's local executor. Count-only coalescing is a
-local state machine; ordinary batch-only buffering is worker-backed. No output
-worker is detached. After a worker or backend error, sends are rejected, the
-first error remains primary, and close still drives downstream cleanup exactly
-once.
+```mermaid
+flowchart TB
+    accTitle: Physical output segments preserve one logical tick sequence
+    accDescr: Singleton tick runs, simultaneous Tick segments, and fixed-layout PackedRows segments remain in their native forms inside OutputBatchStorage. OutputBatch exposes all of them as one ordered sequence of nonempty logical ticks to OutputWriter consumers.
 
-Stage order is observable:
-
-```text
-[Coalesce, Buffer]  = producer -> coalescer -> bounded queue -> backend
-[Buffer, Coalesce]  = producer -> bounded queue -> coalescer -> backend
+    singleton["SingletonTicks: independent width-one ticks"] --> storage["OutputBatchStorage"]
+    simultaneous["Tick: one simultaneous update set"] --> storage
+    packed["PackedRows: fixed-layout row sequence"] --> storage
+    storage --> batch["OutputBatch"]
+    batch --> ticks["Ordered logical ticks"]
+    ticks --> writer["OutputWriter consumer"]
 ```
 
-Coalescing before buffering reduces queued batch count but can make producer
-submission wait for the coalescer. Buffering before coalescing overlaps producer
-work and lets the downstream coalescer combine queued batches. Shared stages
-apply one policy before routing. Destination stages shape each destination's
-writer, but the router's global readiness still couples producer admission to
-every destination; they are not full pressure isolation.
+**Reading rule.** Solid arrows map physical segment forms onto the common logical contract. The forms may coexist in one batch, but they do not merge simultaneous ticks, invent model time, or require packed rows to be expanded before iteration.
 
-## Lifecycle and reconfiguration
+A batch is not an external transaction. Successful admission to an `OutputWriter` also does not prove that a remote service has persisted or consumed the values.
 
-`OutputPipeline::open(ResolvedOutput)` validates the resolved structure, compiles
-routing, and opens destinations in deterministic order. A single destination uses
-the direct writer path; multi-destination pipelines use the router. If a later
-open fails, already-opened destinations are cleaned up, so no runtime sees a
-partially opened pipeline. `open_session` retains the fixed destination owners
-and their routing state for incremental reconfiguration.
+## Resolution and opening
 
-`OutputWriter` retains `primary_error` and an explicit open/closing/closed
-lifecycle. After a failure, data operations fail fast, but close still flushes and
-closes every stage and destination. Flush and close barriers propagate through all
-wrappers.
+`OutputPipeline` owns durable destination and stage configuration. `OutputPipeline::resolve` combines that configuration with model outputs, auxiliary variables, and request-local bindings to produce a complete immutable `ResolvedOutput`.
 
-The reconfigurable dataflow runtime follows this order:
+Resolution establishes primary ownership, explicit mirroring, routes, codecs, shared stages, destination-local stages, and destination selection. Every model output has at least one primary owner. Additional delivery is explicit; a default destination does not mirror to every configured destination.
 
-```text
-final pre-barrier tick
-  -> parse/type-check replacement
-  -> resolve and plan input/output changes without I/O
-  -> transfer context explicitly
-  -> submit pending engine rows
-  -> apply the input plan at the ordered input barrier
-  -> flush only changed output owners (or one shared stage)
-  -> update existing output interfaces and routing
-  -> apply the monitor plan
-  -> acknowledge
-```
+Resolution opens no backend. Opening validates the resolved structure again, then creates destination owners in deterministic order. If a later destination fails to open, already-opened owners are closed before the error is returned. `OutputPipeline::open` uses a direct writer when exactly one destination is resolved and otherwise opens a session-backed router. `OutputPipeline::open_session` always retains the router because its fixed owners may receive new bindings during reconfiguration.
 
-The durable output destination registry does not change in a request. A request
-may change bindings, routes, codecs, or selection for an existing destination;
-creating or removing an endpoint is unsupported. A backend that cannot update
-its opened interface is likewise rejected rather than silently reopened. The
-reconfigurable dataflow runtime retains unchanged input sources and output
-owners, stops and drains removed input relays, and opens only added sources.
-Semisync instead replaces its complete input stream and output writer.
-
-Control messages are not `OutputBatch` variants. Wire reconfiguration can change
-bindings, routes, codecs, destination selection, and output shape, but it
-cannot create endpoints or change local backend host/port, credentials/TLS,
-MQTT implementation, ROS executor, or local stage configuration.
-
-## CLI and compact configuration
-
-Single-destination shortcuts remain concise:
-
-```text
---output-stdout
---mqtt-output
---output-mqtt-file <ROUTES>
---redis-output
---output-redis-file <ROUTES>
---output-ros-file <ROUTES>
-```
-
-Use `--output-config <PATH>` for multiple destinations or stage configuration.
-The file is JSON5 and keeps local transport configuration separate from wire
-requests. This is a valid default-primary plus explicit-mirror configuration for
-model outputs `alarm` and `verdict`:
-
-```json5
-{
-  default: "telemetry",
-  shared_stages: [],
-  destinations: {
-    telemetry: {
-      kind: "mqtt",
-      host: "localhost",
-      port: 1883,
-      routes: { alarm: "/robot/alarm", verdict: "/robot/verdict" },
-      stages: [
-        { kind: "buffer", max_batches: 64, max_updates: 4096 },
-        { kind: "coalesce", max_delay_ms: 2, update_limit: 256 }
-      ]
-    },
-    archive: {
-      kind: "redis",
-      host: "localhost",
-      port: 6379,
-      mirror: true,
-      routes: { alarm: "monitor:alarm", verdict: "monitor:verdict" }
-    }
-  }
-}
-```
-
-Here `telemetry` is primary and `archive` receives an explicit mirror of both
-outputs. A partitioned configuration must assign each model output to exactly
-one primary partition; mirrors can then receive those values explicitly:
-
-```json5
-{
-  destinations: {
-    telemetry: {
-      kind: "mqtt",
-      partition: ["alarm"],
-      routes: { alarm: "/robot/alarm" }
-    },
-    console: {
-      kind: "stdout",
-      partition: ["verdict"]
-    },
-    archive: {
-      kind: "redis",
-      mirror: true,
-      routes: { alarm: "monitor:alarm", verdict: "monitor:verdict" }
-    }
-  }
-}
-```
-
-`variables` is an alternative legacy spelling for `partition`; supplying either
-with `mirror`, or supplying both `variables` and `partition`, is an error.
-Monitor `outputs` and grouped `destinations` use compact string or
-`[route, codec]` forms. They are mutually exclusive with each other, and
-`destination` is only valid with flat `outputs`.
-
-## Configuration reference
-
-This is the compact reference for `--output-config` JSON5 and its resolved
-destination policy.
-
-| Scope | Fields | Rule |
-| --- | --- | --- |
-| Top level | `default`, `shared_stages`, `destinations` | `destinations` is non-empty. `default` must name a destination and is the primary fallback for otherwise-unassigned model outputs, subject to backend route/codec rules; it does not mirror to other destinations. |
-| Common destination | `kind`, `routes`, `stages` | `kind` is `stdout`, `null`, `limited-null`, `mqtt`, `redis`, or `ros`. `routes` is a variable map; a route catalog can establish an explicit destination role. |
-| Backend-specific | `host`, `port`, `limit` | `host` and `port` are only for MQTT/Redis. `limit` is only for `limited-null` and must be positive. Local and ROS destinations reject these fields. |
-| Selectors | `partition`, legacy `variables`, `mirror` | These three are mutually exclusive. `partition` assigns a primary subset; `mirror: true` mirrors all model outputs; a secondary destination needs one of these or a route catalog. For `MonitorConfig`, flat `outputs` and grouped `destinations` are mutually exclusive, and `destination` is valid only with flat `outputs`. |
-| Routes/codecs | `routes: {var: "route"}` or `{var: ["route", "codec"]}` | MQTT/Redis omitted codecs resolve to `json`, and explicit codecs must be `json` or `json5`; ROS routes require a codec; local backends do not accept codecs. Duplicate MQTT topics or Redis channels are rejected within one destination, but reuse across distinct destinations is allowed. |
-| Stage bounds | `buffer`: `max_batches`, optional `max_updates`; `coalesce`: `max_delay_ms`, `tick_limit`, `update_limit` | `max_batches`, `max_updates`, `tick_limit`, and `update_limit` must be positive when present. A coalescer needs at least one bound; count bounds are flush thresholds between physical batches and do not split one. |
-| Feature requirements | MQTT, Redis, ROS, manual | MQTT output uses Paho and requires the `mqtt` feature; Redis requires the `redis` feature (both are enabled by default); stdout, null, and limited-null need no optional feature; ROS requires the `ros` feature and its ROS environment/overlay; manual output is programmatic-only. |
-| CLI shortcut conflict | `--output-config` and output shortcuts | Output selection is single-choice: `--output-config` conflicts with `--output-stdout`, `--mqtt-output`, `--output-mqtt-file`, `--redis-output`, `--output-redis-file`, and `--output-ros-file`; those shortcuts also conflict with one another. |
-
-### Programmatic opening
-
-The public API separates unopened destination configuration, pure resolution, and
-resource opening:
+This example makes the planning, ownership, and completion boundaries explicit with a local null destination:
 
 ```rust
-use trustworthiness_checker::{
-    io::{OutputBackendConfig, OutputDestination, OutputPipeline},
-    OutputWriter, Value, VarName,
+use trustworthiness_checker::{OutputBatch, Value, VarName};
+use trustworthiness_checker::io::output::{
+    OutputBackendConfig, OutputDestination, OutputPipeline,
 };
 
-async fn open_output() -> anyhow::Result<OutputWriter<Value>> {
-    let destination =
-        OutputDestination::<Value>::new("local", OutputBackendConfig::null()).all();
-    let pipeline = OutputPipeline::from_destination(destination)?;
-    let resolved = pipeline.resolve(
-        [VarName::new("verdict")],
-        std::iter::empty::<VarName>(),
-        None,
-    )?;
-    let writer: OutputWriter<Value> = pipeline.open(resolved).await?;
-    Ok(writer)
+fn main() -> anyhow::Result<()> {
+    smol::block_on(async {
+        let destination = OutputDestination::<Value>::new(
+            "local-null",
+            OutputBackendConfig::null(),
+        );
+        let pipeline = OutputPipeline::from_destination(destination)?;
+
+        let resolved = pipeline.resolve(
+            [VarName::new("alert"), VarName::new("total"), VarName::new("scaled")],
+            std::iter::empty::<VarName>(),
+            None,
+        )?;
+        let mut writer = pipeline.open(resolved).await?;
+
+        writer
+            .send(OutputBatch::update("total", Value::Int(8)))
+            .await?;
+        writer.flush().await?;
+        writer.close().await?;
+        Ok(())
+    })
 }
 ```
 
-The async function must be driven by an executor. This no-stage example needs no
-pipeline-local executor; timed coalescing or a buffer without `max_updates`
-requires `OutputPipeline::with_executor` with an `Rc<smol::LocalExecutor<'static>>`,
-and that local executor must remain driven while the writer runs. Count-only
-coalescing and update-bounded buffering do not require it.
+`resolve` is resource-free; `open` creates the destination owner. `send` admits the complete batch under the writer's readiness contract, while `flush` is the downstream completion barrier. Even that barrier states completion only at the opened backend's contract and does not imply remote persistence for a transport-backed destination.
 
-## Performance guidance
+## Shared stages, routing, and destination stages
 
-The dedicated `benches/output_pipeline.rs` target compares direct writing with
-one-destination pipeline writing, buffering, coalescing, both stage orders,
-two/four-destination partitioning and partial mirroring, packed/mixed/singleton
-shapes, and producer-native batching. The corrected harness keeps logical tick
-counts, physical batch counts, and per-destination delivery counts separate.
-It distinguishes producer `feed` admission wait from backend start and backend
-completion latency. Backend latency samples are keyed by synthetic logical tick
-IDs, so a coalesced physical batch does not become one p50/p95/p99 sample.
+The router precomputes the union of variables accepted by its active destinations and rejects any update outside that resolved set. Its detailed admission and selection path is:
 
-The harness reports admission wait as a producer backpressure proxy. It does
-not observe stage internals and therefore must not be used to claim an exact
-queue depth or exact peak queue. Multi-destination counters are per resolved
-destination; mirrored delivery can intentionally exceed the producer total.
+```mermaid
+flowchart TB
+    accTitle: Router admission and destination-local delivery
+    accDescr: After shared stages, poll_ready waits for every active destination writer. start_send validates that every update belongs to the resolved destination union. A one-owner router forwards the original OutputBatch. A multi-owner router clones each destination's selected variables, skips empty selected batches, then sends through that owner's destination-local stages to its backend. Any pending destination can hold global admission.
 
-The synthetic backend models explicit arithmetic work per physical batch,
-optional arithmetic work per update, and one bounded async delay per physical
-batch. The current cases set per-update work to zero and do not make a
-per-update performance claim. All results remain local-sink results: they do
-not model broker behavior, serialization, network contention, transport
-acknowledgements, Redis/MQTT/ROS scheduling, or remote queueing.
+    batch["OutputBatch after shared stages"] --> ready["poll_ready: every active destination writer"]
+    ready --> validate["start_send: validate resolved variable union"]
+    validate --> count{"Active owner count"}
+    count -->|"one"| original["Forward original OutputBatch"]
+    count -->|"several"| select["select_variables_cloned for each owner"]
+    select --> selected["Nonempty selected OutputBatch"]
+    select -. "empty selection" .-> skip["No send to that owner"]
+    original --> local["Destination-local stages"]
+    selected --> local
+    local --> backend["Opened backend owner"]
+    pressure["One pending owner holds producer admission"]
+    ready -. "global readiness coupling" .-> pressure
+```
 
-No performance numbers are retained in this document. Compile the benchmark
-with `cargo bench --profile bench-fast --bench output_pipeline --no-run`, then
-pin only the resulting benchmark executable to an otherwise-idle P-core for
-controlled measurements. Record the source revision, feature set, CPU/core,
-filter, sample configuration, and machine load alongside published results. A
-compile-only check or focused correctness smoke run is not a controlled
-production performance baseline.
+**Reading rule.** Solid arrows carry admitted batches; the one-owner and multi-owner branches are alternatives. Dashed arrows show consequences rather than batch delivery: empty projections are skipped, while readiness remains coupled across all active owners. Destination-local stages preserve each owner's order but do not provide cross-destination rollback.
+
+Selection preserves logical tick boundaries; ticks containing no selected values disappear from that destination's batch:
+
+![Destination selection projects one output tick sequence without merging surviving ticks](assets/output-routing-ticks.svg)
+
+**Reading rule.** Columns retain the original `OutputBatch` tick positions. A destination receives only nonempty projections, so its local sequence can omit an original tick, but values from separate original ticks never become simultaneous. The two destination lanes are independent delivery sequences, not an atomic cross-destination commit.
+
+There is no cross-destination observation order or atomic commit.
+
+## Stage semantics and bounds
+
+Two stage families are implemented:
+
+- `OutputStage::Buffer` is bounded, FIFO, reliable, and blocking. `max_batches` bounds retained physical batches. `max_updates` is a pressure threshold over queued and in-flight updates; one indivisible admitted batch may cross it.
+- `OutputStage::Coalesce` changes physical batching only. It preserves every logical tick and never applies last-update-wins. Tick and update limits are flush thresholds evaluated between incoming physical batches, so one complete batch may overshoot them.
+
+Timed stages own worker activity on the local executor. Flush and close are ordered barriers through every wrapper. No output worker is detached from its owning writer.
+
+## Backpressure and failure
+
+`OutputWriter` exposes sink readiness to its producer. In a multi-destination session, readiness waits for every destination writer, including one that will receive no values from the next batch. Destination-local buffering can absorb work after routing but does not remove this global admission coupling.
+
+A destination may already have observed a batch when another destination fails. The pipeline provides no cross-transport rollback. The first operation failure becomes sticky: later sends fail fast, while close still attempts to flush and close every stage and destination and retains cleanup failures separately.
+
+The writer interaction distinguishes admission from the later completion barrier:
+
+```mermaid
+sequenceDiagram
+    accTitle: Output admission and downstream completion are separate
+    accDescr: A producer sends through OutputPipelineSession and OutputWriter to OutputRouter. The router waits for every destination writer to become ready, then submits each nonempty destination projection. A successful send returns after the pipeline is ready for more work. A later flush waits for every destination writer. A destination failure is retained and does not reverse an earlier destination submission.
+
+    participant producer as Runtime producer
+    participant session as OutputPipelineSession
+    participant writer as OutputWriter
+    participant router as OutputRouter
+    participant destinations as Destination writers
+
+    producer->>session: send(batch)
+    session->>writer: send(batch)
+    writer->>router: poll_ready()
+    loop Every active destination owner
+        router->>destinations: poll_ready()
+        destinations-->>router: Ready, Pending, or error
+    end
+    router-->>writer: all ready
+    writer->>router: start_send(batch)
+    loop Every nonempty destination projection
+        router->>destinations: start_send(selected batch)
+    end
+    alt every selected submission succeeds
+        destinations-->>router: all selected submissions accepted
+        writer->>router: poll_ready() after feed
+        router-->>writer: ready for more work
+        writer-->>session: admission complete
+        session-->>producer: send complete
+        producer->>session: flush()
+        session->>writer: flush()
+        writer->>router: poll_flush()
+        loop Every active destination owner
+            router->>destinations: poll_flush()
+            destinations-->>router: completion or error
+        end
+        router-->>writer: downstream flush complete
+        writer-->>session: flush complete
+        session-->>producer: completion barrier passed
+    else a later destination fails
+        destinations-->>router: error after an earlier submission
+        router-->>writer: retained error
+        writer-->>session: error
+        session-->>producer: error, earlier delivery remains
+    end
+```
+
+**Reading rule.** Solid arrows are calls or batch submissions; dashed arrows are readiness results, returns, or completion signals. `send` completes after admission and a subsequent readiness poll, not after a universal downstream flush. `flush` separately waits through every active destination. The loop order does not create an atomic cross-destination commit, and an error does not reverse an earlier owner’s accepted batch.
+
+## Live interface handoff
+
+A reconfigurable `DataflowRuntime` keeps a fixed registry of opened destination owners in an `OutputPipelineSession`. A request may change bindings, routes, codecs, or destination selection supported by those owners. It cannot create or remove durable destination owners, replace local backend configuration, or change local stage configuration.
+
+Application first flushes affected owners, or the shared writer when shared stages require a global barrier. It then updates supported `OutputInterface` handles and the router's selected variables. There is no hidden close-and-reopen fallback for a backend that cannot update its interface.
+
+Updates are sequential rather than transactional. If a later destination fails, an earlier destination update can remain applied. This partial-application boundary is part of the [root reconfiguration lifecycle](architecture/dataflow/reconfigurable-runtime.md).
+
+## Implementation mapping
+
+- `OutputUpdate`, `OutputBatch`, segment preservation, `OutputWriter`, and sticky writer lifecycle: `src/core/output.rs`.
+- `OutputDestination`, `OutputDestinations`, `OutputPipeline`, `ResolvedOutput`, router selection, and `OutputPipelineSession`: `src/io/output/pipeline.rs`.
+- Buffer and coalescing `OutputStage` wrappers, bounds, workers, and barriers: `src/io/output/stages.rs` and `src/io/output/pump.rs`.
+- Runtime-native batching and handoff: `src/runtime/dataflow.rs`, `src/runtime/semi_sync.rs`, `src/runtime/mstlo.rs`, `src/runtime/asynchronous.rs`, `src/runtime/distributed.rs`, and `src/runtime/output.rs`.
+- Focused output batch, stage, routing, backpressure, opening-cleanup, and reconfiguration tests live beside these implementations.
+
+Continue with the [input architecture](input-architecture.md), [runtime adapter](architecture/dataflow/runtime-adapter.md), or [failure containment](architecture/dataflow/failure-model.md).

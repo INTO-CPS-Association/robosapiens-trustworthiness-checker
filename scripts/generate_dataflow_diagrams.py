@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the SVG assets included by the dataflow module documentation.
+"""Generate the script-managed SVG assets used by dataflow documentation.
 
-Run without arguments to update the SVG assets. Use --check in CI or before
-committing to verify that generated output is current.
+Run without arguments to update the assets listed in ``DIAGRAMS``. Custom SVGs
+outside that registry are preserved. Use --check in CI or before committing to
+verify that the script-managed output is current.
 """
 
 from __future__ import annotations
@@ -70,8 +71,10 @@ def box(
     center = x + width // 2
     label_y = y + (height // 2 if sublabel is None else height // 2 - 7) + 5
     parts = [
-        f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="5" '
-        f'fill="{COLORS[fill]}" stroke="{COLORS[stroke]}" stroke-width="1.5"/>',
+        (
+            f'<rect x="{x}" y="{y}" width="{width}" height="{height}" rx="5" '
+            f'fill="{COLORS[fill]}" stroke="{COLORS[stroke]}" stroke-width="1.5"/>'
+        ),
         text(center, label_y, label, cls="code"),
     ]
     if sublabel is not None:
@@ -565,8 +568,10 @@ def specialization_overlay() -> tuple[str, str]:
         arrow(250, 260, 295, 260, marker),
         arrow(510, 260, 555, 260, marker),
         arrow(770, 260, 815, 260, marker),
-        f'<path d="M 925 225 C 925 185, 825 185, 825 144" fill="none" '
-        f'stroke="{COLORS["purple"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 925 225 C 925 185, 825 185, 825 144" fill="none" '
+            f'stroke="{COLORS["purple"]}" stroke-width="1.8" marker-end="url(#{marker})"/>'
+        ),
         box(
             35,
             340,
@@ -599,8 +604,10 @@ def specialization_overlay() -> tuple[str, str]:
         ),
         arrow(305, 373, 380, 373, marker),
         arrow(650, 373, 725, 373, marker, dashed=True),
-        f'<path d="M 380 373 C 275 373, 275 174, 340 130" fill="none" '
-        f'stroke="{COLORS["orange"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 380 373 C 275 373, 275 174, 340 130" fill="none" '
+            f'stroke="{COLORS["orange"]}" stroke-width="1.8" marker-end="url(#{marker})"/>'
+        ),
     ]
     return (
         svg(
@@ -731,14 +738,22 @@ def execution_layout() -> tuple[str, str]:
             stroke="border",
             sublabel="canonical + scalar state",
         ),
-        f'<path d="M 145 250 L 145 310" fill="none" stroke="{COLORS["line"]}" '
-        f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-        f'<path d="M 245 250 L 392 310" fill="none" stroke="{COLORS["line"]}" '
-        f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-        f'<path d="M 515 250 L 642 310" fill="none" stroke="{COLORS["line"]}" '
-        f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-        f'<path d="M 855 250 L 890 310" fill="none" stroke="{COLORS["line"]}" '
-        f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 145 250 L 145 310" fill="none" stroke="{COLORS["line"]}" '
+            f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>'
+        ),
+        (
+            f'<path d="M 245 250 L 392 310" fill="none" stroke="{COLORS["line"]}" '
+            f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>'
+        ),
+        (
+            f'<path d="M 515 250 L 642 310" fill="none" stroke="{COLORS["line"]}" '
+            f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>'
+        ),
+        (
+            f'<path d="M 855 250 L 890 310" fill="none" stroke="{COLORS["line"]}" '
+            f'stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>'
+        ),
         text(
             515,
             418,
@@ -1010,8 +1025,10 @@ def function_call() -> tuple[str, str]:
             sublabel="state S(n + 1)",
         ),
         arrow(705, 151, 745, 151, marker),
-        f'<path d="M 445 175 C 520 220, 670 220, 745 175" fill="none" '
-        f'stroke="{COLORS["green"]}" stroke-width="2" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 445 175 C 520 220, 670 220, 745 175" fill="none" '
+            f'stroke="{COLORS["green"]}" stroke-width="2" marker-end="url(#{marker})"/>'
+        ),
         text(595, 218, "callable state", cls="small"),
         # RecursiveApply: every active depth gets a distinct reset evaluator
         # frame. Frames return to the per-call pool during unwind.
@@ -1078,9 +1095,11 @@ def function_call() -> tuple[str, str]:
             stroke="green",
             sublabel="after unwind",
         ),
-        f'<path d="M 625 500 C 680 500, 680 420, 700 403" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
-        f'marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 625 500 C 680 500, 680 420, 700 403" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+            f'marker-end="url(#{marker})"/>'
+        ),
     ]
     return (
         svg(
@@ -1109,8 +1128,10 @@ def reconfigurable_expressions() -> tuple[str, str]:
         center = x + width // 2
         return "\n".join(
             [
-                f'<rect x="{x}" y="{y}" width="{width}" height="96" rx="7" '
-                f'fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="2"/>',
+                (
+                    f'<rect x="{x}" y="{y}" width="{width}" height="96" rx="7" '
+                    f'fill="{COLORS["orange_fill"]}" stroke="{COLORS["orange"]}" stroke-width="2"/>'
+                ),
                 text(center, y + 25, title, cls="code"),
                 text(center, y + 51, f'current: "{current}"', cls="code"),
                 text(center, y + 75, f"scope: {scope}", cls="small"),
@@ -1161,9 +1182,11 @@ def reconfigurable_expressions() -> tuple[str, str]:
             "score, baseline",
         ),
         arrow(305, 236, 305, 285, marker),
-        f'<path d="M 365 116 C 565 145, 585 320, 505 330" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
-        f'marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 365 116 C 565 145, 585 320, 505 330" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+            f'marker-end="url(#{marker})"/>'
+        ),
         text(575, 235, "baseline is allowed but unused", cls="small"),
         # Point 2 and point 3 are subexpressions of one fixed decision equation.
         f'<rect x="85" y="415" width="770" height="185" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}" stroke-width="1.5"/>',
@@ -1186,11 +1209,15 @@ def reconfigurable_expressions() -> tuple[str, str]:
         ),
         # Active dependencies into point 2 are routed around point 1 so they do
         # not cross a node. Point 3 receives the preloaded enabled input.
-        f'<path d="M 235 236 C 75 285, 65 430, 115 500" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 235 236 C 75 285, 65 430, 115 500" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>'
+        ),
         arrow(330, 381, 300, 465, marker),
-        f'<path d="M 795 137 C 895 245, 895 430, 825 500" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 795 137 C 895 245, 895 430, 825 500" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" marker-end="url(#{marker})"/>'
+        ),
         box(
             420,
             535,
@@ -1222,8 +1249,10 @@ def dynamic_dependencies() -> tuple[str, str]:
     def permission_cell(x: int, y: int) -> str:
         return "\n".join(
             [
-                f'<rect x="{x}" y="{y}" width="130" height="38" rx="5" '
-                f'fill="{COLORS["blue_fill"]}" stroke="{COLORS["blue"]}" stroke-width="1.5"/>',
+                (
+                    f'<rect x="{x}" y="{y}" width="130" height="38" rx="5" '
+                    f'fill="{COLORS["blue_fill"]}" stroke="{COLORS["blue"]}" stroke-width="1.5"/>'
+                ),
                 text(x + 65, y + 27, "✓", cls="section"),
             ]
         )
@@ -1252,12 +1281,16 @@ def dynamic_dependencies() -> tuple[str, str]:
         box(200, 170, 100, 38, "b", fill="purple_fill", stroke="purple"),
         arrow(110, 170, 155, 132, marker, dashed=True),
         arrow(250, 170, 205, 132, marker, dashed=True),
-        f'<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
-        f'marker-end="url(#{marker})"/>',
-        f'<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" '
-        f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
-        f'marker-end="url(#{marker})"/>',
+        (
+            f'<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+            f'marker-end="url(#{marker})"/>'
+        ),
+        (
+            f'<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" '
+            f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
+            f'marker-end="url(#{marker})"/>'
+        ),
         box(390, 94, 130, 38, "stream", fill="panel", stroke="border"),
         box(520, 94, 130, 38, "x", fill="panel", stroke="border"),
         box(650, 94, 130, 38, "a", fill="panel", stroke="border"),
@@ -1532,22 +1565,15 @@ def defer_lifecycle() -> tuple[str, str]:
     )
 
 
+# These assets still use this generator as their source of truth. Other SVGs in
+# the same directory are hand-authored architecture assets and are not managed
+# or removed by this script.
 DIAGRAMS = {
     "example-streams": example_streams,
-    "pipeline": pipeline,
-    "environment-layout": environment_layout,
-    "history-retention": history_retention,
     "evaluation-graph": evaluation_graph,
-    "specialization-overlay": specialization_overlay,
-    "execution-layout": execution_layout,
-    "lazy-if": lazy_if,
     "function-binding": function_binding,
     "function-call": function_call,
     "reconfigurable-expressions": reconfigurable_expressions,
-    "dynamic-dependencies": dynamic_dependencies,
-    "dynamic-history": dynamic_history,
-    "dynamic-lifecycle": dynamic_lifecycle,
-    "defer-lifecycle": defer_lifecycle,
 }
 
 
@@ -1566,10 +1592,6 @@ def main() -> int:
         for path, expected in expected_assets.items()
         if not path.exists() or path.read_text(encoding="utf-8") != expected
     ]
-    obsolete_assets = sorted(
-        path for path in ASSET_DIR.glob("*.svg") if path not in expected_assets
-    )
-    stale.extend(str(path.relative_to(ROOT)) for path in obsolete_assets)
     if args.check:
         if stale:
             print("stale generated dataflow diagrams:", file=sys.stderr)
@@ -1578,8 +1600,6 @@ def main() -> int:
             return 1
         return 0
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    for path in obsolete_assets:
-        path.unlink()
     for path, expected in expected_assets.items():
         path.write_text(expected, encoding="utf-8")
     print("updated dataflow diagrams:")

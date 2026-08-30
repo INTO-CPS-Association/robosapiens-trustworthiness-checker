@@ -1,0 +1,14 @@
+flowchart TB
+    subgraph prepare["Prepare once"]
+        source["Source definitions"] --> bind["Bind names"]
+        bind --> plan["Execution plan"]
+    end
+
+    subgraph execute["Execute repeatedly"]
+        inputs["Current inputs"] --> evaluate["Evaluate plan"]
+        evaluate --> outputs["Visible outputs"]
+        evaluate --> commit["Commit retained state"]
+    end
+
+    plan -->|"bound plan"| evaluate
+    commit -.->|"next execution"| evaluate

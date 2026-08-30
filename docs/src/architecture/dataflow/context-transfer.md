@@ -1,59 +1,67 @@
 # Context transfer
 
-[← Previous: The replacement contract](replacement-contract.md) · [Next: Failure and termination](failure-model.md) →
+Context transfer moves compatible semantic state from an active `DataflowMonitor` into a prepared target `DataflowMonitor`. Validation and target construction happen first; state movement is destructive and has no rollback path.
 
-A root replacement compares two immutable `DataflowProgram` values. The outgoing `DataflowMonitor` owns the live evaluator state; the program values own only bound semantics, monitor planning, layout, history requirements, and `DefinitionKey` identity.
+```mermaid
+flowchart TB
+    accTitle: Dataflow context transfer phases
+    accDescr: The active monitor and a cold target are compared to create a semantic mapping. Preparation validates evaluator compatibility, scheduler viability, retained environment, and history requirements. Application materializes physical state, moves mapped owners, resets unmapped owners, transfers compatible histories, installs prepared control state, and selects a route.
 
-`plan_runtime_reconfiguration` compiles the requested definition and asks the active monitor for a `MonitorReconfigurationPlan`. The plan is pure. It is accompanied by the complete resolved input and output, and it does not create a stateful target monitor.
+    active["Active monitor"] --> mapping["Validated semantic mapping"]
+    target["Cold target monitor"] --> mapping
+    mapping --> prepare["Prepare evaluator, scheduler, environment, and history state"]
+    prepare --> move["Destructively move mapped owners"]
+    move --> reset["Reset unmapped target owners"]
+    reset --> install["Install target control state and route"]
+```
 
-## The three monitor plans
+**Reading rule.** Nothing moves before preparation succeeds. After destructive movement begins, the architecture provides no reverse transfer to reconstruct the donor.
 
-`MonitorReconfigurationPlan` has exactly three variants:
+## Preparation
 
-| Plan | When | What the root cutover does |
-|---|---|---|
-| `RetainExact` | The target `DefinitionKey` equals the active key and the active monitor is healthy under `MatchingStreamState`. | Keeps the live `DataflowMonitor`; no target monitor and no monitor context mapping are materialized. |
-| `InstallCold { target }` | The policy is `None`, or the active monitor has failed. | Calls `DataflowMonitor::from_program(target)` and installs a fresh monitor with initialized state. Monitor context mapping is skipped. |
-| `Transfer { target, mapping, policy }` | The definition changed while transfer is enabled and the active monitor is healthy. | Builds a target monitor from `target`, then applies the supplied mapping and policy. |
+Preparation requires both monitors to be outside a tick. It validates execution structure, stream and environment mappings, target `Evaluator` compatibility, dynamic-expression projections, candidate `Scheduler` viability, retained-environment layout, and effective history requirements.
 
-`None` skips **monitor** context mapping, but the runtime still resolves the complete candidate input and output interfaces. A failed active monitor never donates state: its replacement is installed cold even when its definition key happens to match the target.
+A preparation failure leaves the donor's semantic owners intact. In the root runtime, earlier input or output cutover effects may already have occurred because monitor application is later in the overall sequence.
 
-`ReconfigurationMapping::between` analyses the two immutable programs before `DataflowMonitor::from_program(target)` is called. It is an internal, target-indexed correspondence for streams, executable evaluator-owner moves, and environment slots. History is deliberately not represented by a second static mapping: effective history requirements can come from transferred active expressions and are known only from monitor state.
+## Application
 
-## Destructive handoff
+Application materializes optimized/native state where necessary, moves exact evaluator owners, resets unmapped target evaluators, transfers compatible retained-environment values, recomputes history requirements, transfers matching variable histories, installs prepared scheduling and nested-reconfiguration state, clears the target current row, and selects its execution route.
 
-Root replacement has separate preparation and application phases. `prepare_context_transfer` checks tick state, mapping structure, active-expression projections, dependencies, schedule viability, retained-row layout, and the transfer report without moving persistent owners. It returns a private `PreparedContextTransfer` containing the validated mapping, candidate scheduler and reconfiguration state, and any executable environment projections.
+With `ContextTransferPolicy::None`, the target uses initialized evaluator state and empty target histories.
 
-`DataflowMonitor::context_transfer_from` consumes that prepared value at the tick barrier. This application path has no recovery branch: it moves evaluator owners, installs prepared projections, moves retained values and histories, and publishes the prepared scheduler and control state. The source monitor is consumed by the root cutover; state moves directly between monitor owners.
+![Old and target tick positions surround destructive evaluator and history transfer across a non-tick replacement interval](../../assets/dataflow/context-transfer-ticks.svg)
 
-The handoff is valid only between ticks. If either monitor has a tick in progress, preparation returns `DataflowStateError::TickInProgress`. A matched stream moves its complete `Evaluator.tier_states` (`EvaluatorTierStates`) as one aggregate, so canonical `EvaluatorState`, optional quickening state, `quick_plan`, and evaluator-local `JittedGraphEvaluator` state/artifact cannot separate. There is no node-level rewriting: a stream either moves whole or starts cold. Schedule-owned plans, JIT coordinator activation, fused artifacts, and schedule-wide replay state remain target-owned.
+**Reading rule.** The shared time axis contains two old logical ticks and the first target tick; the dashed replacement interval is physical application work, not another tick. The compact mapping rows show a compatible `Evaluator` moving with its `DelayState` and monitor history being restricted to the target-required suffix. An unmapped target owner starts cold. The completed old current row does not cross the interval—the target row is cleared before its first evaluation.
 
-## Mapping rules
+## State categories
 
-`ReconfigurationMapping` is indexed by target dense identities, while correspondence is established semantically:
+| State | Transfer rule |
+|---|---|
+| evaluator node and operator state | moved with mapped compatible stream owner |
+| delay rings and call state | part of evaluator owner; otherwise cold |
+| monitor variable history | transferred for matching compatible variables and target requirements |
+| retained sparse environment | transferred through compatible environment mapping |
+| current row | not transferred; target row is cleared |
+| scheduler and nested control | prepared for the target definition |
+| quickened/native representation | materialized or transferred with its semantic owner |
+| schedule route/cache entry | selected or rebuilt; not semantic context |
 
-- Top-level streams are matched independently, by variable name. A pair whose `StreamStateKey` values are equal is recorded as `StreamMapping::Exact`; every other target stream is `StreamMapping::Unmapped` and starts cold.
-- There is no compatible node-level rewriting. A changed stream has no partial correspondence to exploit.
-- Environment slots map by variable name, not by equal slot number, so unrelated declarations do not disturb a match.
-- Active reconfigurable-expression state and dependencies are restored only for matched stream owners.
-- Each transferred active body keeps the environment layout against which its nested evaluator was compiled. A prepared `EnvironmentProjection` maps the body's nested slots to current outer slots by variable identity and stores projected dependency and history slots.
+The retained sparse environment is not temporal history and does not seed a newly created delay ring.
 
-The result is reported per stream with `StreamStateTransferOutcome::Transferred` or `StreamStateTransferOutcome::Initialized`.
+## Nested transfer
 
-## History ownership
+A changed `dynamic` body can transfer compatible state only from the immediately previous active evaluator. Unchanged source text keeps the evaluator directly. Returning to an older body does not revive its former state. The first `defer` activation has no donor; after sealing, its evaluator remains active.
 
-Each monitor owns a `HistoryStore`. Before history movement, the target recomputes effective requirements from its static program plus the projected requirements of transferred active bodies. The environment part of `ReconfigurationMapping` then identifies the same variable in the source monitor, and the handoff moves the actual live history owner when both sides have a useful binding.
+![A replacement nested evaluator receives compatible local delay state from its immediate predecessor or starts cold while enclosing monitor history persists](../../assets/dataflow/dynamic-history.svg)
 
-History is matched independently of stream-state matching, by variable name **and** declared type, so a stream that starts cold can still consume retained input history. The moved history is resized to the target's effective depth. A shallower target keeps only the most recent target-visible values, while a deeper target preserves the available suffix without inventing older samples. Static programs and active bodies can contribute to one context-retention bound whose depth is their maximum. Active bodies still execute their own evaluator-local delays; the shared history exists so a later root specification can reuse the bounded context. Unmatched requirements remain cold.
+**Reading rule.** The local `DelayState` ring belongs to the nested activation and can transfer only from the immediately previous compatible evaluator; otherwise it starts cold and yields `Value::Deferred` while filling. The direct downstream `z[1]` read uses monitor `HistoryStore`, which survives because the enclosing monitor owner did not change.
 
-A history whose effective depth becomes zero is retired immediately: its binding is removed and its storage is dropped. If a later specification needs that variable again, its history is reallocated then.
+## Semisynchronous transfer
 
-History ownership is separate from the retained current-row environment used by reconfigurable expressions. Context transfer materializes and resets evaluator-local native state, while each compiled per-stream artifact remains bound to its target evaluator's program and environment ABI.
+The separate `ReconfSemiSyncRuntime` transfers variable histories rather than dataflow evaluator owners. It filters by variables in the target, gives missing variables empty history, and left-pads retained histories with `NoVal` to align lengths before starting the replacement generation.
 
-## Transfer reports
+## Implementation mapping
 
-`ContextTransferReport` reports at stream granularity. `streams` holds one `StreamStateTransfer` per target stream, naming the variable and whether its state was `Transferred` or `Initialized`; `retained_history` names the variables whose history survived.
+The implementation mapping leads through the monitor and evaluator reconfiguration modules, `src/dataflow/reconfiguration_mapping.rs`, monitor history code, and `src/runtime/reconfigurable_semi_sync.rs`.
 
-Nested bodies do not appear in the root report. A nested body's fate is decided one level down by the same key comparison, so the root report stays a flat, readable list of stream names rather than a tree of owner paths.
-
-[← Previous: The replacement contract](replacement-contract.md) · [Next: Failure and termination](failure-model.md) →
+Continue with [failure and termination](failure-model.md).

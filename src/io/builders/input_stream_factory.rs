@@ -1380,6 +1380,39 @@ fn controlled_input_stream<V: 'static>(
     })
 }
 
+/// Resolves reusable source descriptions and opens one logical input stream.
+///
+/// [`Self::build`] is the ordinary public boundary: it first validates that the
+/// configured sources cover the declared model inputs, then opens and composes
+/// only the selected sources. Source descriptions remain resource-free until
+/// that call.
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// use futures::StreamExt;
+/// use trustworthiness_checker::{InputBatch, Value, VarName};
+/// use trustworthiness_checker::io::{InputPipeline, InputSource};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// smol::block_on(async {
+///     let source = InputSource::in_memory_ticks([
+///         InputBatch::update("x", Value::Int(4)),
+///         InputBatch::update("x", Value::Int(8)),
+///     ]);
+///     let pipeline = InputPipeline::new(source);
+///     let mut input = pipeline
+///         .build(BTreeSet::from([VarName::new("x")]))
+///         .await?;
+///
+///     let first = input.next().await.expect("first configured batch")?;
+///     let second = input.next().await.expect("second configured batch")?;
+///     assert_eq!((first.tick_count(), second.tick_count()), (1, 1));
+///     assert!(input.next().await.is_none());
+///     Ok(())
+/// })
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct InputPipeline<V = Value> {
     sources: InputSources<V>,

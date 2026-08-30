@@ -1,86 +1,195 @@
 # Input architecture
 
-The input API has one public data model for ordered input data. Providers keep
-whatever physical representation is cheapest while they acquire and compose
-input; the ordinary runtimes consume the data-only `InputStream`. Reconfiguration
-control is handled by a private adapter used only by the reconfigurable runtime.
+The input subsystem resolves declared model inputs onto reusable source descriptions, opens the selected source owners, and delivers ordered logical ticks to a runtime. It is the architecture layer that hides where input came from and how that source is owned while preserving the logical time seen by evaluation.
 
-![Input architecture](assets/input-architecture.svg)
+## Scope of the abstraction
 
-## Updates, ticks, batches, and private storage
+| Concern | Input subsystem responsibility |
+|---|---|
+| external source variety | Present files, in-memory data, MQTT, Redis, Redis knowledge state, feature-gated ROS, and manual producers as reusable `InputSource` descriptions and opened streams. |
+| model binding | Resolve declared input variables onto source identities, routes, and codecs before acquiring resources. |
+| logical time | Normalize source-specific physical shapes into ordered `InputBatch` ticks while preserving simultaneous updates and existing tick boundaries. |
+| composition and reduction | Merge selected source streams in locally observed order and optionally batch or reduce complete ticks through one `InputStage`. |
+| live ownership | Separate resource-free `ResolvedInput` plans from opened source owners, relay tasks, and reconfigurable `InputPipelineSession` lifetime. |
+| control | Keep ordinary `InputStream` data-only while exposing `ReconfigurationRequest` through a private typed path for runtimes that support replacement. |
 
-The public model has three logical levels:
+The subsystem does not evaluate the model, create a total order between independent transports, or make input cutover transactional. Those responsibilities belong respectively to the runtime/monitor, the external producers, and the reconfiguration owner loop.
 
-- An **update** is one variable/value pair, represented by
-  `InputUpdate<V>`. For example, `x = 3` is one update.
-- A **tick** is the unit evaluated together. It contains one or more updates.
-  A tick with one update is an independent update; a tick with several updates
-  is simultaneous and must not be flattened into separate ticks.
-- An **input batch** is an ordered sequence of logical ticks delivered by an
-  input stream. A batch boundary is a delivery and storage boundary, not an
-  additional synchronization event.
+```mermaid
+flowchart TB
+    accTitle: Input architecture from source descriptions to runtime boundaries
+    accDescr: Reusable InputSource descriptions are owned by InputSources. Model inputs and optional request-local bindings meet that registry at resource-free InputPipeline resolution, which produces a ResolvedInput plan. Normal opening creates source streams that are composed, optionally windowed, and delivered as data-only InputStream batches. Reconfigurable opening creates a private data/control item stream consumed either by a persistent dataflow session or by a replacement semisynchronous generation.
 
-The corresponding public types are:
+    subgraph source["Reusable source descriptions"]
+        file["File or in-memory source"]
+        live["MQTT, Redis, Redis knowledge, or ROS source"]
+        manual["Manual source"]
+        description["InputSource"]
+        registry["InputSources"]
+        file --> description
+        live --> description
+        manual --> description
+        description --> registry
+    end
 
-```rust
-pub struct InputUpdate<V> {
-    pub variable: VarName,
-    pub value: V,
-}
+    subgraph planning["Resource-free planning"]
+        model["Model input variables"]
+        request["Optional request-local InputConfiguration"]
+        resolve["InputPipeline::resolve"]
+        plan["ResolvedInput"]
+        model --> resolve
+        request --> resolve
+        registry --> resolve
+        resolve --> plan
+    end
 
-pub struct InputBatch<V> { /* crate-private storage */ }
+    subgraph opening["Resource-owning opening"]
+        open["InputPipeline::open"]
+        opened["Opened source streams"]
+        plan --> open
+        open --> opened
+    end
 
-pub type InputStream<V> =
-    OutputStream<anyhow::Result<InputBatch<V>>>;
+    subgraph data["Ordinary logical delivery"]
+        compose["Compose streams in observed order"]
+        stage["Optional InputStage"]
+        stream["InputStream batches"]
+        ordinary["Ordinary runtime"]
+        opened --> compose
+        compose --> stage
+        stage --> stream
+        stream --> ordinary
+    end
+
+    subgraph controlpath["Private reconfiguration delivery"]
+        control["Control-capable route"]
+        reopen["ReconfigurableInput opens control-aware streams"]
+        items["ReconfigurableInputItem"]
+        barrier["Shared window and barrier driver"]
+        dataflow["DataflowRuntime with InputPipelineSession"]
+        semisync["ReconfSemiSyncRuntime generation"]
+        plan --> reopen
+        control -.-> reopen
+        reopen --> items
+        items --> barrier
+        barrier -->|"in-place"| dataflow
+        barrier -->|"generation replacement"| semisync
+    end
 ```
 
-Library callers construct independent updates and simultaneous or multi-tick
-batches with `InputBatch::update`, `InputBatch::tick`, and
-`InputBatch::from_ticks`. They inspect the logical view through methods such as
-`ticks`, `updates`, `tick_count`, and `update_count`.
+**Reading rule.** Solid arrows show source construction, planning, opening, and delivery; edge labels distinguish the two implemented reconfigurable consumers. The dashed edge is the optional control-capable route into the private path, not an ordinary data edge. `InputPipeline::open` composes source streams before its optional stage, while reconfigurable opening yields typed data/control items to the shared barrier driver. Composition across independent streams exposes the order observed by this process, not a distributed total order.
 
-The physical representation is deliberately not public API. Crate-private
-`InputSegment` values retain runs of independent singleton ticks, one
-simultaneous tick, or packed fixed-width rows, and crate-private
-`InputBatchStorage` holds one or several such segments. Built-in file, map, and
-in-memory row providers use packed rows where possible, while MQTT, Redis, ROS,
-and manual live updates normally arrive as singleton ticks. Library callers do
-not construct or inspect segments or packed-row storage directly.
+## Principal entities
 
-Construction validates logical tick invariants at the boundary. Internal packed
-construction also validates layouts and row widths. Concatenation and mapping
-preserve logical order and retain packed storage; runtimes expand a packed row
-only at a tick or evaluator boundary. Physical segments are therefore an
-implementation optimization and shape record, not another public level or a
-nested batch model.
+| Entity | Responsibility |
+|---|---|
+| reusable source description (`InputSource<V>`) | Describes one file, in-memory, transport, knowledge-state, or manual source. It stores configuration and an optional reconfiguration route, but no opened transport handle. |
+| source registry (`InputSources<V>`) | Owns the `SourceId`-to-source catalog and optional default. It validates catalog ownership and selects a control-capable source without opening resources. |
+| input pipeline (`InputPipeline<V>`) | Couples the source registry to at most one `InputStage`; it resolves request-specific bindings and opens the source streams named by a resolved plan. |
+| resolved plan (`ResolvedInput`) | Records selected source identities and `ResolvedBinding` route/codec assignments for one request without owning resources. |
+| logical input (`InputUpdate<V>`, `InputBatch<V>`, `InputStream<V>`) | Represents variable/value updates, ordered logical ticks, and the ordinary data-only stream that delivers batches. |
+| reconfiguration adapter (`ReconfigurableInput`) | Owns `ReconfigurationControl`, opens the private `ReconfigurableInputItem<V>` path, and can create a persistent `InputPipelineSession`. |
+| runtime owners (`DataflowRuntime`, `ReconfSemiSyncRuntime`) | Consume the control-aware stream using either retained source owners or complete generation replacement. |
 
-The public API intentionally does not expose separate event-shaped and
-step-shaped stream aliases. Independent updates and simultaneous rows are both
-represented by `InputBatch`, and their tick boundaries remain explicit.
+## The logical data contract
 
-## Ordinary streams and reconfiguration control
+An `InputUpdate<V>` is one variable/value pair. A logical tick is one or more updates evaluated together; a valid constructed tick is nonempty and contains no duplicate variable. An `InputBatch<V>` is an ordered sequence of those ticks delivered as one physical unit. `InputBatch::update` constructs one independent width-one tick, `InputBatch::tick` constructs one simultaneous tick, and `InputBatch::from_ticks` constructs an ordered sequence.
 
-An ordinary runtime receives only data:
+For example, one batch can carry two model steps without making the second step part of the first:
+
+```rust
+let batch = InputBatch::from_ticks(vec![
+    vec![InputUpdate::new("x".into(), 1)],
+    vec![
+        InputUpdate::new("x".into(), 2),
+        InputUpdate::new("y".into(), 3),
+    ],
+])?;
+```
+
+| Logical unit | Updates | Runtime meaning |
+|---|---|---|
+| first tick | `x = 1` | one independent model step |
+| second tick | `x = 2`, `y = 3` | one simultaneous model step |
+| containing batch | first tick, then second tick | two ordered steps delivered together |
+
+The public stream is data-only:
 
 ```rust
 pub type InputStream<V> = OutputStream<anyhow::Result<InputBatch<V>>>;
 ```
 
-There is no public control frame in `InputStream`. Functions such as
-`map_input_values`, `try_map_input_values`, and source composition operate on
-batches, while the private `input::into_tick_stream` boundary expands owned
-logical ticks only where a runtime needs per-tick fanout. This keeps normal
-runtimes independent of reconfiguration protocol details.
+A batch boundary is therefore a delivery boundary, not an additional synchronization event. Consumers may expand a batch through `ticks()` or `into_ticks()`, but they must preserve the distinction between the two ticks in the example.
 
-Ordinary and reconfigurable inputs use the same private window driver when an
-input window is configured. Ordinary batches are adapted to private data events
-with an impossible control type. The reconfigurable adapter maps its private
-data and control items to the same event form, runs the shared driver, and maps
-the results back. This gives both paths identical batching, atomic-step, timer,
-update-threshold, end-of-stream, and error-flush behavior without adding control
-to the public stream API.
+```mermaid
+flowchart TB
+    accTitle: Logical input units
+    accDescr: An InputUpdate names one variable and value. Updates grouped into a logical tick are evaluated together. InputBatch orders ticks for delivery, and InputStream carries those batches to a runtime tick boundary.
 
-The reconfigurable semi-sync runtime's private item has the following shape:
+    update["InputUpdate: variable and value"] -->|"grouped into"| tick["Logical tick"]
+    tick -->|"ordered in"| batch["InputBatch"]
+    batch -->|"delivered by"| stream["InputStream"]
+    stream -->|"consumed as ticks"| runtime["Runtime tick boundary"]
+```
+
+**Reading rule.** Solid arrows show logical grouping and delivery, not extra model-time steps. A simultaneous tick remains one evaluator step even when storage or delivery boundaries change; no dashed relationship is used in this abstract contract.
+
+## Resolution and opening
+
+`InputSources` owns reusable `InputSource` values in a stable-ID catalog. `InputPipeline` adds the request-independent source set and the optional window stage. `InputConfiguration` can qualify bindings by source, assign bindings across several sources, or leave ownership to source catalogs and the default source. Explicit source qualification wins; otherwise a catalog owner is used, and an unowned variable falls back to a default source only when that source supports a default route.
+
+`InputPipeline::resolve` validates the selected source, complete model-variable coverage, duplicate ownership, route shape, and codec requirements. It returns a `ResolvedInput` containing `ResolvedSource` entries with `ResolvedBinding` records. The control source is not a field in that plan: `ReconfigurableInput` holds a separate `ReconfigurationControl`, and a reconfigurable opening can add a control-only source plan when the selected control source has no model-data bindings.
+
+Resolution does not parse a file, create a subscription, connect a socket, or spawn a source task. `InputPipeline::build` is the public ordinary path: it resolves the model inputs and then opens the resulting streams. The opening step clones each selected source, calls its source-specific opener, attaches source context to emitted errors, composes the child streams with `input::compose_input_streams`, and applies the pipeline's single optional stage after composition.
+
+The following example uses the in-memory tick adapter to exercise that complete public boundary without an external transport:
+
+```rust
+use std::collections::BTreeSet;
+
+use futures::StreamExt;
+use trustworthiness_checker::{InputBatch, Value, VarName};
+use trustworthiness_checker::io::{InputPipeline, InputSource};
+
+fn main() -> anyhow::Result<()> {
+    smol::block_on(async {
+        let source = InputSource::in_memory_ticks([
+            InputBatch::update("x", Value::Int(4)),
+            InputBatch::update("x", Value::Int(8)),
+        ]);
+        let pipeline = InputPipeline::new(source);
+        let mut input = pipeline
+            .build(BTreeSet::from([VarName::new("x")]))
+            .await?;
+
+        let first = input.next().await.expect("first configured batch")?;
+        let second = input.next().await.expect("second configured batch")?;
+        assert_eq!((first.tick_count(), second.tick_count()), (1, 1));
+        assert!(input.next().await.is_none());
+        Ok(())
+    })
+}
+```
+
+`InputSource` remains reusable and unopened until `build`; the returned `InputStream` contains the two original logical ticks. Internally, `build` performs resource-free resolution before opening, but `InputPipeline::resolve` and `InputPipeline::open` are crate-private phases rather than separate public calls.
+
+The source adapters preserve one logical contract while choosing different physical shapes:
+
+| Source form | Opened logical result |
+|---|---|
+| file | Parsed rows are emitted as fixed-layout `PackedRows`; absent sparse rows use the source value's missing-value representation. |
+| in-memory rows | Selected columns are emitted as fixed-layout packed rows; the typed opener rejects unequal column lengths. |
+| in-memory ticks | Existing `InputBatch` values are filtered to the requested variables without discarding their remaining tick boundaries. |
+| MQTT or Redis Pub/Sub | A decoded route payload becomes an independent `InputBatch::update`. |
+| Redis knowledge-state | Selected key updates produce ordinary `Value` batches through the same data-only protocol; this source is not control-capable. |
+| ROS | Each subscribed message is decoded and mapped to an independent `InputBatch::update`. |
+| manual | Per-variable streams are joined into an `InputBatch::tick`, so the values available in one join iteration are simultaneous. |
+
+A source can be selected for a multi-source resolution without implying a global order. The composed stream yields whichever child item the local stream combinator observes next.
+
+## Ordinary data and private control
+
+The ordinary type cannot carry a control frame. Reconfigurable runtimes instead consume this crate-private boundary:
 
 ```rust
 pub(crate) enum ReconfigurableInputItem<V> {
@@ -89,302 +198,118 @@ pub(crate) enum ReconfigurableInputItem<V> {
 }
 ```
 
-### Input sessions
+`ReconfigurableInput::new` validates the selected control source and stores a `ReconfigurationControl` containing its source ID and route. MQTT, Redis, ROS, and a manual source with a control fanout are control-capable. File, in-memory row/tick, and Redis knowledge sources are not. With multiple configured sources, the control source is the one source that declares `reconfiguration_route`; with one configured source, that source must support control. A control-only source can therefore be separate from the sources that own model variables.
 
-An **input session** is one opened set of input transports: the concrete
-subscriptions, sockets, files, and decoders that serve one specification's
-inputs under one binding configuration. An `InputPipeline` is reusable
-configuration and outlives every session; a session is the live connection
-made from it.
+The backend boundaries have different ordering and lifetime facts:
 
-A session ends when a control message arrives, and the replacement
-specification opens the next one:
+| Adapter | Current boundary behavior |
+|---|---|
+| MQTT | Data and control are decoded from one backend item stream. The current Paho and rumqttc `open_items` paths use legacy item mappers that yield the first control item and then close the mapped stream. |
+| Redis Pub/Sub | Data and control are decoded from one Pub/Sub stream in the order observed by that client; the item loop continues after a control item. |
+| ROS | Data and control use independent subscriptions. The control subscription yields one request, while the data subscription remains separate; polling control first is a responsiveness choice, not a data-before-control ordering guarantee. |
+| manual | Data and control use independent fanouts. The adapter polls control first for responsiveness, but the fanouts provide no cross-stream ordering edge. |
 
-```text
-session 1    spec: in x, in y        subscribes: robot/x, robot/y
-             data … data … Reconfigure{ specification: "in y, in z" }   ← ends here
+MQTT, Redis, and ROS reject a control route that collides with an active data route. The shared window driver adds a local barrier rule: when it observes a control item while data is pending, it emits the pending data before the control item. It does not establish an order between independent producers, and it does not guarantee that a later data item exists after the underlying source stream ends.
 
-session 2    spec: in y, in z        subscribes: robot/y, robot/z
-             data … data …
+## Windowing preserves logical ticks
+
+`InputPipeline::with_stage` accepts one bounded `InputStage`. `InputWindow` requires a maximum delay, an update limit, or both. The two implemented reductions are `InputStage::Batch` and `InputStage::WindowToStep` with `InputReduction::LastUpdateWins`.
+
+The shared `drive_window` consumes data events for ordinary input and data/control events for reconfigurable input. A timer, update threshold, end-of-stream, source error, or control item flushes pending data. A source error is forwarded only after pending data has been emitted; a control item is forwarded after the pending data and the data stream then continues only if its underlying source remains live.
+
+The pull interaction makes the pending-data ordering explicit:
+
+```mermaid
+sequenceDiagram
+    accTitle: Pending input leaves before a control or terminal source outcome
+    accDescr: A reconfigurable runtime pulls from drive_window, which pulls from the reconfigurable input stream. Data batches accumulate until a threshold or another boundary emits them. If control, source error, or end of stream arrives while data is pending, drive_window yields the pending data first and only then yields the control item, error, or end of stream.
+
+    participant runtime as Reconfigurable runtime
+    participant barrier as drive_window
+    participant source as ReconfigurableInputStream
+
+    runtime->>barrier: next().await
+    loop Until one downstream item is yielded
+        barrier->>source: next().await
+        alt Data batch
+            source-->>barrier: Data(batch)
+            barrier->>barrier: append(batch)
+            alt update limit reached
+                barrier-->>runtime: Data(pending.take())
+            else window remains open
+                Note over barrier: Keep pending ticks and await again
+            end
+        else Control request
+            source-->>barrier: Reconfigure(request)
+            opt pending data exists
+                barrier-->>runtime: Data(pending.take())
+                runtime->>barrier: next().await
+            end
+            barrier-->>runtime: Reconfigure(request)
+        else Source error or end of stream
+            source-->>barrier: error or EOF
+            opt pending data exists
+                barrier-->>runtime: Data(pending.take())
+                runtime->>barrier: next().await
+            end
+            barrier-->>runtime: error or EOF
+        end
+    end
 ```
 
-Even though `y` is bound to the same route in both, session 1's subscription
-is dropped and session 2 opens its own. Sessions never overlap: exactly one is
-open at a time.
+**Reading rule.** Solid arrows are pull calls or local state changes; dashed arrows are yielded stream items or terminal outcomes. The optional second pull shows that pending data and the following control, error, or EOF are separate downstream items. A maximum-delay expiry can produce the same pending-data yield without a source item. Lifeline order does not establish an order between independent backend producers.
 
-`ReconfigurableInput` owns a reusable `InputPipeline` and one validated control
-binding. It opens the data sources and the control route for one session, then
-translates one control message into the private `Reconfigure` item. The control
-route is not a model variable, does not enter value/variable mapping, and is
-never exposed as an ordinary `InputStream` item. The reconfigurable runtime
-therefore accepts an `InputPipeline`, not a pre-opened direct `InputStream`.
+![The same incoming input window is either physically batched without changing its ticks or explicitly reduced to one simultaneous tick](assets/input-window-ticks.svg)
 
-A control item is a barrier. The shared private window driver first flushes
-pending data, then emits the private reconfiguration item. The old source tasks
-are dropped at the cutover. The new specification is parsed and validated, a
-complete resolved input is produced from the replacement
-`ReconfigurationRequest`, and a fresh session is opened. Even when the input and
-output sets have the same shape, the barrier starts a new session.
+**Reading rule.** Left-to-right position is logical tick order, while values aligned inside one box are simultaneous. `InputStage::Batch` changes the physical delivery unit but preserves both incoming ticks. `WindowToStep` with `LastUpdateWins` deliberately creates one new simultaneous tick, retaining `y = 2` and replacing the earlier `x = 1` with `x = 3`.
 
-## Sources, resolution, and composition
+- **Batch** accumulates the incoming physical segments while retaining every logical tick and every simultaneous boundary. It may split a packed segment at a flush boundary, but it never splits one logical tick merely to meet the update limit.
+- **Window-to-step** consumes complete ticks, keeps the latest update for each repeated variable within the window, and emits the retained values as one simultaneous tick. Its update limit is still a flush threshold, not a hard row-width limit.
 
-`InputSource` is reusable configuration; it does not hold an opened transport
-connection. `InputSources` is the owned local source set: it gives sources stable
-IDs and keeps route catalogs, defaults, endpoints, security-sensitive connection
-settings, and each source's optional transport-local `reconfiguration_route`
-together. It does not hold a session-specific control selection.
+The private `InputSegment` representation distinguishes singleton ticks, one simultaneous `Tick`, and fixed-layout `PackedRows`. `InputBatch` exposes them through its logical iterators rather than making storage shape a second public semantic level. Concatenation and value mapping preserve logical order; packed rows stay packed until a consumer needs their tick view.
 
-Resolution and opening are separate. `InputPipeline::resolve(model_inputs,
-monitor_config)` validates ownership, complete coverage, routes, and codecs and
-returns an internal immutable `ResolvedInput` made of `ResolvedSource` and
-`ResolvedBinding` values for one session. `InputPipeline::open(resolved)`
-then acquires only the resources described by that resolved value. The convenient
-`build(model_inputs)` method performs the default/catalog resolution followed by
-opening for simple callers. A reconfigurable runtime resolves its
-`ReconfigurationRequest` immediately before opening; neither the pipeline nor
-the private reconfiguration adapter stores a resolved input plan.
+## Persistent input sessions
 
-Resolution follows these rules:
+The reconfigurable dataflow runtime is the input path that retains unchanged source owners. `ReconfigurableInput::open_session` creates an `InputPipelineSession` with an active `ResolvedInput`, an `InputSourceSet` of `OpenedInputSource` relays, and a control-aware stream. Each relay stops ingress through cancellation and uses a bounded channel of one queued item; the relay task may hold one additional item while it forwards.
 
-1. An explicit source-qualified binding wins and is checked against that source.
-2. Otherwise a variable with exactly one source catalog owner is assigned to
-   that source.
-3. A variable with no catalog owner uses the configured default source, when
-   that source supports a default route. Generic MQTT and Redis sources use
-   the variable name as the route; file input selects the variable from the
-   trace.
-4. Missing owners, multiple catalog owners, duplicate bindings, undeclared
-   variables, missing model inputs, and invalid route/codec combinations are
-   errors before any resource is opened.
+`InputPipeline::plan_reconfiguration` compares the active and candidate resolved plans by source ID and source configuration. An unchanged source ID is absent from both change sets. A changed source owner appears in both the removed and added sets, which gives the dataflow owner loop a single detach-drain-open-commit sequence.
 
-The private `ReconfigurableInput` adapter selects and validates the fixed control
-source separately. A single source needs no marker; with multiple sources,
-exactly one source must declare `reconfiguration_route`. `--reconf-topic` may
-override the route but not the selected source.
+A source owner follows this lifecycle during an in-place cutover:
 
-Reconfigurable sessions have a stronger ownership invariant than ordinary
-input composition: all active model bindings and the control route must belong
-to one `InputSource`/source ID. If resolution produces bindings on more than one
-source, or produces data bindings on a source other than the selected control
-source, `InputPipeline::open_reconfigurable` rejects the resolution before it
-opens any source. It never uses `select_all` to guess an order between
-independent source streams. Additional configured sources may remain in the
-owned catalog, but they are inactive for that session. A session with no
-model bindings may still open the selected source as a control-only stream.
+```mermaid
+stateDiagram-v2
+    accTitle: In-place input source owner lifecycle
+    accDescr: An active source owner is detached when removed or changed. Stopping ingress leaves already admitted items to drain to end of stream before the owner is retired. Replacement additions open before the candidate resolved input is committed, while unchanged owners remain active.
 
-The selected source is opened once per session with its active model-data
-bindings and control route. The one-source invariant is an ownership check; it is
-not, by itself, an ordering guarantee. Backend behavior is different:
-
-- **MQTT and Redis** expose one backend item stream containing the subscribed data
-  and control routes. The adapter preserves the order observed by that transport
-  client, which is a transport-local observation rather than an intrinsic order
-  between independently published routes or topics.
-- **ROS** creates independent subscriptions for the model-data topics and the
-  control topic, then combines their streams. ROS does not provide a data/control
-  order at this adapter boundary; a control topic that collides with an active
-  data topic is rejected before ROS resources are opened.
-- **Manual** input creates independent fanouts for model data and control. Their
-  receivers likewise have no shared sequence or ordering edge.
-
-For ROS and manual sources, an external controller must quiesce the data
-producers and obtain an application/runtime acknowledgement that preceding data
-has crossed the required boundary before publishing control. It must wait for
-the reconfiguration acknowledgement, where provided, before publishing rows
-for the replacement session. A quiet stream, `Poll::Pending`, a sleep or
-yield, or control-poll priority is not an ordering proof. Library callers can
-install the in-process dataflow acknowledgement sink; CLI deployments must use
-source/backend-specific external controller coordination. No new network
-acknowledgement protocol is defined here. A live update remains an independent
-tick; a packed file or map source remains packed; a mixed batch may contain
-several segment kinds without merging an event into an existing simultaneous
-row.
-
-A simple single-source library pipeline looks like this:
-
-```rust
-let pipeline = InputPipeline::new(InputSource::mqtt(None, Some(1883)));
-let stream = pipeline.build(spec.input_vars().clone()).await?;
+    [*] --> Active
+    Active --> Detached: removed or changed
+    Detached --> Draining: stop ingress
+    Draining --> Retired: admitted items reach EOF
+    Active --> Active: unchanged owner retained
+    Retired --> Opening: replacement opens
+    Opening --> Active: candidate committed
 ```
 
-For a named multi-source deployment, use `InputSources` through the
-`--input-config` command-line form. Catalog ownership or compact
-source-qualified monitor bindings determine each session's resolved input.
+**Reading rule.** Solid transitions are lifecycle transitions. The self-loop is retention of an unchanged owner, not a new generation. A changed owner is removed and added as separate lifecycle work; replacement opening precedes candidate commit. No dashed transition is used.
 
-## Batch and atomic-step windows
+`InputPipelineSession::remove_sources` detaches the selected relays, stops their ingress, and returns a `RemovedInputDrain`. `DataflowRuntime` drains that stream through the old input/evaluation path before `InputPipelineSession::add_sources_and_commit` opens additions and makes the candidate plan active. Unchanged relays stay in the active source set throughout. If a detach, drain, or addition fails, the owner loop terminates and detached state is not restored.
 
-The pipeline has at most one input window stage. A window can be bounded by a
-maximum delay, an update limit, or both:
+This persistence is not shared by the reconfigurable semisynchronous runtime. `ReconfSemiSyncRuntime` prepares a replacement builder when it receives `Reconfigure`, drops the current input stream and evaluator generation, and builds a complete replacement. Its input bindings are resolved and opened for each generation; unchanged source owners are not retained across that boundary.
 
-```text
---input-window-ms <milliseconds>
---input-window-update-limit <updates>
---input-window-mode batch|atomic-step
-```
+## Failure and resource boundaries
 
-When a bound is supplied and no mode is selected, the mode is `batch`.
-Windows are applied after the selected source streams have been composed.
+A failure while resolving bindings occurs before source acquisition. A failure while creating a source stream is returned from the opening operation; an error emitted by an already-opened source is wrapped with that source's ID and terminates its stream. The window driver preserves pending-data-before-error ordering, but it does not recover a failed source.
 
-The update limit is a flush threshold and a soft bound, not a hard maximum. The
-shared private driver accepts a complete logical tick and flushes once the
-accumulated update count reaches or exceeds the threshold. It never splits one
-atomic logical tick, so a wide simultaneous tick can make either mode's emitted
-batch exceed the configured count. A timer, end-of-stream, error, or control
-barrier may flush below the threshold.
+The input relay's local prefetch is bounded by one queued item plus one item held by its relay task. An update limit can be exceeded by one indivisible logical tick, and neither bound implies a distributed ordering guarantee. Dropping a live session cancels its source tasks. Already admitted items are drained only when the explicit removal path retains their relays as a `RemovedInputDrain`.
 
-- **Batch mode** accumulates input while retaining every logical tick and its
-  simultaneous boundaries. Internally it concatenates physical segments rather
-  than flattening them.
-- **Atomic-step mode** consumes the logical ticks in the window and emits one
-  simultaneous tick. It applies last-update-wins per variable, so later updates
-  in the same window replace earlier values. This is an intentional change of
-  semantics: a window of independent events becomes one atomic step. The file
-  input CLI requires an update limit when this mode is selected.
+The input/output session and cutover details continue in [persistent I/O sessions](architecture/dataflow/runtime-io.md) and [root cutover](architecture/dataflow/reconfigurable-runtime.md). The downstream logical consumer is described in the [dataflow execution model](architecture/dataflow/model.md), and the broader replacement distinction is in [reconfiguration architecture](reconfiguration.md).
 
-The two modes should not be confused with the physical representation. A
-packed row is already one simultaneous tick, but a batch window can contain
-many such rows; an atomic-step window reduces the whole configured window to
-one final simultaneous tick.
+## Implementation mapping
 
-Textual stream values from files, MQTT, and Redis are decoded as JSON5. Standard
-JSON is therefore accepted without a separate parser or fallback path.
-
-## Compact route catalogs and input configuration
-
-A route catalog is a JSON5 object from model variable to route. Standard JSON
-remains valid input because it is a subset of JSON5. A route is
-either a string or a compact two-element array containing a route and codec:
-
-```json
-{
-  "x": "/robot/input/x",
-  "pose": ["/robot/input/pose", "Pose2D"]
-}
-```
-
-The same compact form is used by `--input-mqtt-file`,
-`--input-redis-file`, `--input-ros-file`, and the corresponding output route
-files. MQTT and Redis normally use their JSON5 codec and can use string routes;
-ROS routes must carry the message codec. Route catalogs are source-owned
-bindings, not fake model variables or an extra control-plane variable.
-
-The simple input modes are single-source defaults:
-
-- `--input-file` reads the variables declared by the current specification
-  from the trace.
-- `--mqtt-input` and `--redis-input` use the current specification's variable
-  names as routes when no catalog is supplied.
-- A route-file option supplies explicit routes and, for ROS, codecs.
-
-For multiple live sources, `--input-config` defines an owned local source set.
-It is exclusive with the other input-selection flags. A minimal configuration
-is:
-
-```json
-{
-  "default": "robot-mqtt",
-  "sources": {
-    "robot-mqtt": {
-      "kind": "mqtt",
-      "host": "localhost",
-      "reconfiguration_route": "monitor/reconfigure",
-      "routes": {
-        "alarm": "/robot/alarm"
-      }
-    },
-    "robot-ros": {
-      "kind": "ros",
-      "routes": {
-        "pose": ["/robot/pose", "Pose2D"]
-      }
-    }
-  }
-}
-```
-
-The `default` source supplies unowned variables, while explicit route catalogs
-make source ownership unambiguous. Each input variable may occur in only one
-source's catalog. Named file sources are not a shortcut around a local path:
-file input remains a single `--input-file` source, and manual sources are
-constructed through the library API.
-
-## Compact reconfiguration messages
-
-A reconfiguration message always contains a new `specification`. Its optional
-`input` and `output` objects use the same compact route form as route catalogs:
-
-```json
-{
-  "specification": "in x: Int\nout z: Int\nz = x",
-  "input": {
-    "inputs": {
-      "x": "/robot/input/x"
-    }
-  },
-  "output": {
-    "outputs": {
-      "z": "/robot/output/z"
-    }
-  }
-}
-```
-
-With `input.inputs`, `input.source` may identify the named source for all of
-those input bindings. With a multi-source local source set, `input.sources` may
-assign different active bindings to different sources. The independently
-selected control source need not own every model-data binding:
-
-```json
-{
-  "specification": "in alarm: Bool\nin pose\nout safe: Bool\nsafe = alarm",
-  "input": {
-    "source": "robot-mqtt",
-    "inputs": {
-      "alarm": "/robot/alarm",
-      "pose": "/robot/pose"
-    }
-  }
-}
-```
-
-The `inputs` and `sources` forms are alternatives. A `sources` object may assign
-active bindings to several source IDs. The runtime composes their streams into
-one observed order without claiming a distributed total order. If neither form
-is present, the next specification is resolved from the local source catalogs
-and default. `output` is optional and updates output routes for the replacement
-monitor. The message is validated before any replacement is opened.
-
-## Context transfer and unsupported file reconfiguration
-
-Context transfer is enabled by default for both reconfigurable runtimes. When
-a new model is prepared, retained history is kept by variable identity for
-variables that still exist in the new model. Histories are aligned to the
-longest retained history with `NoVal` on the left, so the replacement can
-continue with as much compatible trace context as possible. Use
-`--no-context-transfer` to start the replacement without that history.
-
-Reconfiguration requires a control-capable live source: MQTT, Redis, ROS, or a
-manual library source with a control channel. File and in-memory row/tick
-sources can provide ordinary data, but file-backed reconfiguration is
-unsupported. In particular, `--input-file` cannot be combined with either
-`--runtime reconf-semi-sync` or `--runtime reconf-dataflow`; there is no file
-control route from which a running monitor can receive a replacement request.
-
-## Runtime consumption
-
-- Dataflow can validate packed layout once and evaluate packed rows directly.
-- Async and semi-sync runtimes expand rows only at their per-variable or
-  evaluator boundary.
-- Controlled and replay input preserves `InputBatch` tick boundaries while
-  applying any configured data window.
-- Distributed scheduling and MSTLO consume the same logical tick view, so
-  simultaneous rows remain simultaneous and independent updates remain ordered
-  updates.
-
-## Redis status
-
-Redis Pub/Sub input and Redis output remain supported. Redis knowledge-state
-input is implemented as a selected-key `InputSource<Value>` using the same
-`InputBatch` and `InputStream` protocol. It reads current state after exact
-keyspace invalidations and leaves semantic aggregation to the post-composition
-input window.
+- Logical updates, batches, segment preservation, and `InputStream`: `src/core/input.rs`.
+- `InputSource`, `InputSources`, `InputPipeline`, resolution, opening, and source-change planning: `src/io/builders/input_stream_factory.rs` and `src/io/config/types.rs`.
+- Window and control-barrier reductions: `src/io/aggregation.rs`.
+- `ReconfigurableInput`, private control items, source relays, `InputPipelineSession`, and removal drains: `src/io/reconfigurable_input.rs`.
+- Persistent dataflow ownership and ordered cutover: `src/runtime/dataflow.rs`.
+- Complete semisynchronous generation replacement: `src/runtime/reconfigurable_semi_sync.rs`.
+- Source-specific logical shapes and transport behavior: the file, map, MQTT, Redis, ROS, and manual adapters under `src/io/`; focused unit tests live beside those implementations.

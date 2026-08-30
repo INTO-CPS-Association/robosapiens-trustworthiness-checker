@@ -619,6 +619,25 @@ fn validate_output_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<(
 
 /// A monitor replacement request. The nested input and output values keep
 /// transport-independent reconfiguration data separate from runtime state.
+///
+/// [`Self::validate`] checks the request envelope, not whether a runtime can
+/// compile, resolve, or apply the replacement:
+///
+/// ```
+/// use trustworthiness_checker::io::ReconfigurationRequest;
+///
+/// let replacement = "in x: Int\n\
+///     out alert: Bool\n\
+///     out total: Int\n\
+///     out scaled: Int\n\
+///     alert = total > 40\n\
+///     total = default(total[1], 0) + scaled\n\
+///     scaled = x * 2";
+/// let request = ReconfigurationRequest::new(replacement);
+/// request.validate()?;
+/// assert_eq!(request.specification, replacement);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReconfigurationRequest {
     pub specification: String,

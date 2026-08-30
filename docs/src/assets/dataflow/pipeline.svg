@@ -1,54 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" role="img" aria-labelledby="pipeline-arrow-title pipeline-arrow-desc" style="width:100%;max-width:1000px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
-<title id="pipeline-arrow-title">Current dataflow compilation and tick pipeline</title>
-<desc id="pipeline-arrow-desc">Compilation lowers EvaluationGraphs, binds EnvironmentSlots into StreamPrograms, and creates a DataflowMonitor with a MonitorPlan, Scheduler, and persistent stream evaluators. Each tick loads inputs, pre-evaluates expression sources, resolves active programs, validates the schedule, evaluates every remaining stream once in active dependency order, commits temporal state, and projects outputs.</desc>
-<defs>
-  <marker id="pipeline-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
-  </marker>
-</defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Compile once</text>
-<rect x="35" y="52" width="190" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="130" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DSRV specification</text>
-<text x="130" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">typed or untyped</text>
-<rect x="280" y="52" width="190" height="64" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="375" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">LoweredDataflow</text>
-<text x="375" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">EvaluationGraph + dependencies</text>
-<rect x="525" y="52" width="190" height="64" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="620" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">StreamProgram</text>
-<text x="620" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">bind EnvironmentSlot refs</text>
-<rect x="770" y="52" width="190" height="64" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="865" y="82" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">DataflowMonitor</text>
-<text x="865" y="100" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">ordered persistent machine</text>
-<line x1="225" y1="84" x2="280" y2="84" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="470" y1="84" x2="525" y2="84" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="715" y1="84" x2="770" y2="84" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="25" y1="145" x2="975" y2="145" stroke="#a8b3bf" stroke-width="1"/>
-<text x="24" y="176" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Every logical tick</text>
-<rect x="35" y="202" width="205" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="137" y="232" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">1  load inputs</text>
-<text x="137" y="250" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">environment row</text>
-<rect x="275" y="202" width="205" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="377" y="232" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">2  evaluate sources</text>
-<text x="377" y="250" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">MonitorPlan source order</text>
-<rect x="515" y="202" width="205" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="617" y="232" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">3  resolve programs</text>
-<text x="617" y="250" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">exact active dependencies</text>
-<rect x="755" y="202" width="205" height="64" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="857" y="232" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">4  validate schedule</text>
-<text x="857" y="250" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">Scheduler repairs if needed</text>
-<rect x="155" y="308" width="205" height="64" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="257" y="338" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">5  evaluate once</text>
-<text x="257" y="356" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active dependency order</text>
-<rect x="395" y="308" width="205" height="64" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="497" y="338" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">6  commit temporal</text>
-<text x="497" y="356" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">post-row staged writes</text>
-<rect x="635" y="308" width="205" height="64" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="737" y="338" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">7  project outputs</text>
-<text x="737" y="356" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">saved EnvironmentSlots</text>
-<line x1="240" y1="234" x2="275" y2="234" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="480" y1="234" x2="515" y2="234" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="720" y1="234" x2="755" y2="234" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<path d="M 857 266 C 857 290, 257 290, 257 308" fill="none" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="360" y1="340" x2="395" y2="340" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
-<line x1="600" y1="340" x2="635" y2="340" stroke="#65758b" stroke-width="1.8" marker-end="url(#pipeline-arrow)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 470" role="img" aria-labelledby="pipeline-arrow-title pipeline-arrow-desc" style="width:100%;max-width:1040px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+  <title id="pipeline-arrow-title">Dataflow compilation and static or nested tick execution</title>
+  <desc id="pipeline-arrow-desc">Compilation lowers a DSRV specification, binds stream programs and stable environment slots, assembles an immutable DataflowProgram containing MonitorPlan metadata, then creates a DataflowMonitor with Scheduler and MonitorExecution owners. Every tick loads inputs. A static tick follows the current scheduled plan directly. A tick with dynamic or defer expressions first evaluates source prerequisites, resolves active nested programs and dependencies, and repairs the schedule before evaluating the disjoint main range. Both paths converge on one temporal commit and output projection.</desc>
+  <defs>
+    <marker id="pipeline-arrow" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+    </marker>
+  </defs>
+  <text x="24" y="30" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Compile once into an immutable definition</text>
+  <g font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b" text-anchor="middle">
+    <rect x="25" y="52" width="170" height="66" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+    <text x="110" y="80">DSRV specification</text><text x="110" y="99" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">checked or untyped</text>
+    <rect x="230" y="52" width="170" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+    <text x="315" y="80">LoweredDataflow</text><text x="315" y="99" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">unbound graphs</text>
+    <rect x="435" y="52" width="170" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+    <text x="520" y="80">StreamProgram[]</text><text x="520" y="99" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">bound stable slots</text>
+    <rect x="640" y="52" width="170" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+    <text x="725" y="80">DataflowProgram</text><text x="725" y="99" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">MonitorPlan + layout</text>
+    <rect x="845" y="52" width="170" height="66" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+    <text x="930" y="80">DataflowMonitor</text><text x="930" y="99" font-family="system-ui, sans-serif" font-size="11" font-weight="400" fill="#52606d">Scheduler + execution state</text>
+  </g>
+  <g fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)">
+    <path d="M 195 85 H 230"/><path d="M 400 85 H 435"/><path d="M 605 85 H 640"/><path d="M 810 85 H 845"/>
+  </g>
+  <line x1="20" y1="145" x2="1020" y2="145" stroke="#a8b3bf"/>
+  <text x="24" y="177" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Evaluate many logical ticks</text>
+  <rect x="25" y="198" width="190" height="66" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
+  <text x="120" y="226" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">load input row</text>
+  <text x="120" y="246" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">clear and fill input slots</text>
+  <path d="M 215 231 H 265" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
+  <path d="M 265 231 L 305 200" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
+  <path d="M 265 231 L 305 316" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
+  <text x="270" y="194" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">static</text>
+  <text x="270" y="307" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">dynamic/defer present</text>
+
+  <rect x="305" y="174" width="235" height="66" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+  <text x="422" y="202" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">ScheduledExecutionPlan</text>
+  <text x="422" y="222" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">evaluate computed streams once</text>
+
+  <rect x="305" y="275" width="190" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+  <text x="400" y="303" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">source range</text>
+  <text x="400" y="323" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">evaluate prerequisites once</text>
+  <rect x="535" y="275" width="190" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+  <text x="630" y="303" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">resolve active bodies</text>
+  <text x="630" y="323" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">exact dependencies</text>
+  <rect x="765" y="275" width="190" height="66" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
+  <text x="860" y="303" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">repair + main range</text>
+  <text x="860" y="323" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">remaining streams once</text>
+  <g fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)">
+    <path d="M 495 308 H 535"/><path d="M 725 308 H 765"/>
+  </g>
+
+  <rect x="585" y="382" width="190" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
+  <text x="680" y="408" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">temporal commit</text>
+  <text x="680" y="427" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">one post-row boundary</text>
+  <rect x="815" y="382" width="190" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
+  <text x="910" y="408" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">project outputs</text>
+  <text x="910" y="427" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">saved output slots</text>
+  <path d="M 540 207 C 560 207 545 413 585 413" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
+  <path d="M 860 341 C 860 365 760 365 760 382" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
+  <path d="M 775 413 H 815" fill="none" stroke="#65758b" stroke-width="1.6" marker-end="url(#pipeline-arrow)"/>
 </svg>

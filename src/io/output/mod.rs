@@ -1,9 +1,40 @@
-//! Output destinations, deterministic resolution, and the local output data
-//! plane.
+//! Output destination planning, opened ownership, stages, and routing.
 //!
-//! The output boundary is a single local [`OutputWriter`]. Configuration is
-//! resolved into fixed destination interfaces before any backend is opened;
-//! multiple opened writers are hidden behind a tick-preserving router.
+//! # Contract
+//!
+//! [`OutputPipeline`] resolves model outputs and request-local bindings against a
+//! stable [`OutputDestinations`] registry before opening resources. The resulting
+//! [`ResolvedOutput`] fixes variable ownership, mirroring, routes, codecs, stages,
+//! and backend interfaces. Opening exposes one runtime-facing
+//! [`crate::core::OutputWriter`]; one non-session destination uses a direct writer,
+//! while sessions and multi-destination outputs use a tick-preserving router.
+//!
+//! # Principal entities
+//!
+//! | Entity | Responsibility |
+//! |---|---|
+//! | [`OutputDestination`] | Holds one unopened backend, selection policy, route catalog, and destination-local stages. |
+//! | [`OutputDestinations`] | Owns the deterministic destination registry and optional default owner. |
+//! | [`OutputPipeline`] | Resolves complete plans and opens the backend owners and stage wrappers named by them. |
+//! | [`ResolvedOutput`] | Stores one immutable, resource-free output plan. |
+//! | [`OutputStage`] | Applies bounded buffering or logical-tick-preserving coalescing before or after routing according to ownership. |
+//! | [`OutputPipelineSession`] | Retains fixed destination owners and mutable selected-variable/interface state for live reconfiguration. |
+//!
+//! # Ownership and ordering
+//!
+//! Shared stages wrap the complete delivery path before routing. Destination-local
+//! stages wrap one opened backend owner after routing. Router readiness waits for
+//! every active destination writer; with several owners, admitted batches are
+//! selected by each destination's resolved variable set and empty selections are
+//! skipped. This preserves per-destination logical tick order but provides neither
+//! pressure isolation nor atomic commit across destinations.
+//!
+//! # Implementation mapping
+//!
+//! `pipeline` implements resolution, opening, routing, session ownership, and live
+//! interface handoff. `stages` and `pump` implement buffer/coalescing wrappers and
+//! their worker/barrier lifecycle. `backend` and the transport modules implement
+//! unopened backend configuration and opened destination writers.
 
 mod backend;
 mod pipeline;

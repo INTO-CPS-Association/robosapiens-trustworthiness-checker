@@ -1,131 +1,72 @@
-# The reconfigurable runtime
+# Root cutover
 
-[← Previous: Input and output boundary](runtime-io.md) · [Next: The replacement contract](replacement-contract.md) →
+A `DataflowRuntime` configured by `ReconfigurableDataflowRuntimeBuilder` handles one control request at a time in the same owner loop that drives data ticks. It first constructs a complete resource-free candidate, then applies input, output, and monitor changes in a fixed order. Application has no rollback.
 
-The reconfigurable dataflow runtime uses the same `DirectDataflowEngine`, packed `OutputBatch` path, and `OutputWriter` backpressure as the ordinary runtime. It adds one persistent owner loop that can change the monitor definition and its resolved I/O while the process keeps running.
+## Planning
 
-At any instant the loop owns one live monitor and one live pair of sessions:
+| # | Planning phase | Responsible entity | Produces or validates |
+|---:|---|---|---|
+| 1 | Validate request structure | `DataflowRuntime` | A structurally valid `ReconfigurationRequest`. |
+| 2 | Parse and compile replacement | reconfiguration compiler | A candidate `DataflowProgram` without live state. |
+| 3 | Resolve and plan input | `InputPipeline` | Candidate `ResolvedInput` and `InputPipelineReconfigurationPlan`. |
+| 4 | Resolve and plan output | `OutputPipeline` | Candidate `ResolvedOutput` and `OutputPipelineReconfigurationPlan`. |
+| 5 | Plan monitor replacement | `DataflowMonitor` | `MonitorReconfigurationPlan::RetainExact`, `InstallCold`, or `Transfer`. |
+| 6 | Assemble candidate | `DataflowRuntime` | One complete `RuntimeReconfigurationPlan`. |
 
-```text
-one owner loop
-  ├─ one active DataflowMonitor
-  ├─ one InputPipelineSession
-  └─ one OutputPipelineSession
-```
+All six phases are resource-free. A failure leaves active owner structures unchanged, although `DataflowRuntime` treats the failed command as terminal.
 
-`RuntimeSpec::ReconfDataflow(policy)` selects this implementation and carries its `ExecutionPolicy`. `RuntimeSpec::ReconfSemiSync` is a separate implementation in `src/runtime/reconfigurable_semi_sync.rs`; it has different execution and replacement semantics.
+The monitor plan is one of three forms:
 
-## The typed loop
+- `MonitorReconfigurationPlan::RetainExact` keeps the healthy active monitor when the definition is exact and policy permits retention.
+- `MonitorReconfigurationPlan::InstallCold` constructs initialized state when transfer is disabled or the active monitor cannot donate state.
+- `MonitorReconfigurationPlan::Transfer` constructs a target monitor and a validated semantic mapping from the active definition.
 
-Each iteration awaits the next item from the live `InputPipelineSession`:
+## Application
 
-| Item | Action |
-|---|---|
-| `ReconfigurableInputItem::Data(batch)` | Evaluate the batch with `DirectDataflowEngine`, submit output according to the selected policy, and refresh the monitor revision. |
-| `ReconfigurableInputItem::Reconfigure(request)` | Resolve and apply a root reconfiguration, then continue with the live session state. |
-| `None` | Flush and close the current output session, then return successfully. |
-| `Err(error)` | Attempt output cleanup, then return the input error. |
+| # | Application phase | Responsible entity | Applied effect |
+|---:|---|---|---|
+| 1 | Detach removed or changed input owners | `InputPipelineSession` | Stop new ingress while retaining already-admitted items for draining. |
+| 2 | Drain admitted old input | `DataflowRuntime` and old `DataflowMonitor` | Evaluate retained items under the old definition and interface. |
+| 3 | Flush pending engine rows | `DirectDataflowEngine` and `OutputWriter` | Submit output produced by the old side of the barrier. |
+| 4 | Open additions and commit input | `InputPipelineSession` | Install added source owners and activate the candidate `ResolvedInput`. |
+| 5 | Flush affected output ownership | `OutputPipelineSession` | Establish the required destination-local or shared-stage barrier. |
+| 6 | Update output interfaces and selection | `OutputPipelineSession` | Apply supported interfaces, routes, codecs, and router variable sets sequentially. |
+| 7 | Apply monitor replacement | `DataflowMonitor` | Retain, cold-install, or transfer semantic state according to the plan. |
+| 8 | Rebuild transient row layouts | `DirectDataflowEngine` | Recreate reusable input/output rows and cached slot mappings around the active monitor. |
+| 9 | Send acknowledgement | `DataflowRuntime` | Publish revision and change flags after all local application phases complete. |
 
-The control item carries a parsed `ReconfigurationRequest`, not a model variable. The owner loop does not decode the transport payload.
+Mutation begins at phase 1. Every later phase can fail after earlier effects have occurred, and acknowledgement is emitted only after phase 9 is reached.
 
-## Resource-free planning
+![The delivered control barrier is followed by old-side input drain and output flush before candidate interfaces and monitor state become active](../../assets/dataflow/root-cutover-ticks.svg)
 
-`plan_runtime_reconfiguration` is the first root-reconfiguration phase. It owns only the request and performs no transport or output I/O. Before the cutover awaits anything, it:
+**Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before applying candidate input, output, and monitor state. The second dashed line marks local candidate activation after the serial input commit, output flush/update, monitor application, row rebuild, and acknowledgement; neither line is a rollback boundary.
 
-1. validates the request structure;
-2. compiles the specification into an immutable `DataflowProgram`;
-3. resolves the complete target `ResolvedInput` and `ResolvedOutput` values; and
-4. asks `DataflowMonitor::plan_reconfiguration` for a `MonitorReconfigurationPlan`.
+The old monitor evaluates every row drained from removed sources. Its resulting pending output rows cross the writer boundary before the candidate input and output interfaces become active.
 
-It produces a private `RuntimeReconfigurationPlan` holding the monitor plan and the concrete input/output pipeline plans. Nothing in the plan owns a resource, so a planning failure leaves the active runtime untouched.
+## Monitor replacement and revisions
 
-The monitor result is a pure plan, not a stateful target monitor. Its variants are:
+Applying a monitor plan advances `MonitorRevision` for an accepted root activation, including exact retention. `InterfaceRevision` advances only when the effective input or output interface changed. The acknowledgement reports both revisions and both change flags, not the detailed transfer report.
 
-| Plan | Condition | Later action |
-|---|---|---|
-| `RetainExact` | The target `DefinitionKey` equals the active key and the active monitor is healthy under `MatchingStreamState`. | Retain the live monitor; do not materialize a target or create monitor context mapping. |
-| `InstallCold { target }` | Transfer policy is `None`, or the active monitor has failed. | Materialize `DataflowMonitor::from_program(target)` with fresh state; skip monitor context mapping. |
-| `Transfer { target, mapping, policy }` | The definition changed while transfer is enabled. | Materialize the target from its program, then apply the authoritative `ReconfigurationMapping` with `context_transfer_from`. |
+After monitor application, the direct engine rebuilds reusable rows and cached slot layouts for the replacement monitor. This transient rebuild does not own language state.
 
-`ReconfigurationMapping::between(active_program, target_program)` is created while both programs are immutable, before target monitor construction. It pairs same-name streams whose `StreamStateKey` values match.
+## No root transaction
 
-## Root cutover order
+The cutover is serial but not atomic across subsystems. Examples of reachable partial state include:
 
-Every accepted request plans both pipeline changes, including the possibility that both plans are empty. The owner applies a typed control item in this order:
+- removed input owners already detached when an addition fails;
+- input committed before output interface application fails;
+- an earlier destination interface updated before a later destination fails;
+- I/O changes applied before monitor transfer fails;
+- the entire local cutover applied before acknowledgement delivery fails.
 
-```text
-ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)
-→ plan_runtime_reconfiguration (program, monitor plan, input/output plans)
-→ drain removed input streams through the old monitor
-→ submit pending engine rows
-→ retain unchanged input streams and install additions
-→ flush only changed output owners (or one shared stage)
-→ update existing output interfaces and routing
-→ apply MonitorReconfigurationPlan and rebuild the monitor layout
-→ send ReconfigurationAck
-```
+Cleanup runs on failure, but prior effects are not reversed. The runtime terminates rather than continuing from a partially applied command.
 
-The durable output destination registry is fixed by `OutputPipeline`; a request
-cannot create or remove an output owner. Existing owners must support in-place
-interface updates. Input changes retain unchanged source streams, drain removed
-streams, and open only additions; a changed source ID is break-drain-make.
-Planning can fail
-without mutating the monitor or opening resources. Once application begins, any
-error is terminal: there is no rollback or replacement fallback. The row
-submission and affected-owner flushes form the handoff boundary for output
-already accepted by the engine.
+## Separate nested mechanism
 
-Applying the monitor plan is where it becomes stateful. `RetainExact` keeps the live monitor's execution state. `InstallCold` and `Transfer` call `DataflowMonitor::from_program`; only the latter then performs the destructive context handoff. A failed root operation terminates the owner loop after its cleanup path; it does not restore a previous monitor by copying state back.
+`dynamic` and `defer` changes occur inside `DataflowMonitor::evaluate`. They resolve nested bodies and repair the active schedule before the tick's main range. They neither replace the root `InputPipelineSession` and `OutputPipelineSession` nor use this planning/application sequence.
 
-`DataflowMonitor` is the sole revision authority. Every accepted request advances `MonitorRevision`; `InterfaceRevision` advances only when the effective monitor or I/O interface actually changed. Acknowledgement is sent only after the monitor and both pipeline plans have been applied, and a failed acknowledgement is terminal.
+## Implementation mapping
 
-## The input barrier remains live
+The implementation mapping centers on `plan_runtime_reconfiguration`, `apply_runtime_reconfiguration`, and `run_reconfigurable_dataflow` in `src/runtime/dataflow.rs`, with plans supplied by input, output, and monitor modules.
 
-The input window stage flushes pending data before forwarding `ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)`. The control item is a barrier in the ordered item stream, not an end-of-stream marker: the persistent `InputPipelineSession` retains unchanged sources, installs additions after removals finish, and continues to deliver data and further control items.
-
-Active model-data bindings may span multiple source owners. Exactly one source carries the control route, and the session composes all active source streams into one observed order without claiming a total order between independent transports. Each source has a bounded local relay. Removal stops that relay and consumes its admitted items to genuine EOF before additions open. Source moves still require external producer quiescence or transport replay because remote transport queues are outside this local boundary.
-
-## Nested expression reconfiguration
-
-Root replacement changes the whole `DataflowProgram` at a tick boundary. Nested `dynamic`/`defer` reconfiguration changes one body inside a tick, at the source barrier between the source and main execution ranges, while the surrounding `DataflowMonitor` remains in place:
-
-```text
-unchanged fast path
-→ compile the local body
-→ transfer compatible state from the old body
-→ install the body once
-→ update dependencies and schedule
-→ advance MonitorRevision
-```
-
-The unchanged path keeps the active evaluator and its history. A changed source whose compiled body key matches the active body transfers that whole nested evaluator; otherwise the body installs cold. There is no transaction over a sequence of nested changes: a later failure may leave earlier nested changes applied, and the monitor then becomes failed according to the normal evaluation error policy. The first `defer` activation has no donor. Sealing and source release occur after the successful temporal commit.
-
-## What reconfigurability costs
-
-| Cost | When it applies |
-|---|---|
-| Retained environment row | Every reconfigurable monitor. |
-| Current-row clear to `NoVal` | Every reconfigurable tick. |
-| Source range and resolution barrier | While live points need computed prerequisites. |
-| Whole-plan fused JIT blocked | While a non-empty source barrier exists. |
-| Compilation, transfer, and schedule repair | When a source actually changes. |
-
-Stable static and dynamic ticks retain their fast paths. Unchanged dynamic ticks and sealed `defer` ticks do not rebuild evaluators or schedulers. When all `defer` prerequisites have been released, the source range can become empty and JIT selection may promote the monitor to a fused artifact.
-
-## Packed output batches carry no revision fence
-
-Packed `OutputBatch` values are not revision-filtered. A nested change may advance `MonitorRevision` during a valid tick, but that tick's successfully computed output remains valid and is not discarded as stale.
-
-## Transport support
-
-| Transport | Reconfigurable? |
-|---|---|
-| Manual | Yes, subject to the source/control ordering contract. |
-| MQTT | Yes, subject to feature and connection setup. |
-| ROS | Yes, subject to feature and connection setup. |
-| Redis Pub/Sub | Yes; Redis knowledge sources cannot carry control. |
-| File | **No** |
-
-File input has no live control route and cannot be used by the reconfigurable runtime. Independent MQTT topics still need external coordination when a stronger order than the transport's observed item order is required.
-
-[← Previous: Input and output boundary](runtime-io.md) · [Next: The replacement contract](replacement-contract.md) →
+Continue with [replacement identity](replacement-contract.md), [context transfer](context-transfer.md), and [failure containment](failure-model.md).

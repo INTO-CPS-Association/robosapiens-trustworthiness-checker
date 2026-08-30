@@ -5,7 +5,7 @@ use serde::{
 
 /// The role played by an observed atom in one causal explanation.
 ///
-/// Roles belong to a cause occurrence, not to [`TimedAtom`] itself.  The same
+/// Roles belong to a cause occurrence, not to [`crate::causal::TimedAtom`] itself. The same
 /// external observation can therefore have different roles in different
 /// explanations, or both roles in one explanation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

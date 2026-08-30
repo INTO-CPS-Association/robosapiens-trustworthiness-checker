@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 920 380"
+     role="img"
+     aria-labelledby="dynamic-defer-ticks-title dynamic-defer-ticks-desc"
+     style="width:100%; max-width:920px; height:auto; background:#ffffff;">
+  <title id="dynamic-defer-ticks-title">Dynamic replaces bodies; defer retains the first</title>
+  <desc id="dynamic-defer-ticks-desc">Read left to right at logical ticks 10 through 13. The source row is x plus 1 at ticks 10 and 11, x times 2 at tick 12, and x plus 1 again at tick 13. In the dynamic row, evaluator A is active for ticks 10 and 11, evaluator B begins exactly at tick 12, and new evaluator C begins exactly at tick 13; returning to x plus 1 creates C and never revives A. In the defer row, evaluator A begins at tick 10 and spans all later ticks while later source values are ignored for replacement. Thin spans show activation lifetimes and compact cells show source updates. A replacement can transfer compatible state only from its immediate predecessor; otherwise it starts cold.</desc>
+
+  <defs>
+    <marker id="dynamic-defer-ticks-arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="9"
+            refY="5"
+            viewBox="0 0 10 10"
+            orient="auto"
+            markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="380" fill="#ffffff" />
+  <rect x="0.75" y="0.75" width="918.5" height="378.5" rx="6"
+        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
+
+  <text x="28" y="32"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="15"
+        font-weight="700">Dynamic replaces bodies; defer retains the first</text>
+
+  <line x1="220" y1="300" x2="830" y2="300"
+        fill="none"
+        stroke="#65758b"
+        stroke-width="1.5"
+        marker-end="url(#dynamic-defer-ticks-arrow)" />
+  <text x="842" y="305"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="11">logical time</text>
+
+  <g fill="#52606d"
+     font-family="system-ui, sans-serif"
+     font-size="11"
+     text-anchor="middle">
+    <text x="280" y="58">tick 10</text>
+    <text x="410" y="58">tick 11</text>
+    <text x="540" y="58">tick 12</text>
+    <text x="670" y="58">tick 13</text>
+  </g>
+
+  <g stroke="#65758b" stroke-width="1.5">
+    <line x1="280" y1="294" x2="280" y2="306" />
+    <line x1="410" y1="294" x2="410" y2="306" />
+    <line x1="540" y1="294" x2="540" y2="306" />
+    <line x1="670" y1="294" x2="670" y2="306" />
+  </g>
+
+  <text x="28" y="105"
+        fill="#17212b"
+        font-family="system-ui, sans-serif"
+        font-size="13"
+        font-weight="600">source p</text>
+
+  <g font-family="ui-monospace, monospace"
+     font-size="12"
+     font-weight="600"
+     fill="#17212b"
+     text-anchor="middle">
+    <rect x="232" y="78" width="96" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="280" y="105">&quot;x + 1&quot;</text>
+
+    <rect x="362" y="78" width="96" height="44" rx="5"
+          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+    <text x="410" y="105">&quot;x + 1&quot;</text>
+
+    <rect x="492" y="78" width="96" height="44" rx="5"
+          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+    <text x="540" y="105">&quot;x * 2&quot;</text>
+
+    <rect x="622" y="78" width="96" height="44" rx="5"
+          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+    <text x="670" y="105">&quot;x + 1&quot;</text>
+  </g>
+
+  <text x="28" y="190"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="13"
+        font-weight="600">dynamic(p)</text>
+
+  <g fill="none" stroke-width="3">
+    <line x1="280" y1="183" x2="540" y2="183" stroke="#147d64" />
+    <line x1="540" y1="183" x2="670" y2="183" stroke="#b54708" />
+    <line x1="670" y1="183" x2="790" y2="183" stroke="#8055a3" />
+  </g>
+  <g fill="#17212b"
+     font-family="ui-monospace, monospace"
+     font-size="11"
+     font-weight="600"
+     text-anchor="middle">
+    <text x="410" y="171">A · t10–t11</text>
+    <text x="605" y="171">B · t12</text>
+    <text x="730" y="171">C · t13</text>
+  </g>
+  <text x="535" y="209"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="10.5"
+        text-anchor="middle">returning source text creates C; A is not revived</text>
+
+  <text x="28" y="246"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="13"
+        font-weight="600">defer(p)</text>
+
+  <line x1="280" y1="238" x2="790" y2="238"
+        fill="none"
+        stroke="#147d64"
+        stroke-width="3" />
+  <text x="535" y="227"
+        fill="#17212b"
+        font-family="ui-monospace, monospace"
+        font-size="11"
+        font-weight="600"
+        text-anchor="middle">A · sealed at t10</text>
+  <text x="535" y="263"
+        fill="#52606d"
+        font-family="system-ui, sans-serif"
+        font-size="10.5"
+        text-anchor="middle">later source values ignored</text>
+</svg>

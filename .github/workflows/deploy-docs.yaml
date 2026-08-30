@@ -40,9 +40,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Install mdBook
+      - name: Install mdBook tooling
         run: |
-          cargo install mdbook --version ^0.4
+          cargo install mdbook --version 0.4.52 --locked
+          cargo install mdbook-mermaid --version 0.16.2 --locked
+          mdbook-mermaid install docs
 
       - name: Build documentation
         run: |
