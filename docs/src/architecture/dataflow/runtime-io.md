@@ -12,9 +12,10 @@ This page describes how those plans and sessions are resolved, opened, and updat
 
 Every accepted reconfiguration resolves and plans both sessions, including a
 request that changes neither interface. Unchanged source streams and output
-owners remain live. Input additions are inserted into the composed stream;
-removals drain their ready backlog before break-before-make replacement. Output
-owners are fixed by `OutputPipeline` and changed interfaces are updated in place.
+owners remain live. Input additions are inserted into the composed stream.
+Removal stops the source's bounded local relay, then consumes that relay to real
+EOF before break-before-make replacement. Output owners are fixed by
+`OutputPipeline` and changed interfaces are updated in place.
 
 ```text
 active InputPipelineSession + OutputPipelineSession
@@ -51,9 +52,9 @@ The same live stream can yield data after a control item. For manual and ROS-sty
 
 ## One logical boundary over multiple sources
 
-`InputPipeline::open_reconfigurable` validates every resolved source before opening any transport. It opens each source independently and composes whole `InputBatch` values; the single-source case returns the source stream directly, preserving packed input without composition overhead.
+`ReconfigurableInput::open_session` validates every resolved source before opening any transport. It opens each source independently behind a bounded relay and composes whole `InputBatch` values; the single-source case returns that source directly, preserving packed input without composition overhead.
 
-The control item begins one logical runtime transition. Independent transports still have no inherent total order. Applications requiring a deterministic source move must quiesce the affected producer, issue the command, wait for acknowledgement, and then resume it. The current break-drain-make implementation drains source items already ready at the local boundary before dropping the old stream; a future distributed handoff may strengthen that boundary with durable transport cursors.
+The control item begins one logical runtime transition. Independent transports still have no inherent total order. Applications requiring a deterministic source move must quiesce the affected producer, issue the command, wait for acknowledgement, and then resume it. Each dataflow source is opened behind a bounded local relay. Removal stops that relay from polling its transport and then consumes every item already admitted to the relay before genuine EOF. Messages still held by a remote broker or transport queue remain outside this local boundary; a future distributed handoff may strengthen it with durable transport cursors.
 
 ## The window barrier stage
 
@@ -64,7 +65,7 @@ Data(batch)       → WindowEvent::Data(batch)       → Data(batch)
 Reconfigure(req)  → WindowEvent::Control(req)      → Reconfigure(req)
 ```
 
-The stage flushes pending batch or atomic-step data before forwarding a control item. The control item is a logical barrier, not an end-of-stream marker: the replacement session opened after the cutover continues to deliver data and further control items.
+The stage flushes pending batch or atomic-step data before forwarding a control item. The control item is a logical barrier, not an end-of-stream marker: the persistent session retains unchanged sources, installs additions after removals finish, and continues to deliver data and further control items.
 
 ## Target resolution and pipeline plans
 

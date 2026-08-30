@@ -470,10 +470,12 @@ where
                 );
             };
 
-            let input = match ReconfigurableInput::new(input_pipeline, self.reconf_topic) {
-                Ok(input) => input,
-                Err(error) => return failed_dataflow_runtime(policy, error),
-            };
+            let input =
+                match ReconfigurableInput::new(input_pipeline, self.reconf_topic, executor.clone())
+                {
+                    Ok(input) => input,
+                    Err(error) => return failed_dataflow_runtime(policy, error),
+                };
             let input_vars = model.input_vars();
             let output_vars = model.output_vars();
             let auxiliary_vars = model.aux_vars();
@@ -1052,16 +1054,33 @@ async fn apply_runtime_reconfiguration(
     } = plan;
     let io_interface_changed = input_plan.is_changed() || output_plan.is_changed();
 
-    let drained = match input.drain_removed_sources(&input_plan).await {
-        Ok(drained) => drained,
+    let mut removed = match input.remove_sources(&input_plan) {
+        Ok(removed) => removed,
         Err(error) => {
             drop(input);
             return Err(reconfiguration_failure(engine, error).await);
         }
     };
-    for batch in &drained {
+    while let Some(item) = removed.next().await {
+        let batch = match item {
+            Ok(ReconfigurableInputItem::Data(batch)) => batch,
+            Ok(ReconfigurableInputItem::Reconfigure(_)) => {
+                drop(input);
+                return Err(reconfiguration_failure(
+                    engine,
+                    anyhow::anyhow!(
+                        "a second reconfiguration command arrived while removing input sources"
+                    ),
+                )
+                .await);
+            }
+            Err(error) => {
+                drop(input);
+                return Err(reconfiguration_failure(engine, error).await);
+            }
+        };
         if let Err(error) =
-            evaluate_reconfigurable_batch(&mut engine, batch, execution_policy).await
+            evaluate_reconfigurable_batch(&mut engine, &batch, execution_policy).await
         {
             drop(input);
             return Err(reconfiguration_failure(engine, error).await);
@@ -1073,7 +1092,7 @@ async fn apply_runtime_reconfiguration(
         return Err(reconfiguration_failure(engine, error.into()).await);
     }
 
-    if let Err(error) = input.apply_reconfiguration(input_plan).await {
+    if let Err(error) = input.add_sources_and_commit(input_plan).await {
         drop(input);
         return Err(reconfiguration_failure(engine, error).await);
     }

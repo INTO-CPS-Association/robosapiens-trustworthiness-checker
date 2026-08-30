@@ -104,7 +104,7 @@ A later send failure does not trigger a retry or a replacement monitor. Rows alr
 
 `DataflowRuntimeBuilder::executor` is accepted and ignored. The ordinary runtime spawns no separate worker for the dataflow loop: the engine and writer are polled cooperatively in the caller's future.
 
-The reconfigurable builder requires an executor so `OutputBackendBuilder` can open worker-backed output stages and destinations. The owner loop still owns one `OutputPipelineSession` for the active resolution; its flush operation precedes mapped updates, while close is used at shutdown or an output replacement fallback. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
+The reconfigurable builder requires an executor so `OutputBackendBuilder` can open worker-backed output stages and destinations. The owner loop still owns one `OutputPipelineSession` for the active resolution; its plan application flushes affected owners before in-place interface updates, while close is used at shutdown or terminal failure. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
 
 ## What the adapter may not change
 

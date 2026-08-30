@@ -22,7 +22,7 @@ Reconfiguration is provided by two separate supported implementations. They have
 The reconfigurable semi-sync runtime is built from a reusable `InputPipeline`,
 not from a pre-opened ordinary `InputStream`. The pipeline keeps an owned local
 source set, route catalogs, source ownership, and the optional input window. The
-runtime opens one input session at a time and uses a private control adapter
+runtime opens one complete replacement input stream at a time and uses a private control adapter
 to listen for reconfiguration messages.
 
 Ordinary `InputStream` values contain only `InputBatch` data. The control route
@@ -55,7 +55,8 @@ Reconfiguration messages are JSON5. Standard JSON is accepted because it is a
 subset of JSON5.
 
 Each message contains exactly three fields: the new specification in
-`specification`, plus optional nested `input` and `output` objects. Route values
+`specification`, plus optional nested `input` and `output` objects. The legacy
+`spec` spelling remains accepted as a deserialization alias. Route values
 inside those objects use the same compact route form as route catalog files: a
 string route, or a two-element array containing `[route, codec]`.
 
@@ -103,9 +104,10 @@ catalog and default source:
 }
 ```
 
-With a named multi-source local source set, use `input.source` and
-`input.inputs` to make one active source explicit. All active bindings must use
-the selected control source; other configured source catalogs remain inactive:
+With a named multi-source local source set, `input.source` and
+`input.inputs` assign a group of bindings to one source. Use `input.sources`
+when active bindings span several configured sources; the control route remains
+owned by the independently selected control source:
 
 ```json
 {
@@ -122,11 +124,10 @@ the selected control source; other configured source catalogs remain inactive:
 
 Within `input`, `inputs` and `sources` are alternatives. `source` may accompany
 `inputs` to select one named source for all of those bindings. A `sources`
-object that assigns active bindings to two source IDs is rejected before opening
-by a reconfigurable runtime: it cannot establish a sound order between
-independent source streams. If no explicit input routes are present, the owned
-local source set supplies them from its catalogs and default, but the resolved
-bindings must still all belong to the selected control source. `output` is
+object may assign active bindings to several source IDs. Their streams are
+composed into one locally observed order; no total order is claimed between
+independent transports. If no explicit input routes are present, the owned
+local source set resolves them from its catalogs and default. `output` is
 optional and uses the same compact route representation to override output
 routes for the replacement monitor.
 
@@ -233,10 +234,11 @@ allowing compatible temporal context to survive changes to the specification.
 Use `--no-context-transfer` when the replacement must start without prior
 history.
 
-Context transfer is independent of input ownership. Unchanged source streams
-remain live. Removed streams drain their locally ready backlog through the old
-monitor before matching state is transferred; replacement streams are opened
-after that drain.
+Context transfer is independent of input ownership. Semisync retains its
+replacement lifecycle: after the control barrier it closes the complete old
+input stream and output writer, then opens complete replacements. It does not
+retain unchanged subscriptions or incrementally drain removed sources. Those
+in-place I/O semantics belong only to reconfigurable dataflow.
 
 ### Source-local ordering and producer acknowledgements
 

@@ -330,9 +330,9 @@ A reconfiguration message always contains a new `specification`. Its optional
 ```
 
 With `input.inputs`, `input.source` may identify the named source for all of
-those input bindings. With a multi-source local source set, a reconfigurable
-runtime must assign every active binding to the selected control source; other
-source catalogs remain inactive:
+those input bindings. With a multi-source local source set, `input.sources` may
+assign different active bindings to different sources. The independently
+selected control source need not own every model-data binding:
 
 ```json
 {
@@ -347,14 +347,12 @@ source catalogs remain inactive:
 }
 ```
 
-The `inputs` and `sources` forms are alternatives. A `sources` object with
-active bindings for two source IDs is valid as a general monitor configuration,
-but is rejected before opening when used for reconfiguration because it cannot
-prove command order. If neither is present, the next specification is resolved
-from the local source catalogs and default; this is safe only when all resolved
-variables belong to the selected control source. `output` is optional and
-updates output routes for the replacement monitor. The message is validated
-before any replacement is opened.
+The `inputs` and `sources` forms are alternatives. A `sources` object may assign
+active bindings to several source IDs. The runtime composes their streams into
+one observed order without claiming a distributed total order. If neither form
+is present, the next specification is resolved from the local source catalogs
+and default. `output` is optional and updates output routes for the replacement
+monitor. The message is validated before any replacement is opened.
 
 ## Context transfer and unsupported file reconfiguration
 

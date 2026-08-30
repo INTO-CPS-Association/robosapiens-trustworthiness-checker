@@ -204,9 +204,10 @@ final pre-barrier tick
 The durable output destination registry does not change in a request. A request
 may change bindings, routes, codecs, or selection for an existing destination;
 creating or removing an endpoint is unsupported. A backend that cannot update
-its opened interface is likewise rejected rather than silently reopened. An
-input source change opens the candidate stream once at the barrier; unchanged
-input and output sessions remain live.
+its opened interface is likewise rejected rather than silently reopened. The
+reconfigurable dataflow runtime retains unchanged input sources and output
+owners, stops and drains removed input relays, and opens only added sources.
+Semisync instead replaces its complete input stream and output writer.
 
 Control messages are not `OutputBatch` variants. Wire reconfiguration can change
 bindings, routes, codecs, destination selection, and output shape, but it

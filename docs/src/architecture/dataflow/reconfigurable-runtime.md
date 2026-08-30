@@ -81,9 +81,9 @@ Applying the monitor plan is where it becomes stateful. `RetainExact` keeps the 
 
 ## The input barrier remains live
 
-The input window stage flushes pending data before forwarding `ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)`. The control item is a barrier in the ordered item stream, not an end-of-stream marker: the replacement `InputPipelineSession` opened after the cutover continues to deliver data and further control items.
+The input window stage flushes pending data before forwarding `ReconfigurableInputItem::Reconfigure(ReconfigurationRequest)`. The control item is a barrier in the ordered item stream, not an end-of-stream marker: the persistent `InputPipelineSession` retains unchanged sources, installs additions after removals finish, and continues to deliver data and further control items.
 
-Active model-data bindings may span multiple source owners. Exactly one source carries the control route, and the session composes all active source streams into one observed order without claiming a total order between independent transports. Source moves use break-drain-make and therefore require external producer quiescence or transport replay during the subscription gap.
+Active model-data bindings may span multiple source owners. Exactly one source carries the control route, and the session composes all active source streams into one observed order without claiming a total order between independent transports. Each source has a bounded local relay. Removal stops that relay and consumes its admitted items to genuine EOF before additions open. Source moves still require external producer quiescence or transport replay because remote transport queues are outside this local boundary.
 
 ## Nested expression reconfiguration
 

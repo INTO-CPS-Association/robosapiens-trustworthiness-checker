@@ -629,6 +629,7 @@ pub struct ReconfigurationRequest {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WireReconfigurationRequest {
+    #[serde(alias = "spec")]
     specification: String,
     #[serde(default)]
     input: InputConfiguration,
@@ -1143,6 +1144,12 @@ mod tests {
         .unwrap();
         assert_eq!(config.specification, "in pressure");
         assert_eq!(
+            ReconfigurationRequest::from_json(r#"{spec: "in legacy"}"#)
+                .unwrap()
+                .specification,
+            "in legacy"
+        );
+        assert_eq!(
             config.input.inputs.unwrap()[&VarName::new("pressure")]
                 .route
                 .as_ref(),
@@ -1152,7 +1159,6 @@ mod tests {
         for json in [
             r#"{specification:"in pressure",revision:1}"#,
             r#"{specification:"in pressure",bogus:true}"#,
-            r#"{spec:"in pressure"}"#,
             r#"{specification:"in pressure",inputs:{pressure:"/pressure"}}"#,
         ] {
             assert!(

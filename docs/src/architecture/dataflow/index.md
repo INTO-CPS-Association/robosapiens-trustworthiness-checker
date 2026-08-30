@@ -74,14 +74,14 @@ The source and main ranges are disjoint and together contain every logical strea
 |---|---|---|
 | Builder | `DataflowRuntimeBuilder` | `ReconfigurableDataflowRuntimeBuilder` |
 | Runtime spec | `RuntimeSpec::Dataflow(policy)` | `RuntimeSpec::ReconfDataflow(policy)` |
-| Input | A caller-supplied `InputStream<Value>` | An `InputPipelineSession` with mapped owners applied in place when supported |
-| Output | A caller-supplied `OutputWriter` | An `OutputPipelineSession`; mapped destinations update in place when supported, otherwise a replacement is opened |
+| Input | A caller-supplied `InputStream<Value>` | An `InputPipelineSession`; multiple source streams are retained, drained, added, and composed at the ordered barrier |
+| Output | A caller-supplied `OutputWriter` | An `OutputPipelineSession`; fixed destinations update bindings/interfaces in place |
 | Flush policy | Selected `ExecutionPolicy` | Selected `ExecutionPolicy` (CLI default `Buffered`; direct reconfigurable builder default `Synchronous`) |
 | Executor | Accepted and ignored; the engine and writer are polled cooperatively in the caller's task | Required for opening the reconfigurable output pipeline and its worker-backed stages |
 | Definition | Fixed for the process | Replaceable at a global command barrier |
-| Failure scope | Engine or writer error ends the run | Additionally, any replacement or acknowledgement failure terminates the owner loop |
+| Failure scope | Engine or writer error ends the run | Additionally, any plan-application or acknowledgement failure terminates the owner loop |
 
-Both variants use the same `DirectDataflowEngine`, the same packed `OutputBatch` representation, and the same `OutputWriter` backpressure path. The reconfigurable variant carries its selected `ExecutionPolicy` and adds a typed control item, resource-free planning, a serial cutover that replaces the complete input and output, and context transfer — nothing about ordinary tick evaluation changes.
+Both variants use the same `DirectDataflowEngine`, the same packed `OutputBatch` representation, and the same `OutputWriter` backpressure path. The reconfigurable variant carries its selected `ExecutionPolicy` and adds a typed control item, resource-free planning, a serial cutover that applies incremental input/output plans, and context transfer — nothing about ordinary tick evaluation changes.
 
 `RuntimeSpec::ReconfSemiSync` is a separate supported implementation in `src/runtime/reconfigurable_semi_sync.rs`. It shares neither this evaluator nor its failure policy and is not described by this guide.
 
@@ -110,7 +110,7 @@ Use the pages in this order for a top-down architecture review:
 6. [Execution tiers](execution-tiers.md) explains canonical, quickened, and native physical execution.
 7. [The dataflow runtime adapter](runtime-adapter.md) leaves the synchronous core and describes how ticks are actually driven, buffered, and delivered.
 8. [Input and output boundary](runtime-io.md) defines input sessions, resolved output interfaces, request-specific writers, and the flush/close barrier at cutover.
-9. [The reconfigurable runtime](reconfigurable-runtime.md) describes the serial owner loop, resource-free planning, complete input/output replacement, and nested expression reconfiguration.
+9. [The reconfigurable runtime](reconfigurable-runtime.md) describes the serial owner loop, resource-free planning, incremental input/output application, and nested expression reconfiguration.
 10. [The replacement contract](replacement-contract.md) defines semantic keys, activation timing, and semantic/interface identity.
 11. [Context transfer](context-transfer.md) explains what state survives a replacement and why.
 12. [Failure and termination](failure-model.md) assembles the containment ladder from node deoptimization to runtime termination.

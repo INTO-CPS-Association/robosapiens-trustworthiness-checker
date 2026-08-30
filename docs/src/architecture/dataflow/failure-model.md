@@ -41,11 +41,17 @@ One operational detail does not follow from the rule and is easy to get wrong.
 
 A terminating reconfigurable owner loop **drains its output first**. Before returning any error — malformed command, input-stream error, failed replacement, or a later output send failure — it submits pending `DirectDataflowEngine` rows where possible, then calls `OutputWriter::flush` and `OutputWriter::close` for the active output session.
 
-The rows the old definition already computed are correct, and a later invalid command does not retroactively invalidate them. `reconfiguration_failure` keeps the original error primary and attaches any flush or close failure as context. Rows already accepted by the writer are drained where the backend permits; rows still unsent in the engine buffer are not silently retried against the replacement output.
+The rows the old definition already computed are correct, and a later invalid command does not retroactively invalidate them. `reconfiguration_failure` keeps the original error primary and attaches any flush or close failure as context. Rows already accepted by the writer are drained where the backend permits; rows still unsent in the engine buffer are not silently retried against a new output interface.
 
 A non-closed failure from `OutputWriter::send`, `flush`, or `close` is terminal. The writer retains its first operation failure, so later sends cannot turn a failed output session back into a successful one; cleanup still attempts the close path.
 
-For a successful root cutover, pure program/interface resolution and mapping happen before this flush. The flush is the handoff barrier before mapped owners are updated: a compatible owner can keep the active session, while a `RequiresReplacement` fallback then closes the old session before opening its replacement. If cutover fails, the terminating owner-loop cleanup still flushes and closes the active output where possible. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
+For a successful root cutover, pure program/interface resolution and pipeline
+planning happen before this flush. Pending engine rows are submitted first;
+the input plan then reopens only a changed source, and the output plan flushes
+only changed owners (or one shared stage) before updating their interfaces and
+routing. There is no replacement fallback for an unsupported output update. If
+cutover fails, the terminating owner-loop cleanup still flushes and closes the
+active output where possible. See [The reconfigurable runtime](reconfigurable-runtime.md#root-cutover).
 
 ## Two consequences, not two extra rules
 

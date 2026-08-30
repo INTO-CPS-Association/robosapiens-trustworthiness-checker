@@ -166,7 +166,7 @@ where
                 // first manual tick immediately after spawning the runtime.
                 // Both opens still start only after all resolution is complete.
                 let (input_result, output_result) = futures::join!(
-                    input_ref.open_resolved(resolved_input),
+                    input_ref.open_stream(resolved_input),
                     output_builder.open(resolved_output),
                 );
                 let input_result = input_result.map_err(|error| {
@@ -282,7 +282,11 @@ where
             .input_pipeline
             .clone()
             .ok_or_else(|| anyhow!("reconfigurable input pipeline is not configured"))?;
-        let input = ReconfigurableInput::new(pipeline, self.reconf_topic.clone())
+        let executor = self
+            .executor
+            .clone()
+            .ok_or_else(|| anyhow!("reconfigurable runtime executor is not configured"))?;
+        let input = ReconfigurableInput::new(pipeline, self.reconf_topic.clone(), executor)
             .context("reconfigurable input could not be configured")?;
         let resolved_input = match self.resolved_input.clone() {
             Some(resolved) => resolved,

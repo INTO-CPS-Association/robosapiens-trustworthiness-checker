@@ -1650,11 +1650,11 @@ impl<V> InputPipeline<V> {
         Ok(stream)
     }
 
-    async fn open_reconfigurable_source_plan(
+    async fn open_reconfigurable_source_stream(
         &self,
         source_plan: &ResolvedSource,
         control: &ReconfigurationControl,
-    ) -> anyhow::Result<OpenedInputSource<V>>
+    ) -> anyhow::Result<ReconfigurableInputStream<V>>
     where
         V: FileInputValue + RosStreamValue,
     {
@@ -1691,23 +1691,40 @@ impl<V> InputPipeline<V> {
                 Box::pin(stream.map(|item| item.map(ReconfigurableInputItem::Data)));
             stream
         };
-        Ok(OpenedInputSource {
-            id: description.clone(),
-            stream: contextualize_reconfigurable_stream(stream, description),
-        })
+        Ok(contextualize_reconfigurable_stream(stream, description))
+    }
+
+    async fn open_reconfigurable_source_plan(
+        &self,
+        source_plan: &ResolvedSource,
+        control: &ReconfigurationControl,
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<OpenedInputSource<V>>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
+        let id = source_plan.source().clone();
+        let stream = self
+            .open_reconfigurable_source_stream(source_plan, control)
+            .await?;
+        Ok(OpenedInputSource::relay(id, stream, executor))
     }
 
     pub(crate) async fn open_reconfigurable_source_plans(
         &self,
         plans: &[ResolvedSource],
         control: &ReconfigurationControl,
+        executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<Vec<OpenedInputSource<V>>>
     where
         V: FileInputValue + RosStreamValue,
     {
         let mut opened = Vec::with_capacity(plans.len());
         for plan in plans {
-            opened.push(self.open_reconfigurable_source_plan(plan, control).await?);
+            opened.push(
+                self.open_reconfigurable_source_plan(plan, control, Rc::clone(&executor))
+                    .await?,
+            );
         }
         Ok(opened)
     }
@@ -1716,6 +1733,7 @@ impl<V> InputPipeline<V> {
         &self,
         resolved: &ResolvedInput,
         control: &ReconfigurationControl,
+        executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<Vec<OpenedInputSource<V>>>
     where
         V: FileInputValue + RosStreamValue,
@@ -1723,12 +1741,12 @@ impl<V> InputPipeline<V> {
         let pipeline_configuration = self.configuration_fingerprint();
         self.validate_resolved(resolved, pipeline_configuration)?;
         let mut opened = self
-            .open_reconfigurable_source_plans(resolved.sources(), control)
+            .open_reconfigurable_source_plans(resolved.sources(), control, Rc::clone(&executor))
             .await?;
         if opened.iter().all(|source| source.id != control.source) {
             let control_plan = ResolvedSource::new(control.source.clone(), []);
             opened.push(
-                self.open_reconfigurable_source_plan(&control_plan, control)
+                self.open_reconfigurable_source_plan(&control_plan, control, executor)
                     .await?,
             );
         }
@@ -1743,10 +1761,23 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        let opened = self.open_reconfigurable_sources(&resolved, control).await?;
-        Ok(compose_reconfigurable_input_streams(
-            opened.into_iter().map(|source| source.stream).collect(),
-        ))
+        let pipeline_configuration = self.configuration_fingerprint();
+        self.validate_resolved(&resolved, pipeline_configuration)?;
+        let mut plans = resolved.sources().to_vec();
+        if plans
+            .iter()
+            .all(|source| source.source() != &control.source)
+        {
+            plans.push(ResolvedSource::new(control.source.clone(), []));
+        }
+        let mut streams = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            streams.push(
+                self.open_reconfigurable_source_stream(plan, control)
+                    .await?,
+            );
+        }
+        Ok(compose_reconfigurable_input_streams(streams))
     }
 }
 
