@@ -183,8 +183,6 @@ pub(crate) fn control_stream(
     }))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-
 /// Subscribe to ROS topics and return a stream that owns the subscriber lifetime.
 #[instrument(level = Level::INFO, skip(var_topics))]
 pub fn input_stream(
