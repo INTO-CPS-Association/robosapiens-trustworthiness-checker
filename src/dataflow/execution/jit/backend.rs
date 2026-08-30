@@ -1833,7 +1833,7 @@ fn native_type(kind: ScalarKind) -> ir::Type {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataflow::monitor::test_support::jit_artifact_count;
+    use crate::dataflow::monitor::test_support::{execution, jit_artifact_count};
     use crate::dataflow::{DataflowMonitor, JitConfig, JitPlan};
     use crate::{CheckedDsrvSpecification, DsrvSpecification};
 
@@ -1915,6 +1915,26 @@ mod tests {
         assert!(report.scheduled_temporal_streams().is_empty());
         assert_eq!(report.backend_error(), None);
         assert_eq!(output, [Value::Int(4)]);
+    }
+
+    #[test]
+    fn history_backed_delays_promote_into_the_fused_temporal_kernel() {
+        let checked = "in x: Int\nout result: Int\nresult = default(x[2], 0) + x"
+            .parse::<CheckedDsrvSpecification>()
+            .expect("test specification should type check");
+        let mut monitor =
+            DataflowMonitor::compile_checked_with_jit(checked, JitConfig::after_events(2))
+                .expect("checked monitor should compile");
+        let mut output = [Value::NoVal];
+
+        assert_eq!(execution(&monitor).delay_ring_lengths(), [0]);
+        monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+        monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+        monitor.evaluate(&[Value::Int(3)], &mut output).unwrap();
+
+        assert_eq!(output, [Value::Int(4)]);
+        assert_eq!(execution(&monitor).delay_ring_lengths(), [2]);
+        assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::Fused);
     }
 
     #[test]

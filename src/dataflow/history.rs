@@ -28,7 +28,7 @@ impl<'a> HistoryAccess<'a> {
             .get(slot.index())
             .copied()
             .flatten()
-            .map_or(Value::Deferred, |history| self.store.read(history, offset))
+            .map_or(Value::Deferred, |history| self.store[history].read(offset))
     }
 
     #[inline]
@@ -42,6 +42,16 @@ impl<'a> HistoryAccess<'a> {
     }
 
     #[inline]
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn recent_values(
+        self,
+        slot: EnvironmentSlot,
+        depth: usize,
+    ) -> Vec<Value> {
+        self.binding(slot)
+            .map_or_else(Vec::new, |history| self.store[history].recent_values(depth))
+    }
+
     pub(in crate::dataflow) fn with_bindings<'b>(
         self,
         bindings: &'b [Option<HistoryId>],
@@ -126,6 +136,7 @@ impl ValueHistory {
         self.len == 0
     }
 
+    #[inline]
     pub(in crate::dataflow) fn read(&self, offset: usize) -> Value {
         if offset == 0 || offset > self.required_depth || offset > self.len {
             return Value::Deferred;
@@ -137,6 +148,19 @@ impl ValueHistory {
         self.slots[index].clone()
     }
 
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn recent_values(&self, depth: usize) -> Vec<Value> {
+        let retained = self.len.min(depth);
+        let capacity = self.slots.len();
+        (0..retained)
+            .map(|index| {
+                let slot = (self.next_write + capacity - retained + index) % capacity;
+                self.slots[slot].clone()
+            })
+            .collect()
+    }
+
+    #[inline]
     pub(in crate::dataflow) fn commit(&mut self, value: Value) {
         if self.required_depth == 0 {
             return;
@@ -247,17 +271,15 @@ impl HistoryStore {
             .filter(|history| history.live)
     }
 
-    #[inline]
+    #[cfg(test)]
     pub(in crate::dataflow) fn read(&self, id: HistoryId, offset: usize) -> Value {
-        if self.is_empty() {
-            return Value::Deferred;
-        }
         self.get(id)
             .map_or(Value::Deferred, |history| history.read(offset))
     }
 
+    #[inline]
     pub(in crate::dataflow) fn commit(&mut self, id: HistoryId, value: Value) {
-        self.live_history_mut(id).commit(value);
+        self[id].commit(value);
     }
 
     pub(in crate::dataflow) fn set_required_depth(&mut self, id: HistoryId, required_depth: usize) {

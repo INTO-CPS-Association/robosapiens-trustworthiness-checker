@@ -66,32 +66,28 @@ impl MonitorExecution {
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<(), DataflowEvaluationError> {
         debug_assert!(!self.engine.active_plan.semantic.has_source_barrier());
-        if history_access.is_none() {
-            match self.engine.jit.evaluate_fused(
-                &mut self.evaluators.evaluators,
-                environment_values,
-                &mut self.evaluators.published_scalars,
-            ) {
-                FusedTickOutcome::Completed | FusedTickOutcome::CompletedAndCommitted => {
-                    return Ok(());
-                }
-                FusedTickOutcome::CanonicalFallback => {
-                    if let Some(mut replay_environment) = self.engine.jit.take_replay_environment()
-                    {
-                        self.evaluators.replay_canonical(
-                            &self.engine.active_plan.semantic,
-                            &mut replay_environment,
-                        );
-                    }
-                    self.evaluators.evaluate_canonical_run(
-                        &self.engine.active_plan.semantic,
-                        environment_values,
-                    );
-                    self.commit_active_plan(environment_values, None, None);
-                    return Ok(());
-                }
-                FusedTickOutcome::NotAvailable => {}
+        match self.engine.jit.evaluate_fused(
+            &mut self.evaluators.evaluators,
+            environment_values,
+            &mut self.evaluators.published_scalars,
+            history_access,
+        ) {
+            FusedTickOutcome::Completed | FusedTickOutcome::CompletedAndCommitted => {
+                return Ok(());
             }
+            FusedTickOutcome::CanonicalFallback => {
+                if let Some(mut replay_environment) = self.engine.jit.take_replay_environment() {
+                    self.evaluators.replay_canonical(
+                        &self.engine.active_plan.semantic,
+                        &mut replay_environment,
+                    );
+                }
+                self.evaluators
+                    .evaluate_canonical_run(&self.engine.active_plan.semantic, environment_values);
+                self.commit_active_plan(environment_values, None, None);
+                return Ok(());
+            }
+            FusedTickOutcome::NotAvailable => {}
         }
         let result = self.evaluators.evaluate_steps::<false>(
             &mut self.engine.jit,

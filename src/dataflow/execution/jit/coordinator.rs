@@ -9,6 +9,7 @@ use crate::dataflow::execution::evaluator::Evaluator;
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::execution::scheduled_plan::ScheduledExecutionPlan;
 use crate::dataflow::execution_plan::StreamSlots;
+use crate::dataflow::history::HistoryAccess;
 use crate::dataflow::*;
 
 use super::outcomes::{FusedTickOutcome, GraphTickOutcome};
@@ -335,6 +336,7 @@ impl Jit {
         evaluators: &mut [Evaluator],
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
+        history_access: Option<HistoryAccess<'_>>,
     ) -> FusedTickOutcome {
         #[cfg(feature = "jit")]
         if let NativeExecution::FusedScalar { evaluator, .. } = &mut self.execution {
@@ -348,7 +350,12 @@ impl Jit {
         }
         #[cfg(feature = "jit")]
         if let NativeExecution::FusedTemporal { evaluator, .. } = &mut self.execution {
-            return match evaluator.evaluate(evaluators, environment_values, published_scalars) {
+            return match evaluator.evaluate(
+                evaluators,
+                environment_values,
+                published_scalars,
+                history_access,
+            ) {
                 NativeRunOutcome::Completed => FusedTickOutcome::CompletedAndCommitted,
                 NativeRunOutcome::Fallback { replay_environment } => {
                     self.replay_environment = replay_environment;
@@ -356,7 +363,12 @@ impl Jit {
                 }
             };
         }
-        let _ = (evaluators, environment_values, published_scalars);
+        let _ = (
+            evaluators,
+            environment_values,
+            published_scalars,
+            history_access,
+        );
         FusedTickOutcome::NotAvailable
     }
 
@@ -491,7 +503,12 @@ mod tests {
         environment[0] = Value::Int(3);
         let mut published_scalars = vec![None; programs.len()];
         assert!(matches!(
-            jit.evaluate_fused(&mut evaluators, &mut environment, &mut published_scalars,),
+            jit.evaluate_fused(
+                &mut evaluators,
+                &mut environment,
+                &mut published_scalars,
+                None,
+            ),
             FusedTickOutcome::Completed
         ));
 

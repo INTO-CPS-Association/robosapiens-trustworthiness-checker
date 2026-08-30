@@ -1740,6 +1740,15 @@ impl<V> InputPipeline<V> {
     {
         let pipeline_configuration = self.configuration_fingerprint();
         self.validate_resolved(resolved, pipeline_configuration)?;
+        if let [source_plan] = resolved.sources()
+            && source_plan.source() == &control.source
+        {
+            let id = source_plan.source().clone();
+            let stream = self
+                .open_reconfigurable_source_stream(source_plan, control)
+                .await?;
+            return Ok(vec![OpenedInputSource::direct(id, stream)]);
+        }
         let mut opened = self
             .open_reconfigurable_source_plans(resolved.sources(), control, Rc::clone(&executor))
             .await?;

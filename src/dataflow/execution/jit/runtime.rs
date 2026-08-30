@@ -10,6 +10,7 @@ use crate::dataflow::execution::interpreter::{evaluate_node, evaluate_nodes};
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::execution::scheduled_plan::{ScheduledExecutionPlan, TemporalPlan};
 use crate::dataflow::execution_plan::StreamSlots;
+use crate::dataflow::history::HistoryAccess;
 use crate::dataflow::ir::{BoundEvaluationGraph, NodeId, ScalarKind};
 use crate::dataflow::*;
 
@@ -221,6 +222,7 @@ impl JittedTemporalRunEvaluator {
         evaluators: &mut [Evaluator],
         environment_values: &mut [Value],
         published_scalars: &mut [Option<ScalarValue>],
+        history_access: Option<HistoryAccess<'_>>,
     ) -> NativeRunOutcome {
         self.last_tick_native = false;
         if self.disabled {
@@ -228,12 +230,13 @@ impl JittedTemporalRunEvaluator {
                 replay_environment: None,
             };
         }
-        if !self.state_ready && !self.promote(evaluators) {
+        if !self.state_ready && !self.promote(evaluators, history_access) {
             self.disabled = true;
             return NativeRunOutcome::Fallback {
                 replay_environment: None,
             };
         }
+
         for input in self.compiled.external_inputs.iter() {
             let InputSource::External(slot) = input.source else {
                 unreachable!()
@@ -271,11 +274,15 @@ impl JittedTemporalRunEvaluator {
         NativeRunOutcome::Completed
     }
 
-    fn promote(&mut self, evaluators: &mut [Evaluator]) -> bool {
+    fn promote(
+        &mut self,
+        evaluators: &mut [Evaluator],
+        history_access: Option<HistoryAccess<'_>>,
+    ) -> bool {
         for (index, layout) in self.compiled.states.iter().enumerate() {
             let temporal_plan = self.temporal_plans[layout.stream].as_ref().unwrap();
             let state = evaluators[layout.stream].state_mut();
-            if !temporal_plan.promote(state) {
+            if !temporal_plan.promote(state, history_access) {
                 self.deopt_promoted(evaluators, index);
                 return false;
             }
@@ -621,7 +628,7 @@ impl JittedGraphEvaluator {
             recursive_call: None,
         };
         if !self.scalar_state_ready {
-            self.scalar_state_ready = self.temporal_plan.promote(state);
+            self.scalar_state_ready = self.temporal_plan.promote(state, None);
         }
         if self.scalar_state_ready {
             if !self

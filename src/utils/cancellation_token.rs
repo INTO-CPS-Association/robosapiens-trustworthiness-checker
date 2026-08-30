@@ -18,6 +18,10 @@ impl CancellationToken {
     }
 
     pub async fn is_cancelled(&self) -> bool {
+        self.is_cancelled_now()
+    }
+
+    pub fn is_cancelled_now(&self) -> bool {
         self.cancelled.get()
     }
 

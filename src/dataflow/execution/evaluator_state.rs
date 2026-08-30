@@ -282,6 +282,24 @@ impl DelayState {
         }
     }
 
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn hydrate_shared_history(
+        &mut self,
+        depth: usize,
+        values: impl IntoIterator<Item = Value>,
+    ) {
+        if !self.values.is_empty() {
+            return;
+        }
+        self.values = vec![Value::NoVal; depth];
+        self.next_write = 0;
+        self.filled_slots = 0;
+        for value in values {
+            self.push_value(value);
+        }
+        self.shared_read_pending = false;
+    }
+
     pub(in crate::dataflow) fn read_delayed_value(&self) -> Value {
         if self.values.is_empty() || self.filled_slots < self.values.len() {
             Value::Deferred

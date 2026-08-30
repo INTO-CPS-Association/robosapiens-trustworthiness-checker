@@ -55,6 +55,18 @@ impl Drop for SourceIngress {
 }
 
 impl<V: 'static> OpenedInputSource<V> {
+    pub(crate) fn direct(id: SourceId, source: ReconfigurableInputStream<V>) -> Self {
+        let cancellation = crate::utils::cancellation_token::CancellationToken::new();
+        Self {
+            id,
+            stream: source,
+            ingress: SourceIngress {
+                cancellation,
+                task: None,
+            },
+        }
+    }
+
     pub(crate) fn relay(
         id: SourceId,
         mut source: ReconfigurableInputStream<V>,
@@ -62,7 +74,7 @@ impl<V: 'static> OpenedInputSource<V> {
     ) -> Self {
         // One queued item plus one item held by the relay preserves normal
         // backpressure while giving source removal a concrete local boundary.
-        let (sender, receiver) = async_channel::bounded(1);
+        let (sender, receiver) = async_unsync::bounded::channel(1).into_split();
         let cancellation = crate::utils::cancellation_token::CancellationToken::new();
         let worker_cancellation = cancellation.clone();
         let task = executor.spawn(async move {
@@ -79,9 +91,12 @@ impl<V: 'static> OpenedInputSource<V> {
                 }
             }
         });
+        let stream = futures::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|item| (item, receiver))
+        });
         Self {
             id,
-            stream: Box::pin(receiver),
+            stream: Box::pin(stream),
             ingress: SourceIngress {
                 cancellation,
                 task: Some(task),
@@ -98,7 +113,11 @@ impl<V> Stream for OpenedInputSource<V> {
     type Item = anyhow::Result<ReconfigurableInputItem<V>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.stream.as_mut().poll_next(cx)
+        if self.ingress.task.is_none() && self.ingress.cancellation.is_cancelled_now() {
+            Poll::Ready(None)
+        } else {
+            self.stream.as_mut().poll_next(cx)
+        }
     }
 }
 
@@ -468,6 +487,25 @@ mod tests {
     use super::*;
     use crate::core::InputUpdate;
     use crate::io::config::InputWindow;
+
+    #[test]
+    fn stopped_direct_source_reaches_eof_without_polling_the_transport() {
+        smol::block_on(async {
+            let (sender, receiver) = async_channel::bounded(1);
+            sender
+                .send(Ok(ReconfigurableInputItem::Data(InputBatch::update(
+                    "x", 1,
+                ))))
+                .await
+                .unwrap();
+            let raw: ReconfigurableInputStream<i32> = Box::pin(receiver);
+            let mut source = OpenedInputSource::direct("source".into(), raw);
+
+            source.stop_ingress();
+
+            assert!(source.next().await.is_none());
+        });
+    }
 
     #[test]
     fn stopped_source_relay_drains_admitted_items_to_eof() {

@@ -10,6 +10,7 @@ use crate::dataflow::execution::evaluator::EvaluationEnvironment;
 use crate::dataflow::execution::evaluator_state::{EvaluatorState, NodeState};
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::execution::scheduled_plan::{TemporalCommit, TemporalOperation, TemporalPlan};
+use crate::dataflow::history::HistoryAccess;
 use crate::dataflow::ir::{BoundRef, NodeId};
 
 #[derive(Clone)]
@@ -35,7 +36,30 @@ impl ScheduledTemporalPlan {
         }
     }
 
-    pub(super) fn promote(&self, state: &mut EvaluatorState) -> bool {
+    pub(super) fn promote(
+        &self,
+        state: &mut EvaluatorState,
+        history_access: Option<HistoryAccess<'_>>,
+    ) -> bool {
+        if let Some(history_access) = history_access {
+            for step in self.plan.operations.iter() {
+                let TemporalOperation::Delay {
+                    state: slot,
+                    input: BoundRef::External(input),
+                    offset,
+                } = step
+                else {
+                    continue;
+                };
+                let Ok(depth) = usize::try_from(*offset) else {
+                    return false;
+                };
+                let NodeState::Delay(delay) = &mut state.node_states[slot.node.index()] else {
+                    continue;
+                };
+                delay.hydrate_shared_history(depth, history_access.recent_values(*input, depth));
+            }
+        }
         for step in self.plan.operations.iter() {
             let node = step.node();
             let replacement = match &state.node_states[node.index()] {
