@@ -10,6 +10,7 @@ This book contains two layers:
 ## User guide
 
 - [General Usage](./general-usage.md)
+- [Run and test on Windows](./windows.md)
 - [Whole-monitor runtime reconfiguration](./reconfiguration.md)
 - [Distributed Monitoring](./distributed-monitoring.md)
 - [Distributed Monitoring Counter Example](./distributed-monitoring-counter-tri.md)
