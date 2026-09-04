@@ -8,11 +8,12 @@ use futures::future::try_join_all;
 use crate::{
     core::{
         JsonStreamValue, MQTT_HOSTNAME, OutputBackend, OutputBatch, OutputError, OutputInterface,
-        OutputInterfaceReconfigurationHandle, OutputWriter, VarName,
+        OutputWriter, VarName,
     },
     io::mqtt::{MqttClient, MqttFactory, MqttMessage},
 };
 
+use super::make_reconfigurable_interface;
 use super::sinks::LocalBatchSink;
 
 /// The number of reconnects attempted after a failed MQTT publish.
@@ -142,26 +143,6 @@ fn collect_messages<V: JsonStreamValue>(
         }
     }
     Ok(messages)
-}
-
-fn make_reconfigurable_interface(
-    interface: OutputInterface,
-) -> (
-    Rc<RefCell<OutputInterface>>,
-    OutputInterfaceReconfigurationHandle,
-) {
-    let interface = Rc::new(RefCell::new(interface));
-    let handle_interface = Rc::clone(&interface);
-    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
-        let interface = Rc::clone(&handle_interface);
-        Box::pin(async move {
-            // Keep the borrow entirely within this synchronous assignment. The
-            // next publish observes the replacement without reconnecting.
-            *interface.borrow_mut() = replacement;
-            Ok(())
-        })
-    });
-    (interface, handle)
 }
 
 async fn publish_batch<V: JsonStreamValue>(

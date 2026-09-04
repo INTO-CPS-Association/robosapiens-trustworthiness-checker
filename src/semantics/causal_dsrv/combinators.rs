@@ -4,19 +4,19 @@ use futures::{StreamExt, join, stream as futures_stream};
 use crate::causal::{CausalDomain, CausalRole, CausalValue};
 use crate::core::values::operations;
 use crate::core::{BinaryOperator, UnaryOperator};
-use crate::{OutputStream, Value};
+use crate::{LocalStream, Value};
 
 fn marker<D: CausalDomain>(value: Value, explanation: D) -> CausalValue<D> {
     CausalValue::new(value, explanation)
 }
 
-pub fn constant<D: CausalDomain>(value: Value) -> OutputStream<CausalValue<D>> {
+pub fn constant<D: CausalDomain>(value: Value) -> LocalStream<CausalValue<D>> {
     Box::pin(futures_stream::repeat(CausalValue::constant(value)))
 }
 
 pub fn lift_base<D: CausalDomain>(
-    mut input: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    mut input: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(stream! {
         let mut last: Option<CausalValue<D>> = None;
         while let Some(current) = input.next().await {
@@ -40,8 +40,8 @@ pub fn lift_base<D: CausalDomain>(
 
 pub fn unary<D: CausalDomain>(
     operation: UnaryOperator,
-    input: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    input: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(lift_base(input).map(move |input| {
         let value = match input.value {
             Value::NoVal => Value::NoVal,
@@ -54,9 +54,9 @@ pub fn unary<D: CausalDomain>(
 
 pub fn binary<D: CausalDomain>(
     operation: BinaryOperator,
-    left: OutputStream<CausalValue<D>>,
-    right: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    left: LocalStream<CausalValue<D>>,
+    right: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(
         lift_base(left)
             .zip(lift_base(right))
@@ -76,23 +76,23 @@ pub fn binary<D: CausalDomain>(
 }
 
 pub fn and<D: CausalDomain>(
-    left: OutputStream<CausalValue<D>>,
-    right: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    left: LocalStream<CausalValue<D>>,
+    right: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     boolean_binary(BinaryOperator::And, left, right)
 }
 
 pub fn or<D: CausalDomain>(
-    left: OutputStream<CausalValue<D>>,
-    right: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    left: LocalStream<CausalValue<D>>,
+    right: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     boolean_binary(BinaryOperator::Or, left, right)
 }
 
 pub fn implication<D: CausalDomain>(
-    antecedent: OutputStream<CausalValue<D>>,
-    consequent: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    antecedent: LocalStream<CausalValue<D>>,
+    consequent: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(
         lift_base(antecedent)
             .zip(lift_base(consequent))
@@ -125,9 +125,9 @@ pub fn implication<D: CausalDomain>(
 
 fn boolean_binary<D: CausalDomain>(
     operation: BinaryOperator,
-    left: OutputStream<CausalValue<D>>,
-    right: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    left: LocalStream<CausalValue<D>>,
+    right: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(
         lift_base(left)
             .zip(lift_base(right))
@@ -165,10 +165,10 @@ fn boolean_binary<D: CausalDomain>(
 }
 
 pub fn if_stream<D: CausalDomain>(
-    condition: OutputStream<CausalValue<D>>,
-    then_stream: OutputStream<CausalValue<D>>,
-    else_stream: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    condition: LocalStream<CausalValue<D>>,
+    then_stream: LocalStream<CausalValue<D>>,
+    else_stream: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(
         lift_base(condition)
             .zip(lift_base(then_stream))
@@ -214,18 +214,18 @@ pub fn if_stream<D: CausalDomain>(
 }
 
 pub fn sindex<D: CausalDomain>(
-    input: OutputStream<CausalValue<D>>,
+    input: LocalStream<CausalValue<D>>,
     offset: u64,
-) -> OutputStream<CausalValue<D>> {
+) -> LocalStream<CausalValue<D>> {
     let offset = usize::try_from(offset).expect("causal sindex offset is too large");
     let prefix = futures_stream::repeat(CausalValue::constant(Value::Deferred)).take(offset);
     lift_base(Box::pin(prefix.chain(input)))
 }
 
 pub fn default<D: CausalDomain>(
-    primary: OutputStream<CausalValue<D>>,
-    fallback: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    primary: LocalStream<CausalValue<D>>,
+    fallback: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(lift_base(primary).zip(fallback).map(|(primary, fallback)| {
         if primary.value == Value::Deferred {
             marker(
@@ -241,9 +241,9 @@ pub fn default<D: CausalDomain>(
 }
 
 pub fn init<D: CausalDomain>(
-    mut value: OutputStream<CausalValue<D>>,
-    mut initial: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    mut value: LocalStream<CausalValue<D>>,
+    mut initial: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(stream! {
         while let (Some(value), Some(initial)) = join!(value.next(), initial.next()) {
             if value.value == Value::NoVal {
@@ -266,8 +266,8 @@ pub fn init<D: CausalDomain>(
 }
 
 pub fn is_defined<D: CausalDomain>(
-    input: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    input: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(lift_base(input).map(|input| {
         marker(
             Value::Bool(input.value != Value::Deferred),
@@ -277,8 +277,8 @@ pub fn is_defined<D: CausalDomain>(
 }
 
 pub fn when<D: CausalDomain>(
-    mut input: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    mut input: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(stream! {
         let mut absence = D::unit();
         let mut receipt: Option<D> = None;
@@ -299,9 +299,9 @@ pub fn when<D: CausalDomain>(
 }
 
 pub fn latch<D: CausalDomain>(
-    value: OutputStream<CausalValue<D>>,
-    trigger: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    value: LocalStream<CausalValue<D>>,
+    trigger: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(lift_base(value).zip(trigger).map(|(value, trigger)| {
         if trigger.value == Value::NoVal {
             marker(
@@ -320,9 +320,9 @@ pub fn latch<D: CausalDomain>(
 }
 
 pub fn update<D: CausalDomain>(
-    value: OutputStream<CausalValue<D>>,
-    mut update: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    value: LocalStream<CausalValue<D>>,
+    mut update: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(stream! {
         let mut value = lift_base(value);
         let mut absence = D::unit();

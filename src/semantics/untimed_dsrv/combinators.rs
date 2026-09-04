@@ -4,7 +4,7 @@ use crate::core::{BinaryOperator, UnaryOperator};
 use crate::core::{PartialMarker, StreamData, propagated_special, retain_stream};
 use crate::semantics::AsyncConfig;
 use crate::semantics::StreamContext;
-use crate::{OutputStream, VarName};
+use crate::{LocalStream, VarName};
 use async_stream::stream;
 use core::panic;
 use ecow::EcoString;
@@ -39,15 +39,15 @@ fn eval_unary(operation: UnaryOperator, operand: Value) -> Value {
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
-pub(crate) fn stream_lift_base(x_mon: OutputStream<Value>) -> OutputStream<Value> {
+pub(crate) fn stream_lift_base(x_mon: LocalStream<Value>) -> LocalStream<Value> {
     retain_stream(x_mon)
 }
 
 // Lifting function which propagates both NoVal and Deferred values
 pub fn stream_lift1(
     f: impl CloneFn1<Value, Value>,
-    x_mon: OutputStream<Value>,
-) -> OutputStream<Value> {
+    x_mon: LocalStream<Value>,
+) -> LocalStream<Value> {
     Box::pin(stream_lift_base(x_mon).map(move |x| {
         if let Some(marker) = PartialMarker::of(&x) {
             marker.into_value()
@@ -69,9 +69,9 @@ impl<T, S: StreamData, R: StreamData, U: StreamData> CloneFn2<S, R, U> for T whe
 // Lifting function which propagates both NoVal and Deferred values
 pub fn stream_lift2(
     f: impl CloneFn2<Value, Value, Value>,
-    x_mon: OutputStream<Value>,
-    y_mon: OutputStream<Value>,
-) -> OutputStream<Value> {
+    x_mon: LocalStream<Value>,
+    y_mon: LocalStream<Value>,
+) -> LocalStream<Value> {
     Box::pin(
         stream_lift_base(x_mon)
             .zip(stream_lift_base(y_mon))
@@ -87,19 +87,19 @@ pub fn stream_lift2(
     )
 }
 
-pub fn and(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn and(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::And, x, y), x, y)
 }
 
-pub fn or(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn or(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Or, x, y), x, y)
 }
 
-pub fn implication(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn implication(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Implication, x, y), x, y)
 }
 
-pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn not(x: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|x| eval_unary(UnaryOperator::Not, x), x)
 }
 
@@ -107,35 +107,35 @@ pub fn not(x: OutputStream<Value>) -> OutputStream<Value> {
 // rather than true. This is consistent with three-valued logic style semantics.
 // For the old, value equality, you can use:
 // default(x == y, is_defined(x) == is_defined(y))
-pub fn eq(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn eq(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Equal, x, y), x, y)
 }
 
-pub fn le(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn le(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::LessEqual, x, y), x, y)
 }
 
-pub fn lt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lt(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Less, x, y), x, y)
 }
 
-pub fn ge(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn ge(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::GreaterEqual, x, y), x, y)
 }
 
-pub fn gt(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn gt(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Greater, x, y), x, y)
 }
 
-pub fn val(x: Value) -> OutputStream<Value> {
+pub fn val(x: Value) -> LocalStream<Value> {
     Box::pin(stream::repeat(x))
 }
 
 pub fn if_stm(
-    x: OutputStream<Value>,
-    y: OutputStream<Value>,
-    z: OutputStream<Value>,
-) -> OutputStream<Value> {
+    x: LocalStream<Value>,
+    y: LocalStream<Value>,
+    z: LocalStream<Value>,
+) -> LocalStream<Value> {
     // Uses manual stream lifting rather than a lifting function since deferred values from
     // excluded branches do not propagate (i.e. we propagate lazily with respect to
     // deferred values — only the selected branch potentially yields Deferred)
@@ -209,8 +209,8 @@ pub fn if_stm(
 // and sindex which is implemented like below.
 // (The correct call would need to be evaluated in semantics.rs where the syntax
 // node is still available).
-pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
-    fn sindex_base(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
+pub fn sindex(x: LocalStream<Value>, i: u64) -> LocalStream<Value> {
+    fn sindex_base(x: LocalStream<Value>, i: u64) -> LocalStream<Value> {
         if let Ok(i) = usize::try_from(i) {
             let cs = stream::repeat(Value::Deferred).take(i);
             // Delay x by i defers
@@ -222,7 +222,7 @@ pub fn sindex(x: OutputStream<Value>, i: u64) -> OutputStream<Value> {
     stream_lift_base(sindex_base(x, i))
 }
 
-pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn plus(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     debug!("Creating plus operation stream");
     stream_lift2(
         |x, y| {
@@ -234,26 +234,26 @@ pub fn plus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Valu
     )
 }
 
-pub fn modulo(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn modulo(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Modulo, x, y), x, y)
 }
 
-pub fn minus(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn minus(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Subtract, x, y), x, y)
 }
 
-pub fn mult(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn mult(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Multiply, x, y), x, y)
 }
 
-pub fn div(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn div(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Divide, x, y), x, y)
 }
 
-pub fn concat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn concat(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Concatenate, x, y), x, y)
 }
-pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> OutputStream<Value>
+pub fn var<AC>(ctx: &AC::Ctx, var: VarName) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -272,7 +272,7 @@ where
 
 // Defer for an UntimedDsrvExpression using the dsrv_expression parser
 // Then continues evaluating the r.h.s. (even if it provides Deferred)
-pub fn update(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn update(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     let mut x = stream_lift_base(x);
     let mut y = stream_lift_base(y);
     Box::pin(stream! {
@@ -312,7 +312,7 @@ pub fn update(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Va
 //
 // Note: Intentionally does not default to new value with NoVal - if we want this then we can
 // implement a specific combinator for it.
-pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<Value> {
+pub fn default(x: LocalStream<Value>, d: LocalStream<Value>) -> LocalStream<Value> {
     let x = stream_lift_base(x);
     let xs = x
         .zip(d)
@@ -323,7 +323,7 @@ pub fn default(x: OutputStream<Value>, d: OutputStream<Value>) -> OutputStream<V
 // Initializes the x stream with values from the d stream until
 // x provides a value that is not NoVal. Then yields from x.
 // Can be considered a `default` that applies to NoVal.
-pub fn init(mut x: OutputStream<Value>, mut d: OutputStream<Value>) -> OutputStream<Value> {
+pub fn init(mut x: LocalStream<Value>, mut d: LocalStream<Value>) -> LocalStream<Value> {
     Box::pin(stream! {
         while let (Some(x_val), Some(d_val)) = join!(x.next(), d.next()) {
             match x_val {
@@ -343,13 +343,13 @@ pub fn init(mut x: OutputStream<Value>, mut d: OutputStream<Value>) -> OutputStr
 }
 
 // TODO: Should change to an operator called is_deferred and negate the logic...
-pub fn is_defined(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn is_defined(x: LocalStream<Value>) -> LocalStream<Value> {
     let x = stream_lift_base(x);
     Box::pin(x.map(|x| Value::Bool(x != Value::Deferred)))
 }
 
 // Could also be implemented with is_defined but I think this is more efficient
-pub fn when(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn when(x: LocalStream<Value>) -> LocalStream<Value> {
     let mut x = stream_lift_base(x);
     debug!("Creating when operation stream");
     Box::pin(stream! {
@@ -381,7 +381,7 @@ pub fn when(x: OutputStream<Value>) -> OutputStream<Value> {
 //
 // Note: `latch` is like `last` in TeSSLa but where on simultaneous events it returns the current val
 // instead of previous val
-pub fn latch(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn latch(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     let x = stream_lift_base(x);
     let vals = x
         .zip(y)
@@ -389,7 +389,7 @@ pub fn latch(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Val
     Box::pin(vals)
 }
 
-pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+pub fn list(xs: Vec<LocalStream<Value>>) -> LocalStream<Value> {
     let mut xs = xs
         .into_iter()
         .map(|x| stream_lift_base(x))
@@ -410,7 +410,7 @@ pub fn list(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     })
 }
 
-pub fn tuple(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
+pub fn tuple(xs: Vec<LocalStream<Value>>) -> LocalStream<Value> {
     let mut xs = xs
         .into_iter()
         .map(|x| stream_lift_base(x))
@@ -431,7 +431,7 @@ pub fn tuple(xs: Vec<OutputStream<Value>>) -> OutputStream<Value> {
     })
 }
 
-pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lindex(x: LocalStream<Value>, i: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(
         |list, index| unwrap_value(value_operations::list_index(list, index)),
         x,
@@ -439,7 +439,7 @@ pub fn lindex(x: OutputStream<Value>, i: OutputStream<Value>) -> OutputStream<Va
     )
 }
 
-pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lappend(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(
         |list, value| unwrap_value(value_operations::list_append(list, value)),
         x,
@@ -447,7 +447,7 @@ pub fn lappend(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<V
     )
 }
 
-pub fn lconcat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lconcat(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(
         |left, right| unwrap_value(value_operations::list_concat(left, right)),
         x,
@@ -455,19 +455,19 @@ pub fn lconcat(x: OutputStream<Value>, y: OutputStream<Value>) -> OutputStream<V
     )
 }
 
-pub fn lhead(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn lhead(x: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|list| unwrap_value(value_operations::list_head(list)), x)
 }
 
-pub fn ltail(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn ltail(x: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|list| unwrap_value(value_operations::list_tail(list)), x)
 }
 
-pub fn llen(x: OutputStream<Value>) -> OutputStream<Value> {
+pub fn llen(x: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|list| unwrap_value(value_operations::list_len(list)), x)
 }
 
-pub fn tget(x: OutputStream<Value>, idx: usize) -> OutputStream<Value> {
+pub fn tget(x: LocalStream<Value>, idx: usize) -> LocalStream<Value> {
     stream_lift1(
         move |tuple| match tuple {
             Value::Tuple(values) | Value::List(values) => values
@@ -480,7 +480,7 @@ pub fn tget(x: OutputStream<Value>, idx: usize) -> OutputStream<Value> {
     )
 }
 
-pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> {
+pub fn map(xs: BTreeMap<EcoString, LocalStream<Value>>) -> LocalStream<Value> {
     let mut xs = xs
         .into_iter()
         .map(|(k, v)| (k, stream_lift_base(v)))
@@ -509,25 +509,21 @@ pub fn map(xs: BTreeMap<EcoString, OutputStream<Value>>) -> OutputStream<Value> 
     })
 }
 
-pub fn mget(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mget(xs: LocalStream<Value>, k: EcoString) -> LocalStream<Value> {
     stream_lift1(
         move |map| unwrap_value(value_operations::map_get(map, &k)),
         xs,
     )
 }
 
-pub fn mremove(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mremove(xs: LocalStream<Value>, k: EcoString) -> LocalStream<Value> {
     stream_lift1(
         move |map| unwrap_value(value_operations::map_remove(map, &k)),
         xs,
     )
 }
 
-pub fn minsert(
-    xs: OutputStream<Value>,
-    k: EcoString,
-    v: OutputStream<Value>,
-) -> OutputStream<Value> {
+pub fn minsert(xs: LocalStream<Value>, k: EcoString, v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(
         move |map, value| unwrap_value(value_operations::map_insert(map, &k, value)),
         xs,
@@ -535,30 +531,30 @@ pub fn minsert(
     )
 }
 
-pub fn mhas_key(xs: OutputStream<Value>, k: EcoString) -> OutputStream<Value> {
+pub fn mhas_key(xs: LocalStream<Value>, k: EcoString) -> LocalStream<Value> {
     stream_lift1(
         move |map| unwrap_value(value_operations::map_has_key(map, &k)),
         xs,
     )
 }
 
-pub fn sin(v: OutputStream<Value>) -> OutputStream<Value> {
+pub fn sin(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Sin, v), v)
 }
 
-pub fn cos(v: OutputStream<Value>) -> OutputStream<Value> {
+pub fn cos(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Cos, v), v)
 }
 
-pub fn tan(v: OutputStream<Value>) -> OutputStream<Value> {
+pub fn tan(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Tan, v), v)
 }
 
-pub fn neg(v: OutputStream<Value>) -> OutputStream<Value> {
+pub fn neg(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Negate, v), v)
 }
 
-pub fn abs(v: OutputStream<Value>) -> OutputStream<Value> {
+pub fn abs(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Absolute, v), v)
 }
 
@@ -581,7 +577,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_not() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Bool(true), false.into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![Value::Bool(true), false.into()]));
         let res: Vec<Value> = not(x).collect().await;
         let exp: Vec<Value> = vec![Value::Bool(false), Value::Bool(true)];
         assert_eq!(res, exp)
@@ -591,13 +587,13 @@ mod combinator_tests {
     async fn test_unordered_float_comparisons_are_false() {
         let comparisons: [(
             &str,
-            fn(OutputStream<Value>, OutputStream<Value>) -> OutputStream<Value>,
+            fn(LocalStream<Value>, LocalStream<Value>) -> LocalStream<Value>,
         ); 4] = [("<", lt), ("<=", le), (">", gt), (">=", ge)];
 
         for (name, comparison) in comparisons {
-            let left: OutputStream<Value> =
+            let left: LocalStream<Value> =
                 Box::pin(stream::iter([Value::Float(f64::NAN), Value::Int(1)]));
-            let right: OutputStream<Value> =
+            let right: LocalStream<Value> =
                 Box::pin(stream::iter([Value::Int(1), Value::Float(f64::NAN)]));
 
             assert_eq!(
@@ -610,9 +606,9 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_plus() {
-        let x: OutputStream<Value> =
+        let x: LocalStream<Value> =
             Box::pin(stream::iter(vec![Value::Int(1), 3.into()].into_iter()));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()].into_iter()));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()].into_iter()));
         let z: Vec<Value> = vec![3.into(), 7.into()];
         let res: Vec<Value> = plus(x, y).collect().await;
         assert_eq!(res, z);
@@ -620,8 +616,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_str_concat() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec!["hello ".into(), "olleh ".into()]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec!["world".into(), "dlrow".into()]));
         let exp = vec!["hello world".into(), "olleh dlrow".into()];
         let res: Vec<Value> = concat(x, y).collect().await;
         assert_eq!(res, exp)
@@ -629,7 +625,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_dynamic(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
@@ -643,7 +639,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_dynamic_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
@@ -656,7 +652,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_dynamic_with_start_deferred(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             "x + 1".into(),
             "x + 2".into(),
@@ -674,7 +670,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_dynamic_with_mid_deferred(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec![
             "x + 1".into(),
             Value::Deferred,
             "x + 2".into(),
@@ -697,7 +693,7 @@ mod combinator_tests {
         // Tests that dynamic correctly updates the dependency graph.
         // See comments below
 
-        let e: OutputStream<Value> = Box::pin(stream::iter([
+        let e: LocalStream<Value> = Box::pin(stream::iter([
             "x".into(),
             "x[1]".into(), // Introduces saving x history one step back
             "x[2]".into(), // Introduces saving x history two steps back
@@ -729,7 +725,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_defer1(executor: Rc<LocalExecutor<'static>>) {
         // Notice that even though we first say "x + 1", "x + 2", it continues evaluating "x + 1"
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 2);
@@ -746,7 +742,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) {
         // This test is interesting since we use x twice in the dynamic strings
-        let e: OutputStream<Value> =
+        let e: LocalStream<Value> =
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
@@ -760,7 +756,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) {
         // Using deferred to represent no data on the stream
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
@@ -778,7 +774,7 @@ mod combinator_tests {
             "x + 1".into(),
             Value::Deferred,
             Value::Deferred,
-        ])) as OutputStream<Value>;
+        ])) as LocalStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
@@ -791,7 +787,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_defer_only_deferred(executor: Rc<LocalExecutor<'static>>) {
         // Using deferred to represent no data on the stream
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
@@ -816,9 +812,9 @@ mod combinator_tests {
         let _guard = subscriber.set_default(); // active only in this scope
 
         const SIZE: i64 = 3000;
-        let x: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|x| (2 * x).into())));
-        let y: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|y| (2 * y + 1).into())));
-        let e: OutputStream<Value> = Box::pin(stream::iter((0..SIZE).map(|i| {
+        let x: LocalStream<Value> = Box::pin(stream::iter((0..SIZE).map(|x| (2 * x).into())));
+        let y: LocalStream<Value> = Box::pin(stream::iter((0..SIZE).map(|y| (2 * y + 1).into())));
+        let e: LocalStream<Value> = Box::pin(stream::iter((0..SIZE).map(|i| {
             if i < SIZE / 2 {
                 Value::Deferred
             } else {
@@ -843,8 +839,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_update_both_init() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec!["x0".into(), "x1".into()]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec!["x0".into(), "x1".into()]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec!["y0".into(), "y1".into()];
         assert_eq!(res, exp)
@@ -852,9 +848,9 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_default_no_deferred() {
-        let x: OutputStream<Value> =
+        let x: LocalStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
-        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let d: LocalStream<Value> = Box::pin(stream::repeat("d".into()));
         let res: Vec<Value> = default(x, d).collect().await;
         let exp: Vec<Value> = vec!["x0".into(), "x1".into(), "x2".into()];
         assert_eq!(res, exp)
@@ -862,12 +858,12 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_default_all_deferred() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             Value::Deferred,
             Value::Deferred,
         ]));
-        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let d: LocalStream<Value> = Box::pin(stream::repeat("d".into()));
         let res: Vec<Value> = default(x, d).collect().await;
         let exp: Vec<Value> = vec!["d".into(), "d".into(), "d".into()];
         assert_eq!(res, exp)
@@ -875,12 +871,12 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_default_one_deferred() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
             Value::Deferred,
             "x2".into(),
         ]));
-        let d: OutputStream<Value> = Box::pin(stream::repeat("d".into()));
+        let d: LocalStream<Value> = Box::pin(stream::repeat("d".into()));
         let res: Vec<Value> = default(x, d).collect().await;
         let exp: Vec<Value> = vec!["x0".into(), "d".into(), "x2".into()];
         assert_eq!(res, exp)
@@ -888,13 +884,13 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_update_first_x_then_y() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             "y1".into(),
             Value::Deferred,
@@ -907,13 +903,13 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_update_first_y_then_x() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             "x1".into(),
             Value::Deferred,
             "x3".into(),
         ]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![
             "y0".into(),
             "y1".into(),
             "y2".into(),
@@ -927,9 +923,9 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_update_neither() {
         use Value::Deferred;
-        let x: OutputStream<Value> =
+        let x: LocalStream<Value> =
             Box::pin(stream::iter(vec![Deferred, Deferred, Deferred, Deferred]));
-        let y: OutputStream<Value> =
+        let y: LocalStream<Value> =
             Box::pin(stream::iter(vec![Deferred, Deferred, Deferred, Deferred]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec![Deferred, Deferred, Deferred, Deferred];
@@ -938,14 +934,14 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_update_first_x_then_y_value_sync() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             "y1".into(),
             Value::Deferred,
@@ -958,7 +954,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
@@ -972,7 +968,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_no_stream() {
-        let x: Vec<OutputStream<Value>> = vec![];
+        let x: Vec<LocalStream<Value>> = vec![];
         let res: Vec<Value> = list(x).take(2).collect().await;
         let exp: Vec<Value> = vec![Value::List(eco_vec![]), Value::List(eco_vec![])];
         assert_eq!(res, exp);
@@ -980,7 +976,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_empty_stream() {
-        let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![]))];
+        let x: Vec<LocalStream<Value>> = vec![Box::pin(stream::iter(vec![]))];
         let res: Vec<Value> = list(x).collect().await;
         let exp: Vec<Value> = vec![];
         assert_eq!(res, exp);
@@ -989,8 +985,8 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_list_stream_sending_empty_lists() {
         // Stream that sends empty list twice
-        let s: OutputStream<Value> = Box::pin(stream::repeat(Value::List(eco_vec![])).take(2));
-        let x: Vec<OutputStream<Value>> = vec![s];
+        let s: LocalStream<Value> = Box::pin(stream::repeat(Value::List(eco_vec![])).take(2));
+        let x: Vec<LocalStream<Value>> = vec![s];
         let res: Vec<Value> = list(x).collect().await;
         // Expected is a bit hard to grasp. s is sending List([]) but since we are using the list
         // combinator, we get List(List([]))
@@ -1004,7 +1000,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_list_exprs() {
         // Stream sending Lists containing an int and a string
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             plus(
                 Box::pin(stream::iter(vec![1.into(), 2.into()])),
                 Box::pin(stream::iter(vec![3.into(), 4.into()])),
@@ -1024,7 +1020,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_idx() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
@@ -1036,12 +1032,12 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_idx_varying() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
         // First idx 0 then idx 1
-        let i: OutputStream<Value> = Box::pin(stream::iter(vec![0.into(), 1.into()].into_iter()));
+        let i: LocalStream<Value> = Box::pin(stream::iter(vec![0.into(), 1.into()].into_iter()));
         let res: Vec<Value> = lindex(list(x), i).collect().await;
         let exp: Vec<Value> = vec![1.into(), 4.into()];
         assert_eq!(res, exp);
@@ -1049,11 +1045,11 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_idx_expr() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
-        let i: OutputStream<Value> = minus(
+        let i: LocalStream<Value> = minus(
             Box::pin(stream::iter(vec![5.into(), 6.into()])),
             Box::pin(stream::iter(vec![5.into(), 5.into()])),
         );
@@ -1064,7 +1060,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_idx_var(executor: Rc<LocalExecutor<'static>>) {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
@@ -1079,11 +1075,11 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_append() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![5.into(), 6.into()]));
         let res: Vec<Value> = lappend(list(x), y).collect().await;
         let exp: Vec<Value> = vec![
             Value::List(vec![1.into(), 3.into(), 5.into()].into()),
@@ -1094,11 +1090,11 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_concat() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
-        let y: Vec<OutputStream<Value>> = vec![
+        let y: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![5.into(), 6.into()])),
             Box::pin(stream::iter(vec![7.into(), 8.into()])),
         ];
@@ -1112,7 +1108,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_head() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
         ];
@@ -1123,7 +1119,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_tail() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![1.into(), 2.into()])),
             Box::pin(stream::iter(vec![3.into(), 4.into()])),
             Box::pin(stream::iter(vec![5.into(), 6.into()])),
@@ -1138,7 +1134,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_tail_one_el() {
-        let x: Vec<OutputStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
+        let x: Vec<LocalStream<Value>> = vec![Box::pin(stream::iter(vec![1.into(), 2.into()]))];
         let res: Vec<Value> = ltail(list(x)).collect().await;
         let exp: Vec<Value> = vec![Value::List(vec![].into()), Value::List(vec![].into())];
         assert_eq!(res, exp);
@@ -1146,7 +1142,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_list_len() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             vec![].into(),
             vec![1.into()].into(),
             vec![2.into(), "hello".into()].into(),
@@ -1158,9 +1154,9 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
-        let m: BTreeMap<EcoString, OutputStream<Value>> =
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![3.into(), 4.into()]));
+        let m: BTreeMap<EcoString, LocalStream<Value>> =
             BTreeMap::from([("x".into(), s1), ("y".into(), s2)]);
         let res: Vec<Value> = map(m).collect().await;
         let exp: Vec<Value> = vec![
@@ -1178,7 +1174,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_no_stream() {
-        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::new();
+        let x: BTreeMap<EcoString, LocalStream<Value>> = BTreeMap::new();
         let res: Vec<Value> = map(x).take(2).collect().await;
         let exp: Vec<Value> = vec![Value::Map(BTreeMap::new()), Value::Map(BTreeMap::new())];
         assert_eq!(res, exp);
@@ -1186,8 +1182,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_empty_stream() {
-        let s: OutputStream<Value> = Box::pin(stream::iter(vec![]));
-        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::from([("x".into(), s)]);
+        let s: LocalStream<Value> = Box::pin(stream::iter(vec![]));
+        let x: BTreeMap<EcoString, LocalStream<Value>> = BTreeMap::from([("x".into(), s)]);
         let res: Vec<Value> = map(x).collect().await;
         // No values in the stream generating values, so we get an empty stream even if we have the
         // "x" key
@@ -1198,8 +1194,8 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_stream_sending_empty_lists() {
         // Stream that sends empty list twice
-        let s: OutputStream<Value> = Box::pin(stream::repeat(Value::Map(BTreeMap::new())).take(2));
-        let x: BTreeMap<EcoString, OutputStream<Value>> = BTreeMap::from([("x".into(), s)]);
+        let s: LocalStream<Value> = Box::pin(stream::repeat(Value::Map(BTreeMap::new())).take(2));
+        let x: BTreeMap<EcoString, LocalStream<Value>> = BTreeMap::from([("x".into(), s)]);
         let res: Vec<Value> = map(x).collect().await;
         // Streams of Maps with single key (x) sending empty maps
         let exp: Vec<Value> = vec![
@@ -1243,8 +1239,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_get() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mget(map(m), "y".into()).collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -1259,8 +1255,8 @@ mod combinator_tests {
         // Neither NoVal nor Deferred make sense, since they interpret the missing values
         // inappropriately in other combinators (since in-language errors do not behave the same as
         // missing or deferred inputs)
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         // "z" is not a key in the map — mget must panic
         let _res: Vec<Value> = mget(map(m), "z".into()).collect().await;
@@ -1268,8 +1264,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_remove() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mremove(map(m), "y".into()).collect().await;
         let exp: Vec<Value> = vec![
@@ -1281,8 +1277,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_insert() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1)]);
         let res: Vec<Value> = minsert(map(m), "y".into(), s2).collect().await;
         let exp: Vec<Value> = vec![
@@ -1300,9 +1296,9 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_insert_overwrite() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 4.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 5.into()]));
-        let s3: OutputStream<Value> = Box::pin(stream::iter(vec![3.into(), 6.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 4.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 5.into()]));
+        let s3: LocalStream<Value> = Box::pin(stream::iter(vec![3.into(), 6.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         // Overwrite y with new stream
         let res: Vec<Value> = minsert(map(m), "y".into(), s3).collect().await;
@@ -1321,8 +1317,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_has_key_true() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mhas_key(map(m), "y".into()).collect().await;
         let exp: Vec<Value> = vec![true.into(), true.into()];
@@ -1331,8 +1327,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_map_has_key_false() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 3.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![2.into(), 4.into()]));
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mhas_key(map(m), "z".into()).collect().await;
         let exp: Vec<Value> = vec![false.into(), false.into()];
@@ -1342,7 +1338,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_get_with_deferred() {
         // mget must propagate Deferred rather than panicking
-        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Map(BTreeMap::from([("y".into(), 2.into())])),
             Value::Deferred,
             Value::Map(BTreeMap::from([("y".into(), 4.into())])),
@@ -1355,7 +1351,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_has_key_with_deferred() {
         // mhas_key must propagate Deferred rather than panicking
-        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Map(BTreeMap::from([("x".into(), 1.into())])),
             Value::Deferred,
             Value::Map(BTreeMap::from([("x".into(), 3.into())])),
@@ -1368,7 +1364,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_remove_with_deferred() {
         // mremove must propagate Deferred rather than panicking
-        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Map(BTreeMap::from([
                 ("x".into(), 1.into()),
                 ("y".into(), 2.into()),
@@ -1391,12 +1387,12 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_insert_with_deferred_map() {
         // When the map argument is Deferred the whole output tick is Deferred
-        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Map(BTreeMap::from([("x".into(), 1.into())])),
             Value::Deferred,
             Value::Map(BTreeMap::from([("x".into(), 3.into())])),
         ]));
-        let val_stream: OutputStream<Value> =
+        let val_stream: LocalStream<Value> =
             Box::pin(stream::iter(vec![10.into(), 20.into(), 30.into()]));
         let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
         let exp: Vec<Value> = vec![
@@ -1416,12 +1412,12 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_insert_with_deferred_value() {
         // When the value argument is Deferred the whole output tick is also Deferred
-        let map_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Map(BTreeMap::from([("x".into(), 1.into())])),
             Value::Map(BTreeMap::from([("x".into(), 2.into())])),
             Value::Map(BTreeMap::from([("x".into(), 3.into())])),
         ]));
-        let val_stream: OutputStream<Value> =
+        let val_stream: LocalStream<Value> =
             Box::pin(stream::iter(vec![10.into(), Value::Deferred, 30.into()]));
         let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
         let exp: Vec<Value> = vec![
@@ -1441,9 +1437,9 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_eq_with_deferred() {
         // eq now propagates Deferred rather than treating it as a comparable value
-        let x: OutputStream<Value> =
+        let x: LocalStream<Value> =
             Box::pin(stream::iter(vec![1.into(), Value::Deferred, 3.into()]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 1.into(), 2.into()]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 1.into(), 2.into()]));
         let res: Vec<Value> = eq(x, y).collect().await;
         let exp: Vec<Value> = vec![true.into(), Value::Deferred, false.into()];
         assert_eq!(res, exp);
@@ -1452,7 +1448,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_lhead_with_deferred() {
         // lhead must propagate Deferred rather than panicking
-        let list_stream: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let list_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::List(eco_vec![1.into(), 2.into()]),
             Value::Deferred,
             Value::List(eco_vec![3.into(), 4.into()]),
@@ -1464,8 +1460,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_latch_never() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::NoVal]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::NoVal]));
         let res: Vec<Value> = latch(s1, s2).collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
         assert_eq!(res, exp);
@@ -1473,8 +1469,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_latch_eventually_always() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
-        let s2: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::Unit]));
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into()]));
+        let s2: LocalStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, Value::Unit]));
         let res: Vec<Value> = latch(s1, s2).collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, 2.into()];
         assert_eq!(res, exp);
@@ -1482,8 +1478,8 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_latch_eventually() {
-        let s1: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
-        let s2: OutputStream<Value> =
+        let s1: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let s2: LocalStream<Value> =
             Box::pin(stream::iter(vec![Value::NoVal, Value::Unit, Value::NoVal]));
         let res: Vec<Value> = latch(s1, s2).collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, 2.into(), Value::NoVal];
@@ -1494,10 +1490,10 @@ mod combinator_tests {
     async fn test_latch_interesting_interaction() {
         let x = [1.into(), 2.into(), 3.into()];
         let y = [Value::Unit, Value::NoVal, Value::NoVal];
-        let x1: OutputStream<Value> = Box::pin(stream::iter(x.clone()));
-        let x2: OutputStream<Value> = Box::pin(stream::iter(x));
-        let y1: OutputStream<Value> = Box::pin(stream::iter(y.clone()));
-        let y2: OutputStream<Value> = Box::pin(stream::iter(y));
+        let x1: LocalStream<Value> = Box::pin(stream::iter(x.clone()));
+        let x2: LocalStream<Value> = Box::pin(stream::iter(x));
+        let y1: LocalStream<Value> = Box::pin(stream::iter(y.clone()));
+        let y2: LocalStream<Value> = Box::pin(stream::iter(y));
         let zero = Box::pin(stream::iter(vec![0.into(); 3]));
         let res1: Vec<Value> = latch(x1, y1).collect().await;
         let res2: Vec<Value> = plus(zero, latch(x2, y2)).collect().await;
@@ -1509,7 +1505,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_delay_1() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::Int(2),
             Value::Int(3),
@@ -1521,7 +1517,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_delay_2() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::Int(2),
             Value::Int(3),
@@ -1539,7 +1535,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_noval_at_start() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::NoVal,
             Value::Int(1),
             Value::Int(2),
@@ -1556,7 +1552,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_noval_in_middle() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::NoVal,
             Value::Int(2),
@@ -1573,7 +1569,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_multiple_noval() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::NoVal,
             Value::NoVal,
@@ -1592,7 +1588,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_with_deferred_in_stream() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::Deferred,
             Value::Int(2),
@@ -1609,7 +1605,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_noval_after_deferred() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Deferred,
             Value::NoVal,
             Value::Int(1),
@@ -1626,7 +1622,7 @@ mod combinator_tests {
 
     #[apply(async_test)]
     async fn test_sindex_complex_pattern() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::Int(1),
             Value::NoVal,
             Value::Deferred,
@@ -1666,7 +1662,7 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_dynamic_noval_start(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
+        let e: LocalStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
@@ -1679,7 +1675,7 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_dynamic_noval_middle(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> =
+        let e: LocalStream<Value> =
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
@@ -1695,7 +1691,7 @@ mod noval_tests {
     #[apply(async_test)]
     async fn test_dynamic_deferred_sticky(executor: Rc<LocalExecutor<'static>>) {
         // Tests that deferred is treated as the new "dynamic value" when coming after NoVal
-        let e: OutputStream<Value> = Box::pin(stream::iter([
+        let e: LocalStream<Value> = Box::pin(stream::iter([
             Value::NoVal,
             Value::Deferred,
             Value::NoVal,
@@ -1735,7 +1731,7 @@ mod noval_tests {
         // which we can of course yield from. When we get x[1] again, we once more do not have
         // enough context. Finally, a NoVal, which makes us yield x[1].
 
-        let e: OutputStream<Value> = Box::pin(stream::iter([
+        let e: LocalStream<Value> = Box::pin(stream::iter([
             Value::NoVal,
             "x[1]".into(),
             Value::NoVal,
@@ -1772,7 +1768,7 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_defer_noval_start(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
+        let e: LocalStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 1);
@@ -1784,7 +1780,7 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_defer_noval_middle(executor: Rc<LocalExecutor<'static>>) {
-        let e: OutputStream<Value> =
+        let e: LocalStream<Value> =
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
@@ -1799,7 +1795,7 @@ mod noval_tests {
     #[apply(async_test)]
     async fn test_defer_deferred_sticky(executor: Rc<LocalExecutor<'static>>) {
         // Tests that deferred is treated as the new "defer value" when coming after NoVal
-        let e: OutputStream<Value> = Box::pin(stream::iter([
+        let e: LocalStream<Value> = Box::pin(stream::iter([
             Value::NoVal,
             Value::Deferred,
             Value::NoVal,
@@ -1832,9 +1828,9 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_update_first_x_then_y() {
-        let x: OutputStream<Value> =
+        let x: LocalStream<Value> =
             Box::pin(stream::iter(vec!["x0".into(), "x1".into(), "x2".into()]));
-        let y: OutputStream<Value> =
+        let y: LocalStream<Value> =
             Box::pin(stream::iter(vec![Value::NoVal, "y1".into(), "y2".into()]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec!["x0".into(), "y1".into(), "y2".into()];
@@ -1843,8 +1839,8 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_update_first_y_then_x() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, "x1".into()]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![Value::NoVal, "x1".into()]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec!["y0".into(), "y1".into()]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec!["y0".into(), "y1".into()];
         assert_eq!(res, exp)
@@ -1853,8 +1849,8 @@ mod noval_tests {
     #[apply(async_test)]
     async fn test_update_neither() {
         use Value::NoVal;
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![NoVal, NoVal, NoVal, NoVal]));
         let res: Vec<Value> = update(x, y).collect().await;
         let exp: Vec<Value> = vec![NoVal, NoVal, NoVal, NoVal];
         assert_eq!(res, exp)
@@ -1862,13 +1858,13 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_update_noval_deferred_noval_y() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             "x0".into(),
             "x1".into(),
             "x2".into(),
             "x3".into(),
         ]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::NoVal,
             Value::Deferred,
             Value::NoVal,
@@ -1883,20 +1879,20 @@ mod noval_tests {
     async fn test_random_bin_operators() {
         // Tests a selected number of operators for correct handling of NoVal
         let combinators = vec![
-            plus as fn(OutputStream<Value>, OutputStream<Value>) -> OutputStream<Value>,
+            plus as fn(LocalStream<Value>, LocalStream<Value>) -> LocalStream<Value>,
             minus,
             modulo,
         ];
 
         for comb in combinators {
-            let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            let x: LocalStream<Value> = Box::pin(stream::iter(vec![
                 Value::NoVal,
                 1.into(),
                 Value::NoVal,
                 3.into(),
                 Value::NoVal,
             ]));
-            let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+            let y: LocalStream<Value> = Box::pin(stream::iter(vec![
                 0.into(),
                 1.into(),
                 Value::NoVal,
@@ -1917,12 +1913,12 @@ mod noval_tests {
     async fn test_random_unary_operators() {
         // Tests a selected number of operators for correct handling of NoVal
         let combinators = vec![
-            cos as fn(OutputStream<Value>) -> OutputStream<Value>,
+            cos as fn(LocalStream<Value>) -> LocalStream<Value>,
             sin,
             abs,
         ];
         for comb in combinators {
-            let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+            let x: LocalStream<Value> = Box::pin(stream::iter(vec![
                 Value::NoVal,
                 1.0.into(),
                 Value::NoVal,
@@ -1941,19 +1937,19 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_map_noval() {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::NoVal,
             Value::NoVal,
             "x3".into(),
             "x4".into(),
         ]));
-        let y: OutputStream<Value> = Box::pin(stream::iter(vec![
+        let y: LocalStream<Value> = Box::pin(stream::iter(vec![
             Value::NoVal,
             "y2".into(),
             Value::NoVal,
             "y4".into(),
         ]));
-        let m: BTreeMap<EcoString, OutputStream<Value>> =
+        let m: BTreeMap<EcoString, LocalStream<Value>> =
             BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let res: Vec<Value> = map(m).collect().await;
         let exp: Vec<Value> = vec![
@@ -1979,7 +1975,7 @@ mod noval_tests {
 
     #[apply(async_test)]
     async fn test_list_noval() {
-        let x: Vec<OutputStream<Value>> = vec![
+        let x: Vec<LocalStream<Value>> = vec![
             Box::pin(stream::iter(vec![
                 Value::NoVal,
                 2.into(),

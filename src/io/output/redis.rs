@@ -1,16 +1,17 @@
 //! Sink-based Redis output.
 
-use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, rc::Rc};
+use std::{collections::BTreeMap, marker::PhantomData, rc::Rc};
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface,
-    OutputInterfaceReconfigurationHandle, OutputWriter, REDIS_HOSTNAME, VarName,
+    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter,
+    REDIS_HOSTNAME, VarName,
 };
 
+use super::make_reconfigurable_interface;
 use super::sinks::LocalBatchSink;
 
 type LocalRedisConnection = Rc<MultiplexedConnection>;
@@ -85,24 +86,6 @@ impl<V: JsonStreamValue> OutputBackend for RedisOutputBackend<V> {
             Some(interface_reconfiguration),
         ))
     }
-}
-
-fn make_reconfigurable_interface(
-    interface: OutputInterface,
-) -> (
-    Rc<RefCell<OutputInterface>>,
-    OutputInterfaceReconfigurationHandle,
-) {
-    let interface = Rc::new(RefCell::new(interface));
-    let handle_interface = Rc::clone(&interface);
-    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
-        let interface = Rc::clone(&handle_interface);
-        Box::pin(async move {
-            *interface.borrow_mut() = replacement;
-            Ok(())
-        })
-    });
-    (interface, handle)
 }
 
 fn payload_for<V: JsonStreamValue>(topic: &str, value: &V) -> Result<Option<String>, OutputError> {

@@ -5,7 +5,7 @@ use futures::{FutureExt, StreamExt, stream::BoxStream};
 use tracing::{Level, debug, info, info_span, instrument, warn};
 
 use super::input_backend::{InverseVarTopicMap, MqttInputItem, VarTopicMap, invert_topic_mapping};
-use crate::core::{InputBatch, JsonStreamValue, OutputStream, VarName};
+use crate::core::{InputBatch, JsonStreamValue, LocalStream, VarName};
 use crate::io::ReconfigurationRequest;
 use crate::io::mqtt::{MqttClient, MqttFactory, MqttMessage};
 use crate::utils::cancellation_token::CancellationToken;
@@ -24,7 +24,7 @@ pub(crate) async fn input_stream_items<V: JsonStreamValue>(
     var_topics: VarTopicMap,
     max_attempts: u32,
     control_topic: Option<String>,
-) -> anyhow::Result<OutputStream<anyhow::Result<MqttInputItem<V>>>> {
+) -> anyhow::Result<LocalStream<anyhow::Result<MqttInputItem<V>>>> {
     if var_topics.is_empty() && control_topic.is_none() {
         return Ok(Box::pin(futures::stream::empty()));
     }
@@ -94,7 +94,7 @@ async fn subscribe_many_with_retries(
 fn paho_event_stream(
     mut mqtt_stream: BoxStream<'static, MqttMessage>,
     control_topic: Option<String>,
-) -> OutputStream<anyhow::Result<PahoInputEvent>> {
+) -> LocalStream<anyhow::Result<PahoInputEvent>> {
     let drop_guard = CancellationToken::new().drop_guard();
     let cancellation_token = drop_guard.clone_tok();
     Box::pin(async_stream::try_stream! {
@@ -137,10 +137,10 @@ fn paho_event_stream(
 }
 
 fn map_legacy_items<V: JsonStreamValue + 'static>(
-    mut events: OutputStream<anyhow::Result<PahoInputEvent>>,
+    mut events: LocalStream<anyhow::Result<PahoInputEvent>>,
     topics: InverseVarTopicMap,
     client: Rc<dyn MqttClient>,
-) -> OutputStream<anyhow::Result<MqttInputItem<V>>> {
+) -> LocalStream<anyhow::Result<MqttInputItem<V>>> {
     Box::pin(async_stream::try_stream! {
         let mut terminal_error = None;
         let mut transport_closed = false;

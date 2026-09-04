@@ -5,19 +5,19 @@ use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 use futures::{StreamExt, stream};
 
 use crate::core::{
-    OutputStream, PartialMarker, PartialStreamValue, StreamData, propagated_special, retain_stream,
+    LocalStream, PartialMarker, PartialStreamValue, StreamData, propagated_special, retain_stream,
 };
 
 pub(super) fn lift_base<T: StreamData>(
-    input: OutputStream<PartialStreamValue<T>>,
-) -> OutputStream<PartialStreamValue<T>> {
+    input: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<T>> {
     retain_stream(input)
 }
 
 fn lift1<T, U>(
-    input: OutputStream<PartialStreamValue<T>>,
+    input: LocalStream<PartialStreamValue<T>>,
     operation: impl Fn(T) -> U + 'static,
-) -> OutputStream<PartialStreamValue<U>>
+) -> LocalStream<PartialStreamValue<U>>
 where
     T: StreamData,
     U: StreamData,
@@ -34,10 +34,10 @@ where
 }
 
 fn lift2<T, U, V>(
-    left: OutputStream<PartialStreamValue<T>>,
-    right: OutputStream<PartialStreamValue<U>>,
+    left: LocalStream<PartialStreamValue<T>>,
+    right: LocalStream<PartialStreamValue<U>>,
     operation: impl Fn(T, U) -> V + 'static,
-) -> OutputStream<PartialStreamValue<V>>
+) -> LocalStream<PartialStreamValue<V>>
 where
     T: StreamData,
     U: StreamData,
@@ -62,16 +62,16 @@ where
     )
 }
 
-pub(super) fn val<T: StreamData>(value: T) -> OutputStream<PartialStreamValue<T>> {
+pub(super) fn val<T: StreamData>(value: T) -> LocalStream<PartialStreamValue<T>> {
     Box::pin(stream::repeat(PartialStreamValue::Known(value)))
 }
 
 macro_rules! binary {
     ($name:ident, $trait:ident, $method:ident) => {
         pub(super) fn $name<T>(
-            left: OutputStream<PartialStreamValue<T>>,
-            right: OutputStream<PartialStreamValue<T>>,
-        ) -> OutputStream<PartialStreamValue<T>>
+            left: LocalStream<PartialStreamValue<T>>,
+            right: LocalStream<PartialStreamValue<T>>,
+        ) -> LocalStream<PartialStreamValue<T>>
         where
             T: StreamData + $trait<Output = T>,
         {
@@ -87,8 +87,8 @@ binary!(div, Div, div);
 binary!(rem, Rem, rem);
 
 pub(super) fn neg<T>(
-    input: OutputStream<PartialStreamValue<T>>,
-) -> OutputStream<PartialStreamValue<T>>
+    input: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<T>>
 where
     T: StreamData + Neg<Output = T>,
 {
@@ -96,61 +96,61 @@ where
 }
 
 pub(super) fn not(
-    input: OutputStream<PartialStreamValue<bool>>,
-) -> OutputStream<PartialStreamValue<bool>> {
+    input: LocalStream<PartialStreamValue<bool>>,
+) -> LocalStream<PartialStreamValue<bool>> {
     lift1(input, |value| !value)
 }
 
 pub(super) fn sin(
-    input: OutputStream<PartialStreamValue<f64>>,
-) -> OutputStream<PartialStreamValue<f64>> {
+    input: LocalStream<PartialStreamValue<f64>>,
+) -> LocalStream<PartialStreamValue<f64>> {
     lift1(input, f64::sin)
 }
 
 pub(super) fn cos(
-    input: OutputStream<PartialStreamValue<f64>>,
-) -> OutputStream<PartialStreamValue<f64>> {
+    input: LocalStream<PartialStreamValue<f64>>,
+) -> LocalStream<PartialStreamValue<f64>> {
     lift1(input, f64::cos)
 }
 
 pub(super) fn tan(
-    input: OutputStream<PartialStreamValue<f64>>,
-) -> OutputStream<PartialStreamValue<f64>> {
+    input: LocalStream<PartialStreamValue<f64>>,
+) -> LocalStream<PartialStreamValue<f64>> {
     lift1(input, f64::tan)
 }
 
 pub(super) fn abs(
-    input: OutputStream<PartialStreamValue<f64>>,
-) -> OutputStream<PartialStreamValue<f64>> {
+    input: LocalStream<PartialStreamValue<f64>>,
+) -> LocalStream<PartialStreamValue<f64>> {
     lift1(input, f64::abs)
 }
 
 pub(super) fn and(
-    left: OutputStream<PartialStreamValue<bool>>,
-    right: OutputStream<PartialStreamValue<bool>>,
-) -> OutputStream<PartialStreamValue<bool>> {
+    left: LocalStream<PartialStreamValue<bool>>,
+    right: LocalStream<PartialStreamValue<bool>>,
+) -> LocalStream<PartialStreamValue<bool>> {
     lift2(left, right, |left, right| left && right)
 }
 
 pub(super) fn or(
-    left: OutputStream<PartialStreamValue<bool>>,
-    right: OutputStream<PartialStreamValue<bool>>,
-) -> OutputStream<PartialStreamValue<bool>> {
+    left: LocalStream<PartialStreamValue<bool>>,
+    right: LocalStream<PartialStreamValue<bool>>,
+) -> LocalStream<PartialStreamValue<bool>> {
     lift2(left, right, |left, right| left || right)
 }
 
 pub(super) fn implies(
-    left: OutputStream<PartialStreamValue<bool>>,
-    right: OutputStream<PartialStreamValue<bool>>,
-) -> OutputStream<PartialStreamValue<bool>> {
+    left: LocalStream<PartialStreamValue<bool>>,
+    right: LocalStream<PartialStreamValue<bool>>,
+) -> LocalStream<PartialStreamValue<bool>> {
     lift2(left, right, |left, right| !left || right)
 }
 
 pub(super) fn compare<T: StreamData, F>(
-    left: OutputStream<PartialStreamValue<T>>,
-    right: OutputStream<PartialStreamValue<T>>,
+    left: LocalStream<PartialStreamValue<T>>,
+    right: LocalStream<PartialStreamValue<T>>,
     comparison: F,
-) -> OutputStream<PartialStreamValue<bool>>
+) -> LocalStream<PartialStreamValue<bool>>
 where
     F: Fn(T, T) -> bool + 'static,
 {
@@ -158,9 +158,9 @@ where
 }
 
 pub(super) fn default<T: StreamData>(
-    input: OutputStream<PartialStreamValue<T>>,
-    fallback: OutputStream<PartialStreamValue<T>>,
-) -> OutputStream<PartialStreamValue<T>> {
+    input: LocalStream<PartialStreamValue<T>>,
+    fallback: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<T>> {
     Box::pin(
         lift_base(input)
             .zip(fallback)
@@ -172,9 +172,9 @@ pub(super) fn default<T: StreamData>(
 }
 
 pub(super) fn sindex<T: StreamData>(
-    input: OutputStream<PartialStreamValue<T>>,
+    input: LocalStream<PartialStreamValue<T>>,
     index: u64,
-) -> OutputStream<PartialStreamValue<T>> {
+) -> LocalStream<PartialStreamValue<T>> {
     let Ok(index) = usize::try_from(index) else {
         return Box::pin(stream::empty());
     };
@@ -186,10 +186,10 @@ pub(super) fn sindex<T: StreamData>(
 }
 
 pub(super) fn if_stream<T: StreamData>(
-    condition: OutputStream<PartialStreamValue<bool>>,
-    then_stream: OutputStream<PartialStreamValue<T>>,
-    else_stream: OutputStream<PartialStreamValue<T>>,
-) -> OutputStream<PartialStreamValue<T>> {
+    condition: LocalStream<PartialStreamValue<bool>>,
+    then_stream: LocalStream<PartialStreamValue<T>>,
+    else_stream: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<T>> {
     Box::pin(
         lift_base(condition)
             .zip(lift_base(then_stream))
@@ -211,7 +211,7 @@ mod tests {
 
     fn values<T: StreamData, const N: usize>(
         values: [PartialStreamValue<T>; N],
-    ) -> OutputStream<PartialStreamValue<T>> {
+    ) -> LocalStream<PartialStreamValue<T>> {
         Box::pin(stream::iter(values))
     }
 

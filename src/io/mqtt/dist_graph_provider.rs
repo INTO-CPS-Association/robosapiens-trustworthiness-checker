@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use crate::{OutputStream, distributed::distribution_graphs::DistributionGraph};
+use crate::{LocalStream, distributed::distribution_graphs::DistributionGraph};
 #[cfg(feature = "mqtt")]
 use crate::{
     distributed::distribution_graphs::{NodeName, Pos, dist_graph_from_positions},
@@ -36,7 +36,7 @@ const QOS: i32 = 1;
 const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 pub trait DistGraphProvider {
-    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>>;
+    fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>>;
     // let central_node = self.central_node.clone();
     // let locations = self.locations.keys().cloned().collect::<Vec<_>>();
     // Box::pin(self.locations_stream().map(move |positions| {
@@ -64,7 +64,7 @@ impl StaticDistGraphProvider {
 }
 
 impl DistGraphProvider for StaticDistGraphProvider {
-    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+    fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
         let graph = self.graph.clone();
         Box::pin(stream! {
             yield graph.clone();
@@ -78,12 +78,12 @@ pub struct MqttDistGraphProvider {
     pub executor: Rc<LocalExecutor<'static>>,
     pub central_node: NodeName,
     pub locations: BTreeMap<NodeName, String>,
-    position_stream: Option<OutputStream<Vec<Pos>>>,
+    position_stream: Option<LocalStream<Vec<Pos>>>,
 }
 
 #[cfg(feature = "mqtt")]
 impl DistGraphProvider for MqttDistGraphProvider {
-    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+    fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
         let locations = self.locations.keys().cloned().collect::<Vec<_>>();
         Box::pin(self.locations_stream().map(move |positions| {
@@ -125,7 +125,7 @@ impl MqttDistGraphProvider {
                 info!("Received positions: {:?}", poss);
                 yield poss;
             }
-        }) as OutputStream<Vec<Pos>>);
+        }) as LocalStream<Vec<Pos>>);
 
         executor
             .spawn(async move {
@@ -207,7 +207,7 @@ impl MqttDistGraphProvider {
         })
     }
 
-    pub fn locations_stream(&mut self) -> OutputStream<Vec<Pos>> {
+    pub fn locations_stream(&mut self) -> LocalStream<Vec<Pos>> {
         info!("Taking locations stream");
         Box::pin(mem::take(&mut self.position_stream).unwrap())
     }

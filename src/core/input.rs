@@ -54,7 +54,7 @@ use std::{collections::HashSet, slice, vec};
 
 use futures::StreamExt;
 
-use super::{OutputStream, VarName};
+use super::{LocalStream, VarName};
 
 /// One variable update in a logical input tick.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -832,16 +832,12 @@ impl<V> ExactSizeIterator for OwnedInputTicks<V> {}
 /// Ordinary runtimes receive data only. Reconfiguration is available through
 /// the private `io::reconfigurable_input` adapter instead.
 // ANCHOR: input_stream_alias
-pub type InputStream<V> = OutputStream<anyhow::Result<InputBatch<V>>>;
+pub type InputStream<V> = LocalStream<anyhow::Result<InputBatch<V>>>;
 // ANCHOR_END: input_stream_alias
-pub(crate) type InputTickStream<V> = OutputStream<anyhow::Result<Vec<InputUpdate<V>>>>;
+pub(crate) type InputTickStream<V> = LocalStream<anyhow::Result<Vec<InputUpdate<V>>>>;
 
 pub fn empty_input_stream<V: 'static>() -> InputStream<V> {
     Box::pin(futures::stream::empty())
-}
-
-pub fn once_input_batch<V: 'static>(batch: InputBatch<V>) -> InputStream<V> {
-    Box::pin(futures::stream::iter([Ok(batch)]))
 }
 
 pub fn map_input_values<V, U, F>(mut stream: InputStream<V>, mut map: F) -> InputStream<U>

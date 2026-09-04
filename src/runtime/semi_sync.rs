@@ -1,11 +1,11 @@
 use crate::{
-    InputStream, InputUpdate, OutputStream, VarName,
+    InputStream, InputUpdate, LocalStream, VarName,
     core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input, retain_stream},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
     runtime::output::{drive_row_streams, finish_writer},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
-    stream_utils::{self},
+    stream_utils::{self, lift_no_val},
     utils::cancellation_token::CancellationToken,
 };
 
@@ -141,7 +141,7 @@ where
     // Sender that forwards it to the managed variable
     sender: spsc::Sender<AC::Val>,
     // Stream that evaluates the expression
-    eval_stream: OutputStream<AC::Val>,
+    eval_stream: LocalStream<AC::Val>,
     var_name: VarName,
 
     _marker: std::marker::PhantomData<MS>,
@@ -167,7 +167,7 @@ where
     ) -> Self {
         let hist_len = starting_history.len();
         let eval_stream = MS::to_async_stream(&expr, ctx, Some(var_name.clone()));
-        let eval_stream: OutputStream<AC::Val> =
+        let eval_stream: LocalStream<AC::Val> =
             Box::pin(futures::stream::iter(starting_history).chain(eval_stream.skip(hist_len)));
         Self {
             var_name,
@@ -301,7 +301,7 @@ impl<T: DeferrableStreamData> VarManager<T> {
         }
     }
 
-    fn subscribe(&mut self, history_length: usize) -> OutputStream<T> {
+    fn subscribe(&mut self, history_length: usize) -> LocalStream<T> {
         let (tx, rx) = spsc::channel(history_length + CHANNEL_SIZE);
         self.retained_history.increase_capacity(history_length);
         self.new_subscribers.push((tx, history_length));
@@ -354,7 +354,7 @@ impl<T: DeferrableStreamData> VarManager<T> {
 }
 
 enum VariableSource<T> {
-    Computed(OutputStream<T>),
+    Computed(LocalStream<T>),
     External { pending_value: Option<T> },
 }
 
@@ -370,7 +370,7 @@ struct ManagedVariable<T: DeferrableStreamData> {
 }
 
 impl<T: DeferrableStreamData> ManagedVariable<T> {
-    fn computed(var_name: VarName, value_stream: OutputStream<T>) -> Self {
+    fn computed(var_name: VarName, value_stream: LocalStream<T>) -> Self {
         Self::new(var_name, VariableSource::Computed(value_stream))
     }
 
@@ -419,7 +419,7 @@ impl<T: DeferrableStreamData> ManagedVariable<T> {
         *pending_value = Some(value);
     }
 
-    fn subscribe(&mut self, history_length: usize) -> OutputStream<T> {
+    fn subscribe(&mut self, history_length: usize) -> LocalStream<T> {
         info!(
             ?self.var_name,
             history_length,
@@ -482,7 +482,7 @@ where
 
 pub(crate) struct SemiSyncOutput<V> {
     writer: OutputWriter<V>,
-    streams: BTreeMap<VarName, OutputStream<V>>,
+    streams: BTreeMap<VarName, LocalStream<V>>,
 }
 
 impl<V: DeferrableStreamData> SemiSyncOutput<V> {
@@ -806,7 +806,7 @@ where
 
             let output_vars = model.output_vars();
             let (expr_eval_components, mut variables) = Self::setup_computed_variables(&model)?;
-            let mut subscriptions: BTreeMap<VarName, OutputStream<AC::Val>> = variables
+            let mut subscriptions: BTreeMap<VarName, LocalStream<AC::Val>> = variables
                 .iter_mut()
                 .filter_map(|vm| {
                     output_vars.contains(&vm.var_name).then(|| {
@@ -1139,7 +1139,7 @@ where
         todo!()
     }
 
-    fn input_streams(self, _streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self {
+    fn input_streams(self, _streams: Vec<LocalStream<<Self::AC as AsyncConfig>::Val>>) -> Self {
         todo!()
     }
 
@@ -1335,7 +1335,7 @@ where
     type AC = AC;
     type Builder = SemiSyncContextBuilder<AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
+    fn var(&self, x: &VarName) -> Option<LocalStream<AC::Val>> {
         debug!(
             "SemiSyncContext ID {:?}: Requesting variable {}",
             self.id, x
@@ -1434,7 +1434,7 @@ mod tests {
     };
     use crate::{
         CheckedDsrvSpecification, DsrvSpecification, InputBatch, InputStream, InputUpdate,
-        OutputBatch, OutputError, OutputStream, OutputWriter, Value,
+        LocalStream, OutputBatch, OutputError, OutputWriter, Value,
     };
     use crate::{VarName, dsrv_fixtures::*};
     use futures::{FutureExt, Sink, stream::StreamExt};
@@ -1733,7 +1733,7 @@ mod tests {
     async fn eof_drain_cancellation_cancels_pending_work(executor: Rc<LocalExecutor<'static>>) {
         let drain_started = Rc::new(Cell::new(false));
         let drain_started_by_stream = Rc::clone(&drain_started);
-        let pending_stream: OutputStream<Value> = Box::pin(futures::stream::poll_fn(move |_| {
+        let pending_stream: LocalStream<Value> = Box::pin(futures::stream::poll_fn(move |_| {
             drain_started_by_stream.set(true);
             Poll::Pending
         }));
@@ -1778,7 +1778,7 @@ mod tests {
             writer,
             streams: BTreeMap::from([(
                 VarName::new("z"),
-                Box::pin(futures::stream::empty()) as OutputStream<Value>,
+                Box::pin(futures::stream::empty()) as LocalStream<Value>,
             )]),
         };
         let work = TestRuntime::process_input_ticks(
@@ -2737,10 +2737,10 @@ mod tests {
     //         // Note: z has time index of `time_index` which means we should maintain history for it
     //         let spec_str = format!("in x\nout z\nz = default(z[{}], 0) + x", time_index);
     //         let spec = parse_str(spec_str.as_str()).unwrap();
-    //         let x_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //         let x_stream: LocalStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),
     //         ));
-    //         let z_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //         let z_stream: LocalStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|z| (z as i64).into()),
     //         ));
     //         let stream_map = BTreeMap::from([
@@ -2787,10 +2787,10 @@ mod tests {
     //             "Failed at time_index: {}",
     //             time_index
     //         );
-    //         let x_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //         let x_stream: LocalStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|x| (x as i64).into()),
     //         ));
-    //         let z_stream: OutputStream<Value> = Box::pin(futures::stream::iter(
+    //         let z_stream: LocalStream<Value> = Box::pin(futures::stream::iter(
     //             (0..CHANNEL_SIZE).map(|z| (z as i64).into()),
     //         ));
     //         let stream_map = BTreeMap::from([

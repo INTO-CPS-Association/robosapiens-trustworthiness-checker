@@ -10,7 +10,7 @@ use trustworthiness_checker::VarName;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
-    DsrvSpecification, OutputStream, Value,
+    DsrvSpecification, LocalStream, Value,
     core::{OutputBackend, OutputInterface, OutputWriter, Runtime},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
@@ -24,7 +24,7 @@ type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSe
 
 async fn manual_output(
     variables: BTreeSet<VarName>,
-) -> (OutputWriter<Value>, OutputStream<BTreeMap<VarName, Value>>) {
+) -> (OutputWriter<Value>, LocalStream<BTreeMap<VarName, Value>>) {
     let (backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
     let variables = variables;
     let writer = backend

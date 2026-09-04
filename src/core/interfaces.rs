@@ -54,7 +54,7 @@ pub enum RuntimeSpec {
     ReconfDataflow(ExecutionPolicy),
 }
 
-pub type OutputStream<T> = futures::stream::LocalBoxStream<'static, T>;
+pub type LocalStream<T> = futures::stream::LocalBoxStream<'static, T>;
 
 /// A stream value that can be decoded from JSON5 and encoded for MQTT, Redis, and stdout.
 pub trait JsonStreamValue: StreamData + Sized {

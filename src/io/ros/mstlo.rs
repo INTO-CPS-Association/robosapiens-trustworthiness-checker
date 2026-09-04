@@ -9,7 +9,7 @@ use smol::LocalExecutor;
 use uuid::Uuid;
 
 use crate::core::{
-    InputBatch, InputStream, OutputError, OutputInterface, OutputRoute, OutputStream, VarName,
+    InputBatch, InputStream, LocalStream, OutputError, OutputInterface, OutputRoute, VarName,
     empty_input_stream,
 };
 use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
@@ -191,7 +191,7 @@ pub fn input_stream(
     let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
     let cancellation_for_spin = cancellation_token.clone();
 
-    let mut streams: Vec<OutputStream<anyhow::Result<(VarName, MstloTimedValue)>>> = Vec::new();
+    let mut streams: Vec<LocalStream<anyhow::Result<(VarName, MstloTimedValue)>>> = Vec::new();
     for (variable, (topic, _)) in mapping {
         let variable = VarName::new(&variable);
         let subscription =
@@ -205,7 +205,7 @@ pub fn input_stream(
                 "MSTLO ROS input for variable `{variable}` must have FLOAT kind"
             );
             Ok((variable.clone(), value))
-        })) as OutputStream<anyhow::Result<(VarName, MstloTimedValue)>>;
+        })) as LocalStream<anyhow::Result<(VarName, MstloTimedValue)>>;
         streams.push(drop_guard_stream(stream, drop_guard.clone()));
     }
 

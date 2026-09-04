@@ -1,5 +1,5 @@
 use crate::VarName;
-use crate::core::OutputStream;
+use crate::core::LocalStream;
 use crate::core::Value;
 use crate::distributed::distribution_graphs::{Distance, NodeName};
 use crate::lang::dsrv::ast::VarOrNodeName;
@@ -13,7 +13,7 @@ pub fn monitored_at<AC>(
     var_name: VarName,
     node_name: NodeName,
     ctx: &AC::Ctx,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
 {
@@ -30,7 +30,7 @@ where
     })
 }
 
-pub fn dist<AC>(u: VarOrNodeName, v: VarOrNodeName, ctx: &AC::Ctx) -> OutputStream<AC::Val>
+pub fn dist<AC>(u: VarOrNodeName, v: VarOrNodeName, ctx: &AC::Ctx) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>>,
 {
@@ -79,7 +79,7 @@ mod tests {
     #[apply(async_test)]
     async fn test_that_test_can_test(executor: Rc<LocalExecutor<'static>>) {
         // Just a little test to check that we can do our tests... :-)
-        let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
+        let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let graph_stream = Box::pin(stream::iter(vec![]));
         let mut ctx = TestDistCtxBuilder::new()
@@ -105,7 +105,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_monitor_at_stream(executor: Rc<LocalExecutor<'static>>) {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
 
@@ -149,7 +149,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_dist_stream_nodes(executor: Rc<LocalExecutor<'static>>) {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
 
@@ -194,7 +194,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_dist_stream_var_node(executor: Rc<LocalExecutor<'static>>) {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
 
@@ -239,7 +239,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_disambiguate_name(executor: Rc<LocalExecutor<'static>>) {
-        let x: OutputStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
+        let x: LocalStream<Value> = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let y = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let z = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
 

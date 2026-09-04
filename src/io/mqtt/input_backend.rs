@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::VarName;
-use crate::core::{InputStream, JsonStreamValue, OutputStream};
+use crate::core::{InputStream, JsonStreamValue, LocalStream};
 use ::core::cfg_select;
 
 use crate::io::ReconfigurationRequest;
@@ -31,7 +31,7 @@ impl MqttInputBackend {
         var_topics: VarTopicMap,
         max_reconnect_attempts: u32,
         control_topic: Option<String>,
-    ) -> anyhow::Result<OutputStream<anyhow::Result<MqttInputItem<V>>>> {
+    ) -> anyhow::Result<LocalStream<anyhow::Result<MqttInputItem<V>>>> {
         validate_topic_mapping(&var_topics, control_topic.as_deref())?;
         match self {
             Self::Rumqttc => {

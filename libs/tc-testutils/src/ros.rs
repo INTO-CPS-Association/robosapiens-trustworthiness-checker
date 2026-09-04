@@ -5,7 +5,7 @@ use r2r::{WrappedTypesupport, std_msgs::msg::Int32};
 use smol::{LocalExecutor, stream::StreamExt};
 use std::time::Duration;
 use tracing::info;
-use trustworthiness_checker::{OutputStream, utils::cancellation_token::CancellationToken};
+use trustworthiness_checker::{LocalStream, utils::cancellation_token::CancellationToken};
 
 use crate::streams::{TickSender, tick_stream, with_timeout_res};
 
@@ -22,7 +22,7 @@ async fn ros_stream_publisher<T: WrappedTypesupport + 'static>(
     ex: Rc<LocalExecutor<'static>>,
     node_name: String,
     topic: String,
-    mut values: OutputStream<T>,
+    mut values: LocalStream<T>,
     values_len: usize,
 ) -> Result<(), anyhow::Error> {
     let cancellation_token = CancellationToken::new();
@@ -157,7 +157,7 @@ pub fn recv_ros_int_stream(
     node_name: String,
     topic: String,
     timeout_secs: u64,
-) -> anyhow::Result<OutputStream<i32>> {
+) -> anyhow::Result<LocalStream<i32>> {
     let ctx = r2r::Context::create()
         .map_err(|e| anyhow::anyhow!("Failed to create ROS context: {:?}", e))?;
     let mut node = r2r::Node::create(ctx, node_name.as_str(), "")

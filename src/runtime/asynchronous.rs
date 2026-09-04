@@ -33,10 +33,10 @@ use crate::core::{DeferrableStreamData, retain_stream};
 
 use crate::core::Runtime;
 use crate::core::Specification;
-use crate::core::{InputStream, OutputStream, OutputWriter, StreamData, VarName};
+use crate::core::{InputStream, LocalStream, OutputWriter, StreamData, VarName};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
-use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
+use crate::stream_utils::{drop_guard_stream, lift_no_val, oneshot_to_stream};
 
 #[derive(Clone)]
 struct ForwardingTracker {
@@ -174,9 +174,9 @@ impl InputCompletion {
 }
 
 fn track_direct_stream<V: 'static>(
-    mut stream: OutputStream<V>,
+    mut stream: LocalStream<V>,
     forwarding: ForwardingTracker,
-) -> OutputStream<V> {
+) -> LocalStream<V> {
     // Register before returning the lazy wrapper. The manager releases its
     // subscription permit immediately after constructing this stream, so a
     // lazy registration would let input completion observe no pending work.
@@ -241,7 +241,7 @@ pub struct VarManager<V: StreamData> {
     /// The variable name which this manager is responsible for
     var: VarName,
     /// The input stream which is feeding data into the variable
-    input_stream: Rc<RefCell<Option<OutputStream<V>>>>,
+    input_stream: Rc<RefCell<Option<LocalStream<V>>>>,
     /// The current stage of the variable's lifetime
     var_stage: Rc<AsyncCell<VarStage>>,
     /// The number of outstanding unfulfilled subscription requests
@@ -275,7 +275,7 @@ impl<V: StreamData> VarManager<V> {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var: VarName,
-        input_stream: OutputStream<V>,
+        input_stream: LocalStream<V>,
         cancellation_token: CancellationToken,
     ) -> Self {
         Self::new_with_drain_policy(executor, var, input_stream, cancellation_token, false)
@@ -284,7 +284,7 @@ impl<V: StreamData> VarManager<V> {
     pub fn new_with_drain_policy(
         executor: Rc<LocalExecutor<'static>>,
         var: VarName,
-        input_stream: OutputStream<V>,
+        input_stream: LocalStream<V>,
         cancellation_token: CancellationToken,
         drain_when_unsubscribed: bool,
     ) -> Self {
@@ -302,7 +302,7 @@ impl<V: StreamData> VarManager<V> {
     fn with_state(
         executor: Rc<LocalExecutor<'static>>,
         var: VarName,
-        input_stream: OutputStream<V>,
+        input_stream: LocalStream<V>,
         cancellation_token: CancellationToken,
         drain_when_unsubscribed: bool,
         forwarding: ForwardingTracker,
@@ -332,7 +332,7 @@ impl<V: StreamData> VarManager<V> {
     }
 
     /// Subscribe to the variable and return a stream of its output
-    pub fn subscribe(&mut self) -> OutputStream<V> {
+    pub fn subscribe(&mut self) -> LocalStream<V> {
         // Make owned copies of references to variables owned by the struct
         // so that these are not borrowed when the async block is spawned
         let semaphore = self.var_semaphore.clone();
@@ -415,7 +415,7 @@ impl<V: StreamData> VarManager<V> {
                                     return;
                                 }
                             }
-                        }) as OutputStream<V>).expect(&format!("VarManager {var} with id {id}: Failed to send stream to subscriber - receiver dropped"));
+                        }) as LocalStream<V>).expect(&format!("VarManager {var} with id {id}: Failed to send stream to subscriber - receiver dropped"));
                     debug!("VarManager {id}: done sending stream to subscriber");
                 } else {
                     unreachable!()
@@ -620,8 +620,8 @@ fn store_history<V: StreamData>(
     executor: Rc<LocalExecutor<'static>>,
     var: VarName,
     history_length: usize,
-    mut input_stream: OutputStream<V>,
-) -> OutputStream<V> {
+    mut input_stream: LocalStream<V>,
+) -> LocalStream<V> {
     if history_length == 0 {
         return input_stream;
     }
@@ -718,7 +718,7 @@ pub struct Context<AC: AsyncConfig> {
 pub struct ContextBuilder<AC: AsyncConfig> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     var_names: Option<Vec<VarName>>,
-    input_streams: Option<Vec<OutputStream<AC::Val>>>,
+    input_streams: Option<Vec<LocalStream<AC::Val>>>,
     history_length: Option<usize>,
     drain_when_unsubscribed: BTreeMap<VarName, bool>,
     forwarding: Option<ForwardingTracker>,
@@ -760,7 +760,7 @@ where
         self
     }
 
-    fn input_streams(mut self, streams: Vec<OutputStream<AC::Val>>) -> Self {
+    fn input_streams(mut self, streams: Vec<LocalStream<AC::Val>>) -> Self {
         self.input_streams = Some(streams);
         self
     }
@@ -910,7 +910,7 @@ where
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         var_names: Vec<VarName>,
-        input_streams: Vec<OutputStream<AC::Val>>,
+        input_streams: Vec<LocalStream<AC::Val>>,
         history_length: usize,
     ) -> Self {
         <Self as StreamContext>::Builder::new()
@@ -944,7 +944,7 @@ where
     type AC = AC;
     type Builder = ContextBuilder<AC>;
 
-    fn var(&self, var: &VarName) -> Option<OutputStream<AC::Val>> {
+    fn var(&self, var: &VarName) -> Option<LocalStream<AC::Val>> {
         debug!(
             "Context[id={}]: Requesting stream for variable '{}'",
             self.id, var
@@ -1179,9 +1179,9 @@ where
     S: MonitoringSemantics<AC>,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    input_drive: OutputStream<anyhow::Result<()>>,
+    input_drive: LocalStream<anyhow::Result<()>>,
     output_writer: OutputWriter<AC::Val>,
-    output_streams: BTreeMap<VarName, OutputStream<AC::Val>>,
+    output_streams: BTreeMap<VarName, LocalStream<AC::Val>>,
     cancellation_token: CancellationToken,
     /// Whether input completion is reported by root variable managers
     await_input_completion: bool,
@@ -1321,7 +1321,7 @@ where
             // Create deferred streams based on each computed variable (outputs and aux vars).
             let computed_oneshots: Vec<_> = computed_vars
                 .iter()
-                .map(|_| oneshot::channel::<OutputStream<AC::Val>>().into_split())
+                .map(|_| oneshot::channel::<LocalStream<AC::Val>>().into_split())
                 .collect();
             let (computed_txs, computed_rxs): (Vec<_>, Vec<_>) =
                 computed_oneshots.into_iter().unzip();
@@ -1330,7 +1330,7 @@ where
             let computed_streams = computed_rxs.into_iter().map(oneshot_to_stream);
 
             // Combine the input and computed streams into a single map
-            let streams: Vec<OutputStream<AC::Val>> =
+            let streams: Vec<LocalStream<AC::Val>> =
                 input_streams.chain(computed_streams).collect();
 
             let mut context = context_builder
@@ -1347,7 +1347,7 @@ where
 
             // Create a map of the output variables to their streams
             // based on using the context
-            let output_streams: BTreeMap<VarName, OutputStream<AC::Val>> = output_vars
+            let output_streams: BTreeMap<VarName, LocalStream<AC::Val>> = output_vars
                 .iter()
                 .map(|var| {
                     let stream = context.var(var).unwrap_or_else(|| {
@@ -1554,8 +1554,7 @@ fn combine_runtime_errors(primary: anyhow::Error, additional: anyhow::Error) -> 
 #[cfg(test)]
 mod tests {
     use crate::{
-        DsrvSpecification, InputStream, OutputBatch, OutputError, OutputStream, OutputWriter,
-        Value,
+        DsrvSpecification, InputStream, LocalStream, OutputBatch, OutputError, OutputWriter, Value,
         dsrv_fixtures::{TestConfig, TestRuntime, spec_simple_add_monitor},
         io::{output::AsyncFnSink, testing::null_output},
     };
@@ -1611,8 +1610,8 @@ mod tests {
 
     fn direct_runtime(
         executor: Rc<LocalExecutor<'static>>,
-        input_drive: OutputStream<anyhow::Result<()>>,
-        output_stream: Option<OutputStream<Value>>,
+        input_drive: LocalStream<anyhow::Result<()>>,
+        output_stream: Option<LocalStream<Value>>,
         output_writer: OutputWriter<Value>,
         cancellation_token: CancellationToken,
     ) -> TestRuntime {
@@ -1823,7 +1822,7 @@ mod tests {
 
     #[apply(async_test)]
     async fn test_subctx_regression_727dc01(executor: Rc<LocalExecutor<'static>>) {
-        fn mock_indirection<AC>(ctx: &AC::Ctx, x: VarName) -> OutputStream<AC::Val>
+        fn mock_indirection<AC>(ctx: &AC::Ctx, x: VarName) -> LocalStream<AC::Val>
         where
             AC: AsyncConfig<Val = Value>,
         {

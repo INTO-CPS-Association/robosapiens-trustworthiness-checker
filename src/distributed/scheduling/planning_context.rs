@@ -4,7 +4,7 @@ use event_listener::Event;
 use futures::StreamExt;
 use smol::LocalExecutor;
 
-use crate::{OutputStream, Value, VarName};
+use crate::{LocalStream, Value, VarName};
 
 #[derive(Debug, Clone, Default)]
 pub struct PlanningContextSnapshot {
@@ -149,7 +149,7 @@ impl PlanningContext {
 pub fn spawn_planning_context_recorder(
     executor: Rc<LocalExecutor<'static>>,
     context: PlanningContext,
-    mut batches: OutputStream<Vec<(VarName, Value)>>,
+    mut batches: LocalStream<Vec<(VarName, Value)>>,
 ) -> smol::Task<()> {
     executor.spawn(async move {
         while let Some(batch) = batches.next().await {

@@ -7,7 +7,7 @@ use smol::{LocalExecutor, stream::StreamExt};
 use tracing::{debug, info, warn};
 
 use crate::{
-    OutputStream,
+    LocalStream,
     distributed::distribution_graphs::{
         DistributionGraph, NodeName, Pos, dist_graph_from_positions,
     },
@@ -26,11 +26,11 @@ pub struct RosDistGraphProvider {
     pub central_node: NodeName,
     /// Mapping from logical node name to RVData `source_robot_id`
     pub locations: BTreeMap<NodeName, String>,
-    position_stream: Option<OutputStream<Vec<Pos>>>,
+    position_stream: Option<LocalStream<Vec<Pos>>>,
 }
 
 impl DistGraphProvider for RosDistGraphProvider {
-    fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+    fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
         let locations = self.locations.keys().cloned().collect::<Vec<_>>();
         Box::pin(self.locations_stream().map(move |positions| {
@@ -74,7 +74,7 @@ impl RosDistGraphProvider {
                 info!("Received ROS positions: {:?}", poss);
                 yield poss;
             }
-        }) as OutputStream<Vec<Pos>>);
+        }) as LocalStream<Vec<Pos>>);
 
         let ctx = r2r::Context::create()
             .map_err(|e| anyhow::anyhow!("Failed to create ROS context: {:?}", e))?;
@@ -154,7 +154,7 @@ impl RosDistGraphProvider {
         })
     }
 
-    pub fn locations_stream(&mut self) -> OutputStream<Vec<Pos>> {
+    pub fn locations_stream(&mut self) -> LocalStream<Vec<Pos>> {
         info!("Taking ROS locations stream");
         Box::pin(mem::take(&mut self.position_stream).expect("Position stream already taken"))
     }

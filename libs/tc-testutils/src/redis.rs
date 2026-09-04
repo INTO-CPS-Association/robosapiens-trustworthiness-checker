@@ -10,7 +10,7 @@ use redis::AsyncTypedCommands;
 use smol::LocalExecutor;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
 use tracing::{debug, instrument};
-use trustworthiness_checker::{JsonStreamValue, OutputStream, Value};
+use trustworthiness_checker::{JsonStreamValue, LocalStream, Value};
 
 use crate::testcontainers::ContainerAsync;
 
@@ -53,7 +53,7 @@ pub async fn dummy_redis_stream_sender(
     host: &str,
     port: Option<u16>,
     channel: String,
-    mut stream: OutputStream<Value>,
+    mut stream: LocalStream<Value>,
 ) -> anyhow::Result<()> {
     // Note: This version does not wait for a signal on the receiver,
     // as it expects no data to be available on the `stream` until everything is set up
@@ -80,7 +80,7 @@ pub async fn dummy_redis_receiver(
     port: Option<u16>,
     channels: Vec<String>,
     ready_tx: oneshot::Sender<()>,
-) -> anyhow::Result<Vec<OutputStream<Value>>> {
+) -> anyhow::Result<Vec<LocalStream<Value>>> {
     let uri = match port {
         Some(port) => format!("redis://{}:{}", host, port),
         None => format!("redis://{}", host),
@@ -105,7 +105,7 @@ pub async fn dummy_redis_receiver(
                 while let Some(x) = rx.recv().await {
                     yield x
                 }
-            }) as OutputStream<Value>
+            }) as LocalStream<Value>
         })
         .collect();
 

@@ -79,6 +79,30 @@ pub use crate::io::config::{
     DestinationConfig, DestinationId, DestinationKind, OutputConfigFile, OutputStageConfig,
 };
 
+use std::{cell::RefCell, rc::Rc};
+
+/// Wrap an output interface so a reconfiguration handle can swap it in place.
+///
+/// The borrow is confined to the synchronous assignment inside the handle, so
+/// the next publish observes the replacement without reconnecting the backend.
+pub(crate) fn make_reconfigurable_interface(
+    interface: crate::core::OutputInterface,
+) -> (
+    Rc<RefCell<crate::core::OutputInterface>>,
+    crate::core::OutputInterfaceReconfigurationHandle,
+) {
+    let interface = Rc::new(RefCell::new(interface));
+    let handle_interface = Rc::clone(&interface);
+    let handle = crate::core::OutputInterfaceReconfigurationHandle::new(move |replacement| {
+        let interface = Rc::clone(&handle_interface);
+        Box::pin(async move {
+            *interface.borrow_mut() = replacement;
+            Ok(())
+        })
+    });
+    (interface, handle)
+}
+
 pub(crate) fn remember_error(
     slot: &mut Option<crate::core::OutputError>,
     error: crate::core::OutputError,

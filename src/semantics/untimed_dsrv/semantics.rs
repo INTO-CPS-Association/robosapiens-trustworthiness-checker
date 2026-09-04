@@ -12,8 +12,8 @@ use super::typed_combinators as typed;
 use crate::VarName;
 use crate::core::Value;
 use crate::core::{
-    BinaryOperator, BinaryOperatorKind, OutputStream, PartialStreamValue,
-    from_typed_partial_stream, to_typed_partial_stream,
+    BinaryOperator, BinaryOperatorKind, LocalStream, PartialStreamValue, from_typed_partial_stream,
+    to_typed_partial_stream,
 };
 use crate::lang::dsrv::ast::{CheckedExpr, Expr, ExprRef, ExprView};
 use crate::lang::dsrv::type_checker::TCType;
@@ -26,7 +26,7 @@ use ecow::EcoVec;
 #[derive(Clone)]
 pub struct UntimedDsrvSemantics;
 
-pub(crate) fn evaluate<AC>(expr: Expr, owner: Option<VarName>, ctx: &AC::Ctx) -> OutputStream<Value>
+pub(crate) fn evaluate<AC>(expr: Expr, owner: Option<VarName>, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -42,7 +42,7 @@ pub(crate) fn evaluate_checked<AC>(
     expr: CheckedExpr,
     owner: Option<VarName>,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -54,7 +54,7 @@ where
     checked_typed_dispatch_stream::<AC>(expression, ctx)
 }
 
-pub(super) fn evaluate_scope<AC>(expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+pub(super) fn evaluate_scope<AC>(expr: ScopedExpr, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -65,7 +65,7 @@ where
 pub(super) fn evaluate_scoped_typed<T, AC>(
     expr: ScopedExpr,
     ctx: &AC::Ctx,
-) -> OutputStream<PartialStreamValue<T>>
+) -> LocalStream<PartialStreamValue<T>>
 where
     T: TryFrom<Value> + std::fmt::Debug + 'static,
     <T as TryFrom<Value>>::Error: std::fmt::Debug,
@@ -84,7 +84,7 @@ pub(super) fn evaluate_ref<'a, AC>(
     expression: &ScopedExpr,
     owner: Option<VarName>,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -197,7 +197,7 @@ fn field_survives_checked_projection(typ: Option<&TCType>, name: &str) -> bool {
     }
 }
 
-fn evaluate_float<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+fn evaluate_float<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -207,7 +207,7 @@ where
 fn evaluate_float_typed<AC>(
     expression: ScopedExpr,
     context: &AC::Ctx,
-) -> OutputStream<PartialStreamValue<f64>>
+) -> LocalStream<PartialStreamValue<f64>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -262,7 +262,7 @@ where
     }
 }
 
-fn evaluate_int<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+fn evaluate_int<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -272,7 +272,7 @@ where
 fn evaluate_int_typed<AC>(
     expression: ScopedExpr,
     context: &AC::Ctx,
-) -> OutputStream<PartialStreamValue<i64>>
+) -> LocalStream<PartialStreamValue<i64>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -323,7 +323,7 @@ where
     }
 }
 
-fn evaluate_bool<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+fn evaluate_bool<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -333,7 +333,7 @@ where
 fn evaluate_bool_typed<AC>(
     expression: ScopedExpr,
     context: &AC::Ctx,
-) -> OutputStream<PartialStreamValue<bool>>
+) -> LocalStream<PartialStreamValue<bool>>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -427,7 +427,7 @@ where
 fn evaluate_typed<T, AC>(
     expression: ScopedExpr,
     context: &AC::Ctx,
-) -> OutputStream<PartialStreamValue<T>>
+) -> LocalStream<PartialStreamValue<T>>
 where
     T: TryFrom<Value> + std::fmt::Debug + 'static,
     <T as TryFrom<Value>>::Error: std::fmt::Debug,
@@ -436,7 +436,7 @@ where
     evaluate_scoped_typed::<T, AC>(expression, context)
 }
 
-fn evaluate_untyped<AC>(expression: ScopedExpr, context: &AC::Ctx) -> OutputStream<Value>
+fn evaluate_untyped<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -446,7 +446,7 @@ where
 fn checked_typed_dispatch_stream<AC>(
     expression: ScopedExpr,
     context: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -462,7 +462,7 @@ impl<AC> MonitoringSemantics<AC> for UntimedDsrvSemantics
 where
     AC: AsyncConfig<Val = Value, Expr = Expr>,
 {
-    fn to_async_stream(expr: &Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> OutputStream<Value> {
+    fn to_async_stream(expr: &Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> LocalStream<Value> {
         evaluate::<AC>(expr.clone(), owner, ctx)
     }
 }
@@ -483,7 +483,7 @@ where
         expr: &CheckedExpr,
         ctx: &AC::Ctx,
         owner: Option<VarName>,
-    ) -> OutputStream<Value> {
+    ) -> LocalStream<Value> {
         evaluate_checked::<AC>(expr.clone(), owner, ctx)
     }
 }
@@ -744,7 +744,7 @@ mod tests {
         );
     }
 
-    fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> OutputStream<Value> {
+    fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> LocalStream<Value> {
         <UntimedDsrvSemantics as MonitoringSemantics<TestConfig>>::to_async_stream(&expr, ctx, None)
     }
     // ============================================================================

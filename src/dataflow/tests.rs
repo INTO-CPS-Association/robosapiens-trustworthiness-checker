@@ -15,7 +15,7 @@ use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
 use crate::semantics::UntimedDsrvSemantics;
 use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, async_test};
 use crate::{
-    core::{InputUpdate, OutputStream, Runtime},
+    core::{InputUpdate, LocalStream, Runtime},
     semantics::{MonitoringSemantics, StreamContext},
 };
 use futures::{StreamExt, stream};
@@ -510,7 +510,7 @@ where
         .collect::<Vec<_>>();
     let streams = vars
         .into_iter()
-        .map(|(_, values)| Box::pin(stream::iter(values)) as OutputStream<Value>)
+        .map(|(_, values)| Box::pin(stream::iter(values)) as LocalStream<Value>)
         .collect::<Vec<_>>();
     let mut ctx = Context::<TestConfig>::new(executor, var_names, streams, 8);
     let expr = parse_expr(src);

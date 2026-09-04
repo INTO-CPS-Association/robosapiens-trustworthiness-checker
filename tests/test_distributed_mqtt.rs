@@ -15,7 +15,7 @@ mod integration_tests {
 
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
     use trustworthiness_checker::io::mqtt::MqttInputBackend;
-    use trustworthiness_checker::{OutputStream, dsrv_fixtures::*};
+    use trustworthiness_checker::{LocalStream, dsrv_fixtures::*};
 
     use macro_rules_attribute::apply;
     use std::collections::BTreeMap;
@@ -118,8 +118,8 @@ mod integration_tests {
         mut x_tick: TickSender,
         mut y_tick: TickSender,
         mut z_tick: TickSender,
-        mut outputs_v: OutputStream<Value>,
-        mut outputs_w: OutputStream<Value>,
+        mut outputs_v: LocalStream<Value>,
+        mut outputs_w: LocalStream<Value>,
     ) -> anyhow::Result<()> {
         x_tick.send(()).await?; // 1
         y_tick.send(()).await?; // 3

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ecow::EcoVec;
 use smol::LocalExecutor;
 
-use crate::{OutputStream, Specification, VarName, core::DeferrableStreamData};
+use crate::{LocalStream, Specification, VarName, core::DeferrableStreamData};
 
 /// Abstract builder of contexts
 pub trait AbstractContextBuilder {
@@ -18,7 +18,7 @@ pub trait AbstractContextBuilder {
 
     fn history_length(self, history_length: usize) -> Self;
 
-    fn input_streams(self, streams: Vec<OutputStream<<Self::AC as AsyncConfig>::Val>>) -> Self;
+    fn input_streams(self, streams: Vec<LocalStream<<Self::AC as AsyncConfig>::Val>>) -> Self;
 
     fn drain_when_unsubscribed(self, _vars: impl IntoIterator<Item = VarName>) -> Self
     where
@@ -37,7 +37,7 @@ pub trait StreamContext: 'static {
     type AC: AsyncConfig;
     type Builder: AbstractContextBuilder<AC = Self::AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<<Self::AC as AsyncConfig>::Val>>;
+    fn var(&self, x: &VarName) -> Option<LocalStream<<Self::AC as AsyncConfig>::Val>>;
 
     fn subcontext(&self, history_length: usize) -> Self;
 
@@ -75,7 +75,7 @@ where
         expr: &AC::Expr,
         ctx: &AC::Ctx,
         owner: Option<VarName>,
-    ) -> OutputStream<AC::Val>;
+    ) -> LocalStream<AC::Val>;
 }
 
 pub trait AsyncConfig: Clone + 'static {

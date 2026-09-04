@@ -4,7 +4,7 @@ use super::combinators as mc;
 use super::semantics::evaluate_scope;
 use super::shared_output::SharedOutput;
 use crate::VarName;
-use crate::core::OutputStream;
+use crate::core::LocalStream;
 use crate::core::RuntimeFunction;
 use crate::core::StreamType;
 use crate::core::Value;
@@ -54,8 +54,8 @@ where
 }
 
 struct UntimedFunctionInstance {
-    output: OutputStream<Value>,
-    capture_drivers: Vec<OutputStream<Value>>,
+    output: LocalStream<Value>,
+    capture_drivers: Vec<LocalStream<Value>>,
 }
 
 impl<AC> UntimedFunctionDef<AC>
@@ -225,7 +225,7 @@ impl ScopedExpr {
         None
     }
 
-    pub(super) fn resolve_stream(&self, name: &VarName) -> Option<OutputStream<Value>> {
+    pub(super) fn resolve_stream(&self, name: &VarName) -> Option<LocalStream<Value>> {
         let mut frame = self.environment.as_deref();
         while let Some(current) = frame {
             if let Some((_, EvalBinding::Stream(value))) = current
@@ -428,7 +428,7 @@ pub(super) fn eval_apply<AC>(
     func_expr: ScopedExpr,
     args: EcoVec<ScopedExpr>,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -525,7 +525,7 @@ pub(super) fn eval_partial<AC>(
     func_expr: ScopedExpr,
     args: EcoVec<ScopedExpr>,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -594,7 +594,7 @@ where
     })
 }
 
-pub(super) fn eval_fix<AC>(func_expr: ScopedExpr, ctx: &AC::Ctx) -> OutputStream<Value>
+pub(super) fn eval_fix<AC>(func_expr: ScopedExpr, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -616,7 +616,7 @@ pub(super) fn eval_list_map<AC>(
     func_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -645,7 +645,7 @@ pub(super) fn eval_list_filter<AC>(
     func_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -679,7 +679,7 @@ pub(super) fn eval_list_fold<AC>(
     init_expr: ScopedExpr,
     list_expr: ScopedExpr,
     ctx: &AC::Ctx,
-) -> OutputStream<Value>
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {

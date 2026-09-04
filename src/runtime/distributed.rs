@@ -10,7 +10,7 @@ use tracing::debug;
 use unsync::spsc;
 
 use crate::{
-    DsrvSpecification, InputStream, OutputStream, Value, VarName,
+    DsrvSpecification, InputStream, LocalStream, Value, VarName,
     core::{OutputWriter, Runtime, input},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -59,7 +59,7 @@ mod mqtt_dist_graph_provider {
     use std::{collections::BTreeMap, rc::Rc};
 
     use crate::{
-        OutputStream,
+        LocalStream,
         distributed::distribution_graphs::{DistributionGraph, NodeName},
         io::mqtt::dist_graph_provider::DistGraphProvider,
     };
@@ -80,7 +80,7 @@ mod mqtt_dist_graph_provider {
     }
 
     impl DistGraphProvider for MqttDistGraphProvider {
-        fn dist_graph_stream(&mut self) -> OutputStream<Rc<DistributionGraph>> {
+        fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
             Box::pin(futures::stream::pending())
         }
     }
@@ -1287,12 +1287,12 @@ where
                                 ctx.var(var).map(|stream| {
                                     let var = var.clone();
                                     Box::pin(stream.map(move |value| vec![(var.clone(), value)]))
-                                        as OutputStream<Vec<(VarName, Value)>>
+                                        as LocalStream<Vec<(VarName, Value)>>
                                 })
                             })
                             .collect::<Vec<_>>();
                         let batches = Box::pin(futures::stream::select_all(streams))
-                            as OutputStream<Vec<(VarName, Value)>>;
+                            as LocalStream<Vec<(VarName, Value)>>;
                         spawn_planning_context_recorder(
                             executor_for_planning_context.clone(),
                             planning_context,

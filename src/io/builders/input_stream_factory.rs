@@ -1099,7 +1099,7 @@ impl<V> InputSource<V> {
                     .filter(|(variable, _)| variables.contains(variable))
                     .map(|(variable, fanout)| {
                         let mut receiver = fanout.subscribe();
-                        let stream: crate::OutputStream<V> = Box::pin(stream! {
+                        let stream: crate::LocalStream<V> = Box::pin(stream! {
                             while let Some(value) = receiver.recv().await {
                                 yield value;
                             }
@@ -1241,7 +1241,7 @@ impl<V> InputSource<V> {
                     .filter(|(variable, _)| variables.contains(variable))
                     .map(|(variable, fanout)| {
                         let mut receiver = fanout.subscribe();
-                        let stream: crate::OutputStream<V> = Box::pin(stream! {
+                        let stream: crate::LocalStream<V> = Box::pin(stream! {
                             while let Some(value) = receiver.recv().await {
                                 yield value;
                             }
@@ -1258,7 +1258,7 @@ impl<V> InputSource<V> {
                     anyhow::bail!("manual input has no configured control source")
                 };
                 let mut receiver = control.subscribe();
-                let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
+                let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
                     Box::pin(async_stream::try_stream! {
                         while let Some(payload) = receiver.recv().await {
                             match payload {
@@ -1291,7 +1291,7 @@ enum ControlledInputNext<V> {
 
 fn poll_controlled_input<V>(
     data: &mut Option<InputStream<V>>,
-    control: &mut Option<crate::OutputStream<anyhow::Result<ReconfigurationRequest>>>,
+    control: &mut Option<crate::LocalStream<anyhow::Result<ReconfigurationRequest>>>,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<ControlledInputNext<V>> {
     // Check control first for responsiveness only; independent ROS/manual
@@ -1358,7 +1358,7 @@ fn compose_reconfigurable_input_streams<V: 'static>(
 
 fn controlled_input_stream<V: 'static>(
     mut data: Option<InputStream<V>>,
-    control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>>,
+    control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>>,
 ) -> ReconfigurableInputStream<V> {
     Box::pin(async_stream::try_stream! {
         let mut control = Some(control);
@@ -2456,7 +2456,7 @@ mod resolution_tests {
     fn data_eof_leaves_control_active() {
         smol::block_on(async {
             let data: InputStream<Value> = Box::pin(futures::stream::empty());
-            let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
+            let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::once(async {
                     smol::future::yield_now().await;
                     ReconfigurationRequest::from_json(r#"{"specification":"in x"}"#)
@@ -2473,7 +2473,7 @@ mod resolution_tests {
     fn controlled_input_completes_after_both_branches_end() {
         smol::block_on(async {
             let data: InputStream<Value> = Box::pin(futures::stream::empty());
-            let control: crate::OutputStream<anyhow::Result<ReconfigurationRequest>> =
+            let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::empty());
             let mut stream = controlled_input_stream(Some(data), control);
 

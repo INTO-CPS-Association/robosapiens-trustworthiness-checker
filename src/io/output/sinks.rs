@@ -19,9 +19,10 @@ use async_trait::async_trait;
 use async_unsync::bounded;
 use futures::{Sink, future::LocalBoxFuture};
 
+use super::make_reconfigurable_interface;
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface,
-    OutputInterfaceReconfigurationHandle, OutputRole, OutputWriter, StreamData, VarName,
+    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputRole,
+    OutputWriter, StreamData, VarName,
 };
 
 /// A local sink that runs one asynchronous operation for each accepted batch.
@@ -209,24 +210,6 @@ impl<T: 'static> Sink<T> for AsyncFnSink<T> {
 }
 
 pub type LocalBatchSink<V> = AsyncFnSink<OutputBatch<V>>;
-
-fn make_reconfigurable_interface(
-    interface: OutputInterface,
-) -> (
-    Rc<RefCell<OutputInterface>>,
-    OutputInterfaceReconfigurationHandle,
-) {
-    let interface = Rc::new(RefCell::new(interface));
-    let handle_interface = Rc::clone(&interface);
-    let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
-        let interface = Rc::clone(&handle_interface);
-        Box::pin(async move {
-            *interface.borrow_mut() = replacement;
-            Ok(())
-        })
-    });
-    (interface, handle)
-}
 
 pub fn local_batch_sink<V, F, Fut>(operation: F) -> LocalBatchSink<V>
 where

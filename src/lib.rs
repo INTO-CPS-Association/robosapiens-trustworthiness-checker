@@ -5,8 +5,8 @@ pub mod causal;
 pub mod core;
 pub use core::{
     DynOutputSink, ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick,
-    InputUpdate, InputUpdateRef, JsonStreamValue, OutputBackend, OutputBatch, OutputError,
-    OutputInterface, OutputRole, OutputRoute, OutputStream, OutputUpdate, OutputWriter,
+    InputUpdate, InputUpdateRef, JsonStreamValue, LocalStream, OutputBackend, OutputBatch,
+    OutputError, OutputInterface, OutputRole, OutputRoute, OutputUpdate, OutputWriter,
     RosStreamValue, Runtime, SharedOutputBackend, Specification, Value, VarName,
 };
 pub mod cli;

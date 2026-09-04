@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    ExecutionPolicy, OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime,
+    ExecutionPolicy, LocalStream, OutputBackend, OutputInterface, OutputWriter, Runtime,
     RuntimeSpec, Semantics, StreamType,
 };
 use trustworthiness_checker::io::output::ManualOutputBackend;
@@ -27,7 +27,7 @@ use winnow::Parser;
 
 async fn manual_output(
     variables: impl IntoIterator<Item = VarName>,
-) -> (OutputWriter<Value>, OutputStream<BTreeMap<VarName, Value>>) {
+) -> (OutputWriter<Value>, LocalStream<BTreeMap<VarName, Value>>) {
     let (backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
     let variables = variables
         .into_iter()

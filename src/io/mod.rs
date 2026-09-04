@@ -14,8 +14,8 @@ pub mod config;
 pub use config::{
     CodecId, DestinationConfig, DestinationId, DestinationKind, InputConfigFile,
     InputConfiguration, InputReduction, InputStage, InputWindow, MsgTypeMapping, OutputConfigFile,
-    OutputConfiguration, OutputStageConfig, ReconfigurationRequest, Route, SourceConfig, SourceId,
-    TopicMapping, WireRoute,
+    OutputConfiguration, OutputStageConfig, ReconfigurationRequest, ResolvedBinding, ResolvedInput,
+    ResolvedSource, Route, SourceConfig, SourceId, TopicMapping, WireRoute,
 };
 
 pub use redis_config::{

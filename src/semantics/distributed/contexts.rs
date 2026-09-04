@@ -5,7 +5,7 @@ use futures::join;
 use smol::LocalExecutor;
 
 use crate::{
-    OutputStream, VarName,
+    LocalStream, VarName,
     distributed::distribution_graphs::{
         LabelledDistGraphStream, LabelledDistributionGraph, NodeName, TaggedVarOrNodeName,
     },
@@ -76,7 +76,7 @@ where
         self
     }
 
-    fn input_streams(mut self, input_streams: Vec<OutputStream<AC::Val>>) -> Self {
+    fn input_streams(mut self, input_streams: Vec<LocalStream<AC::Val>>) -> Self {
         self.async_ctx_builder = self.async_ctx_builder.input_streams(input_streams);
         self
     }
@@ -196,7 +196,7 @@ where
     type AC = AC;
     type Builder = DistributedContextBuilder<AC>;
 
-    fn var(&self, x: &VarName) -> Option<OutputStream<AC::Val>> {
+    fn var(&self, x: &VarName) -> Option<LocalStream<AC::Val>> {
         self.ctx.var(x)
     }
 

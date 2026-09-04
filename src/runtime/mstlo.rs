@@ -1056,7 +1056,7 @@ fn combine_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InputBatch, InputStream, OutputBatch, OutputError, OutputStream, OutputWriter};
+    use crate::{InputBatch, InputStream, LocalStream, OutputBatch, OutputError, OutputWriter};
 
     use crate::async_test;
     use crate::io::testing::{manual_output, null_output};
@@ -1124,7 +1124,7 @@ mod tests {
         let streams = inputs.into_iter().map(|(var, values)| {
             Box::pin(
                 stream::iter(values).map(move |value| crate::InputUpdate::new(var.clone(), value)),
-            ) as OutputStream<crate::InputUpdate<Value>>
+            ) as LocalStream<crate::InputUpdate<Value>>
         });
         let streams = futures::stream::select_all(streams);
         if streams.is_empty() {

@@ -2,7 +2,7 @@ use anyhow::Context;
 use futures::StreamExt;
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use crate::core::{InputBatch, InputStream, JsonStreamValue, OutputStream, VarName};
+use crate::core::{InputBatch, InputStream, JsonStreamValue, LocalStream, VarName};
 use crate::io::ReconfigurationRequest;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub async fn input_stream_items<V: JsonStreamValue>(
     port: Option<u16>,
     var_topics: BTreeMap<VarName, String>,
     control_topic: Option<String>,
-) -> anyhow::Result<OutputStream<anyhow::Result<RedisInputItem<V>>>> {
+) -> anyhow::Result<LocalStream<anyhow::Result<RedisInputItem<V>>>> {
     let topic_vars = validate_topics(&var_topics, control_topic.as_deref())?;
     if var_topics.is_empty() && control_topic.is_none() {
         return Ok(Box::pin(futures::stream::empty()));

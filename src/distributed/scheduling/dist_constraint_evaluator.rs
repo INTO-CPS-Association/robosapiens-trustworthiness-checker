@@ -8,7 +8,7 @@ use ecow::EcoVec;
 use futures::{FutureExt, StreamExt, future::pending, pin_mut};
 
 use crate::{
-    DsrvSpecification, OutputStream, Value, VarName,
+    DsrvSpecification, LocalStream, Value, VarName,
     distributed::{
         distribution_constraint::{ConstraintProfile, DistributionConstraintPlan},
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -48,7 +48,7 @@ impl PlacementLabelling {
     }
 }
 
-pub type PlacementLabellingStream = OutputStream<Rc<PlacementLabelling>>;
+pub type PlacementLabellingStream = LocalStream<Rc<PlacementLabelling>>;
 pub type ConstraintInputUpdate = (usize, Value);
 pub type ConstraintInputBatch = Vec<ConstraintInputUpdate>;
 
@@ -133,15 +133,15 @@ pub fn dist_constraint_stream(
     spec: DsrvSpecification,
     constraints: Vec<VarName>,
     labelling_stream: PlacementLabellingStream,
-    input_streams: BTreeMap<VarName, OutputStream<Value>>,
-) -> OutputStream<bool> {
+    input_streams: BTreeMap<VarName, LocalStream<Value>>,
+) -> LocalStream<bool> {
     let input_index = ConstraintInputIndex::new(input_streams.keys().cloned());
     let mut input_events =
         futures::stream::select_all(input_streams.into_iter().map(|(var, stream)| {
             let index = input_index
                 .index_of(&var)
                 .expect("input stream variable missing from compact input index");
-            Box::pin(stream.map(move |value| (index, value))) as OutputStream<ConstraintInputUpdate>
+            Box::pin(stream.map(move |value| (index, value))) as LocalStream<ConstraintInputUpdate>
         }));
 
     dist_constraint_event_stream(
@@ -162,8 +162,8 @@ pub fn dist_constraint_event_stream(
     constraints: Vec<VarName>,
     labelling_stream: PlacementLabellingStream,
     input_index: ConstraintInputIndex,
-    input_events: OutputStream<ConstraintInputBatch>,
-) -> OutputStream<bool> {
+    input_events: LocalStream<ConstraintInputBatch>,
+) -> LocalStream<bool> {
     try_dist_constraint_event_stream(
         spec,
         constraints,
@@ -179,8 +179,8 @@ pub fn try_dist_constraint_event_stream(
     constraints: Vec<VarName>,
     mut labelling_stream: PlacementLabellingStream,
     input_index: ConstraintInputIndex,
-    mut input_events: OutputStream<ConstraintInputBatch>,
-) -> Result<OutputStream<bool>, DistConstraintEvaluatorError> {
+    mut input_events: LocalStream<ConstraintInputBatch>,
+) -> Result<LocalStream<bool>, DistConstraintEvaluatorError> {
     let plan =
         DistributionConstraintPlan::lower(&spec, constraints, ConstraintProfile::CompactEvaluator)?;
 
@@ -356,7 +356,7 @@ distX = if gate then monitored_at(x, "B") else true
                 yield true.into();
                 smol::Timer::after(COMPACT_CONSTRAINT_EVALUATION_INTERVAL * 2).await;
                 yield false.into();
-            }) as OutputStream<Value>,
+            }) as LocalStream<Value>,
         )]);
 
         let result: Vec<_> =
@@ -390,7 +390,7 @@ distX = if gate then monitored_at(x, "A") else true
                 yield true.into();
                 smol::Timer::after(COMPACT_CONSTRAINT_EVALUATION_INTERVAL * 2).await;
                 yield false.into();
-            }) as OutputStream<Value>,
+            }) as LocalStream<Value>,
         )]);
 
         let result: Vec<_> =
@@ -424,7 +424,7 @@ distX = gate
                 yield Value::NoVal;
                 smol::Timer::after(COMPACT_CONSTRAINT_EVALUATION_INTERVAL * 2).await;
                 yield false.into();
-            }) as OutputStream<Value>,
+            }) as LocalStream<Value>,
         )]);
 
         let result: Vec<_> =
@@ -485,7 +485,7 @@ distX = monitored_at(x, "B")
         let labelling = Rc::new(PlacementLabelling::from_labelled_graph(&graph_with_x_at_b()));
         let labelling_stream = Box::pin(stream::iter(vec![labelling]));
         let input_index = ConstraintInputIndex::new(Vec::<VarName>::new());
-        let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
+        let input_events = Box::pin(stream::pending()) as LocalStream<ConstraintInputBatch>;
 
         let stream = try_dist_constraint_event_stream(
             spec,
@@ -506,7 +506,7 @@ distX = monitored_at(x, "B")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
-        let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
+        let input_events = Box::pin(stream::pending()) as LocalStream<ConstraintInputBatch>;
 
         let error = try_dist_constraint_event_stream(
             spec,
@@ -532,7 +532,7 @@ distX = monitored_at(x, "B")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let labelling_stream = Box::pin(stream::pending()) as PlacementLabellingStream;
-        let input_events = Box::pin(stream::pending()) as OutputStream<ConstraintInputBatch>;
+        let input_events = Box::pin(stream::pending()) as LocalStream<ConstraintInputBatch>;
 
         let error = try_dist_constraint_event_stream(
             spec,

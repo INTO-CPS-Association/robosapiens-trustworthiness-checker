@@ -9,7 +9,7 @@ use futures::{future::LocalBoxFuture, stream::FuturesUnordered};
 use smol::LocalExecutor;
 
 use crate::causal::{CausalDomain, CausalValue, report_batch_json_line};
-use crate::core::{OutputStream, VarName};
+use crate::core::{LocalStream, VarName};
 
 /// A standalone causal report adapter that merges named streams into JSONL rows.
 ///
@@ -18,7 +18,7 @@ use crate::core::{OutputStream, VarName};
 /// stream per row and never emits a partial row.
 pub struct CausalJsonlOutputHandler<D: CausalDomain> {
     var_names: BTreeSet<VarName>,
-    streams: Option<BTreeMap<VarName, OutputStream<CausalValue<D>>>>,
+    streams: Option<BTreeMap<VarName, LocalStream<CausalValue<D>>>>,
     path: PathBuf,
 }
 
@@ -35,7 +35,7 @@ impl<D: CausalDomain> CausalJsonlOutputHandler<D> {
         }
     }
 
-    pub fn provide_streams(&mut self, streams: BTreeMap<VarName, OutputStream<CausalValue<D>>>) {
+    pub fn provide_streams(&mut self, streams: BTreeMap<VarName, LocalStream<CausalValue<D>>>) {
         assert_eq!(
             self.var_names,
             streams.keys().cloned().collect(),
@@ -76,7 +76,7 @@ impl<D: CausalDomain> CausalJsonlOutputHandler<D> {
 
 async fn next_equal_row<D: CausalDomain>(
     variables: &[VarName],
-    streams: &mut [OutputStream<CausalValue<D>>],
+    streams: &mut [LocalStream<CausalValue<D>>],
 ) -> anyhow::Result<Option<Vec<CausalValue<D>>>> {
     let stream_count = streams.len();
     let mut nexts = streams
@@ -208,7 +208,7 @@ mod tests {
             BTreeSet::from([VarName::new("verdict")]),
             &path,
         );
-        let output: crate::OutputStream<CausalValue<CausalSet>> =
+        let output: crate::LocalStream<CausalValue<CausalSet>> =
             Box::pin(stream::iter([CausalValue::new(
                 Value::Bool(false),
                 CausalSet::atom(TimedAtom::new("velocity".into(), 0)),
@@ -238,11 +238,11 @@ mod tests {
             BTreeSet::from([VarName::new("x"), VarName::new("y")]),
             &path,
         );
-        let x: crate::OutputStream<CausalValue<CausalSet>> = Box::pin(stream::iter([
+        let x: crate::LocalStream<CausalValue<CausalSet>> = Box::pin(stream::iter([
             CausalValue::constant(Value::Int(1)),
             CausalValue::constant(Value::Int(2)),
         ]));
-        let y: crate::OutputStream<CausalValue<CausalSet>> = Box::pin(stream::iter([
+        let y: crate::LocalStream<CausalValue<CausalSet>> = Box::pin(stream::iter([
             CausalValue::constant(Value::Int(10)),
             CausalValue::constant(Value::Int(20)),
         ]));
@@ -278,8 +278,8 @@ mod tests {
             BTreeSet::from([VarName::new("ended"), VarName::new("ready")]),
             &path,
         );
-        let ended: crate::OutputStream<CausalValue<CausalSet>> = Box::pin(stream::empty());
-        let ready: crate::OutputStream<CausalValue<CausalSet>> =
+        let ended: crate::LocalStream<CausalValue<CausalSet>> = Box::pin(stream::empty());
+        let ready: crate::LocalStream<CausalValue<CausalSet>> =
             Box::pin(stream::iter([CausalValue::constant(Value::Int(1))]));
         handler.provide_streams(BTreeMap::from([
             (VarName::new("ended"), ended),
@@ -312,8 +312,8 @@ mod tests {
             BTreeSet::from([VarName::new("ended"), VarName::new("pending")]),
             &path,
         );
-        let ended: crate::OutputStream<CausalValue<CausalSet>> = Box::pin(stream::empty());
-        let pending: crate::OutputStream<CausalValue<CausalSet>> = Box::pin(stream::pending());
+        let ended: crate::LocalStream<CausalValue<CausalSet>> = Box::pin(stream::empty());
+        let pending: crate::LocalStream<CausalValue<CausalSet>> = Box::pin(stream::pending());
         handler.provide_streams(BTreeMap::from([
             (VarName::new("ended"), ended),
             (VarName::new("pending"), pending),
@@ -356,7 +356,7 @@ mod tests {
             BTreeSet::from([VarName::new("measurement")]),
             &path,
         );
-        let output: crate::OutputStream<CausalValue<CausalSet>> =
+        let output: crate::LocalStream<CausalValue<CausalSet>> =
             Box::pin(stream::iter([CausalValue::constant(Value::Float(
                 f64::INFINITY,
             ))]));

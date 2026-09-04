@@ -7,7 +7,7 @@ pub(crate) async fn manual_output<V: crate::core::StreamData>(
     variables: std::collections::BTreeSet<crate::VarName>,
 ) -> (
     crate::core::OutputWriter<V>,
-    crate::core::OutputStream<std::collections::BTreeMap<crate::VarName, V>>,
+    crate::core::LocalStream<std::collections::BTreeMap<crate::VarName, V>>,
 ) {
     use crate::core::{OutputBackend, OutputInterface};
     let (backend, receiver) = crate::io::output::ManualOutputBackend::<V>::channel(1024);

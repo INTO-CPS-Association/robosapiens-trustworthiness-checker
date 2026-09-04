@@ -1,13 +1,13 @@
 //! Untimed DSRV evaluation reused by distributed semantics.
 
 use super::combinators as mc;
-use crate::core::{BinaryOperator, OutputStream, Value};
+use crate::core::{BinaryOperator, LocalStream, Value};
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
 
 pub(crate) fn evaluate<'a>(
     node: ExprRef<'a>,
-    evaluate: &impl Fn(ExprRef<'a>) -> OutputStream<Value>,
-) -> Option<OutputStream<Value>> {
+    evaluate: &impl Fn(ExprRef<'a>) -> LocalStream<Value>,
+) -> Option<LocalStream<Value>> {
     use ExprView::*;
 
     let stream = match node.view() {

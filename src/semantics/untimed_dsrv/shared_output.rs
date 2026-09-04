@@ -5,7 +5,7 @@ use std::{
     task::{Poll, Waker},
 };
 
-use crate::core::OutputStream;
+use crate::core::LocalStream;
 
 /// A lazily driven stream with independently advancing subscribers.
 ///
@@ -16,7 +16,7 @@ pub(super) struct SharedOutput<T> {
 }
 
 struct SharedOutputState<T> {
-    source: RefCell<OutputStream<T>>,
+    source: RefCell<LocalStream<T>>,
     values: RefCell<VecDeque<T>>,
     base: Cell<usize>,
     cursors: RefCell<Vec<Weak<SharedCursor>>>,
@@ -29,7 +29,7 @@ struct SharedCursor {
 }
 
 impl<T: Clone + 'static> SharedOutput<T> {
-    pub(super) fn new(source: OutputStream<T>) -> Self {
+    pub(super) fn new(source: LocalStream<T>) -> Self {
         Self {
             state: Rc::new(SharedOutputState {
                 source: RefCell::new(source),
@@ -41,7 +41,7 @@ impl<T: Clone + 'static> SharedOutput<T> {
         }
     }
 
-    pub(super) fn subscribe(&self) -> OutputStream<T> {
+    pub(super) fn subscribe(&self) -> LocalStream<T> {
         let position = self.state.base.get() + self.state.values.borrow().len();
         let cursor = Rc::new(SharedCursor {
             position: Cell::new(position),

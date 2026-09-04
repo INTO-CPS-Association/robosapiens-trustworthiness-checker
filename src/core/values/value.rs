@@ -10,10 +10,10 @@ use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 use std::fmt;
 
-use crate::core::{JsonStreamValue, OutputStream};
+use crate::core::{JsonStreamValue, LocalStream};
 
 pub type RuntimeFunctionCallable =
-    Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static>;
+    Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<LocalStream<Value>> + 'static>;
 pub type RuntimeFunctionValueCallable =
     Rc<dyn Fn(EcoVec<Value>) -> anyhow::Result<Value> + 'static>;
 pub type RuntimeFunctionValueFactory = Rc<dyn Fn() -> RuntimeFunctionValueCallable + 'static>;
@@ -53,7 +53,7 @@ impl RuntimeFunction {
 
     pub fn native(
         display: impl Into<EcoString>,
-        callable: impl Fn(EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> + 'static,
+        callable: impl Fn(EcoVec<Value>) -> anyhow::Result<LocalStream<Value>> + 'static,
     ) -> Self {
         Self {
             inner: Rc::new(RuntimeFunctionInner {
@@ -78,7 +78,7 @@ impl RuntimeFunction {
                 display: display.into(),
                 callable: Some(Rc::new(move |args| {
                     let value = stream_callable(args)?;
-                    Ok(Box::pin(futures::stream::iter(vec![value])) as OutputStream<Value>)
+                    Ok(Box::pin(futures::stream::iter(vec![value])) as LocalStream<Value>)
                 })),
                 value_callable: Some(callable.clone()),
                 value_factory: Some(Rc::new(move || callable.clone())),
@@ -121,7 +121,7 @@ impl RuntimeFunction {
         &self.inner.display
     }
 
-    pub fn call(&self, args: EcoVec<Value>) -> anyhow::Result<OutputStream<Value>> {
+    pub fn call(&self, args: EcoVec<Value>) -> anyhow::Result<LocalStream<Value>> {
         let Some(callable) = &self.inner.callable else {
             return Err(anyhow!(
                 "Function {} is display-only and cannot be called",

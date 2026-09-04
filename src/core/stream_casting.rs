@@ -1,9 +1,9 @@
-use crate::{OutputStream, Value, core::StreamData, core::values::PartialStreamValue};
+use crate::{LocalStream, Value, core::StreamData, core::values::PartialStreamValue};
 use futures::StreamExt;
 
 use std::fmt::Debug;
 
-pub fn to_typed_stream<T>(stream: OutputStream<Value>) -> OutputStream<T>
+pub fn to_typed_stream<T>(stream: LocalStream<Value>) -> LocalStream<T>
 where
     T: TryFrom<Value> + Debug,
     <T as TryFrom<Value>>::Error: Debug,
@@ -11,7 +11,7 @@ where
     Box::pin(stream.map(|x| x.try_into().expect("Type error")))
 }
 
-pub fn to_typed_stream_vec<T>(stream: OutputStream<Vec<Value>>) -> OutputStream<Vec<T>>
+pub fn to_typed_stream_vec<T>(stream: LocalStream<Vec<Value>>) -> LocalStream<Vec<T>>
 where
     T: TryFrom<Value> + Debug,
     <T as TryFrom<Value>>::Error: Debug,
@@ -24,14 +24,12 @@ where
 }
 
 pub fn from_typed_stream<T: Into<Value> + StreamData>(
-    stream: OutputStream<T>,
-) -> OutputStream<Value> {
+    stream: LocalStream<T>,
+) -> LocalStream<Value> {
     Box::pin(stream.map(|x| x.into()))
 }
 
-pub fn to_typed_partial_stream<T>(
-    stream: OutputStream<Value>,
-) -> OutputStream<PartialStreamValue<T>>
+pub fn to_typed_partial_stream<T>(stream: LocalStream<Value>) -> LocalStream<PartialStreamValue<T>>
 where
     T: TryFrom<Value> + Debug,
     <T as TryFrom<Value>>::Error: Debug,
@@ -44,8 +42,8 @@ where
 }
 
 pub fn from_typed_partial_stream<T: Into<Value> + StreamData>(
-    stream: OutputStream<PartialStreamValue<T>>,
-) -> OutputStream<Value> {
+    stream: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<Value> {
     Box::pin(stream.map(|x| match x {
         PartialStreamValue::NoVal => Value::NoVal,
         PartialStreamValue::Deferred => Value::Deferred,

@@ -30,7 +30,7 @@ pub(crate) enum ReconfigurableInputItem<V> {
 // ANCHOR_END: reconfigurable_input_item
 
 pub(crate) type ReconfigurableInputStream<V> =
-    crate::OutputStream<anyhow::Result<ReconfigurableInputItem<V>>>;
+    crate::LocalStream<anyhow::Result<ReconfigurableInputItem<V>>>;
 
 pub(crate) struct OpenedInputSource<V> {
     pub(crate) id: SourceId,

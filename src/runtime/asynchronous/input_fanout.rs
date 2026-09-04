@@ -5,13 +5,13 @@ use futures::StreamExt;
 use unsync::spsc;
 
 use crate::core::{DeferrableStreamData, input};
-use crate::{InputStream, OutputStream, VarName};
+use crate::{InputStream, LocalStream, VarName};
 
 const CHANNEL_SIZE: usize = 10;
 
 pub(super) struct InputFanout<V> {
-    pub streams: BTreeMap<VarName, OutputStream<V>>,
-    pub drive: OutputStream<anyhow::Result<()>>,
+    pub streams: BTreeMap<VarName, LocalStream<V>>,
+    pub drive: LocalStream<anyhow::Result<()>>,
 }
 
 pub(super) fn fan_out_input<V>(
@@ -31,7 +31,7 @@ where
         .values()
         .map(|_| {
             let (sender, receiver) = spsc::channel(CHANNEL_SIZE);
-            let output: OutputStream<V> = crate::stream_utils::channel_to_output_stream(receiver);
+            let output: LocalStream<V> = crate::stream_utils::channel_to_output_stream(receiver);
             (Some(sender), output)
         })
         .unzip();

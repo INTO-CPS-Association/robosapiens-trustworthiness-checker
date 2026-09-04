@@ -956,7 +956,7 @@ impl InputStage {
 /// monitor configuration. These types stay inside input orchestration; callers
 /// configure sources and routes rather than constructing resolved inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct ResolvedBinding {
+pub struct ResolvedBinding {
     variable: VarName,
     route: Box<str>,
     codec: CodecId,
@@ -971,21 +971,21 @@ impl ResolvedBinding {
         }
     }
 
-    pub(crate) fn variable(&self) -> &VarName {
+    pub fn variable(&self) -> &VarName {
         &self.variable
     }
 
-    pub(crate) fn route(&self) -> &str {
+    pub fn route(&self) -> &str {
         &self.route
     }
 
-    pub(crate) fn codec(&self) -> &CodecId {
+    pub fn codec(&self) -> &CodecId {
         &self.codec
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct ResolvedSource {
+pub struct ResolvedSource {
     source: SourceId,
     bindings: Box<[ResolvedBinding]>,
 }
@@ -1001,11 +1001,11 @@ impl ResolvedSource {
         }
     }
 
-    pub(crate) fn source(&self) -> &SourceId {
+    pub fn source(&self) -> &SourceId {
         &self.source
     }
 
-    pub(crate) fn bindings(&self) -> &[ResolvedBinding] {
+    pub fn bindings(&self) -> &[ResolvedBinding] {
         &self.bindings
     }
 
@@ -1025,7 +1025,7 @@ impl ResolvedSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct ResolvedInput {
+pub struct ResolvedInput {
     sources: Box<[ResolvedSource]>,
     #[serde(skip)]
     pipeline_identity: Rc<()>,
@@ -1078,7 +1078,7 @@ impl ResolvedInput {
         Ok(())
     }
 
-    pub(crate) fn sources(&self) -> &[ResolvedSource] {
+    pub fn sources(&self) -> &[ResolvedSource] {
         &self.sources
     }
 

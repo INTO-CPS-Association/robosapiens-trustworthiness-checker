@@ -10,7 +10,7 @@ use testcontainers_modules::{
 };
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
-    OutputStream, Value,
+    LocalStream, Value,
     core::JsonStreamValue,
     io::mqtt::{MqttFactory, MqttMessage},
 };
@@ -31,11 +31,7 @@ pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
 }
 
 #[instrument(level = tracing::Level::INFO)]
-pub async fn get_mqtt_outputs(
-    topic: String,
-    client_name: String,
-    port: u16,
-) -> OutputStream<Value> {
+pub async fn get_mqtt_outputs(topic: String, client_name: String, port: u16) -> LocalStream<Value> {
     // Create a new client
     let (mqtt_client, stream) = MQTT_FACTORY
         .connect_and_receive(&format!("tcp://localhost:{}", port), 0)
@@ -91,7 +87,7 @@ pub async fn dummy_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
 pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>(
     client_name: String,
     topic: String,
-    values: OutputStream<T>,
+    values: LocalStream<T>,
     values_len: usize,
     port: u16,
 ) -> Result<(), anyhow::Error> {
@@ -105,7 +101,7 @@ pub async fn dummy_stream_mqtt_publisher<T: Debug + Sized + Serialize + 'static>
 pub async fn dummy_stream_mqtt_payload_publisher(
     client_name: String,
     topic: String,
-    mut payloads: OutputStream<String>,
+    mut payloads: LocalStream<String>,
     payloads_len: usize,
     port: u16,
 ) -> Result<(), anyhow::Error> {
@@ -150,7 +146,7 @@ pub async fn dummy_stream_mqtt_payload_publisher(
 pub async fn dummy_stream_mqtt_json_publisher<T: Debug + JsonStreamValue + 'static>(
     _client_name: String,
     topic: String,
-    values: OutputStream<T>,
+    values: LocalStream<T>,
     values_len: usize,
     port: u16,
 ) -> Result<(), anyhow::Error> {
@@ -182,7 +178,7 @@ pub async fn get_mqtt_json_outputs<V: JsonStreamValue + 'static>(
     topic: String,
     _client_name: String,
     port: u16,
-) -> OutputStream<V> {
+) -> LocalStream<V> {
     let (mqtt_client, stream) = MQTT_FACTORY
         .connect_and_receive(&format!("tcp://localhost:{port}"), 0)
         .await
@@ -198,7 +194,7 @@ pub async fn get_mqtt_json_outputs<V: JsonStreamValue + 'static>(
 async fn publish_values<T: Debug + Sized + Serialize + 'static>(
     client_name: &str,
     topic: &str,
-    mut values: OutputStream<T>,
+    mut values: LocalStream<T>,
     values_len: usize,
     port: u16,
 ) -> Result<(), anyhow::Error> {

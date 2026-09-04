@@ -6,18 +6,18 @@ use crate::core::Value;
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
-use crate::{OutputStream, VarName};
+use crate::{LocalStream, VarName};
 use async_stream::stream;
 use futures::StreamExt;
 use tracing::{debug, info};
 
 pub fn dynamic<AC>(
     ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
+    eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -26,12 +26,12 @@ where
 
 pub(crate) fn dynamic_checked<AC>(
     ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
+    eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
     checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -57,7 +57,7 @@ where
             // The previous property provided
             eval_val: Value,
             // The output stream for dynamic
-            eval_output_stream: OutputStream<Value>
+            eval_output_stream: LocalStream<Value>
         }
         let mut prev_data: Option<PrevData> = None;
         while let Some(current) = eval_stream.next().await {
@@ -146,11 +146,11 @@ where
 
 pub fn defer<AC>(
     ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
+    eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -159,12 +159,12 @@ where
 
 pub(crate) fn defer_checked<AC>(
     ctx: &AC::Ctx,
-    eval_stream: OutputStream<AC::Val>,
+    eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
     checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
 {
@@ -177,7 +177,7 @@ where
         },
     };
     let mut eval_stream = stream_lift_base(eval_stream);
-    let mut eval_output_stream: Option<OutputStream<Value>> = None;
+    let mut eval_output_stream: Option<LocalStream<Value>> = None;
 
     // Build an output stream for dynamic of x over the subcontext
     Box::pin(stream! {

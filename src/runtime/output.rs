@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use futures::{StreamExt, stream::FuturesUnordered};
 
-use crate::{OutputBatch, OutputStream, OutputUpdate, OutputWriter, VarName};
+use crate::{LocalStream, OutputBatch, OutputUpdate, OutputWriter, VarName};
 
-pub(crate) type NamedOutputStreams<V> = BTreeMap<VarName, OutputStream<V>>;
+pub(crate) type NamedOutputStreams<V> = BTreeMap<VarName, LocalStream<V>>;
 
 /// Drive independent named streams as singleton logical output ticks.
 ///
@@ -21,7 +21,7 @@ pub(crate) async fn drive_singleton_streams<V: 'static>(
             .map(|(variable, stream)| {
                 Box::pin(stream.map(move |value| {
                     OutputBatch::from(OutputUpdate::new(variable.clone(), value))
-                })) as OutputStream<OutputBatch<V>>
+                })) as LocalStream<OutputBatch<V>>
             })
             .collect::<Vec<_>>();
     let mut streams = futures::stream::select_all(streams);
@@ -288,7 +288,7 @@ mod tests {
     {
         BTreeMap::from([(
             VarName::new("x"),
-            Box::pin(stream::iter(values)) as OutputStream<i32>,
+            Box::pin(stream::iter(values)) as LocalStream<i32>,
         )])
     }
 
@@ -369,11 +369,11 @@ mod tests {
         let streams = BTreeMap::from([
             (
                 VarName::new("x"),
-                Box::pin(stream::iter([1, 2])) as OutputStream<i32>,
+                Box::pin(stream::iter([1, 2])) as LocalStream<i32>,
             ),
             (
                 VarName::new("y"),
-                Box::pin(stream::iter([10, 20])) as OutputStream<i32>,
+                Box::pin(stream::iter([10, 20])) as LocalStream<i32>,
             ),
         ]);
 
@@ -417,11 +417,11 @@ mod tests {
         let streams = BTreeMap::from([
             (
                 VarName::new("ended"),
-                Box::pin(stream::empty()) as OutputStream<i32>,
+                Box::pin(stream::empty()) as LocalStream<i32>,
             ),
             (
                 VarName::new("pending"),
-                Box::pin(stream::pending()) as OutputStream<i32>,
+                Box::pin(stream::pending()) as LocalStream<i32>,
             ),
         ]);
 

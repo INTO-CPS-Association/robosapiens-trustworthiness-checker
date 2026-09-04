@@ -18,7 +18,7 @@ use crate::core::empty_input_stream;
 use crate::io::ReconfigurationRequest;
 use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
-use crate::{InputBatch, InputStream, OutputStream, Value, VarName};
+use crate::{InputBatch, InputStream, LocalStream, Value, VarName};
 
 impl RosMsgType {
     /* Create a stream of values received on a ROS topic */
@@ -27,7 +27,7 @@ impl RosMsgType {
         node: &mut r2r::Node,
         topic: &str,
         qos: r2r::QosProfile,
-    ) -> anyhow::Result<OutputStream<Value>> {
+    ) -> anyhow::Result<LocalStream<Value>> {
         Ok(match self {
             RosMsgType::Bool => Box::pin(
                 node.subscribe::<r2r::std_msgs::msg::Bool>(topic, qos)?
@@ -149,7 +149,7 @@ impl RosMsgType {
 pub(crate) fn control_stream(
     executor: Rc<LocalExecutor<'static>>,
     topic: String,
-) -> anyhow::Result<OutputStream<anyhow::Result<ReconfigurationRequest>>> {
+) -> anyhow::Result<LocalStream<anyhow::Result<ReconfigurationRequest>>> {
     let context = r2r::Context::create()?;
     let node_name = format!("input_control_{}", Uuid::new_v4().simple());
     let mut node = r2r::Node::create(context, &node_name, "")?;
@@ -252,12 +252,12 @@ pub fn input_stream(
 }
 
 fn merge_ros_streams(
-    ros_streams: BTreeMap<VarName, OutputStream<Value>>,
-) -> OutputStream<(VarName, Value)> {
+    ros_streams: BTreeMap<VarName, LocalStream<Value>>,
+) -> LocalStream<(VarName, Value)> {
     Box::pin(futures::stream::select_all(ros_streams.into_iter().map(
         |(var_name, stream)| {
             Box::pin(stream.map(move |value| (var_name.clone(), value)))
-                as OutputStream<(VarName, Value)>
+                as LocalStream<(VarName, Value)>
         },
     )))
 }

@@ -15,10 +15,10 @@ use smol::{
 };
 use tracing::{debug, info};
 
-use crate::{OutputStream, VarName, core::StreamData};
+use crate::{LocalStream, VarName, core::StreamData};
 
-pub type LabelledDistGraphStream = OutputStream<Rc<LabelledDistributionGraph>>;
-pub type DistGraphStream = OutputStream<Rc<DistributionGraph>>;
+pub type LabelledDistGraphStream = LocalStream<Rc<LabelledDistributionGraph>>;
+pub type DistGraphStream = LocalStream<Rc<DistributionGraph>>;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, Default, Ord, PartialOrd)]
 pub struct NodeName(String);

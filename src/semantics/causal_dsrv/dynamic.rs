@@ -6,12 +6,12 @@ use crate::lang::core::DependencyGraphExpr;
 use crate::lang::dsrv::ast::{CheckedExpr, Expr, ReconfigurableExprScope};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
-use crate::{OutputStream, Value, VarName};
+use crate::{LocalStream, Value, VarName};
 
 type Evaluator<AC, D> =
-    fn(Expr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> OutputStream<CausalValue<D>>;
+    fn(Expr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
 type CheckedEvaluator<AC, D> =
-    fn(CheckedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> OutputStream<CausalValue<D>>;
+    fn(CheckedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
 
 #[derive(Clone)]
 enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
@@ -46,8 +46,8 @@ where
 /// Repeat the last non-`NoVal` runtime property like ordinary semi-sync
 /// evaluation while retaining the absence observations crossed by that value.
 fn lift_property_stream<D: CausalDomain>(
-    mut source: OutputStream<CausalValue<D>>,
-) -> OutputStream<CausalValue<D>> {
+    mut source: LocalStream<CausalValue<D>>,
+) -> LocalStream<CausalValue<D>> {
     Box::pin(stream! {
         let mut last = None;
         let mut leading_absence = D::unit();
@@ -71,11 +71,11 @@ fn lift_property_stream<D: CausalDomain>(
 
 pub fn dynamic<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: Evaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -93,13 +93,13 @@ where
 
 pub fn dynamic_checked<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     expected: TCType,
     environment: std::rc::Rc<StreamTypeEnvironment>,
     evaluator: CheckedEvaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -121,11 +121,11 @@ where
 
 fn dynamic_inner<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -135,7 +135,7 @@ where
     let mut ctx = subcontext::<AC, D>(ctx, scope, owner.as_ref());
     let mut source = lift_property_stream(source);
     Box::pin(stream! {
-        let mut installed: Option<(Value, OutputStream<CausalValue<D>>)> = None;
+        let mut installed: Option<(Value, LocalStream<CausalValue<D>>)> = None;
 
         while let Some(current) = source.next().await {
             match current.value.clone() {
@@ -198,7 +198,7 @@ fn evaluate_property<AC, D>(
     ctx: &AC::Ctx,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -225,11 +225,11 @@ where
 
 pub fn defer<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: Evaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -247,13 +247,13 @@ where
 
 pub fn defer_checked<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     expected: TCType,
     environment: std::rc::Rc<StreamTypeEnvironment>,
     evaluator: CheckedEvaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -275,11 +275,11 @@ where
 
 fn defer_inner<AC, D>(
     ctx: &AC::Ctx,
-    source: OutputStream<CausalValue<D>>,
+    source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,

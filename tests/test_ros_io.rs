@@ -30,7 +30,7 @@ mod integration_tests {
     };
     use trustworthiness_checker::runtime::dataflow::ReconfigurationAck;
     use trustworthiness_checker::utils::cancellation_token::CancellationToken;
-    use trustworthiness_checker::{DsrvSpecification, OutputBatch, OutputStream, Value, VarName};
+    use trustworthiness_checker::{DsrvSpecification, LocalStream, OutputBatch, Value, VarName};
 
     #[apply(async_test)]
     async fn test_add_monitor_ros_input(ex: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
@@ -284,7 +284,7 @@ mod integration_tests {
     }
 
     struct RosIntSubscriber {
-        stream: OutputStream<Int32>,
+        stream: LocalStream<Int32>,
         cancellation: CancellationToken,
         _spinner: smol::Task<()>,
     }

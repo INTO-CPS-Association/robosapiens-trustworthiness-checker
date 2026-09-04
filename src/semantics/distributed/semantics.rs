@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::VarName;
-use crate::core::OutputStream;
+use crate::core::LocalStream;
 use crate::core::{RuntimeFunction, Value};
 use crate::lang::dsrv::ast::{Expr, ExprRef, ExprView};
 use crate::semantics::distributed::combinators as dist_mc;
@@ -21,7 +21,7 @@ where
         expr: &AC::Expr,
         ctx: &AC::Ctx,
         owner: Option<VarName>,
-    ) -> OutputStream<AC::Val> {
+    ) -> LocalStream<AC::Val> {
         <DistributedExprSemantics as MonitoringSemantics<AC>>::to_async_stream(expr, ctx, owner)
     }
 }
@@ -37,7 +37,7 @@ where
         expr: &AC::Expr,
         ctx: &AC::Ctx,
         owner: Option<VarName>,
-    ) -> OutputStream<AC::Val> {
+    ) -> LocalStream<AC::Val> {
         evaluate_expr::<AC>(expr.as_ref(), ctx, owner)
     }
 }
@@ -46,7 +46,7 @@ fn evaluate_expr<'a, AC>(
     expr: ExprRef<'a>,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
-) -> OutputStream<AC::Val>
+) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
 {

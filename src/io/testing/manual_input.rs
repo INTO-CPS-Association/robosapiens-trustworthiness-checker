@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use futures::{StreamExt, future::join_all};
 use unsync::spsc::{self, Sender};
 
-use crate::{InputBatch, InputStream, InputUpdate, OutputStream, VarName};
+use crate::{InputBatch, InputStream, InputUpdate, LocalStream, VarName};
 
 const CHANNEL_SIZE: usize = 10;
 
@@ -37,7 +37,7 @@ pub fn channel<V: 'static>() -> (InputStream<V>, ManualInputController<V>) {
 }
 
 pub(crate) fn from_streams<V: 'static>(
-    streams: BTreeMap<VarName, OutputStream<V>>,
+    streams: BTreeMap<VarName, LocalStream<V>>,
 ) -> InputStream<V> {
     let mut streams = streams.into_iter().collect::<Vec<_>>();
     Box::pin(async_stream::try_stream! {

@@ -10,7 +10,7 @@ use rumqttc::{
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::core::{InputBatch, JsonStreamValue, OutputStream, VarName};
+use crate::core::{InputBatch, JsonStreamValue, LocalStream, VarName};
 use crate::io::ReconfigurationRequest;
 
 use super::input_backend::{InverseVarTopicMap, MqttInputItem, VarTopicMap, invert_topic_mapping};
@@ -64,7 +64,7 @@ pub(super) async fn input_stream_items<V: JsonStreamValue>(
     var_topics: VarTopicMap,
     max_reconnect_attempts: u32,
     control_topic: Option<String>,
-) -> anyhow::Result<OutputStream<anyhow::Result<MqttInputItem<V>>>> {
+) -> anyhow::Result<LocalStream<anyhow::Result<MqttInputItem<V>>>> {
     if var_topics.is_empty() && control_topic.is_none() {
         return Ok(Box::pin(futures::stream::empty()));
     }
@@ -489,7 +489,7 @@ async fn dispatch_pending(
 fn rumqttc_event_stream(
     transport: RumqttcInputTransport,
     terminal_control_topic: Option<String>,
-) -> OutputStream<anyhow::Result<RumqttcEvent>> {
+) -> LocalStream<anyhow::Result<RumqttcEvent>> {
     let RumqttcInputTransport {
         events,
         commands,
@@ -522,10 +522,10 @@ fn rumqttc_event_stream(
 }
 
 fn map_legacy_items<V: JsonStreamValue + 'static>(
-    mut events: OutputStream<anyhow::Result<RumqttcEvent>>,
+    mut events: LocalStream<anyhow::Result<RumqttcEvent>>,
     topics: InverseVarTopicMap,
     control_topic: Option<String>,
-) -> OutputStream<anyhow::Result<MqttInputItem<V>>> {
+) -> LocalStream<anyhow::Result<MqttInputItem<V>>> {
     Box::pin(async_stream::try_stream! {
         while let Some(event) = events.next().await {
             match event? {

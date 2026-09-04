@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 use unsync::broadcast;
 
 use crate::{
-    OutputStream, Specification, VarName,
+    LocalStream, Specification, VarName,
     distributed::distribution_graphs::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
     },
@@ -50,7 +50,7 @@ pub struct Scheduler<M: Specification + Localisable> {
     planner: Box<dyn SchedulerPlanner>,
     scheduler_executor: SchedulerExecutor<M>,
     dist_graph_provider: Box<dyn DistGraphProvider>,
-    dist_constraints_streams: Rc<RefCell<Option<Vec<OutputStream<bool>>>>>,
+    dist_constraints_streams: Rc<RefCell<Option<Vec<LocalStream<bool>>>>>,
     dist_graph_sender: broadcast::Sender<Rc<LabelledDistributionGraph>>,
     placement_labelling_output_stream: Option<PlacementLabellingStream>,
     placement_labelling_sender: broadcast::Sender<Rc<PlacementLabelling>>,
@@ -116,7 +116,7 @@ impl<M: Specification + Localisable> Scheduler<M> {
             .expect("Take placement labelling stream called more than once")
     }
 
-    pub fn provide_dist_constraints_streams(&mut self, streams: Vec<OutputStream<bool>>) {
+    pub fn provide_dist_constraints_streams(&mut self, streams: Vec<LocalStream<bool>>) {
         self.dist_constraints_streams = Rc::new(RefCell::new(Some(streams)));
     }
 
@@ -127,7 +127,7 @@ impl<M: Specification + Localisable> Scheduler<M> {
         })
     }
 
-    pub fn dist_constraints_hold_stream(&mut self) -> OutputStream<bool> {
+    pub fn dist_constraints_hold_stream(&mut self) -> LocalStream<bool> {
         let mut dist_constraints_streams = self
             .dist_constraints_streams
             .take()
@@ -447,7 +447,7 @@ mod tests {
     use petgraph::graph::DiGraph;
 
     use crate::{
-        DsrvSpecification, OutputStream, Value, async_test,
+        DsrvSpecification, LocalStream, Value, async_test,
         distributed::{
             distribution_graphs::NodeName,
             scheduling::{
@@ -491,9 +491,9 @@ mod tests {
     }
 
     fn count_stream<T: 'static>(
-        mut input: OutputStream<T>,
+        mut input: LocalStream<T>,
         counter: Rc<Cell<usize>>,
-    ) -> OutputStream<T> {
+    ) -> LocalStream<T> {
         Box::pin(stream! {
             while let Some(item) = input.next().await {
                 counter.set(counter.get() + 1);

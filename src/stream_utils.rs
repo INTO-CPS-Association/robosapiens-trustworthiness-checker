@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::{OutputStream, utils::cancellation_token::DropGuard};
+use crate::{LocalStream, utils::cancellation_token::DropGuard};
 use anyhow::anyhow;
 use async_stream::stream;
 use async_unsync::{bounded, oneshot};
@@ -10,8 +10,28 @@ use futures::{
     FutureExt, StreamExt,
     stream::{self, LocalBoxStream},
 };
-/* Converts a `oneshot::Receiver` of an `OutputStream` into an `OutputStream`.
- * Is done by first waiting for the oneshot to resolve to an OutputStream and
+/// Forward a stream, replacing each `NoVal` with the last value seen.
+///
+/// Used by the asynchronous and semi-synchronous runtimes to give a deferrable
+/// value domain a total history.
+pub fn lift_no_val<V: crate::core::DeferrableStreamData>(
+    mut input: LocalStream<V>,
+) -> LocalStream<V> {
+    Box::pin(stream! {
+        let mut last = None;
+        while let Some(current) = input.next().await {
+            if current.is_no_val() {
+                yield last.clone().unwrap_or(current);
+            } else {
+                last = Some(current.clone());
+                yield current;
+            }
+        }
+    })
+}
+
+/* Converts a `oneshot::Receiver` of a `LocalStream` into a `LocalStream`.
+ * Is done by first waiting for the oneshot to resolve to a LocalStream and
  * then continuously yielding the values from the stream. This is implemented
  * using the `flatten_stream` combinator from the `futures` crate, which
  * is essentially a general version of this function (except for handling the
@@ -54,11 +74,11 @@ pub fn drop_guard_stream<T: 'static>(
     })
 }
 
-/// Convert a Receiver to an OutputStream
+/// Convert a Receiver to a LocalStream
 /// Similar to tokio::ReceiverStream
 pub fn channel_to_output_stream<T: 'static>(
     mut receiver: unsync::spsc::Receiver<T>,
-) -> OutputStream<T> {
+) -> LocalStream<T> {
     Box::pin(stream! {
         while let Some(val) = receiver.recv().await {
             yield val;
@@ -105,13 +125,13 @@ impl<T> SenderWithAck<T> {
 ///
 /// Creates an SPSC channel with ack-based backpressure.
 ///
-/// Returns a `(SenderWithAck<T>, OutputStream<T>)` where the sender won’t send message (n+1)
+/// Returns a `(SenderWithAck<T>, LocalStream<T>)` where the sender won’t send message (n+1)
 /// until message \(n\) has been acked by the receiver.
 ///
 /// Use this for synchronous (handshaked) communication between async tasks
 ///
 /// Deadlock note: sending twice will block until the first message is acked.
-pub fn channel_with_ack<T>(capacity: usize) -> (SenderWithAck<T>, OutputStream<T>)
+pub fn channel_with_ack<T>(capacity: usize) -> (SenderWithAck<T>, LocalStream<T>)
 where
     T: 'static,
 {

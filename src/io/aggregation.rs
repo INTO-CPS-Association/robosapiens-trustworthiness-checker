@@ -5,7 +5,7 @@ use std::{
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 
 use crate::core::{
-    InputBatch, InputSegment, InputStream, InputUpdate, OutputStream, OwnedInputTicks, VarName,
+    InputBatch, InputSegment, InputStream, InputUpdate, LocalStream, OwnedInputTicks, VarName,
 };
 use crate::io::config::{InputReduction, InputStage};
 
@@ -59,7 +59,7 @@ pub(super) enum WindowEvent<V, C> {
     Control(C),
 }
 
-pub(super) type WindowEventStream<V, C> = OutputStream<anyhow::Result<WindowEvent<V, C>>>;
+pub(super) type WindowEventStream<V, C> = LocalStream<anyhow::Result<WindowEvent<V, C>>>;
 
 pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
     mut source: WindowEventStream<V, C>,

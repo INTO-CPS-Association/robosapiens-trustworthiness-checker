@@ -21,7 +21,7 @@ use crate::lang::dsrv::ast::{
 };
 use crate::runtime::semi_sync::SemiSyncContext;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
-use crate::{DsrvSpecification, OutputStream, VarName};
+use crate::{DsrvSpecification, LocalStream, VarName};
 
 pub use builder::{CausalRuntimeBuilder, CheckedCausalRuntimeBuilder};
 pub use input::annotate_input;
@@ -70,7 +70,7 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
         expr: &Expr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
         owner: Option<VarName>,
-    ) -> OutputStream<CausalValue<CausalSet>> {
+    ) -> LocalStream<CausalValue<CausalSet>> {
         evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.clone(), ctx, owner)
     }
 }
@@ -80,7 +80,7 @@ impl MonitoringSemantics<CausalCheckedSemiSyncConfig<CausalSet>> for CausalDsrvS
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<CausalSet>>,
         owner: Option<VarName>,
-    ) -> OutputStream<CausalValue<CausalSet>> {
+    ) -> LocalStream<CausalValue<CausalSet>> {
         evaluate_checked::<CausalCheckedSemiSyncConfig<CausalSet>, CausalSet>(expr, ctx, owner)
     }
 }
@@ -97,7 +97,7 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
         expr: &Expr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
         owner: Option<VarName>,
-    ) -> OutputStream<CausalValue<D>> {
+    ) -> LocalStream<CausalValue<D>> {
         evaluate::<CausalSemiSyncConfig<D>, D>(expr.clone(), ctx, owner)
     }
 }
@@ -109,16 +109,12 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<D>>,
         owner: Option<VarName>,
-    ) -> OutputStream<CausalValue<D>> {
+    ) -> LocalStream<CausalValue<D>> {
         evaluate_checked::<CausalCheckedSemiSyncConfig<D>, D>(expr, ctx, owner)
     }
 }
 
-fn evaluate<AC, D>(
-    expr: Expr,
-    ctx: &AC::Ctx,
-    owner: Option<VarName>,
-) -> OutputStream<CausalValue<D>>
+fn evaluate<AC, D>(expr: Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -132,7 +128,7 @@ fn evaluate_ref<AC, D>(
     node: ExprRef<'_>,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -199,7 +195,7 @@ fn evaluate_checked<AC, D>(
     expr: &CheckedExpr,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
@@ -212,7 +208,7 @@ fn evaluate_checked_owned<AC, D>(
     expr: CheckedExpr,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
@@ -225,7 +221,7 @@ fn evaluate_checked_ref<AC, D>(
     node: CheckedExprRef<'_>,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
-) -> OutputStream<CausalValue<D>>
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,

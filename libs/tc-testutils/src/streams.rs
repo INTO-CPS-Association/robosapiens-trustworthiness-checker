@@ -6,14 +6,14 @@ use smol::LocalExecutor;
 use std::{rc::Rc, time::Duration};
 use unsync::spsc::Sender as SpscSender;
 
-use trustworthiness_checker::{InputStream, InputUpdate, OutputStream, VarName};
+use trustworthiness_checker::{InputStream, InputUpdate, LocalStream, VarName};
 
 pub type TickSender = SpscSender<()>;
 
 // Helper stream that synchronizes other streams by only progressing when a tick is received
-// We need these to control the flow of the OutputStream tests - essentially we are making them
+// We need these to control the flow of the LocalStream tests - essentially we are making them
 // dependent on in InputStream (but without the dependencies)
-pub fn tick_stream<T: 'static>(mut stream: OutputStream<T>) -> (TickSender, OutputStream<T>) {
+pub fn tick_stream<T: 'static>(mut stream: LocalStream<T>) -> (TickSender, LocalStream<T>) {
     let (tick_sender, mut tick_receiver) = unsync::spsc::channel::<()>(10);
     let synced_stream = Box::pin(stream! {
     while let Some(_) = tick_receiver.recv().await {
@@ -31,8 +31,8 @@ pub fn tick_stream<T: 'static>(mut stream: OutputStream<T>) -> (TickSender, Outp
 // Similar to tick_stream but for multiple streams controlled by a single master.
 pub fn tick_streams<T: 'static>(
     ex: Rc<LocalExecutor<'static>>,
-    streams: Vec<OutputStream<T>>,
-) -> (TickSender, Vec<OutputStream<T>>) {
+    streams: Vec<LocalStream<T>>,
+) -> (TickSender, Vec<LocalStream<T>>) {
     // Create individually synched streams
     let (mut follower_senders, synced_streams): (Vec<_>, Vec<_>) =
         streams.into_iter().map(|s| tick_stream(s)).unzip();
@@ -104,8 +104,8 @@ where
 pub async fn receive_values_serially<ValueType>(
     x_tick: &mut TickSender,
     y_tick: &mut TickSender,
-    mut x_sub_stream: OutputStream<ValueType>,
-    mut y_sub_stream: OutputStream<ValueType>,
+    mut x_sub_stream: LocalStream<ValueType>,
+    mut y_sub_stream: LocalStream<ValueType>,
     stream_len: usize,
 ) -> anyhow::Result<(Vec<ValueType>, Vec<ValueType>)> {
     // Send one x_tick, wait for response. Send one y_tick, wait for response.
@@ -186,11 +186,11 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use trustworthiness_checker::{OutputStream, Value, async_test, core::VarName};
+    use trustworthiness_checker::{LocalStream, Value, async_test, core::VarName};
 
-    fn gen_data_streams(n: i64) -> (Vec<VarName>, Vec<OutputStream<Value>>, Vec<Vec<Value>>) {
-        let x_stream: OutputStream<Value> = Box::pin(stream::iter((0..n).map(|x| (x * 2).into())));
-        let y_stream: OutputStream<Value> =
+    fn gen_data_streams(n: i64) -> (Vec<VarName>, Vec<LocalStream<Value>>, Vec<Vec<Value>>) {
+        let x_stream: LocalStream<Value> = Box::pin(stream::iter((0..n).map(|x| (x * 2).into())));
+        let y_stream: LocalStream<Value> =
             Box::pin(stream::iter((0..n).map(|x| (x * 2 + 1).into())));
         let stream_names = vec!["x".into(), "y".into()];
         let streams = vec![x_stream, y_stream];
@@ -200,7 +200,7 @@ mod tests {
         (stream_names, streams, expected)
     }
 
-    fn gen_default_streams() -> (Vec<VarName>, Vec<OutputStream<Value>>, Vec<Vec<Value>>) {
+    fn gen_default_streams() -> (Vec<VarName>, Vec<LocalStream<Value>>, Vec<Vec<Value>>) {
         gen_data_streams(10)
     }
 

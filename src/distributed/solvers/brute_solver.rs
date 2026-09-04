@@ -11,7 +11,7 @@ use smol::{
 use tracing::{debug, info};
 
 use crate::{
-    DsrvSpecification, InputStream, OutputStream, Value, VarName,
+    DsrvSpecification, InputStream, LocalStream, Value, VarName,
     core::Runtime,
     distributed::{
         distribution_graphs::{
@@ -49,7 +49,7 @@ where
 }
 
 struct CandidateRuntime {
-    output_stream: OutputStream<anyhow::Result<Vec<bool>>>,
+    output_stream: LocalStream<anyhow::Result<Vec<bool>>>,
     executor: Rc<LocalExecutor<'static>>,
     task: Task<anyhow::Result<()>>,
 }
@@ -101,9 +101,9 @@ impl CandidateRuntime {
 }
 
 fn candidate_constraint_stream(
-    output_stream: OutputStream<BTreeMap<VarName, Value>>,
+    output_stream: LocalStream<BTreeMap<VarName, Value>>,
     order: BTreeMap<VarName, usize>,
-) -> OutputStream<anyhow::Result<Vec<bool>>> {
+) -> LocalStream<anyhow::Result<Vec<bool>>> {
     Box::pin(stream! {
         if order.is_empty() {
             yield Err(anyhow::anyhow!("candidate has no distribution constraints"));
@@ -165,7 +165,7 @@ where
             self.input_vars.iter().cloned().collect(),
         );
         let (manual_backend, receiver) = ManualOutputBackend::<Value>::channel(1);
-        let output_stream: OutputStream<BTreeMap<VarName, Value>> = Box::pin(
+        let output_stream: LocalStream<BTreeMap<VarName, Value>> = Box::pin(
             futures::stream::unfold(receiver, |mut receiver| async move {
                 receiver.recv().await.map(|row| (row, receiver))
             }),
@@ -295,7 +295,7 @@ where
         self: Rc<Self>,
         graph: Rc<DistributionGraph>,
         target_step: Option<usize>,
-    ) -> OutputStream<anyhow::Result<Rc<LabelledDistributionGraph>>> {
+    ) -> LocalStream<anyhow::Result<Rc<LabelledDistributionGraph>>> {
         let dist_constraints = self.dist_constraints.clone();
         let builder = self.monitor_builder.partial_clone();
 
@@ -441,7 +441,7 @@ mod tests {
         let output = Box::pin(futures::stream::iter([BTreeMap::from([(
             VarName::new("constraint_a"),
             Value::Bool(true),
-        )])])) as OutputStream<BTreeMap<VarName, Value>>;
+        )])])) as LocalStream<BTreeMap<VarName, Value>>;
         let mut output = candidate_constraint_stream(
             output,
             BTreeMap::from([
