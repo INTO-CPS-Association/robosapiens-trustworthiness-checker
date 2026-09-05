@@ -1,5 +1,7 @@
 # Local quickening/JIT key-benchmark results
 
+These are historical local measurements; [README.md](README.md) defines the current dashboard routes and measurement boundaries.
+
 Measured on 2026-08-01 using `bench-fast`. Each benchmark executable was built
 normally and then pinned to logical CPU 10, a 5.2 GHz P-core on an Intel Core
 i7-13700F. The existing Criterion sampling, warmup, and measurement settings

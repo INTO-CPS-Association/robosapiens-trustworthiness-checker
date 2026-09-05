@@ -7,9 +7,14 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, SamplingMode, Throughput, criterion_group, criterion_main};
-use trustworthiness_checker::dataflow::{DataflowMonitor, JitConfig};
-use trustworthiness_checker::{CheckedDsrvSpecification, Value};
+use criterion::measurement::WallTime;
+use criterion::{
+    BatchSize, BenchmarkGroup, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
+};
+use trustworthiness_checker::dataflow::{
+    DataflowMonitor, JitConfig, JitPlan, TypedDataflowMonitor, TypedJitMonitor, TypedMonitor,
+};
+use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, Value};
 
 const HOTNESS_EVENTS: u64 = 1_024;
 const WARM_EVENTS: usize = 10_000;
@@ -98,6 +103,27 @@ fn compile(source: &str, config: JitConfig) -> DataflowMonitor {
     build(parse(source), config)
 }
 
+fn compile_untyped(source: &str) -> DataflowMonitor {
+    DataflowMonitor::compile_untyped(
+        source
+            .parse::<DsrvSpecification>()
+            .expect("benchmark specification should parse"),
+    )
+    .expect("untyped benchmark specification should compile")
+}
+
+fn compile_checked_canonical(source: &str) -> DataflowMonitor {
+    let mut monitor = DataflowMonitor::compile_checked(parse(source))
+        .expect("checked benchmark specification should compile");
+    monitor.set_quickening(false);
+    monitor
+}
+
+fn compile_checked_quickened(source: &str) -> DataflowMonitor {
+    DataflowMonitor::compile_checked(parse(source))
+        .expect("checked benchmark specification should compile")
+}
+
 fn rows(input_count: usize, events: usize) -> Vec<Vec<Value>> {
     (0..events)
         .map(|tick| {
@@ -117,29 +143,184 @@ fn evaluate_rows(monitor: &mut DataflowMonitor, rows: &[Vec<Value>], output: &mu
     }
 }
 
+fn direct_rows_one(events: usize) -> Vec<(i64,)> {
+    (0..events).map(|tick| ((tick % 1_000) as i64,)).collect()
+}
+
+fn direct_rows_two(events: usize) -> Vec<(i64, i64)> {
+    (0..events)
+        .map(|tick| ((tick % 1_000) as i64, ((tick * 7 + 3) % 1_000) as i64))
+        .collect()
+}
+
+trait DirectBenchmarkOutput {
+    fn into_value(self) -> Value;
+}
+
+impl DirectBenchmarkOutput for (i64,) {
+    fn into_value(self) -> Value {
+        Value::Int(self.0)
+    }
+}
+
+impl DirectBenchmarkOutput for (bool,) {
+    fn into_value(self) -> Value {
+        Value::Bool(self.0)
+    }
+}
+
+fn verify_direct<M>(scenario: Scenario, direct_rows: &[M::Input], mut monitor: M) -> M
+where
+    M: TypedMonitor,
+    M::Output: DirectBenchmarkOutput,
+{
+    let mut reference = compile_checked_canonical(scenario.source);
+    let value_rows = rows(scenario.input_count, direct_rows.len());
+    let mut expected = vec![Value::NoVal; reference.output_vars().len()];
+    assert_eq!(
+        expected.len(),
+        1,
+        "{} should have one output",
+        scenario.name
+    );
+    for (tick, (row, value_row)) in direct_rows.iter().zip(&value_rows).enumerate() {
+        reference.evaluate(value_row, &mut expected).unwrap();
+        let actual = monitor.evaluate(row).into_value();
+        assert_eq!(
+            actual, expected[0],
+            "{} direct mismatch at event {tick}",
+            scenario.name
+        );
+    }
+    monitor
+}
+
+fn benchmark_direct<M, F>(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    label: &str,
+    rows: &[M::Input],
+    build: F,
+) where
+    M: TypedMonitor,
+    F: Fn() -> M,
+{
+    group.bench_function(label, |b| {
+        b.iter_batched(
+            || {
+                let mut monitor = build();
+                for row in &rows[..WARM_EVENTS] {
+                    black_box(monitor.evaluate(black_box(row)));
+                }
+                monitor
+            },
+            |mut monitor| {
+                for row in &rows[WARM_EVENTS..] {
+                    black_box(monitor.evaluate(black_box(row)));
+                }
+            },
+            BatchSize::PerIteration,
+        )
+    });
+}
+
+fn verify_direct_routes(scenario: Scenario) {
+    macro_rules! verify_routes {
+        ($input:ty, $output:ty, $rows:expr) => {{
+            let rows = $rows;
+            verify_direct(
+                scenario,
+                &rows,
+                TypedJitMonitor::<$input, $output>::compile_checked(parse(scenario.source))
+                    .expect("fixture should support eager direct native execution"),
+            );
+            let warmed = verify_direct(
+                scenario,
+                &rows,
+                TypedDataflowMonitor::<$input, $output>::compile_checked_with_jit(
+                    parse(scenario.source),
+                    JitConfig::after_events(HOTNESS_EVENTS),
+                )
+                .expect("fixture should support warmed direct native execution"),
+            );
+            assert!(
+                warmed.is_direct_jit_active(),
+                "{} should activate direct native execution after {HOTNESS_EVENTS} events",
+                scenario.name
+            );
+        }};
+    }
+
+    match scenario.name {
+        "arithmetic" | "conditional" => verify_routes!(
+            (i64, i64),
+            (i64,),
+            direct_rows_two(HOTNESS_EVENTS as usize + 128)
+        ),
+        "threshold" | "window3" => verify_routes!(
+            (i64,),
+            (bool,),
+            direct_rows_one(HOTNESS_EVENTS as usize + 128)
+        ),
+        "chain32" | "accumulator" => verify_routes!(
+            (i64,),
+            (i64,),
+            direct_rows_one(HOTNESS_EVENTS as usize + 128)
+        ),
+        other => unreachable!("unknown direct benchmark fixture {other}"),
+    }
+}
+
 fn verify() {
     for scenario in SCENARIOS.iter().chain(BOUNDARY_SCENARIOS) {
-        let checked_spec = parse(scenario.source);
-        let mut checked = DataflowMonitor::compile_checked(checked_spec.clone()).unwrap();
-        let mut eager = build(checked_spec.clone(), JitConfig::eager());
-        let mut hot = build(checked_spec, JitConfig::after_events(HOTNESS_EVENTS));
+        let mut canonical = compile_checked_canonical(scenario.source);
+        let mut untyped = compile_untyped(scenario.source);
+        let mut quickened = compile_checked_quickened(scenario.source);
+        let mut eager = compile(scenario.source, JitConfig::eager());
+        let mut hot = compile(scenario.source, JitConfig::after_events(HOTNESS_EVENTS));
         let rows = rows(scenario.input_count, HOTNESS_EVENTS as usize + 128);
-        let mut expected = vec![Value::NoVal; checked.output_vars().len()];
+        let mut expected = vec![Value::NoVal; canonical.output_vars().len()];
+        let mut untyped_output = expected.clone();
+        let mut quickened_output = expected.clone();
         let mut eager_output = expected.clone();
         let mut hot_output = expected.clone();
         for row in &rows {
-            checked.evaluate(row, &mut expected).unwrap();
+            canonical.evaluate(row, &mut expected).unwrap();
+            untyped.evaluate(row, &mut untyped_output).unwrap();
+            quickened.evaluate(row, &mut quickened_output).unwrap();
             eager.evaluate(row, &mut eager_output).unwrap();
             hot.evaluate(row, &mut hot_output).unwrap();
+            assert_eq!(
+                untyped_output, expected,
+                "{} untyped mismatch",
+                scenario.name
+            );
+            assert_eq!(
+                quickened_output, expected,
+                "{} quickened mismatch",
+                scenario.name
+            );
             assert_eq!(eager_output, expected, "{} eager mismatch", scenario.name);
             assert_eq!(hot_output, expected, "{} hot mismatch", scenario.name);
         }
+        assert_eq!(
+            eager.jit_report().unwrap().plan(),
+            JitPlan::WholeSchedule,
+            "{} eager Value JIT should use a whole-schedule plan",
+            scenario.name
+        );
+        assert_eq!(
+            hot.jit_report().unwrap().plan(),
+            JitPlan::WholeSchedule,
+            "{} warmed Value JIT should use a whole-schedule plan",
+            scenario.name
+        );
     }
 }
 
 fn bench_configuration(c: &mut Criterion) {
     verify();
     for scenario in SCENARIOS {
+        verify_direct_routes(*scenario);
         let specification = parse(scenario.source);
         let event_rows = rows(scenario.input_count, WARM_EVENTS + TIMED_EVENTS);
 
@@ -168,14 +349,18 @@ fn bench_configuration(c: &mut Criterion) {
             .warm_up_time(Duration::from_secs(1))
             .measurement_time(Duration::from_secs(3));
         sustained.throughput(Throughput::Elements(TIMED_EVENTS as u64));
-        for (name, config) in [
-            ("all_no_hotness", JitConfig::eager()),
-            ("all_with_hotness", JitConfig::after_events(HOTNESS_EVENTS)),
+        for (name, build_monitor) in [
+            (
+                "untyped_value",
+                compile_untyped as fn(&str) -> DataflowMonitor,
+            ),
+            ("checked_canonical_value", compile_checked_canonical),
+            ("checked_quickened_value", compile_checked_quickened),
         ] {
             sustained.bench_function(name, |b| {
                 b.iter_batched(
                     || {
-                        let mut monitor = compile(scenario.source, config);
+                        let mut monitor = build_monitor(scenario.source);
                         let mut output = vec![Value::NoVal; monitor.output_vars().len()];
                         evaluate_rows(&mut monitor, &event_rows[..WARM_EVENTS], &mut output);
                         (monitor, output)
@@ -186,6 +371,65 @@ fn bench_configuration(c: &mut Criterion) {
                     BatchSize::PerIteration,
                 )
             });
+        }
+        sustained.bench_function("native_value_eager", |b| {
+            b.iter_batched(
+                || {
+                    let mut monitor = compile(scenario.source, JitConfig::eager());
+                    let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+                    evaluate_rows(&mut monitor, &event_rows[..WARM_EVENTS], &mut output);
+                    (monitor, output)
+                },
+                |(mut monitor, mut output)| {
+                    evaluate_rows(&mut monitor, &event_rows[WARM_EVENTS..], &mut output)
+                },
+                BatchSize::PerIteration,
+            )
+        });
+
+        macro_rules! benchmark_direct_routes {
+            ($input:ty, $output:ty, $rows:expr) => {{
+                let direct_rows = $rows;
+                benchmark_direct::<TypedJitMonitor<$input, $output>, _>(
+                    &mut sustained,
+                    "native_direct_eager",
+                    &direct_rows,
+                    || {
+                        TypedJitMonitor::compile_checked(parse(scenario.source))
+                            .expect("fixture should support eager direct native execution")
+                    },
+                );
+                benchmark_direct::<TypedDataflowMonitor<$input, $output>, _>(
+                    &mut sustained,
+                    "native_direct_warmed",
+                    &direct_rows,
+                    || {
+                        TypedDataflowMonitor::compile_checked_with_jit(
+                            parse(scenario.source),
+                            JitConfig::after_events(HOTNESS_EVENTS),
+                        )
+                        .expect("fixture should support warmed direct native execution")
+                    },
+                );
+            }};
+        }
+        match scenario.name {
+            "arithmetic" | "conditional" => benchmark_direct_routes!(
+                (i64, i64),
+                (i64,),
+                direct_rows_two(WARM_EVENTS + TIMED_EVENTS)
+            ),
+            "threshold" | "window3" => benchmark_direct_routes!(
+                (i64,),
+                (bool,),
+                direct_rows_one(WARM_EVENTS + TIMED_EVENTS)
+            ),
+            "chain32" | "accumulator" => benchmark_direct_routes!(
+                (i64,),
+                (i64,),
+                direct_rows_one(WARM_EVENTS + TIMED_EVENTS)
+            ),
+            other => unreachable!("unknown direct benchmark fixture {other}"),
         }
         sustained.finish();
 

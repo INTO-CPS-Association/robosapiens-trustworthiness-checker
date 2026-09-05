@@ -3,10 +3,52 @@
 const RECONFIGURATION_PERCENTAGES = [1, 10, 50, 100];
 const RECONFIGURATION_RUNTIMES = [
     ["SemiSync", "semisync"],
-    ["Dataflow untyped", "dataflow_untyped"],
-    ["Dataflow", "dataflow"],
-    ["Dataflow quickened", "dataflow_quickened"],
+    ["Dataflow untyped runtime", "dataflow_untyped"],
+    ["Dataflow checked canonical runtime", "dataflow"],
+    ["Dataflow checked quickened runtime", "dataflow_quickened"],
 ];
+
+const RUNTIME_DATAFLOW_LABELS = {
+    untyped: "Dataflow untyped runtime pipeline",
+    canonical: "Dataflow checked canonical runtime pipeline",
+    quickened: "Dataflow checked quickened runtime pipeline",
+    jit: "Dataflow checked JIT runtime pipeline (includes warmup and compilation)",
+};
+
+const SUSTAINED_FIXTURES = [
+    ["Scalar arithmetic", "arithmetic"],
+    ["32-node chain", "chain32"],
+    ["Conditional expression", "conditional"],
+    ["Threshold property", "threshold"],
+    ["Three-step temporal window", "window3"],
+    ["Stateful accumulator", "accumulator"],
+];
+
+function sustainedMonitorCard([title, fixture]) {
+    const prefix = `jit/sustained/${fixture}`;
+    return {
+        title,
+        description:
+            "Sustained execution over 100,000 timed events after 10,000 untimed setup events. Value-interface routes include Value-row dispatch and conversion; direct routes use the typed monitor interface. The warmed route is verified native before timing.",
+        series: [
+            { label: "Untyped value interface", name: `${prefix}/untyped_value` },
+            {
+                label: "Checked canonical value interface",
+                name: `${prefix}/checked_canonical_value`,
+            },
+            {
+                label: "Checked quickened value interface",
+                name: `${prefix}/checked_quickened_value`,
+            },
+            { label: "Value JIT — steady state", name: `${prefix}/native_value_eager` },
+            { label: "Native typed interface — eager", name: `${prefix}/native_direct_eager` },
+            {
+                label: "Native typed interface — warmed after 1,024 events",
+                name: `${prefix}/native_direct_warmed`,
+            },
+        ],
+    };
+}
 
 function movingAverageReconfigurationCard(percent) {
     return {
@@ -31,19 +73,19 @@ const IMPORTANT_SECTIONS = [
                 description: "End-to-end execution of the MAPLE sequence monitor.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "maple_sequence/maple_sequence_dataflow_untyped/25000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "maple_sequence/maple_sequence_dataflow/25000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "maple_sequence/maple_sequence_dataflow_quickened/25000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "maple_sequence/maple_sequence_dataflow_jit/25000",
                     },
                     {
@@ -62,19 +104,19 @@ const IMPORTANT_SECTIONS = [
                     "End-to-end execution of a bounded integer pipeline containing addition, multiplication, subtraction and modulo operations.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "arithmetic_heavy/dataflow_untyped/25000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "arithmetic_heavy/dataflow/25000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "arithmetic_heavy/dataflow_quickened/25000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "arithmetic_heavy/dataflow_jit/25000",
                     },
                     {
@@ -93,19 +135,19 @@ const IMPORTANT_SECTIONS = [
                     "Paper workload exercising deferred expression parsing, compilation and evaluation over a large stream.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "dyn_paper/dyn_paper_50_dataflow_untyped/100000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "dyn_paper/dyn_paper_50_dataflow/100000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "dyn_paper/dyn_paper_50_dataflow_quickened/100000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "dyn_paper/dyn_paper_50_dataflow_jit/100000",
                     },
                     {
@@ -124,19 +166,19 @@ const IMPORTANT_SECTIONS = [
                     "End-to-end execution of 32 defer and 32 dynamic nodes sharing an automatically scoped environment. Dynamic dependencies change every 64 ticks, with temporal reads and sparse inputs.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "hard_dynamic_defer/automatic_scope_dataflow_untyped/1024",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "hard_dynamic_defer/automatic_scope_dataflow/1024",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "hard_dynamic_defer/automatic_scope_dataflow_quickened/1024",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "hard_dynamic_defer/automatic_scope_dataflow_jit/1024",
                     },
                     {
@@ -151,19 +193,19 @@ const IMPORTANT_SECTIONS = [
                     "Execution over four connected static components feeding 32 defer and 32 dynamic expressions with narrow explicit scopes and periodic dependency changes.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "hard_dynamic_defer/explicit_components_dataflow_untyped/1024",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "hard_dynamic_defer/explicit_components_dataflow/1024",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "hard_dynamic_defer/explicit_components_dataflow_quickened/1024",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "hard_dynamic_defer/explicit_components_dataflow_jit/1024",
                     },
                     {
@@ -178,19 +220,19 @@ const IMPORTANT_SECTIONS = [
                     "End-to-end evaluation of an expression deferred until runtime, comparing all three local execution engines.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "dup_defer/dup_defer_dataflow_untyped/25000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "dup_defer/dup_defer_dataflow/25000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "dup_defer/dup_defer_dataflow_quickened/25000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "dup_defer/dup_defer_dataflow_jit/25000",
                     },
                     {
@@ -207,26 +249,26 @@ const IMPORTANT_SECTIONS = [
             {
                 title: "Stateful runtime steady state — moving average, 1,000 inputs",
                 description:
-                    "No-reconfiguration baseline separating per-tick runtime cost from cutover cost. JIT is meaningful here because the monitor survives long enough to reach its hotness threshold.",
+                    "No-reconfiguration baseline separating per-tick runtime cost from cutover cost. This workload ends before native activation, so its JIT route measures the pre-activation tier and hotness checks.",
                 series: [
                     {
                         label: "SemiSync",
                         name: "rec_moving_average/semisync_reconf_ct_on_percent_0/1000",
                     },
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_0/1000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "rec_moving_average/dataflow_reconf_ct_on_percent_0/1000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_0/1000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000",
                     },
                 ],
@@ -255,19 +297,19 @@ const IMPORTANT_SECTIONS = [
                 description: "Runtime evaluation using stream history, defaults and a three-step temporal window.",
                 series: [
                     {
-                        label: "Dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
                     },
                     {
-                        label: "Dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "time_dependent_property/dsrv_default_window_dataflow/10000",
                     },
                     {
-                        label: "Dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "time_dependent_property/dsrv_default_window_dataflow_quickened/10000",
                     },
                     {
-                        label: "Dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
                     },
                     {
@@ -277,6 +319,12 @@ const IMPORTANT_SECTIONS = [
                 ],
             },
         ],
+    },
+    {
+        title: "Sustained Dataflow monitor execution",
+        description:
+            "Monitor-level routes isolate steady-state evaluation from the asynchronous runtime pipeline.",
+        cards: SUSTAINED_FIXTURES.map(sustainedMonitorCard),
     },
     {
         title: "Parsing and compilation",
@@ -323,23 +371,23 @@ const IMPORTANT_SECTIONS = [
         title: "Reference comparisons",
         cards: [
             {
-                title: "Threshold monitoring — 10,000 inputs",
-                description: "Complete runtime and direct-monitor comparison for a simple threshold property.",
+                title: "Threshold runtime pipelines — 10,000 inputs",
+                description: "End-to-end runtime comparison for a simple threshold property.",
                 series: [
                     {
-                        label: "DSRV dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "threshold_property/dsrv_dataflow_untyped/10000",
                     },
                     {
-                        label: "DSRV dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "threshold_property/dsrv_dataflow/10000",
                     },
                     {
-                        label: "DSRV dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "threshold_property/dsrv_dataflow_quickened/10000",
                     },
                     {
-                        label: "DSRV dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "threshold_property/dsrv_dataflow_jit/10000",
                     },
                     {
@@ -350,6 +398,13 @@ const IMPORTANT_SECTIONS = [
                         label: "MSTLO runtime qualitative",
                         name: "threshold_property/mstlo_runtime_qual/10000",
                     },
+                ],
+            },
+            {
+                title: "Threshold direct monitor — 10,000 inputs",
+                description:
+                    "Direct MSTLO monitor evaluation without the DSRV or MSTLO runtime pipeline.",
+                series: [
                     {
                         label: "MSTLO direct qualitative",
                         name: "threshold_property/mstlo_direct_qual/10000",
@@ -357,23 +412,23 @@ const IMPORTANT_SECTIONS = [
                 ],
             },
             {
-                title: "Temporal monitoring — 10,000 inputs",
-                description: "Runtime and direct-monitor comparison for a bounded globally property.",
+                title: "Temporal runtime pipelines — 10,000 inputs",
+                description: "End-to-end runtime comparison for a bounded globally property.",
                 series: [
                     {
-                        label: "DSRV dataflow untyped",
+                        label: RUNTIME_DATAFLOW_LABELS.untyped,
                         name: "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
                     },
                     {
-                        label: "DSRV dataflow",
+                        label: RUNTIME_DATAFLOW_LABELS.canonical,
                         name: "time_dependent_property/dsrv_default_window_dataflow/10000",
                     },
                     {
-                        label: "DSRV dataflow quickened",
+                        label: RUNTIME_DATAFLOW_LABELS.quickened,
                         name: "time_dependent_property/dsrv_default_window_dataflow_quickened/10000",
                     },
                     {
-                        label: "DSRV dataflow JIT (1,024-event hotness)",
+                        label: RUNTIME_DATAFLOW_LABELS.jit,
                         name: "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
                     },
                     {
@@ -384,6 +439,13 @@ const IMPORTANT_SECTIONS = [
                         label: "MSTLO runtime qualitative",
                         name: "time_dependent_property/mstlo_globally_window_qual/10000",
                     },
+                ],
+            },
+            {
+                title: "Temporal direct monitor — 10,000 inputs",
+                description:
+                    "Direct MSTLO monitor evaluation without the DSRV or MSTLO runtime pipeline.",
+                series: [
                     {
                         label: "MSTLO direct qualitative",
                         name: "time_dependent_property/mstlo_direct_globally_window_qual/10000",
@@ -398,13 +460,30 @@ const BENCHMARK_ALIASES = {
     "compilation_phases/parse_and_validate_specification/1024": [
         "compilation_phases/lalr_parse/1024",
     ],
-    "threshold_property/dsrv_dataflow_untyped/10000": [
-        "threshold_property/dsrv_dataflow/10000",
-    ],
-    "time_dependent_property/dsrv_default_window_dataflow_untyped/10000": [
-        "time_dependent_property/dsrv_default_window_dataflow/10000",
-    ],
+    ...Object.fromEntries(
+        SUSTAINED_FIXTURES.map(([_label, fixture]) => [
+            `jit/sustained/${fixture}/native_value_eager`,
+            [
+                `jit/sustained/${fixture}/all_no_hotness`,
+                `jit/sustained/${fixture}/all_with_hotness`,
+            ],
+        ]),
+    ),
 };
+
+// Source history gives the plain threshold/time-dependent `dataflow` ID three meanings:
+// untyped before 242b5bd9, checked quickened from 242b5bd9 (where explicit `_untyped`
+// was added) through the specialised-name era, and checked canonical from 33fa9871.
+// Use commit timestamps because backfilled measurements retain their source commit but can
+// have a later collection date.
+const CHECKED_QUICKENED_EPOCH_START = Date.parse("2026-07-29T17:54:52+02:00");
+const CHECKED_CANONICAL_EPOCH_START = Date.parse("2026-08-23T11:34:17+02:00");
+const EPOCH_CLASSIFIED_ROUTE_PATTERNS = [
+    [/^(threshold_property\/dsrv_dataflow)(?:_(untyped|quickened))?\/([^/]+)$/, "three-tier"],
+    [/^(time_dependent_property\/dsrv_default_window_dataflow)(?:_(untyped|quickened))?\/([^/]+)$/, "three-tier"],
+    [/^(dyn_paper\/dyn_paper_(?:0|25|50|75|100)_dataflow)(?:_(untyped|quickened))?\/([^/]+)$/, "canonical"],
+    [/^(hard_dynamic_defer\/(?:automatic_scope|explicit_components)_dataflow)(?:_(untyped|quickened))?\/([^/]+)$/, "canonical"],
+];
 
 const COLORS = ["#0969da", "#cf222e", "#1a7f37", "#8250df", "#bc4c00", "#0550ae"];
 const AREA_COLORS = [
@@ -416,13 +495,17 @@ const AREA_COLORS = [
 const TIME_FACTORS = { ns: 1, us: 1e3, "µs": 1e3, ms: 1e6, s: 1e9 };
 // First comparable post-redesign benchmark run, at commit 867f298ac7.
 const CURRENT_ASYNC_EPOCH_START = Date.parse("2026-07-07T11:02:02Z");
-const chartsElement = document.getElementById("charts");
-const emptyState = document.getElementById("empty-state");
-const metadataElement = document.getElementById("metadata");
-const page = document.documentElement.dataset.page;
-const benchmarkData = window.BENCHMARK_DATA;
+const IS_BROWSER = typeof window !== "undefined" && typeof document !== "undefined";
+const chartsElement = IS_BROWSER ? document.getElementById("charts") : null;
+const emptyState = IS_BROWSER ? document.getElementById("empty-state") : null;
+const metadataElement = IS_BROWSER ? document.getElementById("metadata") : null;
+const page = IS_BROWSER ? document.documentElement.dataset.page : null;
+const benchmarkData = IS_BROWSER ? window.BENCHMARK_DATA : null;
 const chartInstances = [];
-const query = new URLSearchParams(window.location.search);
+// Loaded benchmark runs are immutable snapshots. Cache their canonical grouping so every chart
+// lookup does not repeatedly classify all raw benchmark IDs in the run.
+const canonicalRunIndexes = new WeakMap();
+const query = new URLSearchParams(IS_BROWSER ? window.location.search : "");
 let includeSuperseded = query.get("include-superseded") === "true";
 
 function benchmarkRuns() {
@@ -430,19 +513,87 @@ function benchmarkRuns() {
 }
 
 function allBenchmarkNames(runs) {
-    return [...new Set(runs.flatMap((run) => run.benches.map((bench) => bench.name)))].sort((a, b) =>
+    return [...new Set(runs.flatMap((run) => [...canonicalIndexFor(run).keys()]))].sort((a, b) =>
         a.localeCompare(b),
     );
 }
 
-function benchmarkNames(name) {
-    return [name, ...(BENCHMARK_ALIASES[name] || [])];
+function canonicalIndexFor(run) {
+    const cached = canonicalRunIndexes.get(run);
+    if (cached) return cached;
+
+    const index = new Map();
+    for (const benchmark of run.benches) {
+        const canonical = classifiedBenchmarkName(run, benchmark.name);
+        if (canonical === null) continue;
+        if (!index.has(canonical)) index.set(canonical, []);
+        index.get(canonical).push(benchmark);
+    }
+    canonicalRunIndexes.set(run, index);
+    return index;
+}
+
+function classifiedBenchmarkName(run, name) {
+    const route = classifiedDataflowRoute(name);
+    if (route && name === route.plain) {
+        const commitTimestamp = Date.parse(run.commit.timestamp);
+        if (route.history === "three-tier") {
+            if (commitTimestamp < CHECKED_QUICKENED_EPOCH_START) return route.untyped;
+            if (commitTimestamp < CHECKED_CANONICAL_EPOCH_START) return route.quickened;
+        } else if (commitTimestamp < CHECKED_CANONICAL_EPOCH_START) {
+            return route.untyped;
+        }
+        return route.plain;
+    }
+    const legacyUntyped = canonicalUntypedName(name);
+    if (legacyUntyped) return legacyUntyped;
+    const legacyMapleQuickened = canonicalMapleQuickenedName(run, name);
+    if (legacyMapleQuickened) return legacyMapleQuickened;
+    for (const [canonical, aliases] of Object.entries(BENCHMARK_ALIASES)) {
+        if (!aliases.includes(name)) continue;
+        return canonical;
+    }
+    return name;
+}
+
+function classifiedDataflowRoute(name) {
+    for (const [pattern, history] of EPOCH_CLASSIFIED_ROUTE_PATTERNS) {
+        const match = name.match(pattern);
+        if (!match) continue;
+        const [, prefix, tier, size] = match;
+        return {
+            plain: `${prefix}/${size}`,
+            untyped: `${prefix}_untyped/${size}`,
+            quickened: `${prefix}_quickened/${size}`,
+            tier: tier || "plain",
+            history,
+        };
+    }
+    return null;
+}
+
+function canonicalUntypedName(name) {
+    const match = name.match(
+        /^(maple_sequence\/maple_sequence|dup_defer\/dup_defer)_untyped_dataflow(\/[^/]+)$/,
+    );
+    return match ? `${match[1]}_dataflow_untyped${match[2]}` : null;
+}
+
+function canonicalMapleQuickenedName(run, name) {
+    const match = name.match(/^(maple_sequence\/maple_sequence)_typed_dataflow(\/[^/]+)$/);
+    if (!match || Date.parse(run.commit.timestamp) < CHECKED_QUICKENED_EPOCH_START) return null;
+    return `${match[1]}_dataflow_quickened${match[2]}`;
 }
 
 function benchmarkFor(run, name) {
-    return benchmarkNames(name)
-        .map((benchmarkName) => run.benches.find((benchmark) => benchmark.name === benchmarkName))
-        .find((benchmark) => benchmark !== undefined);
+    const matching = canonicalIndexFor(run).get(name) || [];
+    const exact = matching.find((benchmark) => benchmark.name === name);
+    if (exact) return exact;
+    for (const alias of BENCHMARK_ALIASES[name] || []) {
+        const aliased = matching.find((benchmark) => benchmark.name === alias);
+        if (aliased) return aliased;
+    }
+    return matching[0];
 }
 
 function valueInNanoseconds(benchmark) {
@@ -540,13 +691,9 @@ function cardSources(cardDefinition) {
 function cardHasData(cardDefinition, availableNames) {
     const sources = cardSources(cardDefinition);
     if (cardDefinition.kind === "stacked-pipeline") {
-        return sources.every(({ name }) =>
-            benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
-        );
+        return sources.every(({ name }) => availableNames.has(name));
     }
-    return sources.some(({ name }) =>
-        benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
-    );
+    return sources.some(({ name }) => availableNames.has(name));
 }
 
 function destroyCharts() {
@@ -619,9 +766,7 @@ function interactionOptions(relevantRuns) {
 }
 
 function renderLineCard(cardDefinition, runs, availableNames) {
-    const series = cardDefinition.series.filter(({ name }) =>
-        benchmarkNames(name).some((benchmarkName) => availableNames.has(benchmarkName)),
-    );
+    const series = cardDefinition.series.filter(({ name }) => availableNames.has(name));
     if (series.length === 0) return false;
 
     const relevantRuns = runs.filter((run) => series.some(({ name }) => benchmarkFor(run, name)));
@@ -797,10 +942,10 @@ function renderAll(names, runs, availableNames) {
     emptyState.hidden = names.length !== 0;
 }
 
-if (!benchmarkData || !benchmarkData.entries) {
+if (IS_BROWSER && (!benchmarkData || !benchmarkData.entries)) {
     emptyState.hidden = false;
     metadataElement.textContent = "Benchmark data could not be loaded.";
-} else {
+} else if (IS_BROWSER) {
     const runs = benchmarkRuns().sort((a, b) => a.date - b.date);
     const availableNames = allBenchmarkNames(runs);
     const available = new Set(availableNames);
@@ -845,4 +990,13 @@ if (!benchmarkData || !benchmarkData.entries) {
         document.getElementById("benchmark-filter").addEventListener("input", rerender);
     }
     rerender();
+}
+
+if (typeof module !== "undefined") {
+    module.exports = {
+        allBenchmarkNames,
+        benchmarkFor,
+        cardHasData,
+        classifiedBenchmarkName,
+    };
 }
