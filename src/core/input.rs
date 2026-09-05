@@ -50,25 +50,15 @@
 //! logical tick contract; source resolution, opening, windowing, and live ownership
 //! are implemented by the input pipeline modules under `crate::io`.
 
-use std::{collections::HashSet, slice, vec};
+use std::collections::HashSet;
 
 use futures::StreamExt;
 
+use super::batch::{self, SegmentAccess, SegmentView};
 use super::{LocalStream, VarName};
 
 /// One variable update in a logical input tick.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InputUpdate<V> {
-    pub variable: VarName,
-    pub value: V,
-}
-
-impl<V> InputUpdate<V> {
-    #[inline]
-    pub fn new(variable: VarName, value: V) -> Self {
-        Self { variable, value }
-    }
-}
+pub type InputUpdate<V> = batch::Update<V>;
 
 /// A physical segment in an [`InputBatch`]. A segment is never itself a
 /// batch: it is only one representation of an ordered range of logical ticks.
@@ -83,6 +73,30 @@ pub(crate) enum InputSegment<V> {
         layout: Box<[VarName]>,
         values: Vec<V>,
     },
+}
+
+impl<V> SegmentAccess<V> for InputSegment<V> {
+    fn view(&self) -> SegmentView<'_, V> {
+        match self {
+            Self::SingletonTicks(updates) => SegmentView::Singleton(updates),
+            Self::Tick(updates) => SegmentView::Tick(updates),
+            Self::PackedRows { layout, values } => SegmentView::Packed { layout, values },
+        }
+    }
+    fn into_owned(self) -> batch::OwnedSegment<V> {
+        match self {
+            Self::SingletonTicks(v) => batch::OwnedSegment::Singleton(v.into_iter()),
+            Self::Tick(v) => batch::OwnedSegment::Tick(Some(v)),
+            Self::PackedRows { layout, values } => {
+                let width = layout.len();
+                batch::OwnedSegment::Packed {
+                    layout: layout.into_vec(),
+                    values: values.into_iter(),
+                    width,
+                }
+            }
+        }
+    }
 }
 
 impl<V> InputSegment<V> {
@@ -125,34 +139,13 @@ impl<V> InputSegment<V> {
         F: FnMut(&VarName, V) -> U,
     {
         match self {
-            Self::SingletonTicks(updates) => InputSegment::SingletonTicks(
-                updates
-                    .into_iter()
-                    .map(|InputUpdate { variable, value }| {
-                        let value = map(&variable, value);
-                        InputUpdate { variable, value }
-                    })
-                    .collect(),
-            ),
-            Self::Tick(updates) => InputSegment::Tick(
-                updates
-                    .into_iter()
-                    .map(|InputUpdate { variable, value }| {
-                        let value = map(&variable, value);
-                        InputUpdate { variable, value }
-                    })
-                    .collect(),
-            ),
+            Self::SingletonTicks(updates) => {
+                InputSegment::SingletonTicks(batch::map_updates(updates, map))
+            }
+            Self::Tick(updates) => InputSegment::Tick(batch::map_updates(updates, map)),
             Self::PackedRows { layout, values } => {
-                let width = layout.len();
-                InputSegment::PackedRows {
-                    values: values
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, value)| map(&layout[index % width], value))
-                        .collect(),
-                    layout,
-                }
+                let values = batch::map_packed(&layout, values, map);
+                InputSegment::PackedRows { values, layout }
             }
         }
     }
@@ -161,11 +154,7 @@ impl<V> InputSegment<V> {
 /// The physical storage used by an [`InputBatch`]. `Single` deliberately
 /// represents one segment; a batch may contain mixed segment kinds through
 /// `Segments` without recursively nesting batches.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum InputBatchStorage<V> {
-    Single(InputSegment<V>),
-    Segments(Vec<InputSegment<V>>),
-}
+pub(crate) type InputBatchStorage<V> = batch::Storage<InputSegment<V>>;
 
 /// An ordered sequence of logical input ticks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,24 +231,18 @@ impl<V> InputBatch<V> {
     pub(crate) fn from_segments(
         segments: impl IntoIterator<Item = InputSegment<V>>,
     ) -> anyhow::Result<Self> {
-        let mut segments = segments.into_iter().collect::<Vec<_>>();
-        for segment in &segments {
-            segment.validate()?;
-        }
-        segments.retain(|segment| !segment.is_empty());
-        let storage = match segments.len() {
-            0 => InputBatchStorage::Single(InputSegment::SingletonTicks(Vec::new())),
-            1 => InputBatchStorage::Single(segments.pop().expect("length checked")),
-            _ => InputBatchStorage::Segments(segments),
-        };
+        let storage = batch::normalize(
+            segments,
+            || InputSegment::SingletonTicks(Vec::new()),
+            InputSegment::validate,
+            InputSegment::is_empty,
+            |_, segment| Ok(Some(segment)),
+        )?;
         Ok(Self { storage })
     }
 
-    fn segment_cursor(&self) -> SegmentCursor<'_, V> {
-        match &self.storage {
-            InputBatchStorage::Single(segment) => SegmentCursor::Single(Some(segment)),
-            InputBatchStorage::Segments(segments) => SegmentCursor::Slice(segments.iter()),
-        }
+    fn segment_cursor(&self) -> batch::SegmentCursor<'_, InputSegment<V>> {
+        self.storage.cursor()
     }
 
     /// Iterate physical segments in order without exposing their storage
@@ -307,7 +290,11 @@ impl<V> InputBatch<V> {
 
     /// Borrow updates in logical order without allocating.
     pub fn updates(&self) -> InputUpdates<'_, V> {
-        InputUpdates::new(self.segment_cursor(), self.update_count())
+        InputUpdates::new(
+            self.segment_cursor(),
+            self.tick_count(),
+            self.update_count(),
+        )
     }
 
     /// Move physical segments into another batch. This is the preferred way
@@ -330,11 +317,7 @@ impl<V> InputBatch<V> {
     /// evaluator boundaries; packed storage stays packed until that point.
     pub(crate) fn into_ticks(self) -> OwnedInputTicks<V> {
         let remaining = self.tick_count();
-        OwnedInputTicks {
-            segments: self.into_segments().into_iter(),
-            current: None,
-            remaining,
-        }
+        OwnedInputTicks::new(self.into_segments(), remaining)
     }
 
     /// Retain only selected variables while preserving packed row storage.
@@ -346,29 +329,20 @@ impl<V> InputBatch<V> {
         for segment in self.into_segments() {
             match segment {
                 InputSegment::SingletonTicks(updates) => {
-                    let updates = updates
-                        .into_iter()
-                        .filter(|update| variables.contains(&update.variable))
-                        .collect::<Vec<_>>();
+                    let updates = batch::select_updates(updates, variables);
                     if !updates.is_empty() {
                         segments.push(InputSegment::SingletonTicks(updates));
                     }
                 }
                 InputSegment::Tick(updates) => {
-                    let updates = updates
-                        .into_iter()
-                        .filter(|update| variables.contains(&update.variable))
-                        .collect::<Vec<_>>();
+                    let updates = batch::select_updates(updates, variables);
                     if !updates.is_empty() {
                         segments.push(InputSegment::Tick(updates));
                     }
                 }
                 InputSegment::PackedRows { layout, values } => {
                     let width = layout.len();
-                    let selected = layout
-                        .iter()
-                        .map(|variable| variables.contains(variable))
-                        .collect::<Vec<_>>();
+                    let selected = batch::selected_columns(&layout, variables);
                     let selected_width = selected.iter().filter(|&&keep| keep).count();
                     if selected_width == 0 {
                         continue;
@@ -384,11 +358,7 @@ impl<V> InputBatch<V> {
                         .filter_map(|(variable, &keep)| keep.then_some(variable))
                         .collect::<Vec<_>>()
                         .into_boxed_slice();
-                    let values = values
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(index, value)| selected[index % width].then_some(value))
-                        .collect();
+                    let values = batch::select_packed_values(values, &selected);
                     segments.push(InputSegment::PackedRows { layout, values });
                 }
             }
@@ -504,329 +474,62 @@ fn validate_packed_layout(layout: &[VarName], value_count: usize) -> anyhow::Res
     Ok(())
 }
 
-enum SegmentCursor<'a, V> {
-    Single(Option<&'a InputSegment<V>>),
-    Slice(slice::Iter<'a, InputSegment<V>>),
-}
+pub type InputTick<'a, V> = batch::Tick<'a, V>;
+pub type InputUpdateRef<'a, V> = batch::UpdateRef<'a, V>;
 
-impl<'a, V> Iterator for SegmentCursor<'a, V> {
-    type Item = &'a InputSegment<V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Single(segment) => segment.take(),
-            Self::Slice(segments) => segments.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = match self {
-            Self::Single(segment) => usize::from(segment.is_some()),
-            Self::Slice(segments) => segments.len(),
-        };
-        (remaining, Some(remaining))
-    }
-}
-
-impl<V> ExactSizeIterator for SegmentCursor<'_, V> {}
-
-#[derive(Clone, Copy, Debug)]
-enum TickRepresentation<'a, V> {
-    Updates(&'a [InputUpdate<V>]),
-    Packed {
-        layout: &'a [VarName],
-        values: &'a [V],
-    },
-}
-
-/// A borrowed logical tick.
-#[derive(Clone, Copy, Debug)]
-pub struct InputTick<'a, V> {
-    representation: TickRepresentation<'a, V>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct InputUpdateRef<'a, V> {
-    pub variable: &'a VarName,
-    pub value: &'a V,
-}
-
-enum TickUpdates<'a, V> {
-    Updates(slice::Iter<'a, InputUpdate<V>>),
-    Packed(std::iter::Zip<slice::Iter<'a, VarName>, slice::Iter<'a, V>>),
-}
-
-impl<'a, V> Iterator for TickUpdates<'a, V> {
-    type Item = InputUpdateRef<'a, V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Updates(updates) => updates.next().map(|update| InputUpdateRef {
-                variable: &update.variable,
-                value: &update.value,
-            }),
-            Self::Packed(values) => values
-                .next()
-                .map(|(variable, value)| InputUpdateRef { variable, value }),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Updates(updates) => updates.size_hint(),
-            Self::Packed(values) => values.size_hint(),
-        }
-    }
-}
-
-impl<V> ExactSizeIterator for TickUpdates<'_, V> {}
-
-impl<'a, V> InputTick<'a, V> {
-    pub fn len(&self) -> usize {
-        match self.representation {
-            TickRepresentation::Updates(updates) => updates.len(),
-            TickRepresentation::Packed { values, .. } => values.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn updates(&self) -> impl ExactSizeIterator<Item = InputUpdateRef<'a, V>> + '_ {
-        match self.representation {
-            TickRepresentation::Updates(updates) => TickUpdates::Updates(updates.iter()),
-            TickRepresentation::Packed { layout, values } => {
-                TickUpdates::Packed(layout.iter().zip(values.iter()))
-            }
-        }
-    }
-
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = InputUpdateRef<'a, V>> + '_ {
-        self.updates()
-    }
-
-    pub fn to_updates(&self) -> Vec<InputUpdate<V>>
-    where
-        V: Clone,
-    {
-        self.updates()
-            .map(|update| InputUpdate::new(update.variable.clone(), update.value.clone()))
-            .collect()
-    }
-}
-
-enum SegmentTicks<'a, V> {
-    Singleton(slice::Iter<'a, InputUpdate<V>>),
-    Tick(Option<&'a [InputUpdate<V>]>),
-    Packed {
-        layout: &'a [VarName],
-        rows: slice::ChunksExact<'a, V>,
-    },
-}
-
-impl<'a, V> SegmentTicks<'a, V> {
-    fn new(segment: &'a InputSegment<V>) -> Self {
-        match segment {
-            InputSegment::SingletonTicks(updates) => Self::Singleton(updates.iter()),
-            InputSegment::Tick(updates) => Self::Tick(Some(updates)),
-            InputSegment::PackedRows { layout, values } => Self::Packed {
-                layout,
-                rows: values.chunks_exact(layout.len()),
-            },
-        }
-    }
-
-    fn next(&mut self) -> Option<InputTick<'a, V>> {
-        let representation = match self {
-            Self::Singleton(updates) => {
-                TickRepresentation::Updates(slice::from_ref(updates.next()?))
-            }
-            Self::Tick(updates) => TickRepresentation::Updates(updates.take()?),
-            Self::Packed { layout, rows } => TickRepresentation::Packed {
-                layout,
-                values: rows.next()?,
-            },
-        };
-        Some(InputTick { representation })
-    }
-}
-
-pub struct InputTicks<'a, V> {
-    segments: SegmentCursor<'a, V>,
-    current: Option<SegmentTicks<'a, V>>,
-    remaining: usize,
-}
-
+pub struct InputTicks<'a, V>(batch::Ticks<'a, InputSegment<V>, V>);
 impl<'a, V> InputTicks<'a, V> {
-    fn new(segments: SegmentCursor<'a, V>, remaining: usize) -> Self {
-        Self {
-            segments,
-            current: None,
-            remaining,
-        }
+    fn new(segments: batch::SegmentCursor<'a, InputSegment<V>>, remaining: usize) -> Self {
+        Self(batch::Ticks::new(segments, remaining))
     }
 }
-
 impl<'a, V> Iterator for InputTicks<'a, V> {
     type Item = InputTick<'a, V>;
-
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(tick) = self.current.as_mut().and_then(SegmentTicks::next) {
-                self.remaining -= 1;
-                return Some(tick);
-            }
-            self.current = Some(SegmentTicks::new(self.segments.next()?));
-        }
+        self.0.next()
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        self.0.size_hint()
     }
 }
-
 impl<V> ExactSizeIterator for InputTicks<'_, V> {}
 
-struct PackedUpdates<'a, V> {
-    layout: &'a [VarName],
-    values: slice::Iter<'a, V>,
-    offset: usize,
-}
-
-enum SegmentUpdates<'a, V> {
-    Updates(slice::Iter<'a, InputUpdate<V>>),
-    Packed(PackedUpdates<'a, V>),
-}
-
-impl<'a, V> SegmentUpdates<'a, V> {
-    fn new(segment: &'a InputSegment<V>) -> Self {
-        match segment {
-            InputSegment::SingletonTicks(updates) | InputSegment::Tick(updates) => {
-                Self::Updates(updates.iter())
-            }
-            InputSegment::PackedRows { layout, values } => Self::Packed(PackedUpdates {
-                layout,
-                values: values.iter(),
-                offset: 0,
-            }),
-        }
-    }
-
-    fn next(&mut self) -> Option<InputUpdateRef<'a, V>> {
-        match self {
-            Self::Updates(updates) => updates.next().map(|update| InputUpdateRef {
-                variable: &update.variable,
-                value: &update.value,
-            }),
-            Self::Packed(PackedUpdates {
-                layout,
-                values,
-                offset,
-            }) => {
-                let value = values.next()?;
-                let variable = &layout[*offset % layout.len()];
-                *offset += 1;
-                Some(InputUpdateRef { variable, value })
-            }
-        }
-    }
-}
-
-pub struct InputUpdates<'a, V> {
-    segments: SegmentCursor<'a, V>,
-    current: Option<SegmentUpdates<'a, V>>,
-    remaining: usize,
-}
-
+pub struct InputUpdates<'a, V>(batch::Updates<'a, InputSegment<V>, V>);
 impl<'a, V> InputUpdates<'a, V> {
-    fn new(segments: SegmentCursor<'a, V>, remaining: usize) -> Self {
-        Self {
-            segments,
-            current: None,
-            remaining,
-        }
+    fn new(
+        segments: batch::SegmentCursor<'a, InputSegment<V>>,
+        tick_count: usize,
+        update_count: usize,
+    ) -> Self {
+        Self(batch::Updates::new(segments, tick_count, update_count))
     }
 }
-
 impl<'a, V> Iterator for InputUpdates<'a, V> {
     type Item = InputUpdateRef<'a, V>;
-
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(update) = self.current.as_mut().and_then(SegmentUpdates::next) {
-                self.remaining -= 1;
-                return Some(update);
-            }
-            self.current = Some(SegmentUpdates::new(self.segments.next()?));
-        }
+        self.0.next()
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        self.0.size_hint()
     }
 }
-
 impl<V> ExactSizeIterator for InputUpdates<'_, V> {}
 
-enum OwnedSegment<V> {
-    Singleton(vec::IntoIter<InputUpdate<V>>),
-    Tick(Option<Vec<InputUpdate<V>>>),
-    Packed {
-        layout: Box<[VarName]>,
-        values: vec::IntoIter<V>,
-    },
+pub struct OwnedInputTicks<V>(batch::OwnedTicks<InputSegment<V>, V>);
+impl<V> OwnedInputTicks<V> {
+    fn new(segments: Vec<InputSegment<V>>, remaining: usize) -> Self {
+        Self(batch::OwnedTicks::new(segments, remaining))
+    }
 }
-
-pub struct OwnedInputTicks<V> {
-    segments: vec::IntoIter<InputSegment<V>>,
-    current: Option<OwnedSegment<V>>,
-    remaining: usize,
-}
-
 impl<V> Iterator for OwnedInputTicks<V> {
     type Item = Vec<InputUpdate<V>>;
-
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(current) = &mut self.current {
-                let next = match current {
-                    OwnedSegment::Singleton(updates) => updates.next().map(|update| vec![update]),
-                    OwnedSegment::Tick(updates) => updates.take(),
-                    OwnedSegment::Packed { layout, values } => {
-                        let mut row = Vec::with_capacity(layout.len());
-                        for index in 0..layout.len() {
-                            let value = values.next()?;
-                            row.push(InputUpdate::new(layout[index].clone(), value));
-                        }
-                        Some(row)
-                    }
-                };
-                if next.is_some() {
-                    self.remaining = self.remaining.saturating_sub(1);
-                    return next;
-                }
-                self.current = None;
-            }
-            let segment = self.segments.next()?;
-            self.current = Some(match segment {
-                InputSegment::SingletonTicks(updates) => {
-                    OwnedSegment::Singleton(updates.into_iter())
-                }
-                InputSegment::Tick(updates) => OwnedSegment::Tick(Some(updates)),
-                InputSegment::PackedRows { layout, values } => OwnedSegment::Packed {
-                    layout,
-                    values: values.into_iter(),
-                },
-            });
-        }
+        self.0.next()
     }
-
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
+        self.0.size_hint()
     }
 }
-
 impl<V> ExactSizeIterator for OwnedInputTicks<V> {}
 
 /// Ordinary runtimes receive data only. Reconfiguration is available through

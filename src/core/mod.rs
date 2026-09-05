@@ -4,6 +4,7 @@ pub mod variables;
 pub use variables::*;
 pub mod interfaces;
 pub use interfaces::*;
+mod batch;
 pub mod input;
 pub(crate) mod json;
 pub use input::*;
