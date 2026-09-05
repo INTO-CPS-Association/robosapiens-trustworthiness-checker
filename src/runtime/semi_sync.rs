@@ -1,6 +1,6 @@
 use crate::{
     InputStream, InputUpdate, OutputStream, VarName,
-    core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input},
+    core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input, retain_stream},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
     runtime::output::{drive_row_streams, finish_writer},
@@ -10,7 +10,6 @@ use crate::{
 };
 
 use anyhow::anyhow;
-use async_stream::stream;
 use async_trait::async_trait;
 use ecow::EcoVec;
 use futures::{
@@ -28,20 +27,6 @@ use tracing::{debug, error, info, warn};
 use unsync::spsc;
 
 const CHANNEL_SIZE: usize = 8;
-
-fn lift_no_val<T: DeferrableStreamData>(mut input: OutputStream<T>) -> OutputStream<T> {
-    Box::pin(stream! {
-        let mut last = None;
-        while let Some(current) = input.next().await {
-            if current.is_no_val() {
-                yield last.clone().unwrap_or(current);
-            } else {
-                last = Some(current.clone());
-                yield current;
-            }
-        }
-    })
-}
 
 pub struct SemiSyncRuntimeBuilder<AC, MS>
 where
@@ -1303,7 +1288,7 @@ where
             .filter_map(|(name, variable)| {
                 vs.contains(name).then(|| {
                     let history_length = self.deps.longest_time_dependency(name) as usize;
-                    let stream = lift_no_val(variable.subscribe(history_length));
+                    let stream = retain_stream(variable.subscribe(history_length));
                     (
                         name.clone(),
                         ManagedVariable::computed(name.clone(), stream),

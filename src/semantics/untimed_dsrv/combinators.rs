@@ -1,7 +1,7 @@
-use crate::core::StreamData;
 use crate::core::Value;
 use crate::core::values::operations as value_operations;
 use crate::core::{BinaryOperator, UnaryOperator};
+use crate::core::{PartialMarker, StreamData, propagated_special, retain_stream};
 use crate::semantics::AsyncConfig;
 use crate::semantics::StreamContext;
 use crate::{OutputStream, VarName};
@@ -39,26 +39,8 @@ fn eval_unary(operation: UnaryOperator, operand: Value) -> Value {
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 
-pub(crate) fn stream_lift_base(mut x_mon: OutputStream<Value>) -> OutputStream<Value> {
-    Box::pin(stream! {
-        let mut last : Option<Value>  = None;
-        while let Some(curr) = x_mon.next().await {
-            match curr {
-                Value::NoVal => {
-                    if let Some(last) = &last {
-                        yield last.clone();
-                    } else {
-                        // Only happens when the first value is NoVal
-                        yield Value::NoVal;
-                    }
-                }
-                _ => {
-                    last = Some(curr.clone());
-                    yield curr;
-                }
-            }
-        }
-    })
+pub(crate) fn stream_lift_base(x_mon: OutputStream<Value>) -> OutputStream<Value> {
+    retain_stream(x_mon)
 }
 
 // Lifting function which propagates both NoVal and Deferred values
@@ -67,10 +49,8 @@ pub fn stream_lift1(
     x_mon: OutputStream<Value>,
 ) -> OutputStream<Value> {
     Box::pin(stream_lift_base(x_mon).map(move |x| {
-        if x == Value::NoVal {
-            Value::NoVal
-        } else if x == Value::Deferred {
-            Value::Deferred
+        if let Some(marker) = PartialMarker::of(&x) {
+            marker.into_value()
         } else {
             f(x)
         }
@@ -96,10 +76,10 @@ pub fn stream_lift2(
         stream_lift_base(x_mon)
             .zip(stream_lift_base(y_mon))
             .map(move |(x, y)| {
-                if x == Value::NoVal || y == Value::NoVal {
-                    Value::NoVal
-                } else if x == Value::Deferred || y == Value::Deferred {
-                    Value::Deferred
+                if let Some(marker) =
+                    propagated_special([PartialMarker::of(&x), PartialMarker::of(&y)])
+                {
+                    marker.into_value()
                 } else {
                     f(x, y)
                 }
@@ -652,7 +632,8 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -665,7 +646,8 @@ mod combinator_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -681,7 +663,8 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-deferred value
@@ -698,7 +681,8 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Evaluates to Deferred when we get Deferred
@@ -728,7 +712,8 @@ mod combinator_tests {
             5.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1684,7 +1669,8 @@ mod noval_tests {
         let e: OutputStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -1697,7 +1683,8 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1 until we get a non-deferred value
@@ -1725,7 +1712,8 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1766,7 +1754,8 @@ mod noval_tests {
             7.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+        let res_stream =
+            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

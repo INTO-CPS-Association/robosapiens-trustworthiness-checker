@@ -4,29 +4,14 @@ use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
 use futures::{StreamExt, stream};
 
-use crate::core::{OutputStream, PartialStreamValue, StreamData};
-
-// WARNING: These implementations intentionally mirror scalar operations in
-// `combinators`. Changes to propagation or operator semantics must be made in
-// both modules to avoid implementation drift.
+use crate::core::{
+    OutputStream, PartialMarker, PartialStreamValue, StreamData, propagated_special, retain_stream,
+};
 
 pub(super) fn lift_base<T: StreamData>(
-    mut input: OutputStream<PartialStreamValue<T>>,
+    input: OutputStream<PartialStreamValue<T>>,
 ) -> OutputStream<PartialStreamValue<T>> {
-    Box::pin(async_stream::stream! {
-        let mut last = None;
-        while let Some(current) = input.next().await {
-            match current {
-                PartialStreamValue::NoVal => {
-                    yield last.clone().unwrap_or(PartialStreamValue::NoVal);
-                }
-                current => {
-                    last = Some(current.clone());
-                    yield current;
-                }
-            }
-        }
-    })
+    retain_stream(input)
 }
 
 fn lift1<T, U>(
@@ -37,10 +22,14 @@ where
     T: StreamData,
     U: StreamData,
 {
-    Box::pin(lift_base(input).map(move |value| match value {
-        PartialStreamValue::Known(value) => PartialStreamValue::Known(operation(value)),
-        PartialStreamValue::NoVal => PartialStreamValue::NoVal,
-        PartialStreamValue::Deferred => PartialStreamValue::Deferred,
+    Box::pin(lift_base(input).map(move |value| {
+        if let Some(marker) = PartialMarker::of(&value) {
+            marker.into_value()
+        } else if let PartialStreamValue::Known(value) = value {
+            PartialStreamValue::Known(operation(value))
+        } else {
+            unreachable!("a non-special partial stream value must be known")
+        }
     }))
 }
 
@@ -57,15 +46,17 @@ where
     Box::pin(
         lift_base(left)
             .zip(lift_base(right))
-            .map(move |(left, right)| match (left, right) {
-                (PartialStreamValue::Known(left), PartialStreamValue::Known(right)) => {
+            .map(move |(left, right)| {
+                if let Some(marker) =
+                    propagated_special([PartialMarker::of(&left), PartialMarker::of(&right)])
+                {
+                    marker.into_value()
+                } else if let (PartialStreamValue::Known(left), PartialStreamValue::Known(right)) =
+                    (left, right)
+                {
                     PartialStreamValue::Known(operation(left, right))
-                }
-                (PartialStreamValue::Deferred, _) | (_, PartialStreamValue::Deferred) => {
-                    PartialStreamValue::Deferred
-                }
-                (PartialStreamValue::NoVal, _) | (_, PartialStreamValue::NoVal) => {
-                    PartialStreamValue::NoVal
+                } else {
+                    unreachable!("non-special partial stream values must be known")
                 }
             }),
     )
@@ -274,7 +265,16 @@ mod tests {
                 )
                 .collect::<Vec<_>>()
                 .await,
-                [PartialStreamValue::Deferred]
+                [PartialStreamValue::NoVal]
+            );
+            assert_eq!(
+                add(
+                    values([PartialStreamValue::<i64>::NoVal]),
+                    values([PartialStreamValue::Deferred])
+                )
+                .collect::<Vec<_>>()
+                .await,
+                [PartialStreamValue::NoVal]
             );
             assert_eq!(
                 abs(values([PartialStreamValue::Known(-1.5)]))

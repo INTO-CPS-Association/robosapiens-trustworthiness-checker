@@ -9,6 +9,8 @@ pub(crate) mod json;
 pub use input::*;
 mod layout;
 pub(crate) use layout::ValidatedLayout;
+mod partial_value;
+pub(crate) use partial_value::{PartialMarker, propagated_special, retain_last, retain_stream};
 pub mod output;
 pub use output::*;
 pub mod values;

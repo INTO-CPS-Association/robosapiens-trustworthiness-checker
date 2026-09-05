@@ -1226,6 +1226,22 @@ mod tests {
         let typ = StreamType::Struct(vec![("name".into(), StreamType::Str)].into(), true);
         assert_eq!(typ.to_string(), "Struct<name: Str, ...>");
     }
+
+    #[test]
+    fn partial_stream_value_implements_marker_contract_for_generic_payloads() {
+        #[derive(Clone, Debug)]
+        struct Payload;
+
+        assert!(!PartialStreamValue::Known(Payload).is_no_val());
+        assert!(PartialStreamValue::<Payload>::NoVal.is_no_val());
+        assert!(!PartialStreamValue::<Payload>::Deferred.is_no_val());
+
+        assert!(!PartialStreamValue::Known(Payload).is_deferred());
+        assert!(!PartialStreamValue::<Payload>::NoVal.is_deferred());
+        assert!(PartialStreamValue::<Payload>::Deferred.is_deferred());
+        assert!(PartialStreamValue::<Payload>::no_val_value().is_no_val());
+        assert!(PartialStreamValue::<Payload>::deferred_value().is_deferred());
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
@@ -1245,13 +1261,25 @@ impl<T: Display> Display for PartialStreamValue<T> {
     }
 }
 
-impl StreamData for PartialStreamValue<bool> {}
-impl StreamData for PartialStreamValue<i64> {}
-impl StreamData for PartialStreamValue<f64> {}
-impl StreamData for PartialStreamValue<String> {}
-impl StreamData for PartialStreamValue<()> {}
-impl StreamData for PartialStreamValue<EcoVec<Value>> {}
-impl StreamData for PartialStreamValue<Value> {}
+impl<T: Clone + Debug + 'static> StreamData for PartialStreamValue<T> {
+    fn is_no_val(&self) -> bool {
+        matches!(self, PartialStreamValue::NoVal)
+    }
+}
+
+impl<T: Clone + Debug + 'static> DeferrableStreamData for PartialStreamValue<T> {
+    fn is_deferred(&self) -> bool {
+        matches!(self, PartialStreamValue::Deferred)
+    }
+
+    fn deferred_value() -> Self {
+        PartialStreamValue::Deferred
+    }
+
+    fn no_val_value() -> Self {
+        PartialStreamValue::NoVal
+    }
+}
 
 impl TryFrom<Value> for PartialStreamValue<i64> {
     type Error = ();

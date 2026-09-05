@@ -29,7 +29,7 @@ use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 
-use crate::core::DeferrableStreamData;
+use crate::core::{DeferrableStreamData, retain_stream};
 
 use crate::core::Runtime;
 use crate::core::Specification;
@@ -659,20 +659,6 @@ fn store_history<V: StreamData>(
     })
 }
 
-fn lift_no_val<V: DeferrableStreamData>(mut input: OutputStream<V>) -> OutputStream<V> {
-    Box::pin(stream! {
-        let mut last = None;
-        while let Some(current) = input.next().await {
-            if current.is_no_val() {
-                yield last.clone().unwrap_or(current);
-            } else {
-                last = Some(current.clone());
-                yield current;
-            }
-        }
-    })
-}
-
 #[derive(Debug)]
 pub struct ContextId {
     id: usize,
@@ -1013,7 +999,7 @@ where
         let input_streams: Vec<_> = self
             .var_names
             .iter()
-            .map(|var| lift_no_val(self.var(var).unwrap()))
+            .map(|var| retain_stream(self.var(var).unwrap()))
             .collect();
 
         let id_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1035,7 +1021,7 @@ where
             .iter()
             .filter_map(|var| {
                 if vs.contains(var) {
-                    self.var(var).map(lift_no_val)
+                    self.var(var).map(retain_stream)
                 } else {
                     None
                 }
