@@ -13,8 +13,8 @@ use trustworthiness_checker::benches_common::{
 use trustworthiness_checker::core::{InputBatch, InputStream, InputUpdate, input};
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::{
-    InputPipeline, InputReduction, InputSource, InputSources, InputStage, InputWindow,
-    OutputBackendBuilder, OutputBackendConfig,
+    InputPipeline, InputPolicy, InputReduction, InputSource, InputSources, InputWindow,
+    OutputBackendConfig, OutputPipeline,
 };
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::{DsrvSpecification, Runtime, Value, VarName};
@@ -177,7 +177,7 @@ fn prepare_dataflow(rows: usize) -> trustworthiness_checker::runtime::dataflow::
         ),
     ]));
     let output = smol::block_on(
-        OutputBackendBuilder::new(OutputBackendConfig::null()).build(
+        OutputPipeline::from_backend(OutputBackendConfig::null()).build(
             spec.output_vars(),
             spec.aux_vars(),
             None,
@@ -188,7 +188,7 @@ fn prepare_dataflow(rows: usize) -> trustworthiness_checker::runtime::dataflow::
         trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(input)
+            .input(input.into())
             .output_writer(output)
             .build(),
     )
@@ -313,7 +313,7 @@ fn coalescing_pipeline(
     )
     .unwrap();
     let pipeline = InputPipeline::from_sources(sources)
-        .with_stage(InputStage::WindowToStep {
+        .with_policy(InputPolicy::WindowToStep {
             window,
             reduction: InputReduction::LastUpdateWins,
         })
@@ -337,7 +337,9 @@ fn bench_pipeline_windows(c: &mut Criterion) {
                 |(pipeline, input_vars)| {
                     let stream =
                         smol::block_on(async { pipeline.build(input_vars).await.unwrap() });
-                    black_box(smol::block_on(async { consume_input_stream(stream).await }))
+                    black_box(smol::block_on(async {
+                        consume_input_stream(Box::pin(stream)).await
+                    }))
                 },
                 BatchSize::SmallInput,
             );

@@ -1,6 +1,16 @@
 #[cfg(test)]
 #[cfg(feature = "testcontainers")]
 mod integration_tests {
+    fn input_retry() -> trustworthiness_checker::io::RetryPolicy {
+        use std::{num::NonZeroU32, time::Duration};
+        use trustworthiness_checker::io::{RetryLimit, RetryPolicy};
+        RetryPolicy::new(
+            RetryLimit::Attempts(NonZeroU32::MIN),
+            Duration::from_millis(250),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
 
     use std::rc::Rc;
     use std::vec;
@@ -24,7 +34,7 @@ mod integration_tests {
     use trustworthiness_checker::{
         DsrvSpecification, OutputWriter, VarName,
         io::mqtt,
-        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
+        io::{OutputBackendConfig, OutputDestination, OutputPipeline, Route},
         semantics::distributed::localisation::Localisable,
     };
 
@@ -46,15 +56,15 @@ mod integration_tests {
                 )
             })
             .collect();
-        OutputBackendBuilder::from_destination(
+        OutputPipeline::from_destination(
             OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
                 .with_route_catalog(routes),
-        )
+        )?
         .build(variables, std::iter::empty::<VarName>(), None)
         .await
         .map_err(anyhow::Error::from)
     }
-    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
+    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Rumqttc;
 
     fn generate_test_publisher_tasks(
         executor: Rc<LocalExecutor<'static>>,
@@ -200,7 +210,7 @@ mod integration_tests {
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_1.iter().cloned().collect(),
-                0,
+                input_retry(),
             ),
             10,
             "input_stream_1_connect",
@@ -218,7 +228,7 @@ mod integration_tests {
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_2.iter().cloned().collect(),
-                0,
+                input_retry(),
             ),
             10,
             "input_stream_2_connect",
@@ -316,7 +326,7 @@ mod integration_tests {
             mqtt_host,
             Some(mqtt_port),
             var_topics1,
-            0,
+            input_retry(),
         )
         .await
         .expect("Failed to connect MQTT input stream 1");
@@ -333,7 +343,7 @@ mod integration_tests {
             mqtt_host,
             Some(mqtt_port),
             var_topics_2,
-            0,
+            input_retry(),
         )
         .await
         .expect("Failed to connect MQTT input stream 2");
@@ -449,7 +459,7 @@ mod integration_tests {
                 .iter()
                 .map(|v| (v.clone(), v.into()))
                 .collect(),
-            0,
+            input_retry(),
         )
         .await
         .expect("Failed to connect MQTT input stream 1");
@@ -463,7 +473,7 @@ mod integration_tests {
                 .iter()
                 .map(|v| (v.clone(), v.into()))
                 .collect(),
-            0,
+            input_retry(),
         )
         .await
         .expect("Failed to connect MQTT input stream 2");

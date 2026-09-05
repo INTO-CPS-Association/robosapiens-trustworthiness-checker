@@ -158,7 +158,7 @@ Unlike finite file input, the TC remains in the foreground while it waits for br
 
 ### MQTT input with Rumqttc
 
-Generic MQTT input uses Rumqttc by default. Rumqttc input is compiled even with `--no-default-features`; the optional `mqtt` feature selects Paho-backed functionality such as MQTT output and is not required here.
+MQTT input and output use rumqttc and are compiled even with `--no-default-features`.
 
 Start Mosquitto with the image's included unauthenticated local-development configuration. The published broker port is restricted to Windows loopback:
 
@@ -170,7 +170,7 @@ docker run --rm --detach `
   mosquitto -c /mosquitto-no-auth.conf
 ```
 
-In the first PowerShell terminal, start the TC. The explicit `--mqtt-rumqttc` documents the selected backend; omitting it has the same effect.
+In the first PowerShell terminal, start the TC.
 
 ```powershell
 cargo +1.95 run `
@@ -180,7 +180,6 @@ cargo +1.95 run `
   -- `
   tests/fixtures/simple_add_typed.dsrv `
   --mqtt-input `
-  --mqtt-rumqttc `
   --mqtt-port 1883 `
   --output-stdout
 ```
@@ -245,4 +244,4 @@ Stop the TC with `Ctrl+C`, then remove Redis:
 docker rm --force tc-redis
 ```
 
-The current MQTT output backend is Paho-only and requires the Cargo `mqtt` feature, which is enabled by default. When combining MQTT output with `--no-default-features`, add `--features mqtt`. Redis output similarly requires the `redis` feature. Select these destinations with `--mqtt-output` or `--redis-output`, respectively. These output paths have different native dependency and remote-observation boundaries from the Rumqttc and Redis input examples above.
+Select MQTT output with `--mqtt-output`; it needs no additional Cargo feature. Redis output uses `--redis-output` and requires the `redis` feature. MQTT output waits for protocol acknowledgement; Redis output waits for the publish response. Neither confirms that another application consumed the value.

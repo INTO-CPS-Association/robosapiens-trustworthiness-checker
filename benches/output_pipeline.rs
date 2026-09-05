@@ -6,6 +6,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     hint::black_box,
+    num::NonZeroUsize,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -13,10 +14,10 @@ use std::{
 use async_trait::async_trait;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use smol::LocalExecutor;
-use trustworthiness_checker::core::{OutputBackend, OutputError, OutputInterface};
+use trustworthiness_checker::core::{OutputError, OutputInterface};
 use trustworthiness_checker::io::{
-    OutputBackendBuilder, OutputBackendConfig, OutputDestination, OutputDestinations,
-    OutputPipeline, OutputStage, ResolvedOutput,
+    CoalescingLimits, DeliveryPolicy, OutputBackendConfig, OutputDestination, OutputDestinations,
+    OutputPipeline, QueueLimits, ResolvedOutput, TestOutputOpener,
 };
 use trustworthiness_checker::{OutputBatch, OutputUpdate, OutputWriter, Value, VarName};
 
@@ -236,13 +237,8 @@ impl SyntheticBackend {
 }
 
 #[async_trait(?Send)]
-impl OutputBackend for SyntheticBackend {
-    type Val = Value;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
+impl TestOutputOpener<Value> for SyntheticBackend {
+    async fn open(&self, interface: OutputInterface) -> Result<OutputWriter<Value>, OutputError> {
         let stats = Rc::clone(&self.stats);
         let destination = self.destination.clone();
         let cost = self.cost;
@@ -751,7 +747,7 @@ fn assert_case_setup(batches: &[OutputBatch<Value>], expectations: &CaseExpectat
 fn prepare_pipeline_case(
     width: usize,
     batches: Vec<OutputBatch<Value>>,
-    builder: OutputBackendBuilder<Value>,
+    builder: OutputPipeline<Value>,
     executor: Rc<LocalExecutor<'static>>,
     stats: Rc<RefCell<BenchStats>>,
 ) -> PreparedCase {
@@ -801,29 +797,47 @@ fn custom_destination(
     stats: &Rc<RefCell<BenchStats>>,
     cost: SyntheticCost,
 ) -> OutputDestination<Value> {
-    let backend = OutputBackendConfig::custom(SyntheticBackend::new(Rc::clone(stats), id, cost));
+    let backend = OutputBackendConfig::test(SyntheticBackend::new(Rc::clone(stats), id, cost));
     OutputDestination::new(id, backend).partition(variables.iter())
 }
 
 fn one_destination_builder_case(
     width: usize,
     batches: Vec<OutputBatch<Value>>,
-    stages: Vec<OutputStage>,
+    delivery: DeliveryPolicy,
     cost: SyntheticCost,
 ) -> PreparedCase {
     let stats = Rc::new(RefCell::new(BenchStats::default()));
     let destination = OutputDestination::new(
         "default",
-        OutputBackendConfig::custom(SyntheticBackend::new(Rc::clone(&stats), "default", cost)),
+        OutputBackendConfig::test(SyntheticBackend::new(Rc::clone(&stats), "default", cost)),
     )
-    .all();
+    .all()
+    .with_delivery(delivery);
     let pipeline = OutputPipeline::from_destination(destination)
         .expect("benchmark default output destination should construct a pipeline");
     let executor = Rc::new(LocalExecutor::new());
-    let builder = OutputBackendBuilder::from_pipeline(pipeline)
-        .executor(Rc::clone(&executor))
-        .with_shared_stages(stages);
+    let builder = pipeline.with_executor(Rc::clone(&executor));
     prepare_pipeline_case(width, batches, builder, executor, stats)
+}
+
+fn queue_policy(capacity: usize) -> DeliveryPolicy {
+    DeliveryPolicy::queued(QueueLimits::new(NonZeroUsize::new(capacity).unwrap(), None))
+}
+
+fn coalesce_policy(
+    ticks: Option<usize>,
+    updates: Option<usize>,
+    delay: Option<Duration>,
+) -> DeliveryPolicy {
+    DeliveryPolicy::coalesce(
+        CoalescingLimits::new(
+            ticks.and_then(NonZeroUsize::new),
+            updates.and_then(NonZeroUsize::new),
+            delay,
+        )
+        .unwrap(),
+    )
 }
 
 fn names(width: usize) -> Vec<VarName> {
@@ -954,11 +968,11 @@ fn shape_batches(
 fn builder_from_destinations(
     destinations: Vec<OutputDestination<Value>>,
     executor: Rc<LocalExecutor<'static>>,
-) -> OutputBackendBuilder<Value> {
+) -> OutputPipeline<Value> {
     let registry = OutputDestinations::new(destinations)
         .expect("benchmark destination IDs should be non-empty and unique");
     let pipeline = OutputPipeline::new(registry);
-    OutputBackendBuilder::from_pipeline(pipeline).executor(executor)
+    pipeline.with_executor(executor)
 }
 
 fn prepare_failure_case(width: usize) -> PreparedCase {
@@ -967,7 +981,7 @@ fn prepare_failure_case(width: usize) -> PreparedCase {
     let split = width / 2;
     let failing = OutputDestination::new(
         "a-failing",
-        OutputBackendConfig::custom(SyntheticBackend::failing(Rc::clone(&stats), "a-failing")),
+        OutputBackendConfig::test(SyntheticBackend::failing(Rc::clone(&stats), "a-failing")),
     )
     .partition(variables[..split].iter());
     let successful = custom_destination(
@@ -1034,7 +1048,7 @@ fn bench_direct_and_fast_path(c: &mut Criterion) {
                             one_destination_builder_case(
                                 width,
                                 batches.clone(),
-                                Vec::new(),
+                                DeliveryPolicy::direct(),
                                 SyntheticCost::new(Duration::ZERO, 0, 0),
                             )
                         },
@@ -1048,27 +1062,18 @@ fn bench_direct_and_fast_path(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_stage_orders_and_backpressure(c: &mut Criterion) {
-    let mut group = c.benchmark_group("output/stages");
+fn bench_delivery_backpressure(c: &mut Criterion) {
+    let mut group = c.benchmark_group("output/delivery");
     group.sample_size(10);
     let batches = shape_batches(32, 256, 1, "singleton");
     group.throughput(Throughput::Elements(256));
     for capacity in [1_usize, 8, 64, 256] {
-        for (name, stages) in [
-            ("buffer", vec![OutputStage::buffer(capacity).unwrap()]),
+        for (name, policy) in [
+            ("queue", queue_policy(capacity)),
             (
-                "buffer_then_coalesce",
-                vec![
-                    OutputStage::buffer(capacity).unwrap(),
-                    OutputStage::coalesce(64, None).unwrap(),
-                ],
-            ),
-            (
-                "coalesce_then_buffer",
-                vec![
-                    OutputStage::coalesce(64, None).unwrap(),
-                    OutputStage::buffer(capacity).unwrap(),
-                ],
+                "queue_coalesce",
+                coalesce_policy(Some(64), None, None)
+                    .with_queue(QueueLimits::new(NonZeroUsize::new(capacity).unwrap(), None)),
             ),
         ] {
             group.bench_with_input(
@@ -1080,7 +1085,7 @@ fn bench_stage_orders_and_backpressure(c: &mut Criterion) {
                             one_destination_builder_case(
                                 32,
                                 batches.clone(),
-                                stages.clone(),
+                                policy,
                                 SyntheticCost::new(Duration::from_micros(50), 8, 0),
                             )
                         },
@@ -1097,7 +1102,7 @@ fn bench_stage_orders_and_backpressure(c: &mut Criterion) {
                 one_destination_builder_case(
                     32,
                     batches.clone(),
-                    vec![OutputStage::coalesce(64, None).unwrap()],
+                    coalesce_policy(Some(64), None, None),
                     SyntheticCost::new(Duration::from_micros(50), 8, 0),
                 )
             },
@@ -1124,7 +1129,7 @@ fn routed_destinations(
             destinations.push(
                 OutputDestination::new(
                     id,
-                    OutputBackendConfig::custom(SyntheticBackend::new(
+                    OutputBackendConfig::test(SyntheticBackend::new(
                         Rc::clone(stats),
                         "d0",
                         SyntheticCost::new(Duration::ZERO, 0, 0),
@@ -1141,7 +1146,7 @@ fn routed_destinations(
             "every routed destination must receive variables"
         );
         let selected = &variables[start..end];
-        let backend = OutputBackendConfig::custom(SyntheticBackend::new(
+        let backend = OutputBackendConfig::test(SyntheticBackend::new(
             Rc::clone(stats),
             id.clone(),
             SyntheticCost::new(Duration::ZERO, 0, 0),
@@ -1211,7 +1216,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
                         one_destination_builder_case(
                             32,
                             batches.clone(),
-                            vec![OutputStage::coalesce(limit, None).unwrap()],
+                            coalesce_policy(Some(limit), None, None),
                             SyntheticCost::new(Duration::from_micros(50), 8, 0),
                         )
                     },
@@ -1231,9 +1236,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
                         one_destination_builder_case(
                             32,
                             batches.clone(),
-                            vec![
-                                OutputStage::coalesce_with_limits(None, None, Some(limit)).unwrap(),
-                            ],
+                            coalesce_policy(None, Some(limit), None),
                             SyntheticCost::new(Duration::from_micros(50), 8, 0),
                         )
                     },
@@ -1253,9 +1256,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
                         one_destination_builder_case(
                             32,
                             batches.clone(),
-                            vec![
-                                OutputStage::coalesce_with_limits(Some(delay), None, None).unwrap(),
-                            ],
+                            coalesce_policy(None, None, Some(delay)),
                             SyntheticCost::new(Duration::from_micros(50), 8, 0),
                         )
                     },
@@ -1273,7 +1274,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
                 one_destination_builder_case(
                     32,
                     native.clone(),
-                    Vec::new(),
+                    DeliveryPolicy::direct(),
                     SyntheticCost::new(Duration::from_micros(50), 8, 0),
                 )
             },
@@ -1287,7 +1288,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
                 one_destination_builder_case(
                     32,
                     singleton.clone(),
-                    vec![OutputStage::coalesce(64, None).unwrap()],
+                    coalesce_policy(Some(64), None, None),
                     SyntheticCost::new(Duration::from_micros(50), 8, 0),
                 )
             },
@@ -1300,7 +1301,7 @@ fn bench_coalescing_and_native_batching(c: &mut Criterion) {
 
 fn output_pipeline_benches(c: &mut Criterion) {
     bench_direct_and_fast_path(c);
-    bench_stage_orders_and_backpressure(c);
+    bench_delivery_backpressure(c);
     bench_coalescing_and_native_batching(c);
     bench_routing(c);
     bench_failure_cleanup(c);

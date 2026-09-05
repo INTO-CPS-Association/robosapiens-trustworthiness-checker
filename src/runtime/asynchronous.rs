@@ -190,7 +190,7 @@ fn track_direct_stream<V: 'static>(
 }
 
 mod input_fanout;
-use input_fanout::fan_out_input;
+use input_fanout::{InputFanoutDrive, fan_out_input};
 
 /// Track the stage of a variable's lifecycle
 #[derive(Debug, Display, Clone, PartialEq, Eq)]
@@ -1179,7 +1179,8 @@ where
     S: MonitoringSemantics<AC>,
 {
     pub executor: Rc<LocalExecutor<'static>>,
-    input_drive: LocalStream<anyhow::Result<()>>,
+    input: crate::io::OpenedInput<AC::Val>,
+    input_drive: InputFanoutDrive<AC::Val>,
     output_writer: OutputWriter<AC::Val>,
     output_streams: BTreeMap<VarName, LocalStream<AC::Val>>,
     cancellation_token: CancellationToken,
@@ -1194,7 +1195,7 @@ where
 pub struct AsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) executor: Option<Rc<LocalExecutor<'static>>>,
     pub(crate) model: Option<AC::Spec>,
-    pub(super) input: Option<InputStream<AC::Val>>,
+    pub(super) input: Option<crate::io::OpenedInput<AC::Val>>,
     pub(super) output_writer: Option<OutputWriter<AC::Val>>,
     pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     semantics_t: PhantomData<S>,
@@ -1265,7 +1266,7 @@ where
         }
     }
 
-    fn input(self, input: InputStream<AC::Val>) -> Self {
+    fn input(self, input: crate::io::OpenedInput<AC::Val>) -> Self {
         Self {
             input: Some(input),
             ..self
@@ -1301,7 +1302,7 @@ where
             debug!("AsyncRuntimeBuilder: Context builder initialized");
 
             let input_vars = model.input_vars().clone();
-            let input_adapter = fan_out_input(input, input_vars.clone().into());
+            let input_adapter = fan_out_input(input_vars.clone().into());
             let mut adapted_input_streams = input_adapter.streams;
             let input_drive = input_adapter.drive;
             let output_vars = model.output_vars();
@@ -1385,6 +1386,7 @@ where
             debug!("AsyncRuntimeBuilder: Returning runner with cancellation token");
             let runner = AsyncRuntime {
                 executor,
+                input,
                 input_drive,
                 output_writer,
                 output_streams,
@@ -1414,7 +1416,7 @@ where
         AsyncRuntimeBuilder::new()
             .executor(executor)
             .model(model)
-            .input(input)
+            .input(input.into())
             .output_writer(output)
             .build()
             .await
@@ -1432,7 +1434,8 @@ where
         debug!("AsyncRuntime: Starting monitor execution");
         debug!("AsyncRuntime: Creating futures for input and output writer");
         let AsyncRuntime {
-            input_drive,
+            mut input,
+            mut input_drive,
             mut output_writer,
             output_streams,
             cancellation_token,
@@ -1441,101 +1444,112 @@ where
             ..
         } = *self;
 
-        // The output driver owns the output streams. If another side fails,
-        // drop that driver explicitly and finalize the writer rather than
-        // relying on an async Drop implementation to perform cleanup.
-        let output_cancellation = cancellation_token.clone();
-        let output_fut: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
-            let drive = Box::pin(crate::runtime::output::drive_singleton_streams(
-                output_streams,
-                &mut output_writer,
-            ));
-            let drive_result: Option<anyhow::Result<()>> =
+        let mut result = {
+            let output_cancellation = cancellation_token.clone();
+            let output_fut = async {
+                let drive = Box::pin(crate::runtime::output::consume_singleton_streams(
+                    output_streams,
+                    &mut output_writer,
+                ));
                 match futures::future::select(drive, output_cancellation.cancelled()).await {
-                    futures::future::Either::Left((result, _)) => Some(result),
+                    futures::future::Either::Left((result, _)) => result,
                     futures::future::Either::Right((_, drive)) => {
                         drop(drive);
+                        Ok(())
+                    }
+                }
+            };
+
+            // Wrap input stream's run with cancellation support.
+            let input_cancellation = cancellation_token.clone();
+            let input_driver = async {
+                input_drive.run(&mut input).await?;
+                debug!("AsyncRuntime: Input stream input_drive ended");
+                Ok::<_, anyhow::Error>(())
+            };
+
+            let input_fut = async {
+                let result = futures::select! {
+                    result = input_driver.fuse() => Some(result),
+                    _ = input_cancellation.cancelled().fuse() => {
+                        debug!("AsyncRuntime: Input stream cancelled");
                         None
                     }
                 };
-            match drive_result {
-                Some(result) => result,
-                None => crate::runtime::output::finish_writer(&mut output_writer).await,
-            }
-        });
-
-        // Wrap input stream's run with cancellation support.
-        let input_cancellation = cancellation_token.clone();
-        let mut input_drive = input_drive;
-        let input_driver = async move {
-            while let Some(step) = input_drive.next().await {
-                step?;
-            }
-            debug!("AsyncRuntime: Input stream input_drive ended");
-            Ok::<_, anyhow::Error>(())
-        };
-
-        let input_fut: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
-            let result = futures::select! {
-                result = input_driver.fuse() => Some(result),
-                _ = input_cancellation.cancelled().fuse() => {
-                    debug!("AsyncRuntime: Input stream cancelled");
-                    None
-                }
-            };
-            match result {
-                Some(Ok(())) => {
-                    // Input fan-out has delivered its final values to the
-                    // context's channels. Root input managers complete only
-                    // after all causally generated forwarding is quiescent;
-                    // wait for that barrier before stopping independent output
-                    // streams that otherwise have no natural EOF.
-                    if await_input_completion {
-                        // The shared token is canceled by InputCompletion only
-                        // after root managers and all forwarding work finish.
-                        input_cancellation.cancelled().await;
-                    } else if cancel_after_input_completion {
+                match result {
+                    Some(Ok(())) => {
+                        // Input fan-out has delivered its final values to the
+                        // context's channels. Root input managers complete only
+                        // after all causally generated forwarding is quiescent;
+                        // wait for that barrier before stopping independent output
+                        // streams that otherwise have no natural EOF.
+                        if await_input_completion {
+                            // The shared token is canceled by InputCompletion only
+                            // after root managers and all forwarding work finish.
+                            input_cancellation.cancelled().await;
+                        } else if cancel_after_input_completion {
+                            input_cancellation.cancel();
+                        }
+                        Ok(())
+                    }
+                    Some(Err(error)) => {
+                        // An input failure must stop independent output streams
+                        // before this future is joined with them.
                         input_cancellation.cancel();
+                        Err(error)
                     }
-                    Ok(())
-                }
-                Some(Err(error)) => {
-                    // An input failure must stop independent output streams
-                    // before this future is joined with them.
-                    input_cancellation.cancel();
-                    Err(error)
-                }
-                None => Ok(()),
-            }
-        });
-
-        // Race the two sides. Whichever side reports an error cancels the
-        // shared context before the still-running side is awaited.
-        let (output_result, input_result) =
-            match futures::future::select(output_fut, input_fut).await {
-                futures::future::Either::Left((output_result, input_fut)) => {
-                    // A completed output side has no more work that can
-                    // signal input progress. This includes an intentionally
-                    // empty output map, so cancel pending input instead of
-                    // waiting for it forever.
-                    cancellation_token.cancel();
-                    let input_result = input_fut.await;
-                    (output_result, input_result)
-                }
-                futures::future::Either::Right((input_result, output_fut)) => {
-                    if input_result.is_err() {
-                        cancellation_token.cancel();
-                    }
-                    let output_result = output_fut.await;
-                    (output_result, input_result)
+                    None => Ok(()),
                 }
             };
+            futures::pin_mut!(output_fut, input_fut);
 
-        let result = match (output_result, input_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(primary), Err(additional)) => Err(combine_runtime_errors(primary, additional)),
+            // Race the two sides. Whichever side reports an error cancels the
+            // shared context before the still-running side is awaited.
+            let (output_result, input_result) =
+                match futures::future::select(output_fut, input_fut).await {
+                    futures::future::Either::Left((output_result, input_fut)) => {
+                        // A completed output side has no more work that can
+                        // signal input progress. This includes an intentionally
+                        // empty output map, so cancel pending input instead of
+                        // waiting for it forever.
+                        cancellation_token.cancel();
+                        let input_result = input_fut.await;
+                        (output_result, input_result)
+                    }
+                    futures::future::Either::Right((input_result, output_fut)) => {
+                        if input_result.is_err() {
+                            cancellation_token.cancel();
+                        }
+                        let output_result = output_fut.await;
+                        (output_result, input_result)
+                    }
+                };
+
+            match (output_result, input_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                (Err(primary), Err(additional)) => Err(combine_runtime_errors(primary, additional)),
+            }
         };
+        let deadline = output_writer.shutdown_deadline();
+        let mut drain = input.into_drain_with_deadline(deadline);
+        while let Some(item) = drain.next().await {
+            if let Err(error) = item {
+                let cleanup = anyhow::Error::new(error);
+                result = Err(match result {
+                    Ok(()) => cleanup,
+                    Err(primary) => combine_runtime_errors(primary, cleanup),
+                });
+            }
+        }
+        if let Err(cleanup) =
+            crate::runtime::output::finish_writer_with_deadline(&mut output_writer, deadline).await
+        {
+            result = Err(match result {
+                Ok(()) => cleanup,
+                Err(primary) => combine_runtime_errors(primary, cleanup),
+            });
+        }
         debug!(?result, "AsyncRuntime: Monitor execution completed");
         result
     }
@@ -1571,8 +1585,8 @@ mod tests {
     };
 
     fn failing_input() -> InputStream<Value> {
-        Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
-            "input failed"
+        Box::pin(futures::stream::iter([Err(crate::InputError::source(
+            "input failed",
         ))]))
     }
 
@@ -1584,7 +1598,7 @@ mod tests {
         let runtime: TestRuntime = TestRuntime::new(executor, spec, failing_input(), output).await;
 
         let error = runtime.run().await.unwrap_err();
-        assert_eq!(error.to_string(), "input failed");
+        assert_eq!(error.to_string(), "input source error: input failed");
     }
 
     fn writer_with_close_counter(
@@ -1610,14 +1624,15 @@ mod tests {
 
     fn direct_runtime(
         executor: Rc<LocalExecutor<'static>>,
-        input_drive: LocalStream<anyhow::Result<()>>,
+        input: InputStream<Value>,
         output_stream: Option<LocalStream<Value>>,
         output_writer: OutputWriter<Value>,
         cancellation_token: CancellationToken,
     ) -> TestRuntime {
         AsyncRuntime {
             executor,
-            input_drive,
+            input: input.into(),
+            input_drive: fan_out_input(std::collections::BTreeSet::new()).drive,
             output_writer,
             output_streams: output_stream.map_or_else(BTreeMap::new, |stream| {
                 BTreeMap::from([(VarName::new("out"), stream)])
@@ -1656,7 +1671,9 @@ mod tests {
         let cancellation_token = CancellationToken::new();
         let runtime = direct_runtime(
             executor,
-            Box::pin(stream::iter([Err(anyhow::anyhow!("input failed"))])),
+            Box::pin(stream::iter([Err(crate::InputError::source(
+                "input failed",
+            ))])),
             Some(Box::pin(stream::repeat(Value::Int(1)))),
             writer_with_close_counter(None, Rc::clone(&closes)),
             cancellation_token.clone(),
@@ -1666,7 +1683,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.to_string(), "input failed");
+        assert_eq!(error.to_string(), "input source error: input failed");
         assert!(cancellation_token.is_cancelled().await);
         assert_eq!(closes.get(), 1);
     }

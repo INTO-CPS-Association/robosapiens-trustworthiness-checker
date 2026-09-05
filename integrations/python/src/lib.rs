@@ -14,12 +14,13 @@ use tc_core::causal::{
     RoleCausalAntichain, RoleCausalSet, causality_report,
 };
 use tc_core::core::{
-    ExecutionPolicy, OutputBackend, OutputInterface, OutputStream, OutputWriter, Runtime,
-    RuntimeSpec, Semantics,
+    ExecutionPolicy, LocalStream, OutputInterface, OutputWriter, Runtime, RuntimeSpec, Semantics,
 };
-use tc_core::io::output::{ManualOutputBackend, OutputBackendConfig};
-use tc_core::io::testing::{ManualInputController, channel};
-use tc_core::io::{InputController, OutputBackendBuilder};
+use tc_core::io::channel::{
+    ChannelInputController, ChannelOutputReceiver, channel, open_output, output,
+};
+use tc_core::io::output::OutputBackendConfig;
+use tc_core::io::{InputController, OutputPipeline};
 
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
 use tc_core::semantics::CausalRuntimeBuilder;
@@ -30,15 +31,15 @@ type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
 type RoleCausalSetOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalSet>>;
 type RoleCausalAntichainOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalAntichain>>;
 
-async fn manual_causal_output<D: CausalDomain>(
+async fn channel_causal_output<D: CausalDomain>(
     output_vars: BTreeSet<VarName>,
 ) -> anyhow::Result<(
     OutputWriter<CausalValue<D>>,
-    OutputStream<BTreeMap<VarName, CausalValue<D>>>,
+    LocalStream<BTreeMap<VarName, CausalValue<D>>>,
 )> {
-    let (manual_backend, receiver) = ManualOutputBackend::<CausalValue<D>>::channel(1024);
+    let (sender, receiver): (_, ChannelOutputReceiver<CausalValue<D>>) = output(1024);
     let interface = OutputInterface::outputs(output_vars)?;
-    let writer = manual_backend.open(interface).await?;
+    let writer = open_output(sender, interface).await?;
     let outputs = Box::pin(futures::stream::unfold(
         receiver,
         |mut receiver| async move { receiver.recv().await.map(|output| (output, receiver)) },
@@ -54,10 +55,10 @@ enum RuntimeMode {
 }
 
 enum RuntimeOutputs {
-    Ordinary(OutputStream<OutputBatch>),
-    ReferenceCausalSet(OutputStream<CausalSetOutputBatch>),
-    RoleCausalSet(OutputStream<RoleCausalSetOutputBatch>),
-    RoleCausalAntichain(OutputStream<RoleCausalAntichainOutputBatch>),
+    Ordinary(LocalStream<OutputBatch>),
+    ReferenceCausalSet(LocalStream<CausalSetOutputBatch>),
+    RoleCausalSet(LocalStream<RoleCausalSetOutputBatch>),
+    RoleCausalAntichain(LocalStream<RoleCausalAntichainOutputBatch>),
 }
 
 enum RuntimeOutputBatch {
@@ -101,7 +102,7 @@ impl NoValue {
 struct TcRuntime {
     executor: Rc<LocalExecutor<'static>>,
     input_vars: BTreeSet<VarName>,
-    input_controller: ManualInputController<Value>,
+    input_controller: ChannelInputController<Value>,
     tick_controller: InputController,
     outputs: RuntimeOutputs,
 }
@@ -230,7 +231,7 @@ fn read_pathlike(path: &Bound<'_, PyAny>) -> PyResult<String> {
 }
 
 fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
-    match normalize_option(semantics).as_str() {
+    match semantics {
         "typed" | "typed-untimed" => Ok(RuntimeMode::Ordinary(Semantics::TypedUntimed)),
         "untyped" | "untimed" => Ok(RuntimeMode::Ordinary(Semantics::Untimed)),
         "gradual" | "gradual-typed" | "gradual-typed-untimed" => {
@@ -243,10 +244,6 @@ fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
             "unsupported semantics {semantics:?}; expected ordinary untimed semantics or one of 'causal', 'causal-set', 'role-causal-set', 'role-causal-antichain'"
         ))),
     }
-}
-
-fn normalize_option(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 fn collect_input_values(
@@ -345,7 +342,7 @@ fn build_runtime(
     semantics: RuntimeMode,
 ) -> anyhow::Result<(
     BTreeSet<VarName>,
-    ManualInputController<Value>,
+    ChannelInputController<Value>,
     InputController,
     RuntimeOutputs,
 )> {
@@ -362,21 +359,20 @@ fn build_runtime(
 
             let outputs = match semantics {
                 RuntimeMode::Ordinary(semantics) => {
-                    let (manual_backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
-                    let sender = manual_backend.sender().clone();
-                    let outputs: OutputStream<OutputBatch> = Box::pin(futures::stream::unfold(
+                    let (sender, receiver) = output(1024);
+                    let outputs: LocalStream<OutputBatch> = Box::pin(futures::stream::unfold(
                         receiver,
                         |mut receiver| async move {
                             receiver.recv().await.map(|output| (output, receiver))
                         },
                     ));
-                    let output_builder =
-                        OutputBackendBuilder::new(OutputBackendConfig::Manual(sender));
+                    let output_pipeline =
+                        OutputPipeline::from_backend(OutputBackendConfig::channel(sender));
                     let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
                         .executor(runtime_executor.clone())
                         .model(spec)
                         .input(input)
-                        .output_pipeline_builder(output_builder)
+                        .output_pipeline(output_pipeline)
                         .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
                         .semantics(semantics)
                         .build()
@@ -386,7 +382,7 @@ fn build_runtime(
                 }
                 RuntimeMode::ReferenceCausalSet => {
                     let (output_writer, outputs) =
-                        manual_causal_output::<CausalSet>(spec.output_vars().clone()).await?;
+                        channel_causal_output::<CausalSet>(spec.output_vars().clone()).await?;
                     let monitor = CausalRuntimeBuilder::<CausalSet>::new()
                         .executor(runtime_executor.clone())
                         .model(spec)
@@ -399,7 +395,7 @@ fn build_runtime(
                 }
                 RuntimeMode::RoleCausalSet => {
                     let (output_writer, outputs) =
-                        manual_causal_output::<RoleCausalSet>(spec.output_vars().clone()).await?;
+                        channel_causal_output::<RoleCausalSet>(spec.output_vars().clone()).await?;
                     let monitor = CausalRuntimeBuilder::<RoleCausalSet>::role_new()
                         .executor(runtime_executor.clone())
                         .model(spec)
@@ -412,7 +408,7 @@ fn build_runtime(
                 }
                 RuntimeMode::RoleCausalAntichain => {
                     let (output_writer, outputs) =
-                        manual_causal_output::<RoleCausalAntichain>(spec.output_vars().clone())
+                        channel_causal_output::<RoleCausalAntichain>(spec.output_vars().clone())
                             .await?;
                     let monitor = CausalRuntimeBuilder::<RoleCausalAntichain>::role_new()
                         .executor(runtime_executor.clone())

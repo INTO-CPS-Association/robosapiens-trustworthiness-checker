@@ -60,21 +60,21 @@ while direct-only and selection-only are incomparable.
 ## Rust construction
 
 The simplest construction selects the reference pair. Runtimes receive an
-already-open `OutputWriter`; open that writer from a backend before building the
-runtime. For an embedding or test, the manual backend exposes the causal rows to
-the caller:
+already-open `OutputWriter`; open that writer from the public channel transport
+before building the runtime. The channel sender emits one row per logical
+output tick to the caller:
 
 ```rust,ignore
 use trustworthiness_checker::causal::{CausalSet, CausalValue};
-use trustworthiness_checker::core::{OutputBackend, OutputInterface};
-use trustworthiness_checker::io::output::ManualOutputBackend;
+use trustworthiness_checker::core::OutputInterface;
+use trustworthiness_checker::io::channel::{open_output, output};
 use trustworthiness_checker::semantics::CausalRuntimeBuilder;
 
-let (backend, mut causal_rows) =
-    ManualOutputBackend::<CausalValue<CausalSet>>::channel(16);
-let output_writer = backend
-    .open(OutputInterface::outputs(spec.output_vars().iter().cloned())?)
-    .await?;
+let (sender, mut causal_rows) = output::<CausalValue<CausalSet>>(16);
+let output_writer = open_output(
+    sender,
+    OutputInterface::outputs(spec.output_vars().iter().cloned())?,
+).await?;
 
 let runtime = CausalRuntimeBuilder::<CausalSet>::new()
     .executor(executor)
@@ -86,9 +86,11 @@ let runtime = CausalRuntimeBuilder::<CausalSet>::new()
 ```
 
 `causal_rows` receives one `BTreeMap<VarName, CausalValue<CausalSet>>` per
-logical output tick. Other backends can be opened in the same way when they
-accept the selected causal value type; the runtime-facing input is always the
-resulting `OutputWriter`.
+logical output tick. Other native destination openers can be used when they
+accept the selected causal value type; the runtime-facing output is always the
+resulting `OutputWriter`. Channel `send` is an admission operation, while the
+writer's `flush` and `close` provide the corresponding completion and cleanup
+boundaries.
 
 `CausalJsonlOutputHandler` is retained as a compatibility name for the
 standalone adapter that writes named causal streams to JSONL. It is not passed to

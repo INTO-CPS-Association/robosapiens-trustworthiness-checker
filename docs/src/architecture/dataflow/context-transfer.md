@@ -58,7 +58,7 @@ Nested activation follows its own rules, described under [dynamic properties](dy
 
 ## Semisynchronous transfer
 
-The separate `ReconfSemiSyncRuntime` transfers variable histories rather than dataflow evaluator owners. It filters by variables in the target, gives missing variables empty history, and left-pads retained histories with `NoVal` to align lengths before starting the replacement generation.
+The separate `ReconfSemiSyncRuntime` transfers variable histories rather than dataflow evaluator owners. It retains the opened input and output sessions, filters history by variables in the target, gives missing variables empty history, and left-pads retained histories with `NoVal` to align lengths before starting the replacement monitor generation.
 
 ## Implementation mapping
 

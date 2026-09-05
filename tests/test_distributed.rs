@@ -11,10 +11,10 @@ use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
     DsrvSpecification, LocalStream, Value,
-    core::{OutputBackend, OutputInterface, OutputWriter, Runtime},
+    core::{OutputInterface, OutputWriter, Runtime},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
-    io::output::ManualOutputBackend,
+    io::channel::{open_output, output},
     runtime::RuntimeBuilder,
     runtime::distributed::DistAsyncRuntimeBuilder,
     semantics::distributed::semantics::DistributedSemantics,
@@ -22,15 +22,17 @@ use trustworthiness_checker::{
 type TestDistSemantics = DistributedSemantics;
 type TestDistRuntimeBuilder = DistAsyncRuntimeBuilder<TestDistConfig, TestDistSemantics>;
 
-async fn manual_output(
+async fn channel_output(
     variables: BTreeSet<VarName>,
 ) -> (OutputWriter<Value>, LocalStream<BTreeMap<VarName, Value>>) {
-    let (backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
+    let (sender, receiver) = output(1024);
     let variables = variables;
-    let writer = backend
-        .open(OutputInterface::outputs(variables.iter().cloned()).unwrap())
-        .await
-        .unwrap();
+    let writer = open_output(
+        sender,
+        OutputInterface::outputs(variables.iter().cloned()).unwrap(),
+    )
+    .await
+    .unwrap();
     let queues = variables
         .iter()
         .cloned()
@@ -110,7 +112,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let var_names = BTreeSet::from(["tuple_element".into(), "w".into(), "y".into(), "z".into()]);
     let spec = parse_spec(spec);
 
-    let (output_writer, output_stream) = manual_output(var_names).await;
+    let (output_writer, output_stream) = channel_output(var_names).await;
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -122,7 +124,7 @@ async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(input_handler)
+        .input(input_handler.into())
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -199,7 +201,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = parse_spec(spec);
 
-    let (output_writer, output_stream) = manual_output(var_names).await;
+    let (output_writer, output_stream) = channel_output(var_names).await;
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -210,7 +212,7 @@ async fn test_distributed_dist_spec_1(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(input_handler)
+        .input(input_handler.into())
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -284,7 +286,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = parse_spec(spec);
 
-    let (output_writer, output_stream) = manual_output(var_names).await;
+    let (output_writer, output_stream) = channel_output(var_names).await;
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -295,7 +297,7 @@ async fn test_distributed_dist_spec_2(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(input_handler)
+        .input(input_handler.into())
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -369,7 +371,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = parse_spec(spec);
 
-    let (output_writer, output_stream) = manual_output(var_names).await;
+    let (output_writer, output_stream) = channel_output(var_names).await;
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -380,7 +382,7 @@ async fn test_distributed_dist_spec_3(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(input_handler)
+        .input(input_handler.into())
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)
@@ -454,7 +456,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
     let var_names = BTreeSet::from(["w".into(), "y".into(), "z".into()]);
     let spec = parse_spec(spec);
 
-    let (output_writer, output_stream) = manual_output(var_names).await;
+    let (output_writer, output_stream) = channel_output(var_names).await;
 
     let var_msg_types = BTreeMap::from([
         ("x".into(), "Int32".to_string()),
@@ -465,7 +467,7 @@ async fn test_distributed_dist_spec_4(executor: Rc<LocalExecutor<'static>>) {
 
     let monitor = TestDistRuntimeBuilder::new()
         .executor(executor.clone())
-        .input(input_handler)
+        .input(input_handler.into())
         .model(spec)
         .var_msg_types(var_msg_types)
         .static_dist_graph(labelled_graph)

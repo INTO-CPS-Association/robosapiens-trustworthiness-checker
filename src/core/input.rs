@@ -50,9 +50,9 @@
 //! logical tick contract; source resolution, opening, windowing, and live ownership
 //! are implemented by the input pipeline modules under `crate::io`.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, pin::Pin};
 
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 
 use super::batch::{self, SegmentAccess, SegmentView};
 use super::{LocalStream, VarName};
@@ -76,6 +76,7 @@ pub(crate) enum InputSegment<V> {
 }
 
 impl<V> SegmentAccess<V> for InputSegment<V> {
+    #[inline(always)]
     fn view(&self) -> SegmentView<'_, V> {
         match self {
             Self::SingletonTicks(updates) => SegmentView::Singleton(updates),
@@ -284,17 +285,15 @@ impl<V> InputBatch<V> {
     }
 
     /// Borrow logical ticks without expanding packed storage.
+    #[inline(always)]
     pub fn ticks(&self) -> InputTicks<'_, V> {
         InputTicks::new(self.segment_cursor(), self.tick_count())
     }
 
     /// Borrow updates in logical order without allocating.
+    #[inline(always)]
     pub fn updates(&self) -> InputUpdates<'_, V> {
-        InputUpdates::new(
-            self.segment_cursor(),
-            self.tick_count(),
-            self.update_count(),
-        )
+        InputUpdates::new(self.segment_cursor(), self.update_count())
     }
 
     /// Move physical segments into another batch. This is the preferred way
@@ -479,12 +478,14 @@ pub type InputUpdateRef<'a, V> = batch::UpdateRef<'a, V>;
 
 pub struct InputTicks<'a, V>(batch::Ticks<'a, InputSegment<V>, V>);
 impl<'a, V> InputTicks<'a, V> {
+    #[inline(always)]
     fn new(segments: batch::SegmentCursor<'a, InputSegment<V>>, remaining: usize) -> Self {
         Self(batch::Ticks::new(segments, remaining))
     }
 }
 impl<'a, V> Iterator for InputTicks<'a, V> {
     type Item = InputTick<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
@@ -496,16 +497,14 @@ impl<V> ExactSizeIterator for InputTicks<'_, V> {}
 
 pub struct InputUpdates<'a, V>(batch::Updates<'a, InputSegment<V>, V>);
 impl<'a, V> InputUpdates<'a, V> {
-    fn new(
-        segments: batch::SegmentCursor<'a, InputSegment<V>>,
-        tick_count: usize,
-        update_count: usize,
-    ) -> Self {
-        Self(batch::Updates::new(segments, tick_count, update_count))
+    #[inline(always)]
+    fn new(segments: batch::SegmentCursor<'a, InputSegment<V>>, update_count: usize) -> Self {
+        Self(batch::Updates::new(segments, update_count))
     }
 }
 impl<'a, V> Iterator for InputUpdates<'a, V> {
     type Item = InputUpdateRef<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
@@ -535,9 +534,9 @@ impl<V> ExactSizeIterator for OwnedInputTicks<V> {}
 /// Ordinary runtimes receive data only. Reconfiguration is available through
 /// the private `io::reconfigurable_input` adapter instead.
 // ANCHOR: input_stream_alias
-pub type InputStream<V> = LocalStream<anyhow::Result<InputBatch<V>>>;
+pub type InputStream<V> = LocalStream<Result<InputBatch<V>, super::InputError>>;
 // ANCHOR_END: input_stream_alias
-pub(crate) type InputTickStream<V> = LocalStream<anyhow::Result<Vec<InputUpdate<V>>>>;
+pub(crate) type InputTickStream<V> = LocalStream<Result<Vec<InputUpdate<V>>, super::InputError>>;
 
 pub fn empty_input_stream<V: 'static>() -> InputStream<V> {
     Box::pin(futures::stream::empty())
@@ -565,7 +564,7 @@ where
 {
     Box::pin(async_stream::try_stream! {
         while let Some(batch) = stream.next().await {
-            yield batch?.try_map_values(&mut map).map_err(Into::into)?;
+            yield batch?.try_map_values(&mut map).map_err(|error| super::InputError::from(error.into()))?;
         }
     })
 }
@@ -587,6 +586,22 @@ where
 /// Expand a data-only batch into owned logical ticks at a runtime fanout or
 /// evaluator boundary.
 pub(crate) fn into_tick_stream<V: 'static>(mut input: InputStream<V>) -> InputTickStream<V> {
+    Box::pin(async_stream::try_stream! {
+        while let Some(batch) = input.next().await {
+            for tick in batch?.into_ticks() {
+                yield tick;
+            }
+        }
+    })
+}
+
+pub(crate) fn borrowed_tick_stream<'a, V, S>(
+    input: &'a mut S,
+) -> Pin<Box<dyn Stream<Item = Result<Vec<InputUpdate<V>>, super::InputError>> + 'a>>
+where
+    V: 'a,
+    S: Stream<Item = Result<InputBatch<V>, super::InputError>> + Unpin + ?Sized + 'a,
+{
     Box::pin(async_stream::try_stream! {
         while let Some(batch) = input.next().await {
             for tick in batch?.into_ticks() {

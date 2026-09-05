@@ -9,11 +9,10 @@ use smol::LocalExecutor;
 use uuid::Uuid;
 
 use crate::core::{
-    InputBatch, InputStream, LocalStream, OutputError, OutputInterface, OutputRoute, VarName,
+    InputBatch, InputStream, LocalStream, OutputBinding, OutputError, OutputInterface, VarName,
     empty_input_stream,
 };
 use crate::runtime::mstlo::{MstloTimedValue, MstloValue};
-use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
 
 use crate::io::output::{RosPublisher, validate_ros_interface};
@@ -138,16 +137,16 @@ impl RosPublisher<MstloTimedValue> for MstloOutputPublisher {
     }
 }
 
-/// Create the typed publisher used by [`crate::io::output::RosOutputBackend`].
+/// Create the typed publisher used by the opened ROS output owner.
 pub(crate) fn create_mstlo_output_publisher(
     node: &mut r2r::Node,
-    route: &OutputRoute,
+    route: &OutputBinding,
 ) -> Result<Box<dyn RosPublisher<MstloTimedValue>>, OutputError> {
     let (topic, message_type) = ros_output_route_mapping(route)?;
     if message_type != RosMsgType::MstloTimedValue {
         return Err(OutputError::invalid(format!(
             "MSTLO ROS output route `{}` has message type `{message_type:?}`, expected `MstloTimedValue`",
-            route.variable
+            route.variable()
         )));
     }
 
@@ -175,20 +174,19 @@ fn validate_mapping(mapping: &BTreeMap<String, (String, String)>) -> anyhow::Res
 }
 
 /// Subscribe to native MSTLO ROS messages.
-pub fn input_stream(
+pub fn open_ros_input(
     executor: Rc<LocalExecutor<'static>>,
     mapping: BTreeMap<String, (String, String)>,
-) -> anyhow::Result<InputStream<MstloTimedValue>> {
+) -> anyhow::Result<(InputStream<MstloTimedValue>, super::RosInputControl)> {
     validate_mapping(&mapping)?;
     if mapping.is_empty() {
-        return Ok(empty_input_stream());
+        return Ok((empty_input_stream(), super::RosInputControl::inactive()));
     }
 
     let context = r2r::Context::create()?;
     let node_name = format!("input_monitor_{}", Uuid::new_v4().simple());
     let mut node = r2r::Node::create(context, &node_name, "")?;
     let cancellation_token = CancellationToken::new();
-    let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
     let cancellation_for_spin = cancellation_token.clone();
 
     let mut streams: Vec<LocalStream<anyhow::Result<(VarName, MstloTimedValue)>>> = Vec::new();
@@ -206,29 +204,31 @@ pub fn input_stream(
             );
             Ok((variable.clone(), value))
         })) as LocalStream<anyhow::Result<(VarName, MstloTimedValue)>>;
-        streams.push(drop_guard_stream(stream, drop_guard.clone()));
+        streams.push(stream);
     }
 
-    executor
-        .spawn(async move {
-            let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
-            loop {
-                futures::select_biased! {
-                    _ = cancellation_for_spin.cancelled().fuse() => break,
-                    _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
-                }
+    let spinner = executor.spawn(async move {
+        let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
+        loop {
+            futures::select_biased! {
+                _ = cancellation_for_spin.cancelled().fuse() => break,
+                _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
             }
-        })
-        .detach();
+        }
+    });
 
     let merged = futures::stream::select_all(streams);
-    Ok(Box::pin(async_stream::try_stream! {
+    let stream = Box::pin(async_stream::try_stream! {
         futures::pin_mut!(merged);
         while let Some(event) = merged.next().await {
             let (variable, value) = event?;
             yield InputBatch::update(variable, value);
         }
-    }))
+    });
+    Ok((
+        stream,
+        super::RosInputControl::new(cancellation_token, spinner),
+    ))
 }
 
 #[cfg(test)]

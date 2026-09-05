@@ -5,6 +5,8 @@ pub use variables::*;
 pub mod interfaces;
 pub use interfaces::*;
 mod batch;
+mod io_error;
+pub use io_error::{ErrorDetails, InputError, IoErrorKind, OutputError};
 pub mod input;
 pub(crate) mod json;
 pub use input::*;

@@ -12,10 +12,8 @@ use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
     LocalStream, Value,
     core::JsonStreamValue,
-    io::mqtt::{MqttFactory, MqttMessage},
+    io::mqtt::{self, MqttMessage},
 };
-
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 #[instrument(level = tracing::Level::INFO)]
 pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
@@ -33,8 +31,7 @@ pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
 #[instrument(level = tracing::Level::INFO)]
 pub async fn get_mqtt_outputs(topic: String, client_name: String, port: u16) -> LocalStream<Value> {
     // Create a new client
-    let (mqtt_client, stream) = MQTT_FACTORY
-        .connect_and_receive(&format!("tcp://localhost:{}", port), 0)
+    let (mqtt_client, stream) = mqtt::connect_and_receive(&format!("tcp://localhost:{}", port))
         .await
         .expect("Failed to create MQTT client");
     info!("Received client for Z",);
@@ -43,8 +40,9 @@ pub async fn get_mqtt_outputs(topic: String, client_name: String, port: u16) -> 
     //let mut stream = mqtt_client.clone().get_stream(10);
     mqtt_client.subscribe(&topic, 1).await.unwrap();
     info!("Subscribed to Z outputs");
-    return Box::pin(stream.map(|msg| {
-        let binding = msg;
+    Box::pin(stream.map(move |msg| {
+        let _keep_client_alive = &mqtt_client;
+        let binding = msg.expect("MQTT output receive failed");
         let payload = binding.payload;
         let res: Value = serde_json::from_str(&payload).unwrap();
         debug!(?res, topic=?binding.topic, "Received message");
@@ -60,7 +58,7 @@ pub async fn get_mqtt_outputs(topic: String, client_name: String, port: u16) -> 
             }
             _ => res,
         }
-    }));
+    }))
 }
 
 /// Publishes all values from a Vec<Value>.
@@ -110,8 +108,7 @@ pub async fn dummy_stream_mqtt_payload_publisher(
         client_name, topic, payloads_len
     );
 
-    let mqtt_client = MQTT_FACTORY
-        .connect(&format!("tcp://localhost:{port}"))
+    let mqtt_client = mqtt::connect(&format!("tcp://localhost:{port}"))
         .await
         .map_err(|error| anyhow::anyhow!("Failed to create MQTT client: {error}"))?;
 
@@ -133,11 +130,10 @@ pub async fn dummy_stream_mqtt_payload_publisher(
         smol::Timer::after(std::time::Duration::from_millis(50)).await;
     }
 
-    smol::Timer::after(std::time::Duration::from_millis(100)).await;
     mqtt_client
         .disconnect()
         .await
-        .map_err(|error| anyhow::anyhow!("Failed to disconnect MQTT client: {error:?}"))?;
+        .map_err(|error| anyhow::anyhow!("Failed to disconnect MQTT client: {error}"))?;
     Ok(())
 }
 
@@ -151,8 +147,7 @@ pub async fn dummy_stream_mqtt_json_publisher<T: Debug + JsonStreamValue + 'stat
     port: u16,
 ) -> Result<(), anyhow::Error> {
     let uri = format!("tcp://localhost:{port}");
-    let mqtt_client = MQTT_FACTORY
-        .connect(&uri)
+    let mqtt_client = mqtt::connect(&uri)
         .await
         .map_err(|error| anyhow::anyhow!("Failed to create MQTT client: {error}"))?;
 
@@ -170,6 +165,10 @@ pub async fn dummy_stream_mqtt_json_publisher<T: Debug + JsonStreamValue + 'stat
         smol::Timer::after(std::time::Duration::from_millis(50)).await;
     }
     info!("Finished publishing {index}/{values_len} JSON messages on topic {topic}");
+    mqtt_client
+        .disconnect()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to disconnect MQTT client: {error}"))?;
     Ok(())
 }
 
@@ -179,13 +178,14 @@ pub async fn get_mqtt_json_outputs<V: JsonStreamValue + 'static>(
     _client_name: String,
     port: u16,
 ) -> LocalStream<V> {
-    let (mqtt_client, stream) = MQTT_FACTORY
-        .connect_and_receive(&format!("tcp://localhost:{port}"), 0)
+    let (mqtt_client, stream) = mqtt::connect_and_receive(&format!("tcp://localhost:{port}"))
         .await
         .expect("Failed to create MQTT client");
     mqtt_client.subscribe(&topic, 1).await.unwrap();
 
     Box::pin(stream.map(move |message| {
+        let _keep_client_alive = &mqtt_client;
+        let message = message.expect("MQTT typed output receive failed");
         V::decode_mqtt_payload(message.payload.as_bytes()).expect("MQTT typed output should decode")
     }))
 }
@@ -203,8 +203,7 @@ async fn publish_values<T: Debug + Sized + Serialize + 'static>(
         client_name, topic, values_len
     );
 
-    let mqtt_client = MQTT_FACTORY
-        .connect(&format!("tcp://localhost:{}", port))
+    let mqtt_client = mqtt::connect(&format!("tcp://localhost:{}", port))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create MQTT client: {}", e))?;
 
@@ -252,15 +251,9 @@ async fn publish_values<T: Debug + Sized + Serialize + 'static>(
         values_len, topic
     );
 
-    // Ensure we wait a moment before disconnecting to allow for message delivery
-    smol::Timer::after(std::time::Duration::from_millis(100)).await;
-
-    if let Err(e) = mqtt_client.disconnect().await {
-        debug!("Failed to disconnect MQTT client {}: {:?}", client_name, e);
-        // Don't fail the test just because disconnection failed
-    } else {
-        debug!("Successfully disconnected MQTT client {}", client_name);
-    }
-
+    mqtt_client
+        .disconnect()
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to disconnect MQTT client: {error}"))?;
     Ok(())
 }

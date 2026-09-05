@@ -7,7 +7,7 @@ pub use dist_graph_provider::RosDistGraphProvider;
 pub use mstlo::{duration_from_ros, duration_to_ros, mstlo_value_from_ros, mstlo_value_to_ros};
 mod input_stream;
 pub(crate) use input_stream::control_stream;
-pub use input_stream::input_stream;
+pub use input_stream::{RosInputControl, open_ros_input};
 pub mod ros_topic_stream_mapping;
 pub use ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
 mod value_publisher;
@@ -21,8 +21,8 @@ use std::rc::Rc;
 
 use smol::LocalExecutor;
 
-use crate::core::{InputStream, RosStreamValue, SharedOutputBackend, Value};
-use crate::io::output::{RosOutputBackend, create_value_ros_publisher, validate_value_interface};
+use crate::core::{InputStream, OutputError, OutputInterface, OutputWriter, RosStreamValue, Value};
+use crate::io::output::{create_value_ros_publisher, open_ros_output, validate_value_interface};
 use crate::runtime::mstlo::MstloTimedValue;
 
 use ros_topic_stream_mapping::{VariableMappingData, string_to_ros_msg_type};
@@ -45,58 +45,61 @@ fn raw_mapping_to_ros(
 }
 
 impl RosStreamValue for Value {
-    fn ros_input_stream(
+    fn open_ros_input(
         executor: Rc<LocalExecutor<'static>>,
         mapping: BTreeMap<String, (String, String)>,
-    ) -> anyhow::Result<InputStream<Self>> {
-        input_stream(executor, raw_mapping_to_ros(mapping)?)
+    ) -> anyhow::Result<(InputStream<Self>, RosInputControl)> {
+        open_ros_input(executor, raw_mapping_to_ros(mapping)?)
     }
 
-    fn ros_output_backend(
+    fn open_ros_output(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-    ) -> anyhow::Result<SharedOutputBackend<Self>> {
-        Ok(Rc::new(RosOutputBackend::<Self>::new(
+        interface: OutputInterface,
+    ) -> futures::future::LocalBoxFuture<'static, Result<OutputWriter<Self>, OutputError>> {
+        Box::pin(open_ros_output::<Self>(
             executor,
             node_name,
+            interface,
             validate_value_interface,
             create_value_ros_publisher,
-        )))
+        ))
     }
 }
 
 impl RosStreamValue for MstloTimedValue {
-    fn ros_input_stream(
+    fn open_ros_input(
         executor: Rc<LocalExecutor<'static>>,
         mapping: BTreeMap<String, (String, String)>,
-    ) -> anyhow::Result<InputStream<Self>> {
-        mstlo::input_stream(executor, mapping)
+    ) -> anyhow::Result<(InputStream<Self>, RosInputControl)> {
+        mstlo::open_ros_input(executor, mapping)
     }
 
-    fn ros_output_backend(
+    fn open_ros_output(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-    ) -> anyhow::Result<SharedOutputBackend<Self>> {
-        Ok(Rc::new(RosOutputBackend::<Self>::new(
+        interface: OutputInterface,
+    ) -> futures::future::LocalBoxFuture<'static, Result<OutputWriter<Self>, OutputError>> {
+        Box::pin(open_ros_output::<Self>(
             executor,
             node_name,
+            interface,
             mstlo::validate_output_interface,
             mstlo::create_mstlo_output_publisher,
-        )))
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{OutputInterface, OutputRole, OutputRoute, VarName};
+    use crate::core::{FormatId, OutputBinding, OutputInterface, OutputRole, Route, VarName};
 
     #[test]
     fn dynamic_output_rejects_mstlo_messages_during_configuration() {
-        let interface = OutputInterface::from_routes([OutputRoute::new(
+        let interface = OutputInterface::from_bindings([OutputBinding::new(
             VarName::new("out"),
-            Some("/out".to_owned()),
-            Some("MstloTimedValue".to_owned()),
+            Some(Route::new("/out", Some(FormatId::new("MstloTimedValue").unwrap())).unwrap()),
             OutputRole::Output,
         )])
         .expect("single-route interface should be valid");

@@ -2,74 +2,73 @@ use std::collections::BTreeMap;
 
 use crate::VarName;
 use crate::core::{InputStream, JsonStreamValue, LocalStream};
-use ::core::cfg_select;
 
 use crate::io::ReconfigurationRequest;
+use crate::io::RetryPolicy;
 
 #[derive(Debug)]
 pub(crate) enum MqttInputItem<V> {
     Data(crate::InputBatch<V>),
     Control(ReconfigurationRequest),
+    Boundary(u64),
 }
 
 pub(super) type VarTopicMap = BTreeMap<VarName, String>;
 pub(super) type InverseVarTopicMap = BTreeMap<String, VarName>;
+
+pub(crate) fn validate_input_format(format: &crate::core::FormatId) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        matches!(format.as_str(), "json" | "json5"),
+        "MQTT input format `{format}` is unsupported; expected `json` or `json5`"
+    );
+    Ok(())
+}
 
 /// MQTT client implementation used for input subscriptions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MqttInputBackend {
     #[default]
     Rumqttc,
-    Paho,
 }
 
 impl MqttInputBackend {
-    pub(crate) async fn open_items<V: JsonStreamValue>(
+    pub(crate) async fn open_owned_data<V: JsonStreamValue>(
         self,
         host: &str,
         port: Option<u16>,
         var_topics: VarTopicMap,
-        max_reconnect_attempts: u32,
-        control_topic: Option<String>,
-    ) -> anyhow::Result<LocalStream<anyhow::Result<MqttInputItem<V>>>> {
-        validate_topic_mapping(&var_topics, control_topic.as_deref())?;
-        match self {
-            Self::Rumqttc => {
-                super::rumqttc_input_stream::input_stream_items(
-                    host,
-                    port,
-                    var_topics,
-                    max_reconnect_attempts,
-                    control_topic,
-                )
-                .await
-            }
-            Self::Paho => {
-                cfg_select! {
-                    feature = "mqtt" => {
-                    let items = super::input_stream::input_stream_items(
-                        host,
-                        port,
-                        var_topics,
-                        max_reconnect_attempts,
-                        control_topic,
-                    )
-                    .await?;
-                    Ok(items)
-                    },
-                    _ => {
-                        let _ = (
-                            host,
-                            port,
-                            var_topics,
-                            max_reconnect_attempts,
-                            control_topic,
-                        );
-                        anyhow::bail!("Paho MQTT support not enabled")
-                    },
-                }
-            }
-        }
+        retry: RetryPolicy,
+    ) -> anyhow::Result<(
+        InputStream<V>,
+        super::rumqttc_input_stream::RumqttcInputControl,
+    )> {
+        let (items, owner) =
+            super::rumqttc_input_stream::owned_input_stream_items(host, port, var_topics, retry)
+                .await?;
+        let stream = Box::pin(
+            async_stream::try_stream! { let mut items=items; while let Some(item)=futures::StreamExt::next(&mut items).await { match item? { MqttInputItem::Data(batch)=>yield batch, MqttInputItem::Control(_)=>unreachable!("data-only MQTT stream cannot receive control"), MqttInputItem::Boundary(_)=>unreachable!("data-only MQTT stream cannot receive boundary") } } },
+        );
+        Ok((stream, owner))
+    }
+    pub(crate) async fn open_reconfigurable<V: JsonStreamValue>(
+        self,
+        host: &str,
+        port: Option<u16>,
+        var_topics: VarTopicMap,
+        retry: RetryPolicy,
+        control_topic: String,
+    ) -> anyhow::Result<(
+        LocalStream<anyhow::Result<MqttInputItem<V>>>,
+        super::rumqttc_input_stream::RumqttcInputControl,
+    )> {
+        super::rumqttc_input_stream::reconfigurable_input_stream_items(
+            host,
+            port,
+            var_topics,
+            retry,
+            control_topic,
+        )
+        .await
     }
 
     pub(crate) async fn open_data<V: JsonStreamValue>(
@@ -77,19 +76,21 @@ impl MqttInputBackend {
         host: &str,
         port: Option<u16>,
         var_topics: VarTopicMap,
-        max_reconnect_attempts: u32,
+        retry: RetryPolicy,
     ) -> anyhow::Result<InputStream<V>> {
-        let items = self
-            .open_items(host, port, var_topics, max_reconnect_attempts, None)
-            .await?;
+        let (items, mut owner) =
+            super::rumqttc_input_stream::owned_input_stream_items(host, port, var_topics, retry)
+                .await?;
         Ok(Box::pin(async_stream::try_stream! {
             let mut items = items;
             while let Some(item) = futures::StreamExt::next(&mut items).await {
                 match item? {
                     MqttInputItem::Data(batch) => yield batch,
                     MqttInputItem::Control(_) => unreachable!("data-only MQTT stream cannot receive control"),
+                    MqttInputItem::Boundary(_) => unreachable!("data-only MQTT stream cannot receive boundary"),
                 }
             }
+            owner.shutdown().await?;
         }))
     }
 }
@@ -99,11 +100,9 @@ pub async fn input_stream<V: JsonStreamValue>(
     host: &str,
     port: Option<u16>,
     var_topics: VarTopicMap,
-    max_reconnect_attempts: u32,
+    retry: RetryPolicy,
 ) -> anyhow::Result<InputStream<V>> {
-    backend
-        .open_data(host, port, var_topics, max_reconnect_attempts)
-        .await
+    backend.open_data(host, port, var_topics, retry).await
 }
 
 pub(super) fn invert_topic_mapping(var_topics: &VarTopicMap) -> InverseVarTopicMap {

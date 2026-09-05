@@ -25,11 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install dependencies
-        run: |
-          sudo apt-get update &&
-          sudo apt-get install -y libssl-dev cmake build-essential # Used by paho-mqtt
-
         # Do all the building first to fail early - sometimes we push without building specific settings:
       - name: Build project
         run: cargo build

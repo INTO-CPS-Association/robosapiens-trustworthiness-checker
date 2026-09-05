@@ -15,7 +15,7 @@
 //! | [`OutputUpdate`] | Names one variable and value inside a logical output tick. |
 //! | [`OutputBatch`] | Owns ordered logical ticks while preserving their native physical segments. |
 //! | [`OutputTick`], [`OutputTicks`], and [`OutputUpdates`] | Borrow the logical tick and update views without expanding packed rows. |
-//! | [`OutputInterface`] and [`OutputRoute`] | Describe the resolved variables, roles, and transport routes supported by one opened writer. |
+//! | [`OutputInterface`] and [`OutputBinding`] | Describe the resolved variables, roles, and transport routes supported by one opened writer. |
 //! | [`OutputWriter`] | Applies readiness, send, flush, close, and sticky-error semantics to an output sink. |
 //! | [`OutputError`] and [`OutputErrorKind`] | Classify closed, backend, source, and invalid-output failures. |
 //!
@@ -46,8 +46,7 @@
 //!
 //! # Writer lifecycle
 //!
-//! [`OutputWriter::send`] admits a batch and drives the wrapped sink back to readiness
-//! without forcing a flush. [`OutputWriter::send_and_flush`] adds a downstream flush
+//! [`OutputWriter::feed`] admits a batch without flushing. [`OutputWriter::send`] adds a downstream flush
 //! barrier. The first operation failure is retained for later data operations, while
 //! [`OutputWriter::close`] still attempts wrapped cleanup and combines a cleanup error
 //! with the retained primary failure.
@@ -67,118 +66,16 @@ use std::{
     rc::Rc,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 
-use async_trait::async_trait;
-use futures::{Sink, SinkExt, future::LocalBoxFuture};
+use futures::{Sink, SinkExt};
 
 use super::batch::{self, SegmentAccess, SegmentView};
-use super::{StreamData, ValidatedLayout, VarName};
+use super::{OutputError, ValidatedLayout, VarName};
 
-/// The kind of failure reported by an output operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputErrorKind {
-    Closed,
-    Backend,
-    Source,
-    Invalid,
-}
-
-/// An error from an output source, route, or sink.
-///
-/// The payloads are owned strings deliberately: output errors are cloneable so
-/// [`OutputWriter`] can retain the first failure and return the same failure
-/// from every subsequent operation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OutputError {
-    /// The output writer or sink has already been closed.
-    Closed,
-    /// A backend could not accept or finish an output operation.
-    Backend(String),
-    /// An output source failed while producing output.
-    Source(String),
-    /// Output data or routing configuration is invalid.
-    Invalid(String),
-}
-
-impl OutputError {
-    pub fn backend(error: impl fmt::Display) -> Self {
-        Self::Backend(error.to_string())
-    }
-
-    pub fn source(error: impl fmt::Display) -> Self {
-        Self::Source(error.to_string())
-    }
-
-    pub fn invalid(error: impl fmt::Display) -> Self {
-        Self::Invalid(error.to_string())
-    }
-
-    pub fn kind(&self) -> OutputErrorKind {
-        match self {
-            Self::Closed => OutputErrorKind::Closed,
-            Self::Backend(_) => OutputErrorKind::Backend,
-            Self::Source(_) => OutputErrorKind::Source,
-            Self::Invalid(_) => OutputErrorKind::Invalid,
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        matches!(self, Self::Closed)
-    }
-
-    pub fn is_backend(&self) -> bool {
-        matches!(self, Self::Backend(_))
-    }
-
-    pub fn is_source(&self) -> bool {
-        matches!(self, Self::Source(_))
-    }
-
-    pub fn is_invalid(&self) -> bool {
-        matches!(self, Self::Invalid(_))
-    }
-
-    pub fn message(&self) -> Option<&str> {
-        match self {
-            Self::Closed => None,
-            Self::Backend(message) | Self::Source(message) | Self::Invalid(message) => {
-                Some(message)
-            }
-        }
-    }
-}
-
-impl fmt::Display for OutputError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Closed => formatter.write_str("output is closed"),
-            Self::Backend(error) => write!(formatter, "output backend error: {error}"),
-            Self::Source(error) => write!(formatter, "output source error: {error}"),
-            Self::Invalid(error) => write!(formatter, "invalid output: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for OutputError {}
-
-impl From<anyhow::Error> for OutputError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::invalid(error)
-    }
-}
-
-impl From<String> for OutputError {
-    fn from(error: String) -> Self {
-        Self::invalid(error)
-    }
-}
-
-impl From<&str> for OutputError {
-    fn from(error: &str) -> Self {
-        Self::invalid(error)
-    }
-}
+/// The shared classification used by output errors.
+pub type OutputErrorKind = super::IoErrorKind;
 
 /// One variable update in an output tick.
 pub type OutputUpdate<V> = batch::Update<V>;
@@ -203,6 +100,7 @@ enum OutputSegment<V> {
 }
 
 impl<V> SegmentAccess<V> for OutputSegment<V> {
+    #[inline(always)]
     fn view(&self) -> SegmentView<'_, V> {
         match self {
             Self::SingletonTicks(updates) => SegmentView::Singleton(updates),
@@ -447,17 +345,15 @@ impl<V> OutputBatch<V> {
     }
 
     /// Borrow logical ticks without expanding packed storage.
+    #[inline(always)]
     pub fn ticks(&self) -> OutputTicks<'_, V> {
         OutputTicks::new(self.segment_cursor(), self.tick_count())
     }
 
     /// Borrow updates in logical order without allocating.
+    #[inline(always)]
     pub fn updates(&self) -> OutputUpdates<'_, V> {
-        OutputUpdates::new(
-            self.segment_cursor(),
-            self.tick_count(),
-            self.update_count(),
-        )
+        OutputUpdates::new(self.segment_cursor(), self.update_count())
     }
 
     /// Move physical segments into another batch. This preserves the producer's
@@ -792,12 +688,14 @@ pub type OutputTick<'a, V> = batch::Tick<'a, V>;
 
 pub struct OutputTicks<'a, V>(batch::Ticks<'a, OutputSegment<V>, V>);
 impl<'a, V> OutputTicks<'a, V> {
+    #[inline(always)]
     fn new(segments: batch::SegmentCursor<'a, OutputSegment<V>>, remaining: usize) -> Self {
         Self(batch::Ticks::new(segments, remaining))
     }
 }
 impl<'a, V> Iterator for OutputTicks<'a, V> {
     type Item = OutputTick<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
@@ -809,16 +707,14 @@ impl<V> ExactSizeIterator for OutputTicks<'_, V> {}
 
 pub struct OutputUpdates<'a, V>(batch::Updates<'a, OutputSegment<V>, V>);
 impl<'a, V> OutputUpdates<'a, V> {
-    fn new(
-        segments: batch::SegmentCursor<'a, OutputSegment<V>>,
-        tick_count: usize,
-        update_count: usize,
-    ) -> Self {
-        Self(batch::Updates::new(segments, tick_count, update_count))
+    #[inline(always)]
+    fn new(segments: batch::SegmentCursor<'a, OutputSegment<V>>, update_count: usize) -> Self {
+        Self(batch::Updates::new(segments, update_count))
     }
 }
 impl<'a, V> Iterator for OutputUpdates<'a, V> {
     type Item = OutputUpdateRef<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
@@ -886,50 +782,118 @@ impl fmt::Display for OutputRole {
     }
 }
 
-/// A variable and its role in an output interface.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct OutputRoute {
-    pub variable: VarName,
-    pub topic: Option<String>,
-    pub message_type: Option<String>,
-    pub role: OutputRole,
+/// Opaque identifier for the representation carried at a transport address.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub struct FormatId(Box<str>);
+
+impl FormatId {
+    pub fn new(value: impl Into<Box<str>>) -> Self {
+        Self(value.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl OutputRoute {
-    pub fn new(
-        variable: VarName,
-        topic: Option<String>,
-        message_type: Option<String>,
-        role: OutputRole,
-    ) -> Self {
-        Self {
-            variable,
-            topic,
-            message_type,
-            role,
+impl fmt::Display for FormatId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Canonical transport-independent address and optional representation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Route {
+    address: Box<str>,
+    format: Option<FormatId>,
+}
+
+impl serde::Serialize for Route {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.format {
+            Some(format) => (self.address.as_ref(), format).serialize(serializer),
+            None => self.address.serialize(serializer),
         }
     }
+}
 
-    pub fn output(variable: VarName) -> Self {
-        Self::new(variable, None, None, OutputRole::Output)
+impl Route {
+    pub fn new(address: impl Into<Box<str>>, format: Option<FormatId>) -> anyhow::Result<Self> {
+        let address = address.into();
+        if address.trim().is_empty() {
+            anyhow::bail!("route address cannot be empty");
+        }
+        if format
+            .as_ref()
+            .is_some_and(|value| value.as_str().trim().is_empty())
+        {
+            anyhow::bail!("route format cannot be empty");
+        }
+        Ok(Self { address, format })
     }
-
-    pub fn auxiliary(variable: VarName) -> Self {
-        Self::new(variable, None, None, OutputRole::Auxiliary)
+    pub fn address(&self) -> &str {
+        &self.address
     }
-
-    pub fn from_role(role: OutputRole, variable: VarName) -> Self {
-        Self::new(variable, None, None, role)
+    pub fn format(&self) -> Option<&FormatId> {
+        self.format.as_ref()
     }
+}
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct InputBinding {
+    variable: VarName,
+    route: Route,
+}
+impl InputBinding {
+    pub fn new(variable: VarName, route: Route) -> Self {
+        Self { variable, route }
+    }
     pub fn variable(&self) -> &VarName {
         &self.variable
     }
+    pub fn route(&self) -> &Route {
+        &self.route
+    }
+}
 
+/// A variable, role, and canonical route in an output interface.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OutputBinding {
+    variable: VarName,
+    route: Option<Route>,
+    role: OutputRole,
+}
+
+impl OutputBinding {
+    pub fn new(variable: VarName, route: Option<Route>, role: OutputRole) -> Self {
+        Self {
+            variable,
+            route,
+            role,
+        }
+    }
+    pub fn output(variable: VarName) -> Self {
+        Self::new(variable, None, OutputRole::Output)
+    }
+    pub fn auxiliary(variable: VarName) -> Self {
+        Self::new(variable, None, OutputRole::Auxiliary)
+    }
+    pub fn from_role(role: OutputRole, variable: VarName) -> Self {
+        Self::new(variable, None, role)
+    }
+    pub fn variable(&self) -> &VarName {
+        &self.variable
+    }
+    pub fn route(&self) -> Option<&Route> {
+        self.route.as_ref()
+    }
+    pub fn role(&self) -> OutputRole {
+        self.role
+    }
     pub fn validate(&self) -> Result<(), OutputError> {
         if self.variable.name().is_empty() {
             return Err(OutputError::invalid(
-                "output route variable cannot be empty",
+                "output binding variable cannot be empty",
             ));
         }
         Ok(())
@@ -940,30 +904,30 @@ impl OutputRoute {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutputInterface {
     /// Resolved, fixed routes shared by every writer opened for this interface.
-    routes: Arc<[OutputRoute]>,
+    bindings: Arc<[OutputBinding]>,
     indexes: Arc<BTreeMap<VarName, usize>>,
 }
 
 impl OutputInterface {
-    pub fn new(routes: impl Into<Arc<[OutputRoute]>>) -> Result<Self, OutputError> {
-        let routes = routes.into();
-        Self::validate_routes(&routes)?;
-        let indexes = routes
+    pub fn new(bindings: impl Into<Arc<[OutputBinding]>>) -> Result<Self, OutputError> {
+        let bindings = bindings.into();
+        Self::validate_bindings(&bindings)?;
+        let indexes = bindings
             .iter()
             .enumerate()
             .map(|(index, route)| (route.variable.clone(), index))
             .collect();
         Ok(Self {
-            routes,
+            bindings,
             indexes: Arc::new(indexes),
         })
     }
 
-    pub fn from_routes<R>(routes: R) -> Result<Self, OutputError>
+    pub fn from_bindings<R>(bindings: R) -> Result<Self, OutputError>
     where
-        R: IntoIterator<Item = OutputRoute>,
+        R: IntoIterator<Item = OutputBinding>,
     {
-        Self::new(routes.into_iter().collect::<Vec<_>>())
+        Self::new(bindings.into_iter().collect::<Vec<_>>())
     }
 
     pub fn empty() -> Self {
@@ -975,51 +939,53 @@ impl OutputInterface {
     where
         I: IntoIterator<Item = VarName>,
     {
-        Self::from_routes(variables.into_iter().map(OutputRoute::output))
+        Self::from_bindings(variables.into_iter().map(OutputBinding::output))
     }
 
-    pub fn validate_routes(routes: &[OutputRoute]) -> Result<(), OutputError> {
-        let mut seen = HashSet::with_capacity(routes.len());
-        for route in routes {
-            route.validate()?;
-            if !seen.insert(&route.variable) {
+    pub fn validate_bindings(bindings: &[OutputBinding]) -> Result<(), OutputError> {
+        let mut seen = HashSet::with_capacity(bindings.len());
+        for binding in bindings {
+            binding.validate()?;
+            if !seen.insert(&binding.variable) {
                 return Err(OutputError::invalid(format!(
                     "output route contains duplicate variable `{}`",
-                    route.variable
+                    binding.variable
                 )));
             }
         }
         Ok(())
     }
 
-    pub fn routes(&self) -> &[OutputRoute] {
-        &self.routes
+    pub fn bindings(&self) -> &[OutputBinding] {
+        &self.bindings
     }
 
-    pub fn shared_routes(&self) -> Arc<[OutputRoute]> {
-        Arc::clone(&self.routes)
+    pub fn shared_bindings(&self) -> Arc<[OutputBinding]> {
+        Arc::clone(&self.bindings)
     }
 
     pub fn len(&self) -> usize {
-        self.routes.len()
+        self.bindings.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.routes.is_empty()
+        self.bindings.is_empty()
     }
 
-    pub fn route(&self, variable: &VarName) -> Option<&OutputRoute> {
+    pub fn binding(&self, variable: &VarName) -> Option<&OutputBinding> {
         self.indexes
             .get(variable)
-            .and_then(|index| self.routes.get(*index))
+            .and_then(|index| self.bindings.get(*index))
     }
 
     pub fn contains(&self, variable: &VarName) -> bool {
-        self.route(variable).is_some()
+        self.binding(variable).is_some()
     }
 
-    pub fn routes_for(&self, role: OutputRole) -> impl Iterator<Item = &OutputRoute> {
-        self.routes.iter().filter(move |route| route.role == role)
+    pub fn bindings_for(&self, role: OutputRole) -> impl Iterator<Item = &OutputBinding> {
+        self.bindings
+            .iter()
+            .filter(move |binding| binding.role == role)
     }
 
     pub fn validate_batch<V>(&self, batch: &OutputBatch<V>) -> Result<(), OutputError> {
@@ -1036,38 +1002,59 @@ impl OutputInterface {
     }
 }
 
-/// An optional asynchronous interface update operation owned by an opened writer.
-///
-/// The handle is deliberately separate from the data sink so wrappers can retain
-/// it while the backend keeps ownership of its sender or transport resource.
-#[derive(Clone)]
-pub struct OutputInterfaceReconfigurationHandle {
-    operation: Rc<dyn Fn(OutputInterface) -> LocalBoxFuture<'static, Result<(), OutputError>>>,
-}
+/// An opened output owner with an optional in-place binding transition.
+pub trait OutputSink<V>: Sink<OutputBatch<V>, Error = OutputError> {
+    /// Abandon pending work immediately during a timed-out shutdown.
+    fn abort(self: Pin<&mut Self>) {}
 
-impl OutputInterfaceReconfigurationHandle {
-    pub(crate) fn new<F>(operation: F) -> Self
-    where
-        F: Fn(OutputInterface) -> LocalBoxFuture<'static, Result<(), OutputError>> + 'static,
-    {
-        Self {
-            operation: Rc::new(operation),
-        }
-    }
-
-    pub async fn reconfigure(&self, interface: OutputInterface) -> Result<(), OutputError> {
-        (self.operation)(interface).await
+    fn poll_rebind(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        _interface: &OutputInterface,
+    ) -> Poll<Result<(), OutputError>> {
+        Poll::Ready(Err(OutputError::invalid(
+            "output destination does not support interface rebind",
+        )))
     }
 }
 
-/// A local, dynamically dispatched sink for output batches.
-pub type DynOutputSink<V> = Pin<Box<dyn Sink<OutputBatch<V>, Error = OutputError>>>;
+struct PlainOutputSink<S>(Pin<Box<S>>);
+
+impl<V, S> Sink<OutputBatch<V>> for PlainOutputSink<S>
+where
+    S: Sink<OutputBatch<V>, Error = OutputError>,
+{
+    type Error = OutputError;
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.as_mut().poll_ready(cx)
+    }
+    fn start_send(mut self: Pin<&mut Self>, item: OutputBatch<V>) -> Result<(), Self::Error> {
+        self.0.as_mut().start_send(item)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.as_mut().poll_flush(cx)
+    }
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.as_mut().poll_close(cx)
+    }
+}
+impl<V, S> OutputSink<V> for PlainOutputSink<S> where S: Sink<OutputBatch<V>, Error = OutputError> {}
+
+pub type DynOutputSink<V> = Pin<Box<dyn OutputSink<V>>>;
+type DropCleanup<V> = Box<dyn FnOnce(DynOutputSink<V>)>;
+
+#[derive(Clone, Debug)]
+enum OutputRebindState {
+    Idle,
+    Flushing(OutputInterface),
+    Applying(OutputInterface),
+}
 
 #[derive(Clone, Debug)]
 enum OutputCloseState {
     Open,
     Closing,
-    Closed(OutputError),
+    Closed(Result<(), OutputError>),
 }
 
 /// A sticky, local output sink wrapper.
@@ -1077,8 +1064,10 @@ enum OutputCloseState {
 /// after an operation failure. The wrapped close is finalized only once; if it
 /// also fails, its error is attached to the retained primary error.
 pub struct OutputWriter<V> {
-    sink: DynOutputSink<V>,
-    interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
+    sink: Option<DynOutputSink<V>>,
+    drop_cleanup: Option<DropCleanup<V>>,
+    shutdown_timeout: Option<Duration>,
+    rebind_state: OutputRebindState,
     primary_error: Option<OutputError>,
     close_state: OutputCloseState,
 }
@@ -1088,8 +1077,10 @@ impl<V> Unpin for OutputWriter<V> {}
 impl<V> OutputWriter<V> {
     pub fn new(sink: DynOutputSink<V>) -> Self {
         Self {
-            sink,
-            interface_reconfiguration: None,
+            sink: Some(sink),
+            drop_cleanup: None,
+            shutdown_timeout: None,
+            rebind_state: OutputRebindState::Idle,
             primary_error: None,
             close_state: OutputCloseState::Open,
         }
@@ -1099,27 +1090,21 @@ impl<V> OutputWriter<V> {
     where
         S: Sink<OutputBatch<V>, Error = OutputError> + 'static,
     {
-        Self::new(Box::pin(sink))
+        Self::new(Box::pin(PlainOutputSink(Box::pin(sink))))
     }
 
-    pub(crate) fn from_sink_with_interface_reconfiguration<S>(
-        sink: S,
-        interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
-    ) -> Self
+    pub fn from_output_sink<S>(sink: S) -> Self
     where
-        V: 'static,
-        S: Sink<OutputBatch<V>, Error = OutputError> + 'static,
+        S: OutputSink<V> + 'static,
     {
         Self {
-            sink: Box::pin(sink),
-            interface_reconfiguration,
+            sink: Some(Box::pin(sink)),
+            drop_cleanup: None,
+            shutdown_timeout: None,
+            rebind_state: OutputRebindState::Idle,
             primary_error: None,
             close_state: OutputCloseState::Open,
         }
-    }
-
-    pub(crate) fn interface_reconfiguration(&self) -> Option<OutputInterfaceReconfigurationHandle> {
-        self.interface_reconfiguration.clone()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -1130,7 +1115,7 @@ impl<V> OutputWriter<V> {
         self.primary_error.is_some()
             || matches!(
                 &self.close_state,
-                OutputCloseState::Closed(error) if !error.is_closed()
+                OutputCloseState::Closed(Err(error)) if !error.is_closed()
             )
     }
 
@@ -1139,39 +1124,118 @@ impl<V> OutputWriter<V> {
             return Some(error);
         }
         match &self.close_state {
-            OutputCloseState::Closed(error) => Some(error),
+            OutputCloseState::Closed(Err(error)) => Some(error),
+            OutputCloseState::Closed(Ok(())) => None,
             OutputCloseState::Open | OutputCloseState::Closing => None,
         }
     }
 
-    pub fn into_sink(self) -> DynOutputSink<V> {
-        self.sink
+    pub fn into_sink(mut self) -> DynOutputSink<V> {
+        self.sink.take().expect("output writer owns its sink")
+    }
+
+    pub(crate) fn attach_drop_executor(&mut self, executor: Rc<smol::LocalExecutor<'static>>)
+    where
+        V: 'static,
+    {
+        self.drop_cleanup = Some(Box::new(move |mut sink| {
+            executor
+                .spawn(async move {
+                    let _ = SinkExt::close(&mut sink).await;
+                })
+                .detach();
+        }));
+    }
+
+    pub fn with_shutdown_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.shutdown_timeout = timeout;
+        self
+    }
+
+    pub(crate) fn shutdown_timeout(&self) -> Option<Duration> {
+        self.shutdown_timeout
+    }
+
+    pub fn shutdown_deadline(&self) -> crate::io::ShutdownDeadline {
+        self.shutdown_timeout.map_or_else(
+            crate::io::ShutdownDeadline::none,
+            crate::io::ShutdownDeadline::after,
+        )
+    }
+
+    pub(crate) fn abort(&mut self) {
+        if let Some(sink) = self.sink.as_mut() {
+            sink.as_mut().abort();
+        }
+        self.sink.take();
     }
 
     pub async fn feed(&mut self, batch: OutputBatch<V>) -> Result<(), OutputError> {
         SinkExt::feed(self, batch).await
     }
 
-    /// Submit a batch without forcing a downstream flush. This is the
-    /// runtime-facing operation so buffering and coalescing stages can observe
-    /// multiple physical submissions. Call [`Self::flush`] for a completion
-    /// barrier.
+    /// Admit a batch and flush the sink, following [`SinkExt::send`].
     pub async fn send(&mut self, batch: OutputBatch<V>) -> Result<(), OutputError> {
-        SinkExt::feed(self, batch).await?;
-        // `feed` transfers ownership without polling the operation started by
-        // `start_send`. Drive the sink to its next ready point so direct async
-        // backends (notably the manual receiver) can make progress, while
-        // deliberately avoiding `poll_flush`, which would defeat coalescing.
-        match futures::future::poll_fn(|context| self.sink.as_mut().poll_ready(context)).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.is_closed() => Ok(()),
-            Err(error) => Err(self.retain_error(error)),
-        }
+        SinkExt::send(self, batch).await
     }
 
-    /// Submit a batch and wait for the downstream sink to flush it.
-    pub async fn send_and_flush(&mut self, batch: OutputBatch<V>) -> Result<(), OutputError> {
-        SinkExt::send(self, batch).await
+    pub async fn rebind(&mut self, interface: OutputInterface) -> Result<(), OutputError> {
+        if !matches!(self.rebind_state, OutputRebindState::Idle) {
+            let active = match &self.rebind_state {
+                OutputRebindState::Flushing(active) | OutputRebindState::Applying(active) => active,
+                OutputRebindState::Idle => unreachable!(),
+            };
+            if active != &interface {
+                futures::future::poll_fn(|cx| self.poll_rebind(cx)).await?;
+            }
+        }
+        if matches!(self.rebind_state, OutputRebindState::Idle) {
+            self.rebind_state = OutputRebindState::Flushing(interface);
+        }
+        futures::future::poll_fn(|cx| self.poll_rebind(cx)).await
+    }
+
+    fn poll_rebind(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), OutputError>> {
+        if let Some(error) = self.operation_error() {
+            return Poll::Ready(Err(error));
+        }
+        if matches!(self.rebind_state, OutputRebindState::Flushing(_)) {
+            match self
+                .sink
+                .as_mut()
+                .expect("open output sink")
+                .as_mut()
+                .poll_flush(cx)
+            {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(self.retain_error(error))),
+                Poll::Ready(Ok(())) => {
+                    let OutputRebindState::Flushing(interface) =
+                        std::mem::replace(&mut self.rebind_state, OutputRebindState::Idle)
+                    else {
+                        unreachable!()
+                    };
+                    self.rebind_state = OutputRebindState::Applying(interface);
+                }
+            }
+        }
+        let OutputRebindState::Applying(interface) = &self.rebind_state else {
+            unreachable!()
+        };
+        match self
+            .sink
+            .as_mut()
+            .expect("open output sink")
+            .as_mut()
+            .poll_rebind(cx, interface)
+        {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(())) => {
+                self.rebind_state = OutputRebindState::Idle;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(error)) => Poll::Ready(Err(self.retain_error(error))),
+        }
     }
 
     pub async fn flush(&mut self) -> Result<(), OutputError> {
@@ -1179,7 +1243,29 @@ impl<V> OutputWriter<V> {
     }
 
     pub async fn close(&mut self) -> Result<(), OutputError> {
-        SinkExt::close(self).await
+        self.close_with_deadline(self.shutdown_deadline()).await
+    }
+
+    pub async fn close_with_deadline(
+        &mut self,
+        deadline: crate::io::ShutdownDeadline,
+    ) -> Result<(), OutputError> {
+        if let OutputCloseState::Closed(result) = &self.close_state {
+            return result.clone();
+        }
+        match deadline.timeout(SinkExt::close(&mut *self)).await {
+            Ok(result) => result,
+            Err(timeout) => {
+                self.abort();
+                let timeout = OutputError::backend(timeout.to_string());
+                let result = Err(match self.primary_error.clone() {
+                    Some(primary) => combine_errors(primary, timeout),
+                    None => timeout,
+                });
+                self.close_state = OutputCloseState::Closed(result.clone());
+                result
+            }
+        }
     }
 
     fn operation_error(&self) -> Option<OutputError> {
@@ -1188,8 +1274,9 @@ impl<V> OutputWriter<V> {
         }
         match &self.close_state {
             OutputCloseState::Open => None,
-            OutputCloseState::Closing => Some(OutputError::Closed),
-            OutputCloseState::Closed(error) => Some(error.clone()),
+            OutputCloseState::Closing => Some(OutputError::closed()),
+            OutputCloseState::Closed(Ok(())) => Some(OutputError::closed()),
+            OutputCloseState::Closed(Err(error)) => Some(error.clone()),
         }
     }
 
@@ -1211,9 +1298,20 @@ impl<V> OutputWriter<V> {
                 None => cleanup_error,
             }),
         };
-        let closed_error = result.clone().err().unwrap_or(OutputError::Closed);
-        self.close_state = OutputCloseState::Closed(closed_error);
+        self.close_state = OutputCloseState::Closed(result.clone());
         result
+    }
+}
+
+impl<V> Drop for OutputWriter<V> {
+    fn drop(&mut self) {
+        if matches!(self.close_state, OutputCloseState::Closed(_)) {
+            return;
+        }
+        let (Some(sink), Some(cleanup)) = (self.sink.take(), self.drop_cleanup.take()) else {
+            return;
+        };
+        cleanup(sink);
     }
 }
 
@@ -1228,8 +1326,21 @@ impl<V> Sink<OutputBatch<V>> for OutputWriter<V> {
         if let Some(error) = this.operation_error() {
             return Poll::Ready(Err(error));
         }
+        if !matches!(this.rebind_state, OutputRebindState::Idle) {
+            match this.poll_rebind(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Ready(Ok(())) => {}
+            }
+        }
 
-        match this.sink.as_mut().poll_ready(context) {
+        match this
+            .sink
+            .as_mut()
+            .expect("open output sink")
+            .as_mut()
+            .poll_ready(context)
+        {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(error)) => Poll::Ready(Err(this.retain_error(error))),
@@ -1245,7 +1356,13 @@ impl<V> Sink<OutputBatch<V>> for OutputWriter<V> {
             return Err(this.retain_error(error));
         }
 
-        match this.sink.as_mut().start_send(batch) {
+        match this
+            .sink
+            .as_mut()
+            .expect("open output sink")
+            .as_mut()
+            .start_send(batch)
+        {
             Ok(()) => Ok(()),
             Err(error) => Err(this.retain_error(error)),
         }
@@ -1259,8 +1376,21 @@ impl<V> Sink<OutputBatch<V>> for OutputWriter<V> {
         if let Some(error) = this.operation_error() {
             return Poll::Ready(Err(error));
         }
+        if !matches!(this.rebind_state, OutputRebindState::Idle) {
+            match this.poll_rebind(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Ready(Ok(())) => {}
+            }
+        }
 
-        match this.sink.as_mut().poll_flush(context) {
+        match this
+            .sink
+            .as_mut()
+            .expect("open output sink")
+            .as_mut()
+            .poll_flush(context)
+        {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(error)) => Poll::Ready(Err(this.retain_error(error))),
@@ -1273,12 +1403,29 @@ impl<V> Sink<OutputBatch<V>> for OutputWriter<V> {
     ) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
         match &this.close_state {
-            OutputCloseState::Closed(error) => return Poll::Ready(Err(error.clone())),
-            OutputCloseState::Open => this.close_state = OutputCloseState::Closing,
+            OutputCloseState::Closed(result) => return Poll::Ready(result.clone()),
+            OutputCloseState::Open => {
+                if !matches!(this.rebind_state, OutputRebindState::Idle) {
+                    match this.poll_rebind(context) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(error)) => {
+                            let _ = this.retain_error(error);
+                        }
+                        Poll::Ready(Ok(())) => {}
+                    }
+                }
+                this.close_state = OutputCloseState::Closing;
+            }
             OutputCloseState::Closing => {}
         }
 
-        match this.sink.as_mut().poll_close(context) {
+        match this
+            .sink
+            .as_mut()
+            .expect("open output sink")
+            .as_mut()
+            .poll_close(context)
+        {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => Poll::Ready(this.finish_close(result)),
         }
@@ -1289,34 +1436,8 @@ fn combine_errors(primary: OutputError, cleanup: OutputError) -> OutputError {
     if primary == cleanup {
         return primary;
     }
-
-    match primary {
-        OutputError::Backend(message) => {
-            OutputError::Backend(format!("{message}; additionally: {cleanup}"))
-        }
-        OutputError::Source(message) => {
-            OutputError::Source(format!("{message}; additionally: {cleanup}"))
-        }
-        OutputError::Invalid(message) => {
-            OutputError::Invalid(format!("{message}; additionally: {cleanup}"))
-        }
-        OutputError::Closed => OutputError::Backend(format!("{primary}; additionally: {cleanup}")),
-    }
+    primary.with_cleanup(cleanup)
 }
-
-/// A local backend that opens one sink for a validated output interface.
-#[async_trait(?Send)]
-pub trait OutputBackend {
-    type Val: StreamData;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError>;
-}
-
-/// A cheaply clonable handle to a local output backend.
-pub type SharedOutputBackend<V> = Rc<dyn OutputBackend<Val = V>>;
 
 #[cfg(test)]
 mod tests {
@@ -1381,7 +1502,7 @@ mod tests {
             .expect_err("zero-row packed output should be rejected");
         assert_eq!(
             error,
-            OutputError::Invalid(
+            OutputError::invalid(
                 "packed output must contain at least one value; use OutputBatch::empty() for empty output"
                     .to_owned()
             )
@@ -1540,7 +1661,7 @@ mod tests {
 
         smol::block_on(async {
             let primary = writer.send(batch.clone()).await.unwrap_err();
-            assert_eq!(primary, OutputError::Backend("send failed".into()));
+            assert_eq!(primary, OutputError::backend("send failed"));
             assert_eq!(writer.send(batch.clone()).await.unwrap_err(), primary);
             assert_eq!(writer.close().await.unwrap_err(), primary);
             assert_eq!(writer.close().await.unwrap_err(), primary);
@@ -1553,6 +1674,18 @@ mod tests {
     }
 
     #[test]
+    fn writer_repeats_successful_close_without_closing_sink_again() {
+        let (mut writer, closes) = counting_writer(None, None);
+        smol::block_on(async {
+            assert_eq!(writer.close().await, Ok(()));
+            assert_eq!(writer.close().await, Ok(()));
+        });
+        assert_eq!(closes.get(), 1);
+        assert!(writer.is_closed());
+        assert!(!writer.is_failed());
+    }
+
+    #[test]
     fn writer_attaches_cleanup_error_without_replacing_primary() {
         let (mut writer, closes) = counting_writer(
             Some(OutputError::backend("send failed")),
@@ -1562,7 +1695,7 @@ mod tests {
             smol::block_on(writer.send(OutputBatch::update(var("output_writer"), 1))).unwrap_err();
         let result = smol::block_on(writer.close()).unwrap_err();
 
-        assert_eq!(primary, OutputError::Backend("send failed".into()));
+        assert_eq!(primary, OutputError::backend("send failed"));
         assert!(result.is_backend());
         assert!(result.to_string().contains("send failed"));
         assert!(result.to_string().contains("close failed"));
@@ -1580,5 +1713,79 @@ mod tests {
                 .poll_ready(&mut Context::from_waker(noop_waker_ref())),
             Poll::Ready(Ok(()))
         ));
+    }
+
+    struct PendingCloseSink {
+        polls: Rc<Cell<usize>>,
+    }
+
+    impl Sink<OutputBatch<i32>> for PendingCloseSink {
+        type Error = OutputError;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, _: OutputBatch<i32>) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            let polls = self.polls.get() + 1;
+            self.polls.set(polls);
+            if polls == 1 {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_direct_writer_drains_pending_close_on_attached_executor() {
+        let executor = Rc::new(smol::LocalExecutor::new());
+        let polls = Rc::new(Cell::new(0));
+        let mut writer = OutputWriter::from_sink(PendingCloseSink {
+            polls: Rc::clone(&polls),
+        });
+        writer.attach_drop_executor(Rc::clone(&executor));
+        drop(writer);
+
+        smol::block_on(executor.run(async { smol::future::yield_now().await }));
+        assert_eq!(polls.get(), 2);
+    }
+
+    #[test]
+    fn dropping_direct_writer_without_executor_does_not_start_async_close() {
+        let polls = Rc::new(Cell::new(0));
+        drop(OutputWriter::from_sink(PendingCloseSink {
+            polls: Rc::clone(&polls),
+        }));
+        assert_eq!(polls.get(), 0);
+    }
+
+    #[test]
+    fn close_timeout_is_cached_and_does_not_schedule_drop_cleanup() {
+        let executor = Rc::new(smol::LocalExecutor::new());
+        let polls = Rc::new(Cell::new(0));
+        let mut writer = OutputWriter::from_sink(PendingCloseSink {
+            polls: Rc::clone(&polls),
+        });
+        writer.attach_drop_executor(Rc::clone(&executor));
+
+        smol::block_on(async {
+            let deadline = crate::io::ShutdownDeadline::after(std::time::Duration::ZERO);
+            let first = writer.close_with_deadline(deadline).await.unwrap_err();
+            let second = writer.close_with_deadline(deadline).await.unwrap_err();
+            assert_eq!(first, second);
+        });
+        drop(writer);
+        smol::block_on(executor.run(async { smol::future::yield_now().await }));
+        assert_eq!(polls.get(), 0);
     }
 }

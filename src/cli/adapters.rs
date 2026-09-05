@@ -6,7 +6,7 @@ use tracing::{debug, info};
 use crate::cli::args::{Cli, OutputSelection};
 use crate::core::{FileInputValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
-use crate::io::OutputBackendBuilder;
+use crate::io::OutputPipeline;
 use crate::io::config::deserialisation::json_to_routes;
 use crate::io::config::{InputConfigFile, OutputConfigFile, SourceConfig};
 use crate::io::output::{OutputBackendConfig, OutputDestination};
@@ -14,7 +14,7 @@ use crate::{
     VarName,
     core::REDIS_HOSTNAME,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputSource, RedisKnowledgeConfig, RedisKnowledgeRetry, mqtt::MqttInputBackend},
+    io::{InputSource, RedisKnowledgeConfig, RetryPolicy, mqtt::MqttInputBackend},
     runtime::distributed::SchedulerCommunication,
 };
 use ::core::cfg_select;
@@ -100,19 +100,26 @@ pub fn parse_redis_knowledge_mappings(
 }
 
 fn apply_retry_overrides(
-    retry: &mut RedisKnowledgeRetry,
+    retry: &mut RetryPolicy,
     overrides: &RedisKnowledgeOverrides,
 ) -> anyhow::Result<()> {
-    if let Some(max_attempts) = overrides.retry_max_attempts {
-        retry.max_attempts = max_attempts;
-    }
-    if let Some(delay) = overrides.retry_initial_delay_ms {
-        retry.initial_delay = Duration::from_millis(delay);
-    }
-    if let Some(delay) = overrides.retry_max_delay_ms {
-        retry.max_delay = Duration::from_millis(delay);
-    }
-    retry.validate()
+    *retry = RetryPolicy::new(
+        overrides.retry_max_attempts.map_or(retry.limit(), |limit| {
+            limit.map_or(
+                crate::io::RetryLimit::Unlimited,
+                crate::io::RetryLimit::Attempts,
+            )
+        }),
+        overrides
+            .retry_initial_delay_ms
+            .map(Duration::from_millis)
+            .unwrap_or(retry.initial_backoff()),
+        overrides
+            .retry_max_delay_ms
+            .map(Duration::from_millis)
+            .unwrap_or(retry.max_backoff()),
+    )?;
+    Ok(())
 }
 
 pub fn redis_knowledge_config_from_cli(
@@ -120,7 +127,7 @@ pub fn redis_knowledge_config_from_cli(
     overrides: &RedisKnowledgeOverrides,
 ) -> anyhow::Result<RedisKnowledgeConfig> {
     let keys = parse_redis_knowledge_mappings(&overrides.key_mappings)?;
-    let mut retry = RedisKnowledgeRetry::default();
+    let mut retry = RetryPolicy::input_default();
     apply_retry_overrides(&mut retry, overrides)?;
     let config = RedisKnowledgeConfig {
         host: REDIS_HOSTNAME.to_owned(),
@@ -271,22 +278,22 @@ pub fn output_config_from_path(path: &Path) -> anyhow::Result<OutputConfigFile> 
         .with_context(|| format!("output config {path:?} could not be parsed"))
 }
 
-pub fn output_pipeline_builder<V>(
+pub fn output_pipeline<V>(
     selection: OutputSelection,
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
-) -> anyhow::Result<OutputBackendBuilder<V>>
+) -> anyhow::Result<OutputPipeline<V>>
 where
     V: FileInputValue + RosStreamValue,
 {
     if let Some(path) = selection.output_config {
         let config = output_config_from_path(&path)?;
         #[cfg(feature = "ros")]
-        let builder = OutputBackendBuilder::from_config_with_executor(config, executor.clone())?;
+        let builder = OutputPipeline::from_config_with_executor(config, executor.clone())?;
         #[cfg(not(feature = "ros"))]
-        let builder = OutputBackendBuilder::from_config(config)?;
-        return Ok(builder.executor(executor));
+        let builder = OutputPipeline::from_config(config)?;
+        return Ok(builder.with_executor(executor));
     }
 
     let (backend, routes) = if selection.output_stdout {
@@ -344,16 +351,12 @@ where
     if let Some(routes) = routes {
         destination = destination.with_route_catalog(routes);
     }
-    Ok(OutputBackendBuilder::from_destination(destination).executor(executor))
+    Ok(OutputPipeline::from_destination(destination)?.with_executor(executor))
 }
 
 impl Cli {
     pub fn mqtt_input_backend(&self) -> MqttInputBackend {
-        if self.mqtt_paho {
-            MqttInputBackend::Paho
-        } else {
-            MqttInputBackend::default()
-        }
+        MqttInputBackend::default()
     }
 
     pub fn scheduler_communication(&self) -> SchedulerCommunication {
@@ -789,31 +792,6 @@ mod tests {
     }
 
     #[test]
-    fn mqtt_paho_flag_selects_paho_input_backend() {
-        let cli = Cli::parse_from([
-            "trustworthiness_checker",
-            "model.dsrv",
-            "--mqtt-input",
-            "--output-stdout",
-            "--mqtt-paho",
-        ]);
-        assert_eq!(cli.mqtt_input_backend(), MqttInputBackend::Paho);
-    }
-
-    #[test]
-    fn mqtt_input_backend_flags_conflict() {
-        let result = Cli::try_parse_from([
-            "trustworthiness_checker",
-            "model.dsrv",
-            "--mqtt-input",
-            "--output-stdout",
-            "--mqtt-paho",
-            "--mqtt-rumqttc",
-        ]);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_scheduler_communication_ros_mode_uses_default_values() {
         let cli = Cli::parse_from([
             "trustworthiness_checker",
@@ -1233,7 +1211,7 @@ mod tests {
             path.to_str().unwrap(),
         ])
         .unwrap();
-        let dsrv_builder = output_pipeline_builder::<crate::Value>(
+        let dsrv_builder = output_pipeline::<crate::Value>(
             dsrv.output_selection,
             std::rc::Rc::new(smol::LocalExecutor::new()),
             None,
@@ -1261,7 +1239,7 @@ mod tests {
             path.to_str().unwrap(),
         ])
         .unwrap();
-        let mstlo_builder = output_pipeline_builder::<crate::runtime::mstlo::MstloTimedValue>(
+        let mstlo_builder = output_pipeline::<crate::runtime::mstlo::MstloTimedValue>(
             mstlo.output_selection,
             std::rc::Rc::new(smol::LocalExecutor::new()),
             None,
@@ -1436,8 +1414,11 @@ mod tests {
             panic!("expected first knowledge source")
         };
         assert_eq!(*first_database, 2);
-        assert_eq!(first_retry.max_attempts, NonZeroU32::new(3));
-        assert_eq!(first_retry.initial_delay, Duration::from_millis(10));
+        assert_eq!(
+            first_retry.limit(),
+            crate::io::RetryLimit::Attempts(NonZeroU32::new(3).unwrap())
+        );
+        assert_eq!(first_retry.initial_backoff(), Duration::from_millis(10));
 
         let SourceConfig::RedisKnowledge {
             database,
@@ -1450,9 +1431,9 @@ mod tests {
         };
         assert_eq!(*database, 5);
         assert!(*publish_initial);
-        assert_eq!(retry.max_attempts, None);
-        assert_eq!(retry.initial_delay, Duration::from_millis(25));
-        assert_eq!(retry.max_delay, Duration::from_millis(30));
+        assert_eq!(retry.limit(), crate::io::RetryLimit::Unlimited);
+        assert_eq!(retry.initial_backoff(), Duration::from_millis(25));
+        assert_eq!(retry.max_backoff(), Duration::from_millis(30));
     }
 
     #[test]

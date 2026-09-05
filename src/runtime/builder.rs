@@ -15,7 +15,7 @@ use crate::ExecutionPolicy;
 use crate::dataflow::ContextTransferPolicy;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    DsrvSpecification, InputStream, Runtime, Specification, Value, VarName,
+    DsrvSpecification, Runtime, Specification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy},
@@ -25,7 +25,7 @@ use crate::{
         StreamType,
     },
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputPipeline, OutputBackendBuilder},
+    io::{InputPipeline, OpenedInput, OutputPipeline},
     lang::dsrv::{
         DsrvPipelineError, TypeCheckOptions,
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
@@ -180,7 +180,7 @@ pub trait RuntimeBuilder<M, V: StreamData> {
         }
     }
 
-    fn input(self, input: InputStream<V>) -> Self;
+    fn input(self, input: OpenedInput<V>) -> Self;
 
     fn output_writer(self, writer: OutputWriter<V>) -> Self;
 
@@ -208,7 +208,7 @@ pub trait RuntimeBuilderDyn<M, V: StreamData>: 'static {
 
     fn maybe_model(self: Box<Self>, model: Option<M>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
-    fn input(self: Box<Self>, input: crate::InputStream<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
+    fn input(self: Box<Self>, input: OpenedInput<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
     fn output_writer(self: Box<Self>, writer: OutputWriter<V>) -> Box<dyn RuntimeBuilderDyn<M, V>>;
 
@@ -246,7 +246,7 @@ impl<
         Box::new(MonBuilder::maybe_model(*self, model))
     }
 
-    fn input(self: Box<Self>, input: crate::InputStream<V>) -> Box<dyn RuntimeBuilderDyn<M, V>> {
+    fn input(self: Box<Self>, input: OpenedInput<V>) -> Box<dyn RuntimeBuilderDyn<M, V>> {
         Box::new(MonBuilder::input(*self, input))
     }
 
@@ -341,7 +341,7 @@ fn parse_gradually_checked_spec(input: &str) -> anyhow::Result<CheckedDsrvSpecif
 fn configure_reconfigurable_dataflow_builder<S>(
     builder: ReconfigurableDataflowRuntimeBuilder<S>,
     input_pipeline: Option<InputPipeline<Value>>,
-    output_builder: Option<OutputBackendBuilder<Value>>,
+    output_pipeline: Option<OutputPipeline<Value>>,
     reconf_topic: Option<String>,
     execution_policy: ExecutionPolicy,
     transfer_policy: ContextTransferPolicy,
@@ -367,11 +367,9 @@ where
             }
         }
     };
-    let builder = match output_builder {
-        Some(output_builder) => builder.output_builder(output_builder),
-        None => {
-            builder.setup_error("reconfigurable dataflow runtime requires an OutputBackendBuilder")
-        }
+    let builder = match output_pipeline {
+        Some(output_pipeline) => builder.output_pipeline(output_pipeline),
+        None => builder.setup_error("reconfigurable dataflow runtime requires an OutputPipeline"),
     };
     let builder = match reconf_topic {
         Some(topic) => builder.reconf_topic(topic),
@@ -386,7 +384,7 @@ where
 fn configure_reconfigurable_builder<AC, MS>(
     builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     input_pipeline: InputPipeline<Value>,
-    output_builder: OutputBackendBuilder<Value>,
+    output_pipeline: OutputPipeline<Value>,
     reconf_topic: Option<String>,
     use_context_transfer: bool,
 ) -> ReconfSemiSyncRuntimeBuilder<AC, MS>
@@ -398,7 +396,7 @@ where
 {
     let builder = builder
         .input_pipeline(input_pipeline)
-        .output_builder(output_builder)
+        .output_pipeline(output_pipeline)
         .use_context_transfer(use_context_transfer);
     match reconf_topic {
         Some(topic) => builder.reconf_topic(topic),
@@ -443,7 +441,7 @@ impl<
         }
     }
 
-    fn input(self, input: crate::InputStream<V>) -> Self {
+    fn input(self, input: OpenedInput<V>) -> Self {
         Self {
             builder: self.builder.input(input),
             type_check_error: self.type_check_error,
@@ -511,7 +509,7 @@ impl<
         }
     }
 
-    fn input(self, input: crate::InputStream<V>) -> Self {
+    fn input(self, input: OpenedInput<V>) -> Self {
         Self {
             builder: self.builder.input(input),
             type_check_error: self.type_check_error,
@@ -774,8 +772,7 @@ fn distributed_constraint_scheduler_only(
 }
 
 async fn reject_simultaneous_output_sources<V>(mut writer: OutputWriter<V>) -> anyhow::Error {
-    let configuration_error =
-        "output_writer and output_pipeline_builder cannot be configured together";
+    let configuration_error = "output_writer and output_pipeline cannot be configured together";
     match writer.close().await {
         Ok(()) => anyhow::anyhow!(configuration_error),
         Err(close_error) => anyhow::anyhow!(
@@ -793,7 +790,7 @@ async fn close_scheduler_only_output_writer<V>(mut writer: OutputWriter<V>) -> a
 
 async fn reject_reconfigurable_output_writer<V>(mut writer: OutputWriter<V>) -> anyhow::Error {
     let configuration_error =
-        "reconfigurable runtimes require an output_pipeline_builder, not an output_writer";
+        "reconfigurable runtimes require an output_pipeline, not an output_writer";
     match writer.close().await {
         Ok(()) => anyhow::anyhow!(configuration_error),
         Err(close_error) => anyhow::anyhow!(
@@ -805,10 +802,11 @@ async fn reject_reconfigurable_output_writer<V>(mut writer: OutputWriter<V>) -> 
 pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub executor: Option<Rc<LocalExecutor<'static>>>,
     pub model: Option<M>,
-    input: Option<InputStream<V>>,
+    input: Option<OpenedInput<V>>,
     input_pipeline: Option<InputPipeline<V>>,
     pub output_writer: Option<OutputWriter<V>>,
-    pub output_pipeline_builder: Option<OutputBackendBuilder<V>>,
+    pub output_pipeline: Option<OutputPipeline<V>>,
+    shutdown_timeout: Option<Option<std::time::Duration>>,
     pub runtime: RuntimeSpec,
     pub semantics: Semantics,
     pub distribution_mode: DistributionMode,
@@ -837,7 +835,8 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             input: None,
             input_pipeline: None,
             output_writer: None,
-            output_pipeline_builder: None,
+            output_pipeline: None,
+            shutdown_timeout: None,
             runtime,
             semantics: Semantics::GradualTypedUntimed,
             distribution_mode: DistributionMode::CentralMonitor,
@@ -861,6 +860,24 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
+    /// Set the whole graceful-shutdown allowance. `None` means unlimited.
+    pub fn shutdown_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.shutdown_timeout = Some(timeout);
+        self
+    }
+
+    fn configure_shutdown(mut self) -> Self {
+        if let Some(timeout) = self.shutdown_timeout {
+            self.output_writer = self
+                .output_writer
+                .map(|writer| writer.with_shutdown_timeout(timeout));
+            self.output_pipeline = self
+                .output_pipeline
+                .map(|pipeline| pipeline.with_shutdown_timeout(timeout));
+        }
+        self
+    }
+
     pub fn maybe_executor(self, executor: Option<Rc<LocalExecutor<'static>>>) -> Self {
         match executor {
             Some(executor) => self.executor(executor),
@@ -882,11 +899,15 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
-    pub fn input(self, input: InputStream<V>) -> Self {
+    pub fn input(self, input: impl Into<OpenedInput<V>>) -> Self {
         Self {
-            input: Some(input),
+            input: Some(input.into()),
             ..self
         }
+    }
+
+    pub fn opened_input(self, input: OpenedInput<V>) -> Self {
+        self.input(input)
     }
 
     pub fn output_writer(self, writer: OutputWriter<V>) -> Self {
@@ -921,9 +942,9 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
         }
     }
 
-    pub fn output_pipeline_builder(self, builder: OutputBackendBuilder<V>) -> Self {
+    pub fn output_pipeline(self, builder: OutputPipeline<V>) -> Self {
         Self {
-            output_pipeline_builder: Some(builder),
+            output_pipeline: Some(builder),
             ..self
         }
     }
@@ -1054,8 +1075,9 @@ impl From<MstloSynchronizationStrategy> for SynchronizationStrategy {
 }
 
 impl GeneralRuntimeBuilder<LangSpecification, Value> {
-    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
-        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+    pub async fn build(mut self) -> anyhow::Result<Box<dyn Runtime>> {
+        self = self.configure_shutdown();
+        if self.output_writer.is_some() && self.output_pipeline.is_some() {
             let writer = self
                 .output_writer
                 .expect("output writer exists after simultaneous-output check");
@@ -1071,7 +1093,8 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                 input: self.input,
                 input_pipeline: self.input_pipeline,
                 output_writer: self.output_writer,
-                output_pipeline_builder: self.output_pipeline_builder,
+                output_pipeline: self.output_pipeline,
+                shutdown_timeout: self.shutdown_timeout,
                 runtime: self.runtime,
                 semantics: self.semantics,
                 distribution_mode: self.distribution_mode,
@@ -1103,7 +1126,8 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     input: self.input,
                     input_pipeline: self.input_pipeline,
                     output_writer: self.output_writer,
-                    output_pipeline_builder: self.output_pipeline_builder,
+                    output_pipeline: self.output_pipeline,
+                    shutdown_timeout: self.shutdown_timeout,
                     runtime,
                     semantics: self.semantics,
                     distribution_mode: DistributionMode::CentralMonitor,
@@ -1142,8 +1166,9 @@ where
         }
     }
 
-    pub async fn build(self) -> anyhow::Result<Box<dyn Runtime>> {
-        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+    pub async fn build(mut self) -> anyhow::Result<Box<dyn Runtime>> {
+        self = self.configure_shutdown();
+        if self.output_writer.is_some() && self.output_pipeline.is_some() {
             let writer = self
                 .output_writer
                 .expect("output writer exists after simultaneous-output check");
@@ -1185,9 +1210,9 @@ where
             .variables(self.mstlo_variables)
             .input(input);
 
-        builder = if let Some(output_backend_builder) = self.output_pipeline_builder {
-            let writer = output_backend_builder
-                .executor(executor)
+        builder = if let Some(output_pipeline) = self.output_pipeline {
+            let writer = output_pipeline
+                .with_executor(executor)
                 .build(&output_names, &auxiliary_names, None)
                 .await
                 .context("MSTLO output pipeline could not be opened")?;
@@ -1212,7 +1237,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         input_pipeline: Option<InputPipeline>,
-        output_pipeline_builder: Option<OutputBackendBuilder>,
+        output_pipeline: Option<OutputPipeline>,
         reconf_topic: Option<String>,
         use_context_transfer: bool,
         topic_mapping: Option<TopicMapping>,
@@ -1254,7 +1279,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
                             .parse_spec(parse_unchecked_spec),
                         input_pipeline,
-                        output_pipeline_builder,
+                        output_pipeline,
                         reconf_topic,
                         policy,
                         transfer_policy,
@@ -1273,7 +1298,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
                             .parse_spec(parse_checked_spec),
                         input_pipeline,
-                        output_pipeline_builder,
+                        output_pipeline,
                         reconf_topic,
                         policy,
                         transfer_policy,
@@ -1292,7 +1317,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
                             .parse_spec(parse_gradually_checked_spec),
                         input_pipeline,
-                        output_pipeline_builder,
+                        output_pipeline,
                         reconf_topic,
                         policy,
                         transfer_policy,
@@ -1335,9 +1360,9 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                             "Input pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
-                    output_pipeline_builder.ok_or_else(|| {
+                    output_pipeline.ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                            "Output pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
                     reconf_topic,
@@ -1357,9 +1382,9 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                             "Input pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
-                    output_pipeline_builder.ok_or_else(|| {
+                    output_pipeline.ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                            "Output pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
                     reconf_topic,
@@ -1379,9 +1404,9 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                             "Input pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
-                    output_pipeline_builder.ok_or_else(|| {
+                    output_pipeline.ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Output pipeline builder required for ReconfigurableSemiSync runtime"
+                            "Output pipeline required for ReconfigurableSemiSync runtime"
                         )
                     })?,
                     reconf_topic,
@@ -1586,7 +1611,8 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
     }
 
     pub async fn build(mut self) -> anyhow::Result<Box<dyn Runtime>> {
-        if self.output_writer.is_some() && self.output_pipeline_builder.is_some() {
+        self = self.configure_shutdown();
+        if self.output_writer.is_some() && self.output_pipeline.is_some() {
             let Some(writer) = self.output_writer.take() else {
                 return Err(anyhow::anyhow!(
                     "output writer configuration changed while validating runtime outputs"
@@ -1631,11 +1657,11 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             .map(Specification::aux_vars)
             .unwrap_or_default();
         let mut configured_output_writer = self.output_writer;
-        let configured_output_pipeline_builder = self.output_pipeline_builder;
+        let configured_output_pipeline = self.output_pipeline;
         let output_executor = self.executor.clone();
-        let output_pipeline_builder = configured_output_pipeline_builder.map(|builder| {
+        let output_pipeline = configured_output_pipeline.map(|builder| {
             if let Some(executor) = output_executor.as_ref() {
-                builder.executor(executor.clone())
+                builder.with_executor(executor.clone())
             } else {
                 builder
             }
@@ -1663,7 +1689,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 if scheduler_only {
                     None
                 } else {
-                    output_pipeline_builder.clone()
+                    output_pipeline.clone()
                 },
                 self.reconf_topic.clone(),
                 self.use_context_transfer,
@@ -1696,8 +1722,8 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
 
         let builder = if reconfigurable {
             builder
-        } else if let Some(output_backend_builder) = output_pipeline_builder {
-            let writer = output_backend_builder
+        } else if let Some(output_pipeline) = output_pipeline {
+            let writer = output_pipeline
                 .build(&output_names, &auxiliary_names, None)
                 .await
                 .context("DSRV output pipeline could not be opened")?;
@@ -1720,31 +1746,27 @@ mod tests {
     use petgraph::graph::DiGraph;
 
     use super::*;
-    use crate::core::{
-        OutputBackend, OutputError, OutputInterface, OutputWriter, empty_input_stream,
-    };
+    use crate::core::{OutputError, OutputInterface, OutputWriter, empty_input_stream};
     use crate::distributed::distribution_graphs::{
         DistributionGraph, GenericLabelledDistributionGraph, LabelledDistributionGraph, NodeName,
     };
-    use crate::io::output::{AsyncFnSink, OutputBackendConfig};
+    use crate::io::output::{AsyncFnSink, OutputBackendConfig, TestOutputOpener};
     use crate::lang::mstlo::parse_named_properties;
 
     struct FailingOutputBackend;
 
     #[async_trait(?Send)]
-    impl OutputBackend for FailingOutputBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for FailingOutputBackend {
         async fn open(
             &self,
             _interface: OutputInterface,
-        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+        ) -> Result<OutputWriter<Value>, OutputError> {
             Err(OutputError::backend("intentional output open failure"))
         }
     }
 
-    fn failing_output_builder() -> OutputBackendBuilder<Value> {
-        OutputBackendBuilder::new(OutputBackendConfig::custom(FailingOutputBackend))
+    fn failing_output_pipeline() -> OutputPipeline<Value> {
+        OutputPipeline::from_backend(OutputBackendConfig::test(FailingOutputBackend))
     }
 
     #[derive(Clone)]
@@ -1754,13 +1776,11 @@ mod tests {
     }
 
     #[async_trait(?Send)]
-    impl OutputBackend for CountingOutputBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for CountingOutputBackend {
         async fn open(
             &self,
             _interface: OutputInterface,
-        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+        ) -> Result<OutputWriter<Value>, OutputError> {
             self.opens.set(self.opens.get() + 1);
             let closes = self.closes.clone();
             let sink = AsyncFnSink::with_close(
@@ -1792,7 +1812,7 @@ mod tests {
 
     fn distributed_constraint_builder(
         output_writer: Option<OutputWriter<Value>>,
-        output_pipeline_builder: Option<OutputBackendBuilder<Value>>,
+        output_pipeline: Option<OutputPipeline<Value>>,
     ) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
         let spec = "in x\nout c\nc = monitored_at(x, A)"
             .parse::<DsrvSpecification>()
@@ -1811,8 +1831,8 @@ mod tests {
         if let Some(writer) = output_writer {
             builder = builder.output_writer(writer);
         }
-        if let Some(output_pipeline_builder) = output_pipeline_builder {
-            builder = builder.output_pipeline_builder(output_pipeline_builder);
+        if let Some(output_pipeline) = output_pipeline {
+            builder = builder.output_pipeline(output_pipeline);
         }
         builder
     }
@@ -1825,7 +1845,7 @@ mod tests {
             .executor(executor)
             .model(spec)
             .input(empty_input_stream())
-            .output_pipeline_builder(failing_output_builder())
+            .output_pipeline(failing_output_pipeline())
             .runtime(RuntimeSpec::SemiSync)
             .semantics(Semantics::Untimed);
 
@@ -1850,7 +1870,7 @@ mod tests {
             .executor(executor)
             .model(spec)
             .input(empty_input_stream())
-            .output_pipeline_builder(failing_output_builder())
+            .output_pipeline(failing_output_pipeline())
             .runtime(RuntimeSpec::Mstlo(ExecutionPolicy::Buffered));
 
         let result = smol::block_on(builder.build());
@@ -1881,14 +1901,14 @@ mod tests {
     fn scheduler_only_distribution_does_not_open_local_output_pipeline() {
         let opens = Rc::new(Cell::new(0));
         let closes = Rc::new(Cell::new(0));
-        let output_builder =
-            OutputBackendBuilder::new(OutputBackendConfig::custom(CountingOutputBackend {
+        let output_pipeline =
+            OutputPipeline::from_backend(OutputBackendConfig::test(CountingOutputBackend {
                 opens: opens.clone(),
                 closes: closes.clone(),
             }));
 
         let runtime =
-            smol::block_on(distributed_constraint_builder(None, Some(output_builder)).build())
+            smol::block_on(distributed_constraint_builder(None, Some(output_pipeline)).build())
                 .expect("scheduler-only distributed runtime should build without local output");
 
         assert_eq!(
@@ -1920,15 +1940,15 @@ mod tests {
     fn simultaneous_output_sources_are_rejected_without_opening_the_pipeline() {
         let opens = Rc::new(Cell::new(0));
         let closes = Rc::new(Cell::new(0));
-        let output_builder =
-            OutputBackendBuilder::new(OutputBackendConfig::custom(CountingOutputBackend {
+        let output_pipeline =
+            OutputPipeline::from_backend(OutputBackendConfig::test(CountingOutputBackend {
                 opens: opens.clone(),
                 closes: closes.clone(),
             }));
         let result = smol::block_on(
             distributed_constraint_builder(
                 Some(counted_writer(closes.clone())),
-                Some(output_builder),
+                Some(output_pipeline),
             )
             .build(),
         );
@@ -1940,7 +1960,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("output_writer and output_pipeline_builder")
+                .contains("output_writer and output_pipeline")
         );
         assert_eq!(opens.get(), 0);
         assert_eq!(

@@ -2,7 +2,7 @@ use anyhow::Context;
 use futures::select;
 use futures::{FutureExt, StreamExt};
 use r2r;
-use smol::LocalExecutor;
+use smol::{LocalExecutor, Task};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use tracing::info;
@@ -16,9 +16,44 @@ use super::{
 
 use crate::core::empty_input_stream;
 use crate::io::ReconfigurationRequest;
-use crate::stream_utils::drop_guard_stream;
 use crate::utils::cancellation_token::CancellationToken;
 use crate::{InputBatch, InputStream, LocalStream, Value, VarName};
+
+pub struct RosInputControl {
+    cancellation: CancellationToken,
+    spinner: Option<Task<()>>,
+}
+
+impl RosInputControl {
+    pub(crate) fn inactive() -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+            spinner: None,
+        }
+    }
+
+    pub(crate) fn new(cancellation: CancellationToken, spinner: Task<()>) -> Self {
+        Self {
+            cancellation,
+            spinner: Some(spinner),
+        }
+    }
+
+    pub async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.cancellation.cancel();
+        if let Some(spinner) = self.spinner.take() {
+            spinner.await;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RosInputControl {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        let _ = self.spinner.take();
+    }
+}
 
 impl RosMsgType {
     /* Create a stream of values received on a ROS topic */
@@ -149,7 +184,10 @@ impl RosMsgType {
 pub(crate) fn control_stream(
     executor: Rc<LocalExecutor<'static>>,
     topic: String,
-) -> anyhow::Result<LocalStream<anyhow::Result<ReconfigurationRequest>>> {
+) -> anyhow::Result<(
+    LocalStream<anyhow::Result<ReconfigurationRequest>>,
+    RosInputControl,
+)> {
     let context = r2r::Context::create()?;
     let node_name = format!("input_control_{}", Uuid::new_v4().simple());
     let mut node = r2r::Node::create(context, &node_name, "")?;
@@ -157,22 +195,18 @@ pub(crate) fn control_stream(
         node.subscribe::<r2r::std_msgs::msg::String>(&topic, r2r::QosProfile::default())?;
 
     let cancellation_token = CancellationToken::new();
-    let drop_guard = cancellation_token.clone().drop_guard();
     let cancellation_for_spin = cancellation_token.clone();
-    executor
-        .spawn(async move {
-            let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
-            loop {
-                select! {
-                    _ = cancellation_for_spin.cancelled().fuse() => return,
-                    _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
-                }
+    let spinner = executor.spawn(async move {
+        let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
+        loop {
+            select! {
+                _ = cancellation_for_spin.cancelled().fuse() => return,
+                _ = spin_ticks.next().fuse() => node.spin_once(ROS_SPIN_TIMEOUT),
             }
-        })
-        .detach();
+        }
+    });
 
-    Ok(Box::pin(async_stream::try_stream! {
-        let _drop_guard = drop_guard;
+    let stream = Box::pin(async_stream::try_stream! {
         let mut subscription = subscription;
         while let Some(message) = subscription.next().await {
             let request = ReconfigurationRequest::from_json(&message.data)
@@ -180,17 +214,18 @@ pub(crate) fn control_stream(
             yield request;
             return;
         }
-    }))
+    });
+    Ok((stream, RosInputControl::new(cancellation_token, spinner)))
 }
 
 /// Subscribe to ROS topics and return a stream that owns the subscriber lifetime.
 #[instrument(level = Level::INFO, skip(var_topics))]
-pub fn input_stream(
+pub fn open_ros_input(
     executor: Rc<LocalExecutor<'static>>,
     var_topics: RosStreamMapping,
-) -> anyhow::Result<InputStream<Value>> {
+) -> anyhow::Result<(InputStream<Value>, RosInputControl)> {
     if var_topics.is_empty() {
-        return Ok(empty_input_stream());
+        return Ok((empty_input_stream(), RosInputControl::inactive()));
     }
     // Create a ROS node to subscribe to all of the input topics
     let ctx = r2r::Context::create()?;
@@ -201,7 +236,6 @@ pub fn input_stream(
     // if all consumers of the output streams have
     // gone away
     let cancellation_token = CancellationToken::new();
-    let drop_guard = Rc::new(cancellation_token.clone().drop_guard());
     let cancellation_token_task = cancellation_token.clone();
 
     let var_topics_shallow: BTreeMap<VarName, String> = var_topics
@@ -220,34 +254,31 @@ pub fn input_stream(
             .msg_type
             .node_output_stream(&mut node, &var_data.topic, qos)?;
 
-        // Apply a drop guard to the stream to ensure that the
-        // subscriber ROS node does not go away whilst the stream
-        // is still being consumed
-        let stream = drop_guard_stream(stream, drop_guard.clone());
         ros_streams.insert(VarName::from(var_name), stream);
     }
 
     // TODO: Should not be spawning a task during stream construction. Fix the potential race conditions
     // instead of circumventing them like this.
     // Launch the ROS subscriber node in background async task
-    executor
-        .spawn(async move {
-            let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
-            loop {
-                select! {
-                    _ = cancellation_token_task.cancelled().fuse() => {
-                        return;
-                    },
-                    _ = spin_ticks.next().fuse() => {
-                        node.spin_once(ROS_SPIN_TIMEOUT);
-                    },
-                }
+    let spinner = executor.spawn(async move {
+        let mut spin_ticks = smol::Timer::interval(ROS_SPIN_INTERVAL);
+        loop {
+            select! {
+                _ = cancellation_token_task.cancelled().fuse() => {
+                    return;
+                },
+                _ = spin_ticks.next().fuse() => {
+                    node.spin_once(ROS_SPIN_TIMEOUT);
+                },
             }
-        })
-        .detach();
+        }
+    });
 
-    Ok(Box::pin(
-        merge_ros_streams(ros_streams).map(|(var, value)| Ok(InputBatch::update(var, value))),
+    Ok((
+        Box::pin(
+            merge_ros_streams(ros_streams).map(|(var, value)| Ok(InputBatch::update(var, value))),
+        ),
+        RosInputControl::new(cancellation_token, spinner),
     ))
 }
 
@@ -260,4 +291,33 @@ fn merge_ros_streams(
                 as LocalStream<(VarName, Value)>
         },
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn shutdown_joins_spinner_before_completing() {
+        let executor = Rc::new(LocalExecutor::new());
+        let task_executor = Rc::clone(&executor);
+        smol::block_on(executor.run(async move {
+            let cancellation = CancellationToken::new();
+            let worker_cancellation = cancellation.clone();
+            let stopped = Rc::new(Cell::new(false));
+            let worker_stopped = Rc::clone(&stopped);
+            let spinner = task_executor.spawn(async move {
+                worker_cancellation.cancelled().await;
+                smol::Timer::after(std::time::Duration::from_millis(10)).await;
+                worker_stopped.set(true);
+            });
+            let mut owner = RosInputControl::new(cancellation, spinner);
+
+            owner.shutdown().await.unwrap();
+
+            assert!(stopped.get(), "shutdown returned before the spinner joined");
+        }));
+    }
 }

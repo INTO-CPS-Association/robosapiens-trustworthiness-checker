@@ -87,7 +87,7 @@
 //! ## Completion, shutdown, and errors
 //!
 //! The direct engine sends full packed row batches, performs a final writer flush, and
-//! explicitly closes the writer. `OutputError::Closed` means intentional early completion;
+//! explicitly closes the writer. `OutputError::closed()` means intentional early completion;
 //! other writer, input, and monitor errors are returned. Rows accumulated before a monitor
 //! or input error are not emitted.
 //!
@@ -114,7 +114,7 @@ use crate::io::output::{OutputPipelineReconfigurationPlan, OutputPipelineSession
 use crate::io::reconfigurable_input::{
     InputPipelineSession, ReconfigurableInput, ReconfigurableInputItem,
 };
-use crate::io::{InputPipeline, OutputBackendBuilder, ReconfigurationRequest};
+use crate::io::{InputPipeline, OutputPipeline, ReconfigurationRequest};
 use crate::runtime::builder::RuntimeBuilder;
 
 use async_trait::async_trait;
@@ -172,7 +172,7 @@ struct RuntimeReconfigurationPlan {
 
 struct RuntimeReconfigurationContext {
     input: ReconfigurableInput<Value>,
-    output_builder: OutputBackendBuilder<Value>,
+    output_pipeline: OutputPipeline<Value>,
     compiler: ReconfigurationCompiler,
     execution_configuration: ExecutionConfiguration,
     transfer_policy: ContextTransferPolicy,
@@ -195,19 +195,23 @@ fn plan_runtime_reconfiguration(
         .input
         .pipeline()
         .resolve(&compiled.input_vars, Some(&request.input))?;
-    let input = context
-        .input
-        .pipeline()
-        .plan_reconfiguration(active.input.active(), input_resolution)?;
-    let output_resolution = context.output_builder.resolve(
+    let input = context.input.pipeline().plan_reconfiguration(
+        active.input.active(),
+        input_resolution,
+        active.input.session_id(),
+        active.input.revision(),
+    )?;
+    let output_resolution = context.output_pipeline.resolve(
         &compiled.output_vars,
         &compiled.auxiliary_vars,
         Some(&request.output),
     )?;
-    let output = context
-        .output_builder
-        .pipeline()
-        .plan_reconfiguration(active.engine.output.resolved(), output_resolution)?;
+    let output = context.output_pipeline.plan_reconfiguration(
+        active.engine.output.resolved(),
+        output_resolution,
+        active.engine.output.session_id(),
+        active.engine.output.revision(),
+    )?;
     let monitor = active
         .engine
         .monitor
@@ -220,7 +224,7 @@ fn plan_runtime_reconfiguration(
     })
 }
 enum DataflowInput {
-    Standard(InputStream<Value>),
+    Standard(crate::io::OpenedInput<Value>),
     Reconfigurable(InputPipelineSession<Value>),
 }
 
@@ -243,7 +247,7 @@ where
     DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
 {
     model: Option<S>,
-    input: Option<InputStream<Value>>,
+    input: Option<crate::io::OpenedInput<Value>>,
     output_writer: Option<OutputWriter<Value>>,
     execution_policy: ExecutionPolicy,
     quickening: bool,
@@ -298,7 +302,7 @@ where
         let (input, controller) = crate::io::controlled(input);
         (
             self.execution_policy(ExecutionPolicy::Synchronous)
-                .input(input),
+                .input(input.into()),
             controller,
         )
     }
@@ -314,7 +318,7 @@ where
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<S>,
     input_pipeline: Option<InputPipeline<Value>>,
-    output_builder: Option<OutputBackendBuilder<Value>>,
+    output_pipeline: Option<OutputPipeline<Value>>,
     reconf_topic: Option<String>,
     parse_spec: Option<fn(&str) -> anyhow::Result<S>>,
     execution_policy: ExecutionPolicy,
@@ -341,8 +345,8 @@ where
         self
     }
 
-    pub fn output_builder(mut self, output_builder: OutputBackendBuilder<Value>) -> Self {
-        self.output_builder = Some(output_builder);
+    pub fn output_pipeline(mut self, output_pipeline: OutputPipeline<Value>) -> Self {
+        self.output_pipeline = Some(output_pipeline);
         self
     }
 
@@ -396,7 +400,7 @@ where
             executor: None,
             model: None,
             input_pipeline: None,
-            output_builder: None,
+            output_pipeline: None,
             reconf_topic: None,
             parse_spec: None,
             execution_policy: ExecutionPolicy::Synchronous,
@@ -419,7 +423,7 @@ where
         self
     }
 
-    fn input(self, _input: InputStream<Value>) -> Self {
+    fn input(self, _input: crate::io::OpenedInput<Value>) -> Self {
         self.setup_error(
             "reconfigurable dataflow runtime requires an InputPipeline, not a direct InputStream",
         )
@@ -427,7 +431,7 @@ where
 
     fn output_writer(self, _writer: OutputWriter<Value>) -> Self {
         self.setup_error(
-            "reconfigurable dataflow runtime requires an OutputBackendBuilder, not a direct OutputWriter",
+            "reconfigurable dataflow runtime requires an OutputPipeline, not a direct OutputWriter",
         )
     }
 
@@ -461,12 +465,10 @@ where
                     anyhow::anyhow!("reconfigurable dataflow runtime requires an InputPipeline"),
                 );
             };
-            let Some(output_builder) = self.output_builder else {
+            let Some(output_pipeline) = self.output_pipeline else {
                 return failed_dataflow_runtime(
                     policy,
-                    anyhow::anyhow!(
-                        "reconfigurable dataflow runtime requires an OutputBackendBuilder"
-                    ),
+                    anyhow::anyhow!("reconfigurable dataflow runtime requires an OutputPipeline"),
                 );
             };
 
@@ -483,8 +485,8 @@ where
                 Ok(resolved) => resolved,
                 Err(error) => return failed_dataflow_runtime(policy, error),
             };
-            let output_builder = output_builder.executor(executor.clone());
-            let resolved_output = match output_builder.resolve(&output_vars, &auxiliary_vars, None)
+            let output_pipeline = output_pipeline.with_executor(executor.clone());
+            let resolved_output = match output_pipeline.resolve(&output_vars, &auxiliary_vars, None)
             {
                 Ok(resolved) => resolved,
                 Err(error) => return failed_dataflow_runtime(policy, error),
@@ -507,7 +509,7 @@ where
                 Ok(session) => session,
                 Err(error) => return failed_dataflow_runtime(policy, error),
             };
-            let output_session = match output_builder.open_session(resolved_output.clone()).await {
+            let output_session = match output_pipeline.open_session(resolved_output.clone()).await {
                 Ok(session) => session,
                 Err(error) => {
                     return failed_dataflow_runtime(
@@ -532,7 +534,7 @@ where
                 execution_policy: policy,
                 reconfiguration: Some(RuntimeReconfigurationContext {
                     input,
-                    output_builder,
+                    output_pipeline,
                     compiler,
                     execution_configuration,
                     transfer_policy: self.transfer_policy,
@@ -574,7 +576,7 @@ where
         }
     }
 
-    fn input(self, input: InputStream<Value>) -> Self {
+    fn input(self, input: crate::io::OpenedInput<Value>) -> Self {
         Self {
             input: Some(input),
             ..self
@@ -610,7 +612,9 @@ where
                     startup_error = Some(anyhow::anyhow!(
                         "dataflow runtime input stream is not configured"
                     ));
-                    DataflowInput::Standard(Box::pin(futures::stream::empty()))
+                    DataflowInput::Standard(
+                        (Box::pin(futures::stream::empty()) as InputStream<Value>).into(),
+                    )
                 }
             };
             let output_writer = self.output_writer;
@@ -693,7 +697,25 @@ impl Runtime for DataflowRuntime {
                 let monitor = match monitor {
                     Ok(monitor) => monitor,
                     Err(error) => {
-                        return finish_direct_output(&mut output_writer, Some(error)).await;
+                        let deadline = output_writer.shutdown_deadline();
+                        let mut error = error;
+                        if let DataflowInput::Standard(input) = input_stream {
+                            let mut drain = input.into_drain_with_deadline(deadline);
+                            while let Some(item) = drain.next().await {
+                                if let Err(cleanup) = item {
+                                    error = combine_errors(error, anyhow::Error::new(cleanup));
+                                }
+                            }
+                        }
+                        let cleanup = crate::runtime::output::finish_writer_with_deadline(
+                            &mut output_writer,
+                            deadline,
+                        )
+                        .await;
+                        return match cleanup {
+                            Ok(()) => Err(error),
+                            Err(cleanup) => Err(combine_errors(error, cleanup)),
+                        };
                     }
                 };
                 let DataflowInput::Standard(input) = input_stream else {
@@ -720,7 +742,7 @@ trait DataflowOutput {
 
 impl DataflowOutput for OutputWriter<Value> {
     async fn send_output(&mut self, batch: OutputBatch<Value>) -> Result<(), OutputError> {
-        self.send(batch).await
+        crate::runtime::output::submit_batch(self, batch).await
     }
 
     async fn flush_output(&mut self) -> Result<(), OutputError> {
@@ -738,7 +760,10 @@ impl DataflowOutput for OutputWriter<Value> {
 
 impl DataflowOutput for OutputPipelineSession<Value> {
     async fn send_output(&mut self, batch: OutputBatch<Value>) -> Result<(), OutputError> {
-        self.send(batch).await
+        if let Some(error) = self.error() {
+            return Err(error.clone());
+        }
+        crate::runtime::output::submit_batch(self.writer_mut(), batch).await
     }
 
     async fn flush_output(&mut self) -> Result<(), OutputError> {
@@ -750,24 +775,24 @@ impl DataflowOutput for OutputPipelineSession<Value> {
     }
 
     fn output_error(&self) -> Option<&OutputError> {
-        self.writer().error()
+        self.error()
     }
 }
 
 async fn run_direct_dataflow_engine(
-    mut input_stream: InputStream<Value>,
+    mut input_stream: crate::io::OpenedInput<Value>,
     monitor: DataflowMonitor,
     output_writer: OutputWriter<Value>,
     execution_policy: ExecutionPolicy,
 ) -> anyhow::Result<()> {
     let mut engine = DirectDataflowEngine::new(monitor, output_writer);
-    let mut error = None;
+    let mut error: Option<anyhow::Error> = None;
 
     'input: while let Some(batch) = input_stream.next().await {
         let batch = match batch {
             Ok(batch) => batch,
             Err(input_error) => {
-                error = Some(input_error);
+                error = Some(input_error.into());
                 break;
             }
         };
@@ -785,9 +810,13 @@ async fn run_direct_dataflow_engine(
                 if execution_policy == ExecutionPolicy::Synchronous
                     || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
                 {
-                    if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
-                        error = Some(output_error);
-                        break 'input;
+                    match flush_reconfigurable_output(&mut engine).await {
+                        Ok(true) => {}
+                        Ok(false) => break 'input,
+                        Err(output_error) => {
+                            error = Some(output_error);
+                            break 'input;
+                        }
                     }
                 }
             }
@@ -802,11 +831,27 @@ async fn run_direct_dataflow_engine(
             if execution_policy == ExecutionPolicy::Synchronous
                 || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
             {
-                if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
-                    error = Some(output_error);
-                    break 'input;
+                match flush_reconfigurable_output(&mut engine).await {
+                    Ok(true) => {}
+                    Ok(false) => break 'input,
+                    Err(output_error) => {
+                        error = Some(output_error);
+                        break 'input;
+                    }
                 }
             }
+        }
+    }
+
+    let deadline = engine.output.shutdown_deadline();
+    let mut drain = input_stream.into_drain_with_deadline(deadline);
+    while let Some(item) = drain.next().await {
+        if let Err(cleanup) = item {
+            let cleanup = anyhow::Error::new(cleanup);
+            error = Some(match error {
+                Some(primary) => combine_errors(primary, cleanup),
+                None => cleanup,
+            });
         }
     }
 
@@ -814,12 +859,19 @@ async fn run_direct_dataflow_engine(
     // particular, a failed evaluation must never turn its incomplete row into
     // an output batch. The writer still receives its cleanup flush and close.
     if error.is_none() && engine.pending_rows != 0 {
-        if let Err(output_error) = flush_reconfigurable_output(&mut engine).await {
-            error = Some(output_error);
+        match flush_reconfigurable_output(&mut engine).await {
+            Ok(_) => {}
+            Err(output_error) => error = Some(output_error),
         }
     }
 
-    finish_direct_output(&mut engine.output, error).await
+    let cleanup =
+        crate::runtime::output::finish_writer_with_deadline(&mut engine.output, deadline).await;
+    match (error, cleanup) {
+        (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
+        (Some(primary), Ok(())) => Err(primary),
+        (None, cleanup) => cleanup,
+    }
 }
 
 async fn finish_dataflow_output<O: DataflowOutput>(output: &mut O) -> anyhow::Result<()> {
@@ -864,7 +916,9 @@ fn failed_dataflow_runtime(
     error: anyhow::Error,
 ) -> DataflowRuntime {
     DataflowRuntime {
-        input_stream: DataflowInput::Standard(Box::pin(futures::stream::empty())),
+        input_stream: DataflowInput::Standard(
+            (Box::pin(futures::stream::empty()) as InputStream<Value>).into(),
+        ),
         output_writer: None,
         output_session: None,
         monitor: Err(anyhow::anyhow!("dataflow runtime startup failed")),
@@ -924,13 +978,20 @@ fn writer_is_closed<O: DataflowOutput>(output: &O) -> bool {
 
 async fn flush_reconfigurable_output<O: DataflowOutput>(
     engine: &mut DirectDataflowEngine<O>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     match engine.flush().await {
-        Ok(()) if writer_is_closed(&engine.output) => Err(anyhow::anyhow!(
-            "dataflow output writer closed while flushing"
-        )),
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(!writer_is_closed(&engine.output)),
         Err(error) => Err(error.into()),
+    }
+}
+
+async fn flush_required_output<O: DataflowOutput>(
+    engine: &mut DirectDataflowEngine<O>,
+) -> anyhow::Result<()> {
+    if flush_reconfigurable_output(engine).await? {
+        Ok(())
+    } else {
+        Err(OutputError::closed().into())
     }
 }
 
@@ -941,7 +1002,7 @@ async fn flush_reconfiguration_barrier(
         engine.flush().await?;
     }
     if writer_is_closed(&engine.output) {
-        return Err(OutputError::Closed);
+        return Err(OutputError::closed());
     }
     Ok(())
 }
@@ -950,23 +1011,38 @@ async fn finish_reconfigurable_output_session(
     output: &mut OutputPipelineSession<Value>,
     primary: Option<anyhow::Error>,
 ) -> anyhow::Result<()> {
-    finish_direct_output(output, primary).await
+    let deadline = output.writer().shutdown_deadline();
+    let cleanup =
+        crate::runtime::output::finish_writer_with_deadline(output.writer_mut(), deadline).await;
+    match (primary, cleanup) {
+        (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
+        (Some(primary), Ok(())) => Err(primary),
+        (None, cleanup) => cleanup,
+    }
 }
 
 async fn finish_reconfigurable_engine(
     mut engine: DirectDataflowEngine<OutputPipelineSession<Value>>,
     primary: Option<anyhow::Error>,
+    deadline: crate::io::ShutdownDeadline,
 ) -> anyhow::Result<()> {
     let mut error = primary;
     if engine.pending_rows != 0 {
-        if let Err(flush_error) = engine.flush().await {
+        let flush = deadline.timeout(engine.flush()).await;
+        if let Err(flush_error) = match flush {
+            Ok(result) => result.map_err(anyhow::Error::from),
+            Err(timeout) => Err(anyhow::Error::new(timeout)),
+        } {
             error = Some(match error {
-                Some(primary) => combine_errors(primary, flush_error.into()),
-                None => flush_error.into(),
+                Some(primary) => combine_errors(primary, flush_error),
+                None => flush_error,
             });
         }
     }
-    if let Err(cleanup) = finish_dataflow_output(&mut engine.output).await {
+    if let Err(cleanup) =
+        crate::runtime::output::finish_writer_with_deadline(engine.output.writer_mut(), deadline)
+            .await
+    {
         error = Some(match error {
             Some(primary) => combine_errors(primary, cleanup),
             None => cleanup,
@@ -975,17 +1051,55 @@ async fn finish_reconfigurable_engine(
     error.map_or(Ok(()), Err)
 }
 
+async fn finish_reconfigurable_active(
+    active: ActiveRuntime,
+    primary: Option<anyhow::Error>,
+) -> anyhow::Result<()> {
+    let ActiveRuntime { engine, input } = active;
+    let deadline = engine.output.writer().shutdown_deadline();
+    let mut error = primary;
+    let mut drain = input.into_drain_with_deadline(deadline);
+    while let Some(item) = drain.next().await {
+        if let Err(cleanup) = item {
+            error = Some(match error {
+                Some(primary) => combine_errors(primary, cleanup),
+                None => cleanup,
+            });
+        }
+    }
+    finish_reconfigurable_engine(engine, error, deadline).await
+}
+
+async fn reconfiguration_failure_active(
+    active: ActiveRuntime,
+    primary: anyhow::Error,
+) -> anyhow::Error {
+    match finish_reconfigurable_active(active, Some(primary)).await {
+        Ok(()) => anyhow::anyhow!("reconfiguration failed"),
+        Err(error) => error,
+    }
+}
+
 async fn reconfiguration_failure(
     mut engine: DirectDataflowEngine<OutputPipelineSession<Value>>,
     primary: anyhow::Error,
+    failure_deadline: Option<crate::io::ShutdownDeadline>,
 ) -> anyhow::Error {
+    let deadline = failure_deadline.unwrap_or_else(|| engine.output.writer().shutdown_deadline());
     let mut error = primary;
     if engine.pending_rows != 0 {
-        if let Err(flush_error) = engine.flush().await {
-            error = combine_errors(error, flush_error.into());
+        let flush = deadline.timeout(engine.flush()).await;
+        if let Err(flush_error) = match flush {
+            Ok(result) => result.map_err(anyhow::Error::from),
+            Err(timeout) => Err(anyhow::Error::new(timeout)),
+        } {
+            error = combine_errors(error, flush_error);
         }
     }
-    if let Err(cleanup) = finish_dataflow_output(&mut engine.output).await {
+    if let Err(cleanup) =
+        crate::runtime::output::finish_writer_with_deadline(engine.output.writer_mut(), deadline)
+            .await
+    {
         error = combine_errors(error, cleanup);
     }
     error
@@ -1005,12 +1119,12 @@ async fn run_reconfigurable_dataflow(
 
     loop {
         let Some(item) = active.input.next().await else {
-            return finish_reconfigurable_engine(active.engine, None).await;
+            return finish_reconfigurable_active(active, None).await;
         };
         let item = match item {
             Ok(item) => item,
             Err(error) => {
-                return finish_reconfigurable_engine(active.engine, Some(error)).await;
+                return finish_reconfigurable_active(active, Some(error)).await;
             }
         };
 
@@ -1020,18 +1134,25 @@ async fn run_reconfigurable_dataflow(
                     evaluate_reconfigurable_batch(&mut active.engine, &batch, execution_policy)
                         .await
                 {
-                    return finish_reconfigurable_engine(active.engine, Some(error)).await;
+                    return finish_reconfigurable_active(active, Some(error)).await;
                 }
             }
             ReconfigurableInputItem::Reconfigure(request) => {
                 let plan = match plan_runtime_reconfiguration(&active, &context, request) {
                     Ok(plan) => plan,
                     Err(error) => {
-                        return Err(reconfiguration_failure(active.engine, error).await);
+                        return Err(reconfiguration_failure_active(active, error).await);
                     }
                 };
                 active =
                     apply_runtime_reconfiguration(active, &context, plan, execution_policy).await?;
+            }
+            ReconfigurableInputItem::Boundary(_) => {
+                return finish_reconfigurable_active(
+                    active,
+                    Some(anyhow::anyhow!("unexpected input lifecycle boundary")),
+                )
+                .await;
             }
         }
     }
@@ -1043,62 +1164,46 @@ async fn apply_runtime_reconfiguration(
     plan: RuntimeReconfigurationPlan,
     execution_policy: ExecutionPolicy,
 ) -> anyhow::Result<ActiveRuntime> {
-    let ActiveRuntime {
-        mut engine,
-        mut input,
-    } = active;
+    let ActiveRuntime { mut engine, input } = active;
     let RuntimeReconfigurationPlan {
         monitor,
         input: input_plan,
         output: output_plan,
     } = plan;
     let io_interface_changed = input_plan.is_changed() || output_plan.is_changed();
+    let input_revision = input_plan.expected_revision();
+    let output_revision = output_plan.expected_revision();
+    let shutdown_timeout = engine.output.writer().shutdown_timeout();
+    let failure_deadline = std::rc::Rc::new(std::cell::Cell::new(None));
 
-    let mut removed = match input.remove_sources(&input_plan) {
-        Ok(removed) => removed,
+    let input = match input
+        .rebind(
+            input_plan,
+            shutdown_timeout,
+            failure_deadline.clone(),
+            async |batch| {
+                evaluate_reconfigurable_batch(&mut engine, &batch, execution_policy).await
+            },
+        )
+        .await
+    {
+        Ok(input) => input,
         Err(error) => {
-            drop(input);
-            return Err(reconfiguration_failure(engine, error).await);
+            return Err(reconfiguration_failure(engine, error, failure_deadline.get()).await);
         }
     };
-    while let Some(item) = removed.next().await {
-        let batch = match item {
-            Ok(ReconfigurableInputItem::Data(batch)) => batch,
-            Ok(ReconfigurableInputItem::Reconfigure(_)) => {
-                drop(input);
-                return Err(reconfiguration_failure(
-                    engine,
-                    anyhow::anyhow!(
-                        "a second reconfiguration command arrived while removing input sources"
-                    ),
-                )
-                .await);
-            }
-            Err(error) => {
-                drop(input);
-                return Err(reconfiguration_failure(engine, error).await);
-            }
-        };
-        if let Err(error) =
-            evaluate_reconfigurable_batch(&mut engine, &batch, execution_policy).await
-        {
-            drop(input);
-            return Err(reconfiguration_failure(engine, error).await);
-        }
-    }
+    let mut input = input;
 
     if let Err(error) = flush_reconfiguration_barrier(&mut engine).await {
-        drop(input);
-        return Err(reconfiguration_failure(engine, error.into()).await);
+        return Err(
+            reconfiguration_failure_active(ActiveRuntime { engine, input }, error.into()).await,
+        );
     }
 
-    if let Err(error) = input.add_sources_and_commit(input_plan).await {
-        drop(input);
-        return Err(reconfiguration_failure(engine, error).await);
-    }
     if let Err(error) = engine.output.apply_reconfiguration(output_plan).await {
-        drop(input);
-        return Err(reconfiguration_failure(engine, error.into()).await);
+        return Err(
+            reconfiguration_failure_active(ActiveRuntime { engine, input }, error.into()).await,
+        );
     }
 
     let report = match engine.monitor.apply_reconfiguration_plan(
@@ -1108,15 +1213,26 @@ async fn apply_runtime_reconfiguration(
     ) {
         Ok(report) => report,
         Err(error) => {
-            drop(input);
-            return Err(reconfiguration_failure(engine, error.into()).await);
+            return Err(reconfiguration_failure_active(
+                ActiveRuntime { engine, input },
+                error.into(),
+            )
+            .await);
         }
     };
 
+    if let Err(error) = input.commit_revision(input_revision) {
+        return Err(reconfiguration_failure_active(ActiveRuntime { engine, input }, error).await);
+    }
+    if let Err(error) = engine.output.commit_revision(output_revision) {
+        return Err(
+            reconfiguration_failure_active(ActiveRuntime { engine, input }, error.into()).await,
+        );
+    }
+
     engine.rebuild_monitor_layout();
     if let Err(error) = acknowledge_reconfiguration(context, &report).await {
-        drop(input);
-        return Err(reconfiguration_failure(engine, error).await);
+        return Err(reconfiguration_failure_active(ActiveRuntime { engine, input }, error).await);
     }
 
     Ok(ActiveRuntime { engine, input })
@@ -1133,7 +1249,7 @@ async fn evaluate_reconfigurable_batch(
             if execution_policy == ExecutionPolicy::Synchronous
                 || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
             {
-                flush_reconfigurable_output(engine).await?;
+                flush_required_output(engine).await?;
             }
         }
         return Ok(());
@@ -1144,7 +1260,7 @@ async fn evaluate_reconfigurable_batch(
         if execution_policy == ExecutionPolicy::Synchronous
             || engine.pending_rows == DATAFLOW_RUNTIME_BATCH_SIZE
         {
-            flush_reconfigurable_output(engine).await?;
+            flush_required_output(engine).await?;
         }
     }
     Ok(())
@@ -1341,10 +1457,11 @@ mod tests {
     use smol::LocalExecutor;
 
     use crate::VarName;
-    use crate::core::{OutputBackend, OutputBatch};
+    use crate::core::{OutputBatch, OutputWriter};
 
-    use crate::io::testing::{input_source_with_control, limited_null_output, manual_output};
-    use crate::io::{InputPipeline, OutputBackendBuilder, OutputBackendConfig, map};
+    use crate::io::output::TestOutputOpener;
+    use crate::io::testing::{channel_output, input_source_with_control, limited_null_output};
+    use crate::io::{InputPipeline, OutputBackendConfig, OutputPipeline, map};
     use crate::stream_utils::Fanout;
     use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, Value, async_test};
 
@@ -1414,14 +1531,12 @@ mod tests {
     }
 
     #[async_trait(?Send)]
-    impl crate::OutputBackend for RecordingBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for RecordingBackend {
         async fn open(
             &self,
             interface: crate::OutputInterface,
         ) -> Result<OutputWriter<Value>, OutputError> {
-            assert_eq!(interface.routes().len(), 1);
+            assert_eq!(interface.bindings().len(), 1);
             *self.opened.borrow_mut() += 1;
             self.writer
                 .borrow_mut()
@@ -1443,9 +1558,7 @@ mod tests {
     }
 
     #[async_trait(?Send)]
-    impl crate::OutputBackend for CountingBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for CountingBackend {
         async fn open(
             &self,
             _interface: crate::OutputInterface,
@@ -1493,9 +1606,7 @@ mod tests {
     struct FailingBackend;
 
     #[async_trait(?Send)]
-    impl crate::OutputBackend for FailingBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for FailingBackend {
         async fn open(
             &self,
             _interface: crate::OutputInterface,
@@ -1515,7 +1626,7 @@ mod tests {
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(map::input_stream(inputs))
+            .input(map::input_stream(inputs).into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1565,7 +1676,7 @@ mod tests {
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
-            .output_builder(OutputBackendBuilder::new(OutputBackendConfig::null()))
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::null()))
             .reconf_topic("control")
             .acknowledgements(ack_sender)
             .build()
@@ -1640,7 +1751,7 @@ mod tests {
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
-            .output_builder(OutputBackendBuilder::new(OutputBackendConfig::custom(
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::test(
                 CountingBackend {
                     counts: Rc::clone(&counts),
                 },
@@ -1706,7 +1817,7 @@ mod tests {
             .executor(executor)
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
-            .output_builder(OutputBackendBuilder::new(OutputBackendConfig::null()))
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::null()))
             .reconf_topic("control")
             .quickening(false)
             .build()
@@ -1726,7 +1837,7 @@ mod tests {
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
         let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-        let (output_writer, mut outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, mut outputs) = channel_output(spec.output_vars().clone()).await;
         let input = map::input_stream(BTreeMap::from([(
             VarName::new("x"),
             vec![Value::Int(1), Value::Int(2)],
@@ -1782,10 +1893,13 @@ mod tests {
             DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
                 .executor(executor.clone())
                 .model(spec)
-                .input(map::input_stream(BTreeMap::from([
-                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-                ])))
+                .input(
+                    map::input_stream(BTreeMap::from([
+                        (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                        (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                    ]))
+                    .into(),
+                )
                 .output_writer(output_writer)
                 .build()
                 .await;
@@ -1802,15 +1916,18 @@ mod tests {
         let spec = "in x: Int\nout z: Int\nz = x + 1"
             .parse::<CheckedDsrvSpecification>()
             .unwrap();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
             .jit(JitConfig::after_events(1))
             .executor(executor.clone())
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![1.into(), 2.into(), 3.into()],
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    vec![1.into(), 2.into(), 3.into()],
+                )]))
+                .into(),
+            )
             .output_writer(output_writer)
             .build()
             .await;
@@ -1846,10 +1963,13 @@ mod tests {
             DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
                 .executor(executor.clone())
                 .model(spec)
-                .input(map::input_stream(BTreeMap::from([
-                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-                ])))
+                .input(
+                    map::input_stream(BTreeMap::from([
+                        (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                        (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                    ]))
+                    .into(),
+                )
                 .output_writer(output_writer)
                 .build()
                 .await;
@@ -1867,15 +1987,18 @@ mod tests {
         let spec_src = "in x\nout z\nz = x + 1";
         let spec =
             CheckedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime =
             DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
                 .executor(executor.clone())
                 .model(spec)
-                .input(map::input_stream(BTreeMap::from([(
-                    VarName::new("x"),
-                    vec![41.into(), 1.into()],
-                )])))
+                .input(
+                    map::input_stream(BTreeMap::from([(
+                        VarName::new("x"),
+                        vec![41.into(), 1.into()],
+                    )]))
+                    .into(),
+                )
                 .output_writer(output_writer)
                 .build()
                 .await;
@@ -1904,14 +2027,17 @@ mod tests {
     ) {
         let spec_src = "in x\nout z\nz = x + 10";
         let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![Value::Int(1), Value::Int(2)],
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    vec![Value::Int(1), Value::Int(2)],
+                )]))
+                .into(),
+            )
             .output_writer(output_writer)
             .build()
             .await;
@@ -1940,14 +2066,17 @@ mod tests {
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
         let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                (0..300).map(Value::Int).collect(),
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    (0..300).map(Value::Int).collect(),
+                )]))
+                .into(),
+            )
             .output_writer(output_writer)
             .build()
             .await;
@@ -1972,7 +2101,7 @@ mod tests {
     ) {
         let spec_src = "in x\nin y\nout z\nz = 42";
         let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let simultaneous = crate::InputBatch::tick(vec![
             crate::InputUpdate::new("x".into(), Value::Int(1)),
             crate::InputUpdate::new("y".into(), Value::Int(10)),
@@ -1983,11 +2112,12 @@ mod tests {
             vec![crate::InputUpdate::new("y".into(), Value::Int(20))],
         ])
         .unwrap();
-        let input = Box::pin(futures::stream::iter([Ok(simultaneous), Ok(independent)]));
+        let input: InputStream<Value> =
+            Box::pin(futures::stream::iter([Ok(simultaneous), Ok(independent)]));
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(input)
+            .input(input.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -2020,16 +2150,19 @@ mod tests {
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([
-                (
-                    VarName::new("x"),
-                    (0..300).map(Value::Int).collect::<Vec<_>>(),
-                ),
-                (
-                    VarName::new("y"),
-                    (0..299).map(Value::Int).collect::<Vec<_>>(),
-                ),
-            ])))
+            .input(
+                map::input_stream(BTreeMap::from([
+                    (
+                        VarName::new("x"),
+                        (0..300).map(Value::Int).collect::<Vec<_>>(),
+                    ),
+                    (
+                        VarName::new("y"),
+                        (0..299).map(Value::Int).collect::<Vec<_>>(),
+                    ),
+                ]))
+                .into(),
+            )
             .output_writer(recording_writer(Rc::clone(&batches)))
             .build()
             .await;
@@ -2076,16 +2209,18 @@ mod tests {
             opened: Rc::clone(&opened),
             writer: RefCell::new(Some(recording_writer(Rc::clone(&batches)))),
         });
-        let interface =
-            crate::OutputInterface::new([crate::OutputRoute::output(VarName::new("z"))]).unwrap();
+        let interface = crate::OutputInterface::from_bindings([crate::OutputBinding::output(
+            VarName::new("z"),
+        )])
+        .unwrap();
         let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![Value::Int(1)],
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]))
+                    .into(),
+            )
             .output_writer(backend.open(interface).await.unwrap())
             .build()
             .await;
@@ -2121,10 +2256,13 @@ mod tests {
             .execution_policy(ExecutionPolicy::Synchronous)
             .executor(executor)
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![Value::Int(1), Value::Int(2)],
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    vec![Value::Int(1), Value::Int(2)],
+                )]))
+                .into(),
+            )
             .output_writer(recording_writer(Rc::clone(&batches)))
             .build()
             .await;
@@ -2144,16 +2282,16 @@ mod tests {
         let spec = "in source\nout z\nz = dynamic(source: Int)"
             .parse::<DsrvSpecification>()
             .unwrap();
-        let input = Box::pin(futures::stream::iter([Ok(crate::InputBatch::from(
-            crate::InputUpdate::new(
+        let input: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
+            crate::InputBatch::from(crate::InputUpdate::new(
                 VarName::new("source"),
                 Value::Str("not a valid expression".into()),
-            ),
-        ))]));
+            )),
+        )]));
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(input)
+            .input(input.into())
             .output_writer(recording_writer(Rc::clone(&batches)))
             .build()
             .await;
@@ -2172,12 +2310,12 @@ mod tests {
         let spec = "in source\nout z\nz = dynamic(source: Int)"
             .parse::<DsrvSpecification>()
             .unwrap();
-        let input = Box::pin(futures::stream::iter([Ok(crate::InputBatch::from(
-            crate::InputUpdate::new(
+        let input: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
+            crate::InputBatch::from(crate::InputUpdate::new(
                 VarName::new("source"),
                 Value::Str("not a valid expression".into()),
-            ),
-        ))]));
+            )),
+        )]));
         let output_writer = OutputWriter::from_sink(CleanupFailingSink {
             flush_error: Some(OutputError::backend("dataflow flush failed")),
             close_error: Some(OutputError::backend("dataflow close failed")),
@@ -2186,7 +2324,7 @@ mod tests {
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(input)
+            .input(input.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -2207,11 +2345,11 @@ mod tests {
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![Value::Int(1)],
-            )])))
-            .output_writer(failing_writer(OutputError::Closed))
+            .input(
+                map::input_stream(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]))
+                    .into(),
+            )
+            .output_writer(failing_writer(OutputError::closed()))
             .build()
             .await;
 
@@ -2224,10 +2362,10 @@ mod tests {
         let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
             .executor(executor)
             .model(spec)
-            .input(map::input_stream(BTreeMap::from([(
-                VarName::new("x"),
-                vec![Value::Int(1)],
-            )])))
+            .input(
+                map::input_stream(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]))
+                    .into(),
+            )
             .output_writer(failing_writer(OutputError::backend("sink failed")))
             .build()
             .await;

@@ -1,556 +1,489 @@
-use std::{collections::VecDeque, time::Duration};
-
 use anyhow::Context;
 use async_channel::{Receiver, Sender};
-use async_compat::Compat as TokioCompat;
-use futures::{FutureExt, StreamExt};
-use rumqttc::{
-    AsyncClient, Event, EventLoop, Incoming, MqttOptions, QoS, SubscribeFilter, SubscribeReasonCode,
-};
-use tracing::{debug, info, warn};
-use uuid::Uuid;
+use futures::FutureExt;
+use std::collections::{BTreeMap, VecDeque};
+use tracing::debug;
 
 use crate::core::{InputBatch, JsonStreamValue, LocalStream, VarName};
-use crate::io::ReconfigurationRequest;
+use crate::io::{ReconfigurationRequest, RetryPolicy};
 
+use super::client::mqtt311::{self, RawMqttMessage};
 use super::input_backend::{InverseVarTopicMap, MqttInputItem, VarTopicMap, invert_topic_mapping};
 
-const RUMQTTC_CHANNEL_SIZE: usize = 1024;
+const INPUT_CAPACITY: usize = 1024;
 
-enum RumqttcEvent {
+enum InputEvent {
     Publish(RawPublish),
+    Boundary(u64),
     Error(String),
 }
-
 struct RawPublish {
     topic: String,
     payload: Vec<u8>,
-    /// Filled by the event-loop owner immediately before emission. A publish
-    /// kept in the reconfiguration queue remains unrouted until the candidate
-    /// map is active.
     variable: Option<VarName>,
 }
-
-struct RumqttcCommand {
-    candidate_topics: InverseVarTopicMap,
+struct InputCommand {
+    candidate: Option<InverseVarTopicMap>,
     additions: Vec<String>,
     removals: Vec<String>,
-    response: Sender<Result<(), String>>,
+    response: Sender<Result<u64, String>>,
+    boundary_id: Option<u64>,
+    resume: bool,
 }
 
-struct RumqttcInputTransport {
-    events: Receiver<RumqttcEvent>,
-    commands: Sender<RumqttcCommand>,
+pub(crate) struct RumqttcInputControl {
+    commands: Sender<InputCommand>,
+    active_topics: VarTopicMap,
+    control_topic: Option<String>,
     cancel: Sender<()>,
-    worker: smol::Task<()>,
+    worker: Option<smol::Task<anyhow::Result<()>>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Acknowledgement {
-    Subscribe,
-    Unsubscribe,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingDispatch {
-    Drained,
-    Barrier,
-    Closed,
-}
-
-pub(super) async fn input_stream_items<V: JsonStreamValue>(
-    host: &str,
-    port: Option<u16>,
-    var_topics: VarTopicMap,
-    max_reconnect_attempts: u32,
-    control_topic: Option<String>,
-) -> anyhow::Result<LocalStream<anyhow::Result<MqttInputItem<V>>>> {
-    if var_topics.is_empty() && control_topic.is_none() {
-        return Ok(Box::pin(futures::stream::empty()));
-    }
-
-    let inverse_topics = invert_topic_mapping(&var_topics);
-    let transport = open_transport(
-        host,
-        port,
-        &var_topics,
-        max_reconnect_attempts,
-        control_topic.as_deref(),
-    )
-    .await?;
-    let events = rumqttc_event_stream(transport, control_topic.clone());
-    Ok(map_legacy_items(events, inverse_topics, control_topic))
-}
-
-async fn open_transport(
-    host: &str,
-    port: Option<u16>,
-    var_topics: &VarTopicMap,
-    max_reconnect_attempts: u32,
-    control_topic: Option<&str>,
-) -> anyhow::Result<RumqttcInputTransport> {
-    super::input_backend::validate_topic_mapping(var_topics, control_topic)?;
-
-    let mut options = MqttOptions::new(
-        format!("robosapiens_trustworthiness_checker_{}", Uuid::new_v4()),
-        host,
-        port.unwrap_or(1883),
-    );
-    options.set_keep_alive(Duration::from_secs(30));
-    options.set_clean_session(false);
-    options.set_request_channel_capacity(RUMQTTC_CHANNEL_SIZE);
-    options.set_inflight(RUMQTTC_CHANNEL_SIZE as u16);
-
-    let (client, mut eventloop) = AsyncClient::new(options, RUMQTTC_CHANNEL_SIZE);
-    let inverse_topics = invert_topic_mapping(var_topics);
-    let mut filters = var_topics
-        .values()
-        .map(|topic| SubscribeFilter::new(topic.clone(), QoS::AtLeastOnce))
-        .collect::<Vec<_>>();
-    if let Some(topic) = control_topic {
-        filters.push(SubscribeFilter::new(topic.to_owned(), QoS::AtLeastOnce));
-    }
-    info!(%host, ?port, topics = var_topics.len(), "Connecting rumqttc input stream");
-    client.subscribe_many(filters).await?;
-
-    // The initial subscription is also a barrier. Retained or immediately
-    // published messages observed before its SubAck are preserved in order.
-    let mut pending = VecDeque::new();
-    let mut reconnect_attempts = 0;
-    wait_for_ack(
-        &mut eventloop,
-        Acknowledgement::Subscribe,
-        var_topics.len() + usize::from(control_topic.is_some()),
-        &inverse_topics,
-        control_topic,
-        max_reconnect_attempts,
-        &mut reconnect_attempts,
-        &mut pending,
-    )
-    .await?;
-
-    let (events, event_receiver) = async_channel::unbounded();
-    let (commands, command_receiver) = async_channel::bounded(1);
-    let (cancel, cancel_receiver) = async_channel::bounded(1);
-    let worker = smol::spawn(run_event_loop(
-        client,
-        eventloop,
-        inverse_topics,
-        control_topic.map(str::to_owned),
-        max_reconnect_attempts,
-        pending,
-        events,
-        command_receiver,
-        cancel_receiver,
-    ));
-    Ok(RumqttcInputTransport {
-        events: event_receiver,
-        commands,
-        cancel,
-        worker,
-    })
-}
-
-// rumqttc 0.25's AsyncClient subscribe/unsubscribe APIs return enqueue status,
-// not packet IDs. The event-loop owner therefore keeps these commands
-// single-flight, making the next matching acknowledgement unambiguous.
-async fn wait_for_ack(
-    eventloop: &mut EventLoop,
-    expected: Acknowledgement,
-    expected_topics: usize,
-    topics: &InverseVarTopicMap,
-    control_topic: Option<&str>,
-    max_reconnect_attempts: u32,
-    reconnect_attempts: &mut u32,
-    pending: &mut VecDeque<RawPublish>,
-) -> anyhow::Result<()> {
-    loop {
-        match TokioCompat::new(eventloop.poll()).await {
-            Ok(Event::Incoming(Incoming::Publish(publish))) => {
-                *reconnect_attempts = 0;
-                let is_control = control_topic == Some(publish.topic.as_str());
-                if is_control || topics.contains_key(&publish.topic) {
-                    pending.push_back(raw_publish(publish));
-                }
-            }
-            Ok(Event::Incoming(Incoming::SubAck(ack)))
-                if expected == Acknowledgement::Subscribe =>
-            {
-                anyhow::ensure!(
-                    ack.return_codes.len() == expected_topics,
-                    "rumqttc MQTT SubAck acknowledged {} topics, expected {}",
-                    ack.return_codes.len(),
-                    expected_topics
-                );
-                if let Some((index, code)) = ack
-                    .return_codes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, code)| !matches!(code, SubscribeReasonCode::Success(_)))
-                {
-                    anyhow::bail!(
-                        "rumqttc MQTT subscription for topic index {index} was rejected: {code:?}"
-                    );
-                }
-                *reconnect_attempts = 0;
-                return Ok(());
-            }
-            Ok(Event::Incoming(Incoming::UnsubAck(_)))
-                if expected == Acknowledgement::Unsubscribe =>
-            {
-                *reconnect_attempts = 0;
-                return Ok(());
-            }
-            Ok(_) => *reconnect_attempts = 0,
-            Err(error) => {
-                *reconnect_attempts += 1;
-                if max_reconnect_attempts != u32::MAX
-                    && *reconnect_attempts > max_reconnect_attempts
-                {
-                    return Err(error.into());
-                }
-                warn!(
-                    ?error,
-                    reconnect_attempts, "rumqttc poll failed; waiting for reconnection"
-                );
-                smol::Timer::after(Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
-
-async fn run_event_loop(
-    client: AsyncClient,
-    mut eventloop: EventLoop,
-    mut active_topics: InverseVarTopicMap,
-    control_topic: Option<String>,
-    max_reconnect_attempts: u32,
-    mut pending: VecDeque<RawPublish>,
-    events: Sender<RumqttcEvent>,
-    commands: Receiver<RumqttcCommand>,
-    cancel: Receiver<()>,
-) {
-    let mut awaiting_command = false;
-    let mut command_in_flight = false;
-    let mut reconnect_attempts = 0;
-    loop {
-        if awaiting_command {
-            debug_assert!(
-                !command_in_flight,
-                "rumqttc input command overlap would make acknowledgements ambiguous"
-            );
-            if command_in_flight {
-                let _ = events
-                    .send(RumqttcEvent::Error(
-                        "rumqttc input command overlap".to_owned(),
-                    ))
-                    .await;
-                break;
-            }
-            let command = futures::select! {
-                command = commands.recv().fuse() => command.ok(),
-                _ = cancel.recv().fuse() => None,
-            };
-            let Some(command) = command else {
-                break;
-            };
-            let RumqttcCommand {
-                candidate_topics,
+impl RumqttcInputControl {
+    pub(crate) async fn rebind(&mut self, candidate: VarTopicMap) -> anyhow::Result<()> {
+        super::input_backend::validate_topic_mapping(&candidate, self.control_topic.as_deref())?;
+        let additions = candidate
+            .values()
+            .filter(|topic| !self.active_topics.values().any(|old| old == *topic))
+            .cloned()
+            .collect();
+        let removals = self
+            .active_topics
+            .values()
+            .filter(|topic| !candidate.values().any(|new| new == *topic))
+            .cloned()
+            .collect();
+        let (response, result) = async_channel::bounded(1);
+        self.commands
+            .send(InputCommand {
+                candidate: Some(invert_topic_mapping(&candidate)),
                 additions,
                 removals,
                 response,
-            } = command;
-            command_in_flight = true;
-            debug_assert!(command_in_flight);
-            let result = apply_command(
-                &client,
-                &mut eventloop,
-                &mut active_topics,
-                candidate_topics,
-                additions,
-                removals,
-                &control_topic,
-                max_reconnect_attempts,
-                &mut reconnect_attempts,
-                &mut pending,
-            )
-            .await;
-            command_in_flight = false;
-            let error = result.as_ref().err().cloned();
-            let mut next_awaiting_command = false;
-            if result.is_ok() {
-                match dispatch_pending(
-                    &events,
-                    &mut pending,
-                    &active_topics,
-                    control_topic.as_deref(),
-                )
-                .await
-                {
-                    PendingDispatch::Drained => {}
-                    PendingDispatch::Barrier => next_awaiting_command = true,
-                    PendingDispatch::Closed => break,
-                }
-            }
-            if response.send(result).await.is_err() {
-                break;
-            }
-            if let Some(error) = error {
-                let _ = events.send(RumqttcEvent::Error(error)).await;
-                break;
-            }
-            awaiting_command = next_awaiting_command;
-            continue;
+                boundary_id: None,
+                resume: false,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("rumqttc input owner stopped before rebind"))?;
+        result
+            .recv()
+            .await
+            .map_err(|_| anyhow::anyhow!("rumqttc input owner stopped during rebind"))?
+            .map_err(anyhow::Error::msg)?;
+        self.active_topics = candidate;
+        Ok(())
+    }
+
+    /// Stops admission at an engine-ordered generation boundary. All raw
+    /// observations before the boundary precede its same-channel marker.
+    /// This call returns after command admission; `rebind` resumes admission.
+    pub(crate) async fn pause(&mut self, boundary_id: u64) -> anyhow::Result<()> {
+        let (response, _result) = async_channel::bounded(1);
+        self.commands
+            .send(InputCommand {
+                candidate: None,
+                additions: Vec::new(),
+                removals: Vec::new(),
+                response,
+                boundary_id: Some(boundary_id),
+                resume: false,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("rumqttc input owner stopped before pause"))?;
+        Ok(())
+    }
+
+    /// Resumes an unchanged source after a global boundary. The command is
+    /// admitted asynchronously; the owner reuses the paused generation and
+    /// installs the existing map without changing broker subscriptions.
+    pub(crate) async fn resume(&mut self) -> anyhow::Result<()> {
+        let (response, _result) = async_channel::bounded(1);
+        self.commands
+            .send(InputCommand {
+                candidate: Some(invert_topic_mapping(&self.active_topics)),
+                additions: Vec::new(),
+                removals: Vec::new(),
+                response,
+                boundary_id: None,
+                resume: true,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("rumqttc input owner stopped before resume"))?;
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
+        let _ = self.cancel.send(()).await;
+        if let Some(worker) = self.worker.take() {
+            worker.await?;
         }
+        Ok(())
+    }
+}
 
-        match dispatch_pending(
-            &events,
-            &mut pending,
-            &active_topics,
-            control_topic.as_deref(),
-        )
-        .await
-        {
-            PendingDispatch::Drained => {}
-            PendingDispatch::Barrier => {
-                awaiting_command = true;
-                continue;
+pub(crate) async fn reconfigurable_input_stream_items<V: JsonStreamValue>(
+    host: &str,
+    port: Option<u16>,
+    topics: VarTopicMap,
+    retry: RetryPolicy,
+    control: String,
+) -> anyhow::Result<(
+    LocalStream<anyhow::Result<MqttInputItem<V>>>,
+    RumqttcInputControl,
+)> {
+    open_items(host, port, topics, retry, Some(control)).await
+}
+
+pub(crate) async fn owned_input_stream_items<V: JsonStreamValue>(
+    host: &str,
+    port: Option<u16>,
+    topics: VarTopicMap,
+    retry: RetryPolicy,
+) -> anyhow::Result<(
+    LocalStream<anyhow::Result<MqttInputItem<V>>>,
+    RumqttcInputControl,
+)> {
+    open_items(host, port, topics, retry, None).await
+}
+
+async fn open_items<V: JsonStreamValue>(
+    host: &str,
+    port: Option<u16>,
+    topics: VarTopicMap,
+    retry: RetryPolicy,
+    control: Option<String>,
+) -> anyhow::Result<(
+    LocalStream<anyhow::Result<MqttInputItem<V>>>,
+    RumqttcInputControl,
+)> {
+    super::input_backend::validate_topic_mapping(&topics, control.as_deref())?;
+    let uri = format!("tcp://{host}:{}", port.unwrap_or(1883));
+    let (client, raw, driver) = mqtt311::connect_raw(&uri, retry).await?;
+    let mut subscriptions = topics.values().cloned().collect::<Vec<_>>();
+    if let Some(topic) = &control {
+        subscriptions.push(topic.clone());
+    }
+    if !subscriptions.is_empty() {
+        client.subscribe_many_same_qos(&subscriptions, 1).await?;
+    }
+
+    let (events, event_rx) = async_channel::bounded(INPUT_CAPACITY);
+    let (commands, command_rx) = async_channel::bounded(1);
+    let (cancel, cancel_rx) = async_channel::bounded(1);
+    let worker = smol::spawn(run_owner(
+        client,
+        driver,
+        raw,
+        invert_topic_mapping(&topics),
+        control.clone(),
+        events,
+        command_rx,
+        cancel_rx,
+    ));
+    Ok((
+        map_items(event_rx, control.clone()),
+        RumqttcInputControl {
+            commands,
+            active_topics: topics,
+            control_topic: control,
+            cancel,
+            worker: Some(worker),
+        },
+    ))
+}
+
+async fn run_owner(
+    client: super::MqttClient,
+    driver: smol::Task<()>,
+    raw: Receiver<Result<RawMqttMessage, crate::core::InputError>>,
+    topics: InverseVarTopicMap,
+    control: Option<String>,
+    events: Sender<InputEvent>,
+    commands: Receiver<InputCommand>,
+    cancel: Receiver<()>,
+) -> anyhow::Result<()> {
+    let mut awaiting_rebind = false;
+    let mut cancelled = false;
+    let mut topic_versions = BTreeMap::from([(0_u64, topics)]);
+    let mut deferred = VecDeque::new();
+    let mut pause_generation = None;
+    'owner: loop {
+        let next = if awaiting_rebind {
+            futures::select! {
+                _ = cancel.recv().fuse() => { cancelled = true; None },
+                command = commands.recv().fuse() => command.ok().map(OwnerInput::Command),
             }
-            PendingDispatch::Closed => break,
-        }
-
-        let next = futures::select! {
-            event = TokioCompat::new(eventloop.poll()).fuse() => {
-                Some(WorkerInput::Event(event))
+        } else {
+            futures::select! {
+                _ = cancel.recv().fuse() => { cancelled = true; None },
+                command = commands.recv().fuse() => command.ok().map(OwnerInput::Command),
+                message = async {
+                    if let Some(message) = deferred.pop_front() { Some(message) } else { raw.recv().await.ok() }
+                }.fuse() => message.map(OwnerInput::Message),
             }
-            _ = cancel.recv().fuse() => None,
         };
-        let Some(next) = next else {
-            break;
-        };
-
+        let Some(next) = next else { break };
         match next {
-            WorkerInput::Event(Ok(Event::Incoming(Incoming::Publish(publish)))) => {
-                reconnect_attempts = 0;
-                if let Some(event) = route_publish(
-                    raw_publish(publish),
-                    &active_topics,
-                    control_topic.as_deref(),
-                ) {
-                    let is_control = matches!(
-                        &event,
-                        RumqttcEvent::Publish(publish)
-                            if control_topic.as_deref() == Some(publish.topic.as_str())
-                    );
-                    if events.send(event).await.is_err() {
+            OwnerInput::Message(Ok(message)) => {
+                let generation = message.generation;
+                let is_control_message = control.as_deref() == Some(message.topic.as_str());
+                if is_control_message {
+                    let boundary = client.subscribe_boundary(Vec::new()).await?;
+                    while let Ok(queued) = raw.try_recv() {
+                        match queued {
+                            Ok(queued)
+                                if queued.generation <= generation
+                                    && control.as_deref() != Some(queued.topic.as_str()) =>
+                            {
+                                if let Some(publish) =
+                                    route(queued, &topic_versions, control.as_deref())
+                                {
+                                    if !send_event(&events, &cancel, InputEvent::Publish(publish))
+                                        .await?
+                                    {
+                                        cancelled = true;
+                                        break 'owner;
+                                    }
+                                }
+                            }
+                            queued => {
+                                deferred.push_back(queued);
+                                break;
+                            }
+                        }
+                    }
+                    pause_generation = Some(boundary);
+                }
+                if let Some(publish) = route(message, &topic_versions, control.as_deref()) {
+                    let is_control = control.as_deref() == Some(publish.topic.as_str());
+                    if !send_event(&events, &cancel, InputEvent::Publish(publish)).await? {
+                        cancelled = true;
                         break;
                     }
-                    if is_control {
-                        // The owner deliberately stops polling here. Data
-                        // after this control cannot be tagged with the old
-                        // subscription set while a reconfiguration is applying.
-                        awaiting_command = true;
+                    awaiting_rebind = is_control;
+                }
+                topic_versions.retain(|version, _| *version >= generation);
+            }
+            OwnerInput::Message(Err(error)) => {
+                let text = error.to_string();
+                queue_terminal(&events, text.clone());
+                anyhow::bail!(text);
+            }
+            OwnerInput::Command(command) => {
+                if command.resume && pause_generation.is_none() {
+                    let generation = *topic_versions.keys().next_back().unwrap_or(&0);
+                    let _ = command.response.send(Ok(generation)).await;
+                    continue;
+                }
+                if command.candidate.is_none() {
+                    if let Some(boundary) = pause_generation {
+                        if !send_event(
+                            &events,
+                            &cancel,
+                            InputEvent::Boundary(
+                                command.boundary_id.expect("pause command has boundary id"),
+                            ),
+                        )
+                        .await?
+                        {
+                            cancelled = true;
+                            break;
+                        }
+                        let _ = command.response.send(Ok(boundary)).await;
+                        continue;
+                    }
+                    let old_generation = *topic_versions.keys().next_back().unwrap_or(&0);
+                    let boundary = client.subscribe_boundary(Vec::new()).await?;
+                    if !drain_old_generation(
+                        &raw,
+                        &mut deferred,
+                        old_generation,
+                        &topic_versions,
+                        control.as_deref(),
+                        &events,
+                        &cancel,
+                    )
+                    .await?
+                    {
+                        cancelled = true;
+                        break;
+                    }
+                    if !send_event(
+                        &events,
+                        &cancel,
+                        InputEvent::Boundary(
+                            command.boundary_id.expect("pause command has boundary id"),
+                        ),
+                    )
+                    .await?
+                    {
+                        cancelled = true;
+                        break;
+                    }
+                    pause_generation = Some(boundary);
+                    awaiting_rebind = true;
+                    let _ = command.response.send(Ok(boundary)).await;
+                    continue;
+                }
+                let paused_generation = pause_generation;
+                let result = {
+                    let operation = apply_command(&client, &command, paused_generation).fuse();
+                    futures::pin_mut!(operation);
+                    futures::select! {
+                        result = operation => result,
+                        _ = cancel.recv().fuse() => {
+                            cancelled = true;
+                            let _ = command.response.try_send(Err("rumqttc input command cancelled".into()));
+                            break;
+                        }
+                    }
+                };
+                if let Ok(generation) = result.as_ref() {
+                    if let Some(paused) = pause_generation.take() {
+                        topic_versions.insert(paused, command.candidate.as_ref().unwrap().clone());
+                    }
+                    topic_versions.insert(*generation, command.candidate.as_ref().unwrap().clone());
+                    if raw.is_empty() {
+                        topic_versions.retain(|version, _| version == generation);
                     }
                 }
-            }
-            WorkerInput::Event(Ok(_)) => reconnect_attempts = 0,
-            WorkerInput::Event(Err(error)) => {
-                reconnect_attempts += 1;
-                if max_reconnect_attempts != u32::MAX && reconnect_attempts > max_reconnect_attempts
-                {
-                    let _ = events.send(RumqttcEvent::Error(error.to_string())).await;
+                let reply = result.map_err(|error| error.to_string());
+                let failed = reply.is_err();
+                let _ = command.response.send(reply).await;
+                if failed {
                     break;
                 }
-                warn!(
-                    ?error,
-                    reconnect_attempts, "rumqttc poll failed; waiting for reconnection"
-                );
-                smol::Timer::after(Duration::from_millis(100)).await;
+                awaiting_rebind = false;
             }
         }
     }
-
-    debug!("Disconnecting rumqttc MQTT input client");
-    let _ = client.disconnect().await;
+    if cancelled {
+        driver.cancel().await;
+        return Ok(());
+    }
+    debug!("Disconnecting shared MQTT input client");
+    let disconnect = client.disconnect().await;
+    driver.await;
+    disconnect
 }
 
-enum WorkerInput {
-    Event(Result<Event, rumqttc::ConnectionError>),
+enum OwnerInput {
+    Message(Result<RawMqttMessage, crate::core::InputError>),
+    Command(InputCommand),
+}
+
+fn queue_terminal(events: &Sender<InputEvent>, error: String) {
+    let events = events.clone();
+    smol::spawn(async move {
+        let _ = events.send(InputEvent::Error(error)).await;
+    })
+    .detach();
+}
+
+async fn send_event(
+    events: &Sender<InputEvent>,
+    cancel: &Receiver<()>,
+    event: InputEvent,
+) -> anyhow::Result<bool> {
+    futures::select! {
+        result = events.send(event).fuse() => result
+            .map(|_| true)
+            .map_err(|_| anyhow::anyhow!("MQTT input consumer dropped")),
+        _ = cancel.recv().fuse() => Ok(false),
+    }
+}
+
+async fn drain_old_generation(
+    raw: &Receiver<Result<RawMqttMessage, crate::core::InputError>>,
+    deferred: &mut VecDeque<Result<RawMqttMessage, crate::core::InputError>>,
+    generation: u64,
+    versions: &BTreeMap<u64, InverseVarTopicMap>,
+    control: Option<&str>,
+    events: &Sender<InputEvent>,
+    cancel: &Receiver<()>,
+) -> anyhow::Result<bool> {
+    while let Ok(queued) = raw.try_recv() {
+        match queued {
+            Ok(queued)
+                if queued.generation <= generation && control != Some(queued.topic.as_str()) =>
+            {
+                if let Some(publish) = route(queued, versions, control) {
+                    if !send_event(events, cancel, InputEvent::Publish(publish)).await? {
+                        return Ok(false);
+                    }
+                }
+            }
+            queued => {
+                deferred.push_back(queued);
+                break;
+            }
+        }
+    }
+    Ok(true)
 }
 
 async fn apply_command(
-    client: &AsyncClient,
-    eventloop: &mut EventLoop,
-    active_topics: &mut InverseVarTopicMap,
-    candidate_topics: InverseVarTopicMap,
-    additions: Vec<String>,
-    removals: Vec<String>,
-    control_topic: &Option<String>,
-    max_reconnect_attempts: u32,
-    reconnect_attempts: &mut u32,
-    pending: &mut VecDeque<RawPublish>,
-) -> Result<(), String> {
-    if !additions.is_empty() {
-        let filters = additions
-            .iter()
-            .map(|topic| SubscribeFilter::new(topic.clone(), QoS::AtLeastOnce))
-            .collect::<Vec<_>>();
-        client
-            .subscribe_many(filters)
-            .await
-            .map_err(|error| error.to_string())?;
-        wait_for_ack(
-            eventloop,
-            Acknowledgement::Subscribe,
-            additions.len(),
-            &candidate_topics,
-            control_topic.as_deref(),
-            max_reconnect_attempts,
-            reconnect_attempts,
-            pending,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+    client: &super::MqttClient,
+    command: &InputCommand,
+    paused: Option<u64>,
+) -> anyhow::Result<u64> {
+    let generation = if command.additions.is_empty() {
+        match paused {
+            Some(generation) => generation,
+            None => client.subscribe_boundary(Vec::new()).await?,
+        }
+    } else {
+        client.subscribe_boundary(command.additions.clone()).await?
+    };
+    if !command.removals.is_empty() {
+        client.unsubscribe_many(&command.removals).await?;
     }
-
-    // Install the candidate decoding view before waiting for removal acks. Raw
-    // publishes observed by those waits are routed only after the complete
-    // command succeeds, so they are all decoded under this candidate map.
-    *active_topics = candidate_topics.clone();
-
-    for topic in removals {
-        client
-            .unsubscribe(topic.as_str())
-            .await
-            .map_err(|error| error.to_string())?;
-        wait_for_ack(
-            eventloop,
-            Acknowledgement::Unsubscribe,
-            1,
-            &candidate_topics,
-            control_topic.as_deref(),
-            max_reconnect_attempts,
-            reconnect_attempts,
-            pending,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    }
-
-    Ok(())
+    Ok(generation)
 }
 
-fn raw_publish(publish: rumqttc::Publish) -> RawPublish {
-    RawPublish {
-        topic: publish.topic,
-        payload: publish.payload.to_vec(),
-        variable: None,
-    }
-}
-
-fn route_publish(
-    mut publish: RawPublish,
-    topics: &InverseVarTopicMap,
-    control_topic: Option<&str>,
-) -> Option<RumqttcEvent> {
-    let is_control = control_topic == Some(publish.topic.as_str());
-    publish.variable = if is_control {
+fn route(
+    message: RawMqttMessage,
+    versions: &BTreeMap<u64, InverseVarTopicMap>,
+    control: Option<&str>,
+) -> Option<RawPublish> {
+    let is_control = control == Some(message.topic.as_str());
+    let variable = if is_control {
         None
     } else {
-        topics.get(&publish.topic).cloned()
+        versions
+            .get(&message.generation)
+            .and_then(|topics| topics.get(&message.topic))
+            .cloned()
     };
-    if !is_control && publish.variable.is_none() {
+    if !is_control && variable.is_none() {
         return None;
     }
-    Some(RumqttcEvent::Publish(publish))
-}
-
-async fn dispatch_pending(
-    events: &Sender<RumqttcEvent>,
-    pending: &mut VecDeque<RawPublish>,
-    topics: &InverseVarTopicMap,
-    control_topic: Option<&str>,
-) -> PendingDispatch {
-    while let Some(publish) = pending.pop_front() {
-        let is_control = control_topic == Some(publish.topic.as_str());
-        let Some(event) = route_publish(publish, topics, control_topic) else {
-            continue;
-        };
-        if events.send(event).await.is_err() {
-            return PendingDispatch::Closed;
-        }
-        if is_control {
-            return PendingDispatch::Barrier;
-        }
-    }
-    PendingDispatch::Drained
-}
-
-fn rumqttc_event_stream(
-    transport: RumqttcInputTransport,
-    terminal_control_topic: Option<String>,
-) -> LocalStream<anyhow::Result<RumqttcEvent>> {
-    let RumqttcInputTransport {
-        events,
-        commands,
-        cancel,
-        worker,
-    } = transport;
-    Box::pin(async_stream::try_stream! {
-        let _commands = commands;
-        let cancel = cancel;
-        let mut worker = Some(worker);
-        while let Ok(event) = events.recv().await {
-            match event {
-                RumqttcEvent::Publish(publish)
-                    if terminal_control_topic.as_deref() == Some(publish.topic.as_str()) =>
-                {
-                    // The legacy consumer drops its generator after this
-                    // yield, so the worker must be stopped before yielding.
-                    let _ = cancel.send(()).await;
-                    if let Some(worker) = worker.take() {
-                        worker.await;
-                    }
-                    yield RumqttcEvent::Publish(publish);
-                    break;
-                }
-                RumqttcEvent::Publish(publish) => yield RumqttcEvent::Publish(publish),
-                RumqttcEvent::Error(error) => Err(anyhow::anyhow!(error))?,
-            }
-        }
+    Some(RawPublish {
+        topic: message.topic,
+        payload: message.payload,
+        variable,
     })
 }
 
-fn map_legacy_items<V: JsonStreamValue + 'static>(
-    mut events: LocalStream<anyhow::Result<RumqttcEvent>>,
-    topics: InverseVarTopicMap,
-    control_topic: Option<String>,
+fn map_items<V: JsonStreamValue + 'static>(
+    events: Receiver<InputEvent>,
+    control: Option<String>,
 ) -> LocalStream<anyhow::Result<MqttInputItem<V>>> {
     Box::pin(async_stream::try_stream! {
-        while let Some(event) = events.next().await {
-            match event? {
-                RumqttcEvent::Publish(publish)
-                    if control_topic.as_deref() == Some(publish.topic.as_str()) =>
-                {
-                    let payload = std::str::from_utf8(&publish.payload)
-                        .context("MQTT monitor configuration is not UTF-8")?;
+        while let Ok(event) = events.recv().await {
+            match event {
+                InputEvent::Publish(publish) if control.as_deref() == Some(publish.topic.as_str()) => {
+                    let payload = std::str::from_utf8(&publish.payload).context("MQTT monitor configuration is not UTF-8")?;
                     yield MqttInputItem::Control(ReconfigurationRequest::from_json(payload)?);
-                    break;
                 }
-                RumqttcEvent::Publish(publish) => {
-                    let Some(variable) = publish
-                        .variable
-                        .or_else(|| topics.get(&publish.topic).cloned())
-                    else {
-                        continue;
-                    };
+                InputEvent::Publish(publish) => {
+                    let Some(variable) = publish.variable else { continue };
                     let value = super::input_backend::decode_payload::<V>(&publish.payload)
-                        .with_context(|| {
-                            format!("failed to parse value for MQTT variable `{variable}`")
-                        })?;
+                        .with_context(|| format!("failed to parse value for MQTT variable `{variable}`"))?;
                     yield MqttInputItem::Data(InputBatch::update(variable, value));
                 }
-                RumqttcEvent::Error(_) => unreachable!("event stream converts errors before yielding"),
+                InputEvent::Error(error) => Err(anyhow::anyhow!(error))?,
+                InputEvent::Boundary(id) => yield MqttInputItem::Boundary(id),
             }
         }
     })
@@ -559,81 +492,97 @@ fn map_legacy_items<V: JsonStreamValue + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
 
-    fn raw(topic: &str) -> RawPublish {
-        RawPublish {
-            topic: topic.to_owned(),
-            payload: Vec::new(),
-            variable: None,
+    fn message(generation: u64, topic: &str) -> RawMqttMessage {
+        RawMqttMessage {
+            topic: topic.into(),
+            payload: vec![0xff],
+            qos: 1,
+            generation,
         }
     }
 
     #[test]
-    fn pending_data_after_a_control_uses_the_candidate_route_map() {
-        let active = InverseVarTopicMap::from([("old".to_owned(), VarName::new("x"))]);
-        let candidate = InverseVarTopicMap::from([("new".to_owned(), VarName::new("x"))]);
-        let mut pending = VecDeque::from([raw("control"), raw("new")]);
-        let (events, receiver) = async_channel::unbounded();
-
-        let result = smol::block_on(dispatch_pending(
-            &events,
-            &mut pending,
-            &active,
-            Some("control"),
-        ));
-        assert_eq!(result, PendingDispatch::Barrier);
-        assert_eq!(pending.len(), 1);
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
-            RumqttcEvent::Publish(_)
-        ));
-
-        let result = smol::block_on(dispatch_pending(
-            &events,
-            &mut pending,
-            &candidate,
-            Some("control"),
-        ));
-        assert_eq!(result, PendingDispatch::Drained);
-        let RumqttcEvent::Publish(publish) = receiver.try_recv().unwrap() else {
-            panic!("expected a routed data publish");
-        };
-        assert_eq!(publish.variable, Some(VarName::new("x")));
+    fn queued_messages_keep_the_map_from_their_engine_generation() {
+        let versions = BTreeMap::from([
+            (0, BTreeMap::from([("old".into(), VarName::new("x"))])),
+            (1, BTreeMap::from([("new".into(), VarName::new("x"))])),
+        ]);
+        assert_eq!(
+            route(message(0, "old"), &versions, None).unwrap().variable,
+            Some(VarName::new("x"))
+        );
+        assert!(route(message(0, "new"), &versions, None).is_none());
+        assert_eq!(
+            route(message(1, "new"), &versions, None).unwrap().variable,
+            Some(VarName::new("x"))
+        );
     }
 
     #[test]
-    fn legacy_rumqttc_stream_stops_worker_before_yielding_control() {
+    fn routing_preserves_non_utf8_payload_bytes() {
+        let versions = BTreeMap::from([(0, BTreeMap::from([("data".into(), VarName::new("x"))]))]);
+        assert_eq!(
+            route(message(0, "data"), &versions, None).unwrap().payload,
+            vec![0xff]
+        );
+    }
+
+    #[test]
+    fn native_pause_uses_a_distinct_owner_command() {
         smol::block_on(async {
-            let (event_sender, event_receiver) = async_channel::unbounded();
-            let (commands, _command_receiver) = async_channel::bounded(1);
-            let (cancel, cancel_receiver) = async_channel::bounded(1);
-            let stopped = Arc::new(AtomicBool::new(false));
-            let worker_stopped = Arc::clone(&stopped);
-            let worker = smol::spawn(async move {
-                let _ = cancel_receiver.recv().await;
-                worker_stopped.store(true, Ordering::SeqCst);
-            });
-            let transport = RumqttcInputTransport {
-                events: event_receiver,
+            let (commands, receiver) = async_channel::bounded(1);
+            let (cancel, _cancel_receiver) = async_channel::bounded(1);
+            let mut control = RumqttcInputControl {
                 commands,
+                active_topics: BTreeMap::new(),
+                control_topic: None,
                 cancel,
-                worker,
+                worker: Some(smol::spawn(async { Ok(()) })),
             };
-            let mut stream = rumqttc_event_stream(transport, Some("control".to_owned()));
-            event_sender
-                .send(RumqttcEvent::Publish(raw("control")))
-                .await
-                .unwrap();
+            let operation = control.pause(42);
+            let responder = async {
+                let command = receiver.recv().await.unwrap();
+                assert!(command.candidate.is_none());
+                assert_eq!(command.boundary_id, Some(42));
+                assert!(command.response.send(Ok(7)).await.is_err());
+            };
+            let (result, ()) = futures::join!(operation, responder);
+            result.unwrap();
+        });
+    }
+
+    #[test]
+    fn terminal_error_remains_ordered_behind_full_event_queue() {
+        smol::block_on(async {
+            let (events, receiver) = async_channel::bounded(1);
+            events.send(InputEvent::Boundary(9)).await.unwrap();
+            queue_terminal(&events, "overflow".into());
+            drop(events);
 
             assert!(matches!(
-                stream.next().await,
-                Some(Ok(RumqttcEvent::Publish(_)))
+                receiver.recv().await.unwrap(),
+                InputEvent::Boundary(9)
             ));
-            assert!(stopped.load(Ordering::SeqCst));
+            assert!(
+                matches!(receiver.recv().await.unwrap(), InputEvent::Error(error) if error == "overflow")
+            );
+            assert!(receiver.recv().await.is_err());
+        });
+    }
+
+    #[test]
+    fn blocked_event_send_observes_owner_cancellation() {
+        smol::block_on(async {
+            let (events, _receiver) = async_channel::bounded(1);
+            events.send(InputEvent::Boundary(1)).await.unwrap();
+            let (cancel, cancelled) = async_channel::bounded(1);
+            cancel.send(()).await.unwrap();
+            assert!(
+                !send_event(&events, &cancelled, InputEvent::Boundary(2))
+                    .await
+                    .unwrap()
+            );
         });
     }
 }

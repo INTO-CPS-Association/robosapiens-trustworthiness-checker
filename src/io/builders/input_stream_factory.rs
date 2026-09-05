@@ -1,34 +1,170 @@
+use std::any::TypeId;
 use std::{
-    any::TypeId,
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
+    pin::Pin,
     rc::Rc,
+    task::{Context as TaskContext, Poll},
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use async_stream::stream;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use smol::LocalExecutor;
 
 use crate::core::{
     FileInputValue, InputBatch, InputStream, MQTT_HOSTNAME, REDIS_HOSTNAME, RosStreamValue, Value,
-    VarName, input,
+    VarName,
 };
-use crate::fingerprint::FingerprintBuilder;
-use crate::io::RedisKnowledgeConfig;
+#[cfg(any(feature = "ros", test))]
+use crate::io::config::ReconfigurationRequest;
 use crate::io::config::{
-    CodecId, InputConfigFile, InputConfiguration, ReconfigurationRequest, ResolvedBinding,
-    ResolvedInput, ResolvedSource, Route, SourceId,
+    FormatId, InputBinding, InputConfigFile, InputConfiguration, ResolvedInput, ResolvedSource,
+    Route, SourceId,
 };
 use crate::io::mqtt::MqttInputBackend;
 use crate::io::reconfigurable_input::{
-    OpenedInputSource, ReconfigurableInputItem, ReconfigurableInputStream, ReconfigurationControl,
+    InputSourceControl, InputSourceSet, OpenedInputSource, ReconfigurableInputItem,
+    ReconfigurableInputStream, ReconfigurationControl, SharedInputSourceSet,
+};
+use crate::io::{
+    PipelineGeneration, RedisKnowledgeConfig, RetryPolicy, SessionId, SessionRevision,
+    ShutdownDeadline,
 };
 use crate::stream_utils::Fanout;
 use ::core::cfg_select;
 #[cfg(feature = "redis")]
 use std::any::Any;
 
-use super::super::config::InputStage;
+use super::super::config::InputPolicy;
+
+/// An opened ordinary input pipeline and the resources that keep it live.
+///
+/// Dropping this owner drops the underlying transports and requests their
+/// cancellation. Consume it with [`Self::into_drain`] when locally admitted
+/// input and a pending input window must be observed before transport cleanup
+/// reaches EOF.
+pub struct OpenedInput<V = Value> {
+    stream: InputStream<V>,
+    sources: Rc<RefCell<InputSourceSet<V>>>,
+    stop: Option<Box<dyn FnOnce()>>,
+    drain_stream: bool,
+}
+
+impl<V: 'static> OpenedInput<V> {
+    fn new(stream: InputStream<V>, sources: Rc<RefCell<InputSourceSet<V>>>) -> Self {
+        Self {
+            stream,
+            sources,
+            stop: None,
+            drain_stream: true,
+        }
+    }
+
+    pub(crate) fn with_stop(stream: InputStream<V>, stop: impl FnOnce() + 'static) -> Self {
+        Self {
+            stream,
+            sources: Rc::new(RefCell::new(InputSourceSet::new(Vec::new()))),
+            stop: Some(Box::new(stop)),
+            drain_stream: true,
+        }
+    }
+
+    pub(crate) fn map_stream(self, map: impl FnOnce(InputStream<V>) -> InputStream<V>) -> Self {
+        Self {
+            stream: map(self.stream),
+            sources: self.sources,
+            stop: self.stop,
+            drain_stream: self.drain_stream,
+        }
+    }
+
+    /// Map input values while retaining the original source lifecycle.
+    pub(crate) fn map_values<U: 'static>(
+        mut self,
+        map: impl FnOnce(InputStream<V>) -> InputStream<U>,
+    ) -> OpenedInput<U> {
+        let stream = map(self.stream);
+        let sources = self.sources;
+        let original_stop = self.stop.take();
+        OpenedInput {
+            stream,
+            sources: Rc::new(RefCell::new(InputSourceSet::new(Vec::new()))),
+            stop: Some(Box::new(move || {
+                if let Some(stop) = original_stop {
+                    stop();
+                }
+                sources.borrow_mut().stop_all();
+            })),
+            drain_stream: self.drain_stream,
+        }
+    }
+
+    pub fn into_drain(self) -> InputDrain<V> {
+        self.into_drain_with_deadline(ShutdownDeadline::none())
+    }
+
+    pub fn into_drain_with_deadline(mut self, deadline: ShutdownDeadline) -> InputDrain<V>
+    where
+        V: 'static,
+    {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
+        self.sources.borrow_mut().stop_all();
+        let mut stream = if self.drain_stream {
+            self.stream
+        } else {
+            crate::core::empty_input_stream()
+        };
+        InputDrain {
+            stream: Box::pin(async_stream::stream! {
+                loop {
+                    match deadline.timeout(stream.next()).await {
+                        Ok(Some(item)) => yield item,
+                        Ok(None) => return,
+                        Err(error) => {
+                            yield Err(crate::core::InputError::source(error));
+                            return;
+                        }
+                    }
+                }
+            }),
+        }
+    }
+}
+
+impl<V: 'static> From<InputStream<V>> for OpenedInput<V> {
+    fn from(stream: InputStream<V>) -> Self {
+        Self {
+            stream,
+            sources: Rc::new(RefCell::new(InputSourceSet::new(Vec::new()))),
+            stop: None,
+            drain_stream: false,
+        }
+    }
+}
+
+impl<V: 'static> Stream for OpenedInput<V> {
+    type Item = Result<InputBatch<V>, crate::core::InputError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        self.stream.as_mut().poll_next(cx)
+    }
+}
+
+/// The consuming graceful-shutdown stream returned by [`OpenedInput`].
+pub struct InputDrain<V = Value> {
+    stream: InputStream<V>,
+}
+
+impl<V: 'static> Stream for InputDrain<V> {
+    type Item = Result<InputBatch<V>, crate::core::InputError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        self.stream.as_mut().poll_next(cx)
+    }
+}
 
 #[derive(Clone, Debug)]
 enum InputSourceKind<V = Value> {
@@ -50,14 +186,16 @@ enum InputSourceKind<V = Value> {
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
         backend: MqttInputBackend,
+        retry: RetryPolicy,
     },
     Redis {
         host: String,
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
+        retry: RetryPolicy,
     },
     RedisKnowledge(RedisKnowledgeConfig),
-    Manual {
+    Channel {
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
     },
@@ -84,10 +222,11 @@ impl InputSource<Value> {
 /// Open the Value-specific Redis knowledge provider from the generic source
 /// opener. The type check is deliberately before the provider is opened so an
 /// unsupported value domain cannot establish a Redis connection.
+#[cfg(feature = "redis")]
 async fn open_configured_redis_knowledge<V>(
     config: RedisKnowledgeConfig,
     bindings: BTreeMap<VarName, String>,
-) -> anyhow::Result<InputStream<V>>
+) -> anyhow::Result<(InputStream<V>, crate::io::redis::RedisKnowledgeInputControl)>
 where
     V: FileInputValue + RosStreamValue + 'static,
 {
@@ -96,28 +235,22 @@ where
         "Redis knowledge input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
     );
 
-    cfg_select! {
-        feature = "redis" => {
-            let mut values = crate::io::redis::open_value_redis_knowledge(config, bindings).await?;
-            Ok(Box::pin(async_stream::try_stream! {
-                while let Some(batch) = values.next().await {
-                    let batch = batch?;
-                    let batch = batch.try_map_values(|value| {
-                        let value: Box<dyn Any> = Box::new(value);
-                        value
-                            .downcast::<V>()
-                            .map(|value| *value)
-                            .map_err(|_| anyhow!("Redis knowledge value-domain conversion failed"))
-                    })?;
-                    yield batch;
-                }
-            }))
-        },
-        _ => {
-            let _ = (config, bindings);
-            anyhow::bail!("Redis support not enabled")
-        },
-    }
+    let (mut values, owner) =
+        crate::io::redis::open_value_redis_knowledge(config, bindings).await?;
+    let stream = Box::pin(async_stream::try_stream! {
+        while let Some(batch) = values.next().await {
+            let batch = batch?;
+            let batch = batch.try_map_values(|value| {
+                let value: Box<dyn Any> = Box::new(value);
+                value
+                    .downcast::<V>()
+                    .map(|value| *value)
+                    .map_err(|_| anyhow::anyhow!("Redis knowledge value-domain conversion failed"))
+            })?;
+            yield batch;
+        }
+    });
+    Ok((stream, owner))
 }
 
 /// An owned local source set containing source-owned catalogs and
@@ -217,23 +350,6 @@ impl<V> InputSources<V> {
         self.sources.get_mut(source)
     }
 
-    fn configuration_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("input-sources-v1");
-        match &self.default {
-            Some(default) => {
-                key.write_bool(true);
-                key.write_str(default);
-            }
-            None => key.write_bool(false),
-        }
-        key.write_usize(self.sources.len());
-        for (id, source) in &self.sources {
-            key.write_str(id);
-            key.write_u128(source.configuration_fingerprint());
-        }
-        key.finish()
-    }
-
     fn sole_reconfigurable_source_id(&self) -> Option<SourceId> {
         if self.sources.len() != 1 {
             return None;
@@ -313,20 +429,15 @@ impl<V> InputSources<V> {
         config.validate()?;
         let mut sources = InputSources::new();
         for (id, source_config) in config.sources {
-            let convert_routes = |routes: BTreeMap<VarName, crate::io::config::WireRoute>| {
-                routes
-                    .into_iter()
-                    .map(|(variable, route)| route.into_route().map(|route| (variable, route)))
-                    .collect::<anyhow::Result<BTreeMap<_, _>>>()
-            };
             let (input, reconfiguration_route) = match source_config {
                 crate::io::config::SourceConfig::Mqtt {
                     host,
                     port,
                     routes,
                     reconfiguration_route,
+                    retry,
                 } => {
-                    let routes = convert_routes(routes)?;
+                    let routes = routes;
                     (
                         InputSource::mqtt_with_host_routes(
                             host.unwrap_or_else(|| MQTT_HOSTNAME.to_owned()),
@@ -337,6 +448,7 @@ impl<V> InputSources<V> {
                             },
                             port.or(mqtt_port),
                             mqtt_backend,
+                            retry.unwrap_or_else(RetryPolicy::input_default),
                         ),
                         reconfiguration_route,
                     )
@@ -346,10 +458,11 @@ impl<V> InputSources<V> {
                     port,
                     routes,
                     reconfiguration_route,
+                    retry,
                 } => {
-                    let routes = convert_routes(routes)?;
+                    let routes = routes;
                     (
-                        InputSource::redis_with_host_routes(
+                        InputSource::redis_with_host_routes_and_retry(
                             host.unwrap_or_else(|| REDIS_HOSTNAME.to_owned()),
                             if routes.is_empty() {
                                 None
@@ -357,6 +470,7 @@ impl<V> InputSources<V> {
                                 Some(routes)
                             },
                             port.or(redis_port),
+                            retry.unwrap_or_else(RetryPolicy::input_default),
                         ),
                         reconfiguration_route,
                     )
@@ -389,7 +503,7 @@ impl<V> InputSources<V> {
                     routes,
                     reconfiguration_route,
                 } => (
-                    InputSource::ros(convert_routes(routes)?, executor.clone()),
+                    InputSource::ros(routes, executor.clone()),
                     reconfiguration_route,
                 ),
             };
@@ -411,24 +525,30 @@ impl<V> InputSources<V> {
         variables: &BTreeSet<VarName>,
     ) -> anyhow::Result<ResolvedInput> {
         let catalog_ownership = self.catalog_ownership(variables)?;
-        let mut by_source = BTreeMap::<SourceId, Vec<ResolvedBinding>>::new();
+        let mut by_source = BTreeMap::<SourceId, Vec<InputBinding>>::new();
         for variable in variables {
             let source_id = self.owner_for(variable, &catalog_ownership)?;
             let source = self.sources.get(&source_id).ok_or_else(|| {
                 anyhow::anyhow!("resolved input source `{source_id}` is not available")
             })?;
-            let route = source.route_for(variable).unwrap_or_else(|| Route {
-                route: variable.to_string().into_boxed_str(),
-                codec: None,
+            let route = source.route_for(variable).unwrap_or_else(|| {
+                Route::new(variable.to_string(), None).expect("variable names are valid routes")
             });
             anyhow::ensure!(
-                !source.requires_route_codec() || route.codec.is_some(),
-                "source `{source_id}` requires a codec for input variable `{variable}`"
+                !source.requires_route_codec() || route.format().is_some(),
+                "source `{source_id}` requires a route format for input variable `{variable}`"
             );
-            let binding = ResolvedBinding::new(
+            let binding = InputBinding::new(
                 variable.clone(),
-                route.route,
-                route.codec.unwrap_or_else(|| CodecId::new("json")),
+                Route::new(
+                    route.address(),
+                    Some(
+                        route
+                            .format()
+                            .cloned()
+                            .unwrap_or_else(|| FormatId::new("json")),
+                    ),
+                )?,
             );
             source.validate_binding(&binding)?;
             by_source.entry(source_id).or_default().push(binding);
@@ -465,7 +585,7 @@ impl<V> InputSources<V> {
         } else {
             BTreeMap::new()
         };
-        let mut grouped = BTreeMap::<SourceId, Vec<ResolvedBinding>>::new();
+        let mut grouped = BTreeMap::<SourceId, Vec<InputBinding>>::new();
         if explicit_bindings.is_empty() {
             let configured_source = config.source.clone().or_else(|| {
                 config.sources.as_ref().and_then(|sources| {
@@ -494,14 +614,21 @@ impl<V> InputSources<V> {
                 .sources
                 .get(&source_id)
                 .ok_or_else(|| anyhow::anyhow!("input source `{source_id}` is not registered"))?;
-            let binding = ResolvedBinding::new(
+            let binding = InputBinding::new(
                 variable.clone(),
-                route.route.clone(),
-                route.codec.clone().unwrap_or_else(|| CodecId::new("json")),
+                Route::new(
+                    route.address(),
+                    Some(
+                        route
+                            .format()
+                            .cloned()
+                            .unwrap_or_else(|| FormatId::new("json")),
+                    ),
+                )?,
             );
             anyhow::ensure!(
-                !source_config.requires_route_codec() || route.codec.is_some(),
-                "source `{source_id}` requires a codec for input variable `{variable}`"
+                !source_config.requires_route_codec() || route.format().is_some(),
+                "source `{source_id}` requires a route format for input variable `{variable}`"
             );
             source_config.validate_binding(&binding)?;
             grouped.entry(source_id).or_default().push(binding);
@@ -567,8 +694,9 @@ impl<V> InputSources<V> {
             for binding in source_plan.bindings() {
                 source.validate_binding(binding)?;
                 anyhow::ensure!(
-                    !source.requires_route_codec() || !binding.codec().0.trim().is_empty(),
-                    "source `{}` requires a codec for input variable `{}`",
+                    !source.requires_route_codec()
+                        || !binding.route().format().unwrap().as_str().trim().is_empty(),
+                    "source `{}` requires a route format for input variable `{}`",
                     source_plan.source(),
                     binding.variable()
                 );
@@ -608,113 +736,138 @@ impl<V> Default for InputSources<V> {
 }
 
 impl<V> InputSource<V> {
+    fn is_finite(&self) -> bool {
+        matches!(
+            self.kind,
+            InputSourceKind::File { .. }
+                | InputSourceKind::InMemoryRows { .. }
+                | InputSourceKind::InMemoryTicks { .. }
+        )
+    }
+
+    async fn open_owned(
+        self,
+        bindings: Vec<InputBinding>,
+        variables: BTreeSet<VarName>,
+    ) -> anyhow::Result<(InputStream<V>, Option<InputSourceControl>)>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
+        if let InputSourceKind::Mqtt {
+            host,
+            port,
+            backend,
+            retry,
+            ..
+        } = &self.kind
+        {
+            let topics = bindings
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.variable().clone(),
+                        binding.route().address().to_owned(),
+                    )
+                })
+                .collect();
+            let (stream, owner) = backend
+                .open_owned_data::<V>(host, *port, topics, retry.clone())
+                .await?;
+            return Ok((stream, Some(InputSourceControl::Rumqttc(owner))));
+        }
+        #[cfg(feature = "redis")]
+        if let InputSourceKind::Redis {
+            host, port, retry, ..
+        } = &self.kind
+        {
+            let topics = bindings
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.variable().clone(),
+                        binding.route().address().to_owned(),
+                    )
+                })
+                .collect();
+            let (mut items, owner) = crate::io::redis::open_owned_input_stream_items(
+                host,
+                *port,
+                topics,
+                None,
+                retry.clone(),
+            )
+            .await?;
+            let stream = Box::pin(async_stream::try_stream! {
+                while let Some(item) = items.next().await {
+                    match item? {
+                        crate::io::redis::RedisInputItem::Data(batch) => yield batch,
+                        crate::io::redis::RedisInputItem::Control(_) => unreachable!("data-only Redis stream cannot receive control"),
+                        crate::io::redis::RedisInputItem::Boundary(_) => unreachable!("data-only Redis stream cannot receive boundary"),
+                    }
+                }
+            });
+            return Ok((stream, Some(InputSourceControl::Redis(owner))));
+        }
+        #[cfg(feature = "ros")]
+        if let InputSourceKind::Ros { executor, .. } = &self.kind {
+            let active_topics = bindings
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.variable().clone(),
+                        binding.route().address().to_owned(),
+                    )
+                })
+                .collect();
+            let mapping = bindings
+                .iter()
+                .map(|binding| {
+                    let format = binding.route().format().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "ROS route for `{}` requires a route format",
+                            binding.variable()
+                        )
+                    })?;
+                    Ok((
+                        binding.variable().to_string(),
+                        (binding.route().address().to_owned(), format.to_string()),
+                    ))
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            let (stream, owner) = V::open_ros_input(Rc::clone(executor), mapping)?;
+            return Ok((
+                stream,
+                Some(InputSourceControl::Ros {
+                    controls: vec![owner],
+                    active_topics,
+                }),
+            ));
+        }
+        #[cfg(feature = "redis")]
+        if let InputSourceKind::RedisKnowledge(config) = &self.kind {
+            let keys = bindings
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.variable().clone(),
+                        binding.route().address().to_owned(),
+                    )
+                })
+                .collect();
+            let (stream, owner) =
+                open_configured_redis_knowledge::<V>(config.clone(), keys).await?;
+            return Ok((stream, Some(InputSourceControl::RedisKnowledge(owner))));
+        }
+        self.open(bindings, variables)
+            .await
+            .map(|stream| (stream, None))
+    }
+
     fn new(kind: InputSourceKind<V>) -> Self {
         Self {
             kind,
             reconfiguration_route: None,
         }
-    }
-
-    fn configuration_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("input-source-v1");
-        match &self.kind {
-            InputSourceKind::File { path } => {
-                key.write_str("file");
-                key.write_str(path);
-            }
-            InputSourceKind::InMemoryRows { columns } => {
-                key.write_str("in-memory-rows");
-                key.write_usize(columns.len());
-                for (variable, values) in columns {
-                    key.write_str(&variable.name());
-                    key.write_usize(values.len());
-                }
-            }
-            InputSourceKind::InMemoryTicks { batches } => {
-                key.write_str("in-memory-ticks");
-                key.write_usize(batches.len());
-                for batch in batches {
-                    key.write_usize(batch.update_count());
-                    for update in batch.updates() {
-                        key.write_str(&update.variable.name());
-                    }
-                }
-            }
-            InputSourceKind::Ros { routes, .. } => {
-                key.write_str("ros");
-                write_input_routes(&mut key, routes);
-            }
-            InputSourceKind::Mqtt {
-                host,
-                routes,
-                port,
-                backend,
-            } => {
-                key.write_str("mqtt");
-                key.write_str(host);
-                write_optional_u16(&mut key, *port);
-                key.write_str(match backend {
-                    MqttInputBackend::Rumqttc => "rumqttc",
-                    MqttInputBackend::Paho => "paho",
-                });
-                match routes {
-                    Some(routes) => {
-                        key.write_bool(true);
-                        write_input_routes(&mut key, routes);
-                    }
-                    None => key.write_bool(false),
-                }
-            }
-            InputSourceKind::Redis { host, routes, port } => {
-                key.write_str("redis");
-                key.write_str(host);
-                write_optional_u16(&mut key, *port);
-                match routes {
-                    Some(routes) => {
-                        key.write_bool(true);
-                        write_input_routes(&mut key, routes);
-                    }
-                    None => key.write_bool(false),
-                }
-            }
-            InputSourceKind::RedisKnowledge(config) => {
-                key.write_str("redis-knowledge");
-                key.write_str(&config.host);
-                write_optional_u16(&mut key, config.port);
-                key.write_u64(config.database as u64);
-                key.write_bool(config.publish_initial);
-                key.write_usize(config.keys.len());
-                for (variable, redis_key) in &config.keys {
-                    key.write_str(&variable.name());
-                    key.write_str(redis_key);
-                }
-                match config.retry.max_attempts {
-                    Some(attempts) => {
-                        key.write_bool(true);
-                        key.write_u64(attempts.get() as u64);
-                    }
-                    None => key.write_bool(false),
-                }
-                key.write_u128(config.retry.initial_delay.as_nanos());
-                key.write_u128(config.retry.max_delay.as_nanos());
-            }
-            InputSourceKind::Manual { fanouts, control } => {
-                key.write_str("manual");
-                key.write_usize(fanouts.len());
-                for variable in fanouts.keys() {
-                    key.write_str(&variable.name());
-                }
-                key.write_bool(control.is_some());
-            }
-        }
-        match &self.reconfiguration_route {
-            Some(route) => {
-                key.write_bool(true);
-                key.write_str(route);
-            }
-            None => key.write_bool(false),
-        }
-        key.finish()
     }
 
     /// Set the transport-local route carrying monitor reconfiguration messages.
@@ -766,7 +919,13 @@ impl<V> InputSource<V> {
         port: Option<u16>,
         backend: MqttInputBackend,
     ) -> Self {
-        Self::mqtt_with_host_routes(MQTT_HOSTNAME, routes, port, backend)
+        Self::mqtt_with_host_routes(
+            MQTT_HOSTNAME,
+            routes,
+            port,
+            backend,
+            RetryPolicy::input_default(),
+        )
     }
 
     pub fn mqtt_with_host_routes(
@@ -774,12 +933,14 @@ impl<V> InputSource<V> {
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
         backend: MqttInputBackend,
+        retry: RetryPolicy,
     ) -> Self {
         Self::new(InputSourceKind::Mqtt {
             host: host.into(),
             routes,
             port,
             backend,
+            retry,
         })
     }
 
@@ -796,22 +957,32 @@ impl<V> InputSource<V> {
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
     ) -> Self {
+        Self::redis_with_host_routes_and_retry(host, routes, port, RetryPolicy::input_default())
+    }
+
+    pub fn redis_with_host_routes_and_retry(
+        host: impl Into<String>,
+        routes: Option<BTreeMap<VarName, Route>>,
+        port: Option<u16>,
+        retry: RetryPolicy,
+    ) -> Self {
         Self::new(InputSourceKind::Redis {
             host: host.into(),
             routes,
             port,
+            retry,
         })
     }
 
-    pub(crate) fn manual(fanouts: BTreeMap<VarName, Rc<Fanout<V>>>) -> Self {
-        Self::manual_with_control(fanouts, None)
+    pub(crate) fn channel(fanouts: BTreeMap<VarName, Rc<Fanout<V>>>) -> Self {
+        Self::channel_with_control(fanouts, None)
     }
 
-    pub(crate) fn manual_with_control(
+    pub(crate) fn channel_with_control(
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
     ) -> Self {
-        Self::new(InputSourceKind::Manual { fanouts, control })
+        Self::new(InputSourceKind::Channel { fanouts, control })
     }
 
     fn record_catalog_ownership(
@@ -875,7 +1046,7 @@ impl<V> InputSource<V> {
                     }
                 }
             }
-            InputSourceKind::Manual { fanouts, .. } => {
+            InputSourceKind::Channel { fanouts, .. } => {
                 for variable in requested {
                     if fanouts.contains_key(variable) {
                         record(variable)?;
@@ -898,18 +1069,17 @@ impl<V> InputSource<V> {
                 ..
             } => routes.get(variable).cloned(),
             InputSourceKind::Mqtt { routes: None, .. }
-            | InputSourceKind::Redis { routes: None, .. } => Some(Route {
-                route: variable.to_string().into_boxed_str(),
-                codec: None,
-            }),
-            InputSourceKind::RedisKnowledge(config) => config.keys.get(variable).map(|key| Route {
-                route: key.clone().into_boxed_str(),
-                codec: None,
-            }),
+            | InputSourceKind::Redis { routes: None, .. } => Some(
+                Route::new(variable.to_string(), None).expect("variable names are valid routes"),
+            ),
+            InputSourceKind::RedisKnowledge(config) => config
+                .keys
+                .get(variable)
+                .map(|key| Route::new(key.clone(), None).expect("configured keys are nonempty")),
             InputSourceKind::File { .. }
             | InputSourceKind::InMemoryRows { .. }
             | InputSourceKind::InMemoryTicks { .. }
-            | InputSourceKind::Manual { .. } => None,
+            | InputSourceKind::Channel { .. } => None,
         }
     }
 
@@ -926,36 +1096,46 @@ impl<V> InputSource<V> {
         matches!(self.kind, InputSourceKind::Ros { .. })
     }
 
-    fn validate_binding(&self, binding: &ResolvedBinding) -> anyhow::Result<()> {
+    fn validate_binding(&self, binding: &InputBinding) -> anyhow::Result<()> {
+        let route = binding.route();
         anyhow::ensure!(
-            !binding.route().trim().is_empty(),
+            !route.address().trim().is_empty(),
             "input route for `{}` cannot be empty",
             binding.variable()
         );
+        let format = route.format().ok_or_else(|| {
+            anyhow::anyhow!("input format for `{}` is missing", binding.variable())
+        })?;
         anyhow::ensure!(
-            !binding.codec().0.trim().is_empty(),
-            "input codec for `{}` cannot be empty",
+            !format.as_str().trim().is_empty(),
+            "input format for `{}` cannot be empty",
             binding.variable()
         );
+        match &self.kind {
+            InputSourceKind::Mqtt { .. } => crate::io::mqtt::validate_input_format(format)?,
+            #[cfg(feature = "redis")]
+            InputSourceKind::Redis { .. } => crate::io::redis::validate_input_format(format)?,
+            _ => {}
+        }
         if matches!(&self.kind, InputSourceKind::RedisKnowledge(_)) {
             anyhow::ensure!(
-                matches!(binding.codec().0.as_ref(), "json" | "json5"),
-                "Redis knowledge input for `{}` supports JSON5 decoding only (`json` is a compatibility alias); codec `{}` is unsupported",
+                matches!(format.as_str(), "json" | "json5"),
+                "Redis knowledge input for `{}` supports JSON5 decoding only (`json` is a compatibility alias); format `{}` is unsupported",
                 binding.variable(),
-                binding.codec()
+                format
             );
         }
         Ok(())
     }
 
-    fn validate_bindings(&self, bindings: &[ResolvedBinding]) -> anyhow::Result<()> {
+    fn validate_bindings(&self, bindings: &[InputBinding]) -> anyhow::Result<()> {
         if matches!(self.kind, InputSourceKind::RedisKnowledge(_)) {
             let mut keys = BTreeMap::<&str, &VarName>::new();
             for binding in bindings {
-                if let Some(previous) = keys.insert(binding.route(), binding.variable()) {
+                if let Some(previous) = keys.insert(binding.route().address(), binding.variable()) {
                     anyhow::bail!(
                         "active Redis knowledge key `{}` is mapped to both `{}` and `{}`",
-                        binding.route(),
+                        binding.route().address(),
                         previous,
                         binding.variable()
                     );
@@ -971,7 +1151,7 @@ impl<V> InputSource<V> {
             InputSourceKind::Mqtt { .. }
                 | InputSourceKind::Redis { .. }
                 | InputSourceKind::Ros { .. }
-                | InputSourceKind::Manual {
+                | InputSourceKind::Channel {
                     control: Some(_),
                     ..
                 }
@@ -980,7 +1160,7 @@ impl<V> InputSource<V> {
 
     async fn open(
         self,
-        bindings: Vec<ResolvedBinding>,
+        bindings: Vec<InputBinding>,
         variables: BTreeSet<VarName>,
     ) -> anyhow::Result<InputStream<V>>
     where
@@ -988,15 +1168,7 @@ impl<V> InputSource<V> {
     {
         let routes = bindings
             .into_iter()
-            .map(|binding| {
-                (
-                    binding.variable().clone(),
-                    Route {
-                        route: binding.route().to_owned().into_boxed_str(),
-                        codec: Some(binding.codec().clone()),
-                    },
-                )
-            })
+            .map(|binding| (binding.variable().clone(), binding.route().clone()))
             .collect::<BTreeMap<_, _>>();
         let kind = self.kind;
         let _span = tracing::debug_span!("open input source").entered();
@@ -1039,19 +1211,18 @@ impl<V> InputSource<V> {
                     let mapping = routes
                         .into_iter()
                         .map(|(variable, route)| {
-                            let codec =
-                                route
-                                    .codec
-                                    .map(|codec| codec.0.to_string())
+                            let codec = route
+                                    .format()
+                                    .map(ToString::to_string)
                                     .ok_or_else(|| {
                                         anyhow::anyhow!(
-                                            "ROS route for `{variable}` requires a codec"
+                                            "ROS route for `{variable}` requires a route format"
                                         )
                                     })?;
-                            Ok((variable.to_string(), (route.route.to_string(), codec)))
+                            Ok((variable.to_string(), (route.address().to_string(), codec)))
                         })
                         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                    Ok(V::ros_input_stream(executor, mapping)?)
+                    Ok(V::open_ros_input(executor, mapping)?.0)
                     },
                     _ => {
                         let _ = (executor, routes);
@@ -1063,37 +1234,67 @@ impl<V> InputSource<V> {
                 host,
                 port,
                 backend,
+                retry,
                 ..
             } => {
                 let topics = routes
                     .into_iter()
-                    .map(|(variable, route)| (variable, route.route.to_string()))
+                    .map(|(variable, route)| (variable, route.address().to_string()))
                     .collect();
-                backend.open_data::<V>(&host, port, topics, u32::MAX).await
+                backend.open_data::<V>(&host, port, topics, retry).await
             }
-            InputSourceKind::Redis { host, port, .. } => {
+            InputSourceKind::Redis {
+                host, port, retry, ..
+            } => {
                 cfg_select! {
                     feature = "redis" => {
                         let topics = routes
                             .into_iter()
-                            .map(|(variable, route)| (variable, route.route.to_string()))
+                            .map(|(variable, route)| (variable, route.address().to_string()))
                             .collect();
-                        crate::io::redis::input_stream::<V>(&host, port, topics).await
+                        let (mut items, mut owner) = crate::io::redis::open_owned_input_stream_items(
+                            &host, port, topics, None, retry,
+                        ).await?;
+                        Ok(Box::pin(async_stream::try_stream! {
+                            while let Some(item) = items.next().await {
+                                match item? {
+                                    crate::io::redis::RedisInputItem::Data(batch) => yield batch,
+                                    crate::io::redis::RedisInputItem::Control(_) => unreachable!("data-only Redis stream cannot receive control"),
+                                    crate::io::redis::RedisInputItem::Boundary(_) => unreachable!("data-only Redis stream cannot receive boundary"),
+                                }
+                            }
+                            owner.shutdown().await?;
+                        }))
                     },
                     _ => {
-                        let _ = (host, port, routes);
+                        let _ = (host, port, routes, retry);
                         anyhow::bail!("Redis support not enabled")
                     },
                 }
             }
             InputSourceKind::RedisKnowledge(config) => {
-                let keys = routes
-                    .into_iter()
-                    .map(|(variable, route)| (variable, route.route.to_string()))
-                    .collect();
-                open_configured_redis_knowledge::<V>(config, keys).await
+                cfg_select! {
+                    feature = "redis" => {
+                        let keys = routes
+                            .into_iter()
+                            .map(|(variable, route)| (variable, route.address().to_string()))
+                            .collect();
+                        let (mut stream, mut owner) =
+                            open_configured_redis_knowledge::<V>(config, keys).await?;
+                        Ok(Box::pin(async_stream::try_stream! {
+                            while let Some(batch) = stream.next().await {
+                                yield batch?;
+                            }
+                            owner.shutdown().await?;
+                        }))
+                    },
+                    _ => {
+                        let _ = (config, routes);
+                        anyhow::bail!("Redis support not enabled")
+                    },
+                }
             }
-            InputSourceKind::Manual { fanouts, .. } => {
+            InputSourceKind::Channel { fanouts, .. } => {
                 let streams = fanouts
                     .into_iter()
                     .filter(|(variable, _)| variables.contains(variable))
@@ -1107,31 +1308,23 @@ impl<V> InputSource<V> {
                         (variable, stream)
                     })
                     .collect();
-                Ok(crate::io::testing::from_streams(streams))
+                Ok(crate::io::channel::from_streams(streams))
             }
         }
     }
 
-    async fn open_with_control(
+    async fn open_with_control_owner(
         self,
-        bindings: Vec<ResolvedBinding>,
+        bindings: Vec<InputBinding>,
         variables: BTreeSet<VarName>,
         control_route: Box<str>,
-    ) -> anyhow::Result<ReconfigurableInputStream<V>>
+    ) -> anyhow::Result<(ReconfigurableInputStream<V>, Option<InputSourceControl>)>
     where
         V: FileInputValue + RosStreamValue,
     {
         let routes = bindings
             .into_iter()
-            .map(|binding| {
-                (
-                    binding.variable().clone(),
-                    Route {
-                        route: binding.route().to_owned().into_boxed_str(),
-                        codec: Some(binding.codec().clone()),
-                    },
-                )
-            })
+            .map(|binding| (binding.variable().clone(), binding.route().clone()))
             .collect::<BTreeMap<_, _>>();
         let kind = self.kind;
         match kind {
@@ -1139,22 +1332,17 @@ impl<V> InputSource<V> {
                 host,
                 port,
                 backend,
+                retry,
                 ..
             } => {
                 let topics = routes
                     .into_iter()
-                    .map(|(variable, route)| (variable, route.route.to_string()))
+                    .map(|(variable, route)| (variable, route.address().to_string()))
                     .collect();
-                let stream = backend
-                    .open_items(
-                        &host,
-                        port,
-                        topics,
-                        u32::MAX,
-                        Some(control_route.to_string()),
-                    )
+                let (stream, owner) = backend
+                    .open_reconfigurable(&host, port, topics, retry, control_route.to_string())
                     .await?;
-                Ok(Box::pin(stream.map(|item| {
+                let stream: ReconfigurableInputStream<V> = Box::pin(stream.map(|item| {
                     item.map(|item| match item {
                         crate::io::mqtt::MqttInputItem::Data(batch) => {
                             ReconfigurableInputItem::Data(batch)
@@ -1162,24 +1350,31 @@ impl<V> InputSource<V> {
                         crate::io::mqtt::MqttInputItem::Control(config) => {
                             ReconfigurableInputItem::Reconfigure(config)
                         }
+                        crate::io::mqtt::MqttInputItem::Boundary(id) => {
+                            ReconfigurableInputItem::Boundary(id)
+                        }
                     })
-                })))
+                }));
+                Ok((stream, Some(InputSourceControl::Rumqttc(owner))))
             }
-            InputSourceKind::Redis { host, port, .. } => {
+            InputSourceKind::Redis {
+                host, port, retry, ..
+            } => {
                 cfg_select! {
                     feature = "redis" => {
                         let topics = routes
                             .into_iter()
-                            .map(|(variable, route)| (variable, route.route.to_string()))
+                            .map(|(variable, route)| (variable, route.address().to_string()))
                             .collect();
-                        let stream = crate::io::redis::input_stream_items(
+                        let (stream, owner) = crate::io::redis::open_owned_input_stream_items(
                             &host,
                             port,
                             topics,
                             Some(control_route.to_string()),
+                            retry,
                         )
                         .await?;
-                        Ok(Box::pin(stream.map(|item| {
+                        let stream: ReconfigurableInputStream<V> = Box::pin(stream.map(|item| {
                             item.map(|item| match item {
                                 crate::io::redis::RedisInputItem::Data(batch) => {
                                     ReconfigurableInputItem::Data(batch)
@@ -1187,11 +1382,15 @@ impl<V> InputSource<V> {
                                 crate::io::redis::RedisInputItem::Control(config) => {
                                     ReconfigurableInputItem::Reconfigure(config)
                                 }
+                                crate::io::redis::RedisInputItem::Boundary(id) => {
+                                    ReconfigurableInputItem::Boundary(id)
+                                }
                             })
-                        })))
+                        }));
+                        Ok((stream, Some(InputSourceControl::Redis(owner))))
                     },
                     _ => {
-                        let _ = (host, port, routes, control_route);
+                        let _ = (host, port, retry, routes, control_route);
                         anyhow::bail!("Redis support not enabled")
                     },
                 }
@@ -1200,29 +1399,37 @@ impl<V> InputSource<V> {
                 validate_ros_control_route(&routes, control_route.as_ref())?;
                 cfg_select! {
                     feature = "ros" => {
+                    let active_topics = routes
+                        .iter()
+                        .map(|(variable, route)| (variable.clone(), route.address().to_owned()))
+                        .collect();
                     let mapping = routes
                         .into_iter()
                         .map(|(variable, route)| {
-                            let codec =
-                                route
-                                    .codec
-                                    .map(|codec| codec.0.to_string())
+                            let codec = route
+                                    .format()
+                                    .map(ToString::to_string)
                                     .ok_or_else(|| {
                                         anyhow::anyhow!(
-                                            "ROS route for `{variable}` requires a codec"
+                                            "ROS route for `{variable}` requires a route format"
                                         )
                                     })?;
-                            Ok((variable.to_string(), (route.route.to_string(), codec)))
+                            Ok((variable.to_string(), (route.address().to_string(), codec)))
                         })
                         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                    let data = if mapping.is_empty() {
-                        None
+                    let (data, data_owner) = if mapping.is_empty() {
+                        (None, None)
                     } else {
-                        Some(V::ros_input_stream(executor.clone(), mapping)?)
+                        let (stream, owner) = V::open_ros_input(executor.clone(), mapping)?;
+                        (Some(stream), Some(owner))
                     };
-                    let control =
+                    let (control, control_owner) =
                         crate::io::ros::control_stream(executor, control_route.to_string())?;
-                    Ok(controlled_input_stream(data, control))
+                    let controls = data_owner.into_iter().chain([control_owner]).collect();
+                    Ok((controlled_input_stream(data, control), Some(InputSourceControl::Ros {
+                        controls,
+                        active_topics,
+                    })))
                     },
                     _ => {
                         let _ = (executor, routes, variables, control_route);
@@ -1232,47 +1439,16 @@ impl<V> InputSource<V> {
             }
             InputSourceKind::RedisKnowledge(_) => {
                 anyhow::bail!(
-                    "Redis knowledge sources do not support reconfiguration control; use a Redis Pub/Sub, MQTT, ROS, or manual control source"
+                    "Redis knowledge sources do not support reconfiguration control; use a Redis Pub/Sub, MQTT, ROS, or channel control source"
                 )
             }
-            InputSourceKind::Manual { fanouts, control } => {
-                let data_streams = fanouts
-                    .into_iter()
-                    .filter(|(variable, _)| variables.contains(variable))
-                    .map(|(variable, fanout)| {
-                        let mut receiver = fanout.subscribe();
-                        let stream: crate::LocalStream<V> = Box::pin(stream! {
-                            while let Some(value) = receiver.recv().await {
-                                yield value;
-                            }
-                        });
-                        (variable, stream)
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let data = if data_streams.is_empty() {
-                    None
-                } else {
-                    Some(crate::io::testing::from_streams(data_streams))
-                };
+            InputSourceKind::Channel { fanouts, control } => {
                 let Some(control) = control else {
-                    anyhow::bail!("manual input has no configured control source")
+                    anyhow::bail!("channel input has no configured control source")
                 };
-                let mut receiver = control.subscribe();
-                let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
-                    Box::pin(async_stream::try_stream! {
-                        while let Some(payload) = receiver.recv().await {
-                            match payload {
-                                Value::NoVal => continue,
-                                Value::Str(payload) => {
-                                    yield ReconfigurationRequest::from_json(payload.as_str())?;
-                                }
-                                other => Err(anyhow!(
-                                    "manual reconfiguration payload must be a string, got {other:?}"
-                                ))?,
-                            }
-                        }
-                    });
-                Ok(controlled_input_stream(data, control))
+                let (stream, owner) =
+                    crate::io::channel::reconfigurable_stream(fanouts, variables, control);
+                Ok((stream, Some(InputSourceControl::Channel(owner))))
             }
             InputSourceKind::File { .. }
             | InputSourceKind::InMemoryRows { .. }
@@ -1281,20 +1457,103 @@ impl<V> InputSource<V> {
             }
         }
     }
+
+    async fn open_reconfigurable_owned(
+        self,
+        bindings: Vec<InputBinding>,
+        variables: BTreeSet<VarName>,
+    ) -> anyhow::Result<(ReconfigurableInputStream<V>, Option<InputSourceControl>)>
+    where
+        V: FileInputValue + RosStreamValue,
+    {
+        let routes = bindings
+            .iter()
+            .map(|binding| (binding.variable().clone(), binding.route().clone()))
+            .collect::<BTreeMap<_, _>>();
+        match self.kind {
+            InputSourceKind::Mqtt {
+                host, port, retry, ..
+            } => {
+                let topics = routes
+                    .into_iter()
+                    .map(|(variable, route)| (variable, route.address().to_owned()))
+                    .collect();
+                let (stream, owner) =
+                    crate::io::mqtt::owned_input_stream_items(&host, port, topics, retry).await?;
+                let stream = Box::pin(stream.map(|item| {
+                    item.map(|item| match item {
+                        crate::io::mqtt::MqttInputItem::Data(batch) => {
+                            ReconfigurableInputItem::Data(batch)
+                        }
+                        crate::io::mqtt::MqttInputItem::Boundary(id) => {
+                            ReconfigurableInputItem::Boundary(id)
+                        }
+                        crate::io::mqtt::MqttInputItem::Control(_) => {
+                            unreachable!("MQTT source without a control route cannot emit control")
+                        }
+                    })
+                }));
+                Ok((stream, Some(InputSourceControl::Rumqttc(owner))))
+            }
+            InputSourceKind::Redis {
+                host, port, retry, ..
+            } => {
+                cfg_select! {
+                    feature = "redis" => {
+                        let topics = routes
+                            .into_iter()
+                            .map(|(variable, route)| (variable, route.address().to_owned()))
+                            .collect();
+                        let (stream, owner) = crate::io::redis::open_owned_input_stream_items(
+                            &host, port, topics, None, retry,
+                        ).await?;
+                        let stream = Box::pin(stream.map(|item| {
+                            item.map(|item| match item {
+                                crate::io::redis::RedisInputItem::Data(batch) => ReconfigurableInputItem::Data(batch),
+                                crate::io::redis::RedisInputItem::Boundary(id) => ReconfigurableInputItem::Boundary(id),
+                                crate::io::redis::RedisInputItem::Control(_) => unreachable!("Redis source without a control route cannot emit control"),
+                            })
+                        }));
+                        Ok((stream, Some(InputSourceControl::Redis(owner))))
+                    },
+                    _ => {
+                        let _ = (host, port, retry, routes);
+                        anyhow::bail!("Redis support not enabled")
+                    },
+                }
+            }
+            kind => {
+                let source = Self {
+                    kind,
+                    reconfiguration_route: self.reconfiguration_route,
+                };
+                let (stream, owner) = source.open_owned(bindings, variables).await?;
+                Ok((
+                    Box::pin(stream.map(|item| {
+                        item.map(ReconfigurableInputItem::Data)
+                            .map_err(anyhow::Error::from)
+                    })),
+                    owner,
+                ))
+            }
+        }
+    }
 }
 
+#[cfg(any(feature = "ros", test))]
 enum ControlledInputNext<V> {
-    Data(anyhow::Result<InputBatch<V>>),
+    Data(Result<InputBatch<V>, crate::InputError>),
     Control(anyhow::Result<ReconfigurationRequest>),
     Complete,
 }
 
+#[cfg(any(feature = "ros", test))]
 fn poll_controlled_input<V>(
     data: &mut Option<InputStream<V>>,
     control: &mut Option<crate::LocalStream<anyhow::Result<ReconfigurationRequest>>>,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<ControlledInputNext<V>> {
-    // Check control first for responsiveness only; independent ROS/manual
+    // Check control first for responsiveness only; independent ROS/channel
     // streams still have no ordering edge at this boundary.
     if let Some(stream) = control.as_mut() {
         match stream.as_mut().poll_next(cx) {
@@ -1328,7 +1587,7 @@ fn validate_ros_control_route(
     control_route: &str,
 ) -> anyhow::Result<()> {
     for (variable, route) in data_routes {
-        if route.route.as_ref() == control_route {
+        if route.address() == control_route {
             anyhow::bail!(
                 "ROS control topic `{control_route}` collides with data topic for variable `{variable}`"
             );
@@ -1346,16 +1605,7 @@ fn contextualize_reconfigurable_stream<V: 'static>(
     }))
 }
 
-fn compose_reconfigurable_input_streams<V: 'static>(
-    mut streams: Vec<ReconfigurableInputStream<V>>,
-) -> ReconfigurableInputStream<V> {
-    match streams.len() {
-        0 => Box::pin(futures::stream::empty()),
-        1 => streams.pop().expect("source count checked above"),
-        _ => Box::pin(futures::stream::select_all(streams)),
-    }
-}
-
+#[cfg(any(feature = "ros", test))]
 fn controlled_input_stream<V: 'static>(
     mut data: Option<InputStream<V>>,
     control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>>,
@@ -1416,66 +1666,27 @@ fn controlled_input_stream<V: 'static>(
 #[derive(Clone, Debug)]
 pub struct InputPipeline<V = Value> {
     sources: InputSources<V>,
-    stages: Box<[InputStage]>,
-    configuration_identity: Rc<()>,
-}
-
-fn write_optional_u16(key: &mut FingerprintBuilder, value: Option<u16>) {
-    match value {
-        Some(value) => {
-            key.write_bool(true);
-            key.write_u64(value as u64);
-        }
-        None => key.write_bool(false),
-    }
-}
-
-fn write_input_routes(key: &mut FingerprintBuilder, routes: &BTreeMap<VarName, Route>) {
-    key.write_usize(routes.len());
-    for (variable, route) in routes {
-        key.write_str(&variable.name());
-        key.write_str(&route.route);
-        match &route.codec {
-            Some(codec) => {
-                key.write_bool(true);
-                key.write_str(&codec.0);
-            }
-            None => key.write_bool(false),
-        }
-    }
-}
-
-fn write_input_stage(key: &mut FingerprintBuilder, stage: &InputStage) {
-    let window = stage.window();
-    key.write_u128(window.max_delay.map_or(0, |delay| delay.as_nanos()));
-    match window.update_limit {
-        Some(limit) => {
-            key.write_bool(true);
-            key.write_usize(limit.get());
-        }
-        None => key.write_bool(false),
-    }
-    if matches!(stage, InputStage::WindowToStep { .. }) {
-        key.write_str("window-to-step");
-    } else {
-        key.write_str("batch");
-    }
+    policy: Option<InputPolicy>,
+    executor: Option<Rc<LocalExecutor<'static>>>,
+    generation: PipelineGeneration,
 }
 
 impl<V> InputPipeline<V> {
     pub fn new(source: InputSource<V>) -> Self {
         Self {
             sources: InputSources::single(source),
-            stages: Box::new([]),
-            configuration_identity: Rc::new(()),
+            policy: None,
+            executor: None,
+            generation: PipelineGeneration::new(),
         }
     }
 
     pub fn from_sources(sources: InputSources<V>) -> Self {
         Self {
             sources,
-            stages: Box::new([]),
-            configuration_identity: Rc::new(()),
+            policy: None,
+            executor: None,
+            generation: PipelineGeneration::new(),
         }
     }
 
@@ -1483,43 +1694,32 @@ impl<V> InputPipeline<V> {
         &self.sources
     }
 
-    pub fn with_stage(mut self, stage: InputStage) -> anyhow::Result<Self> {
+    /// Attach the local executor used only by live source ingress relays.
+    pub fn with_executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    pub fn with_policy(mut self, policy: InputPolicy) -> anyhow::Result<Self> {
         anyhow::ensure!(
-            stage.window().is_bounded(),
+            policy.window().is_bounded(),
             "input window requires max_delay or update_limit"
         );
         anyhow::ensure!(
-            self.stages.is_empty(),
-            "input pipeline accepts one window stage"
+            self.policy.is_none(),
+            "input pipeline already has an input policy"
         );
-        self.stages = vec![stage].into_boxed_slice();
+        self.policy = Some(policy);
+        self.generation = PipelineGeneration::new();
         Ok(self)
     }
 
-    pub fn stages(&self) -> &[InputStage] {
-        &self.stages
+    pub fn policy(&self) -> Option<&InputPolicy> {
+        self.policy.as_ref()
     }
 
-    fn configuration_identity(&self) -> &Rc<()> {
-        &self.configuration_identity
-    }
-
-    fn configuration_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("input-pipeline-v1");
-        key.write_u128(self.sources.configuration_fingerprint());
-        key.write_usize(self.stages.len());
-        for stage in &self.stages {
-            write_input_stage(&mut key, stage);
-        }
-        key.finish()
-    }
-
-    fn validate_resolved(
-        &self,
-        resolved: &ResolvedInput,
-        pipeline_configuration: u128,
-    ) -> anyhow::Result<()> {
-        resolved.validate_for_pipeline(self.configuration_identity(), pipeline_configuration)?;
+    fn validate_resolved(&self, resolved: &ResolvedInput) -> anyhow::Result<()> {
+        resolved.validate_for_pipeline(self.generation)?;
 
         let mut source_ids = BTreeSet::new();
         let mut variables = BTreeSet::new();
@@ -1554,17 +1754,18 @@ impl<V> InputPipeline<V> {
 
     /// Plan the source-owner changes between two pure resolutions.
     ///
-    /// Unchanged source IDs are implicit. A changed owner appears in both the
-    /// removed and added sets, which gives application a simple
-    /// break-drain-make ordering without a separate replacement operation.
+    /// Unchanged source IDs are implicit. Native live transports retain their
+    /// owner across binding changes; distinct source identities are opened or
+    /// removed explicitly.
     pub(crate) fn plan_reconfiguration(
         &self,
         active: &ResolvedInput,
         candidate: ResolvedInput,
+        session: SessionId,
+        expected_revision: SessionRevision,
     ) -> anyhow::Result<InputPipelineReconfigurationPlan> {
-        let pipeline_configuration = self.configuration_fingerprint();
-        self.validate_resolved(active, pipeline_configuration)?;
-        self.validate_resolved(&candidate, pipeline_configuration)?;
+        self.validate_resolved(active)?;
+        self.validate_resolved(&candidate)?;
         let active_by_id = active
             .sources()
             .iter()
@@ -1577,29 +1778,53 @@ impl<V> InputPipeline<V> {
             .collect::<BTreeMap<_, _>>();
         let mut removed = Vec::new();
         let mut added = Vec::new();
+        let mut rebound = Vec::new();
 
         for active_source in active.sources() {
             match candidate_by_id.get(active_source.source()) {
-                Some(candidate_source)
-                    if active_source.configuration_key()
-                        == candidate_source.configuration_key() => {}
-                _ => removed.push(active_source.source().clone()),
+                Some(candidate_source) if active_source == *candidate_source => {}
+                Some(candidate_source) => {
+                    let source = self
+                        .sources
+                        .sources
+                        .get(active_source.source())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "input source `{}` is not registered",
+                                active_source.source()
+                            )
+                        })?;
+                    match &source.kind {
+                        InputSourceKind::Mqtt { .. } | InputSourceKind::Redis { .. } => {
+                            rebound.push((*candidate_source).clone());
+                        }
+                        InputSourceKind::Channel { .. } => {
+                            rebound.push((*candidate_source).clone())
+                        }
+                        _ => anyhow::bail!(
+                            "input source `{}` cannot change bindings in place; use a distinct source ID",
+                            active_source.source()
+                        ),
+                    }
+                }
+                None => removed.push(active_source.source().clone()),
             }
         }
         for candidate_source in candidate.sources() {
             match active_by_id.get(candidate_source.source()) {
-                Some(active_source)
-                    if active_source.configuration_key()
-                        == candidate_source.configuration_key() => {}
-                _ => added.push(candidate_source.clone()),
+                Some(active_source) if *active_source == candidate_source => {}
+                None => added.push(candidate_source.clone()),
+                Some(_) => {}
             }
         }
 
         Ok(InputPipelineReconfigurationPlan {
-            active_fingerprint: active.fingerprint(),
+            session,
+            expected_revision,
             candidate,
             removed: removed.into_boxed_slice(),
             added: added.into_boxed_slice(),
+            rebound: rebound.into_boxed_slice(),
         })
     }
 
@@ -1626,15 +1851,14 @@ impl<V> InputPipeline<V> {
                 .resolve_input_configuration(config, model_inputs),
             None => self.sources.resolve_default(model_inputs),
         }?;
-        let pipeline_configuration = self.configuration_fingerprint();
-        Ok(resolved.attach_to_pipeline(self.configuration_identity(), pipeline_configuration))
+        Ok(resolved.attach_to_pipeline(self.generation))
     }
 
     pub fn into_sources(self) -> InputSources<V> {
         self.sources
     }
 
-    pub async fn build(&self, input_vars: BTreeSet<VarName>) -> anyhow::Result<InputStream<V>>
+    pub async fn build(&self, input_vars: BTreeSet<VarName>) -> anyhow::Result<OpenedInput<V>>
     where
         V: FileInputValue + RosStreamValue,
     {
@@ -1642,11 +1866,12 @@ impl<V> InputPipeline<V> {
         self.open(resolved).await
     }
 
-    pub(crate) async fn open(&self, resolved: ResolvedInput) -> anyhow::Result<InputStream<V>>
+    pub(crate) async fn open(&self, resolved: ResolvedInput) -> anyhow::Result<OpenedInput<V>>
     where
         V: FileInputValue + RosStreamValue,
     {
-        let mut streams = Vec::new();
+        self.validate_resolved(&resolved)?;
+        let mut opened: Vec<OpenedInputSource<V>> = Vec::new();
         for source_plan in resolved.sources() {
             let source = self
                 .sources
@@ -1661,70 +1886,89 @@ impl<V> InputPipeline<V> {
                 .iter()
                 .map(|binding| binding.variable().clone())
                 .collect::<BTreeSet<_>>();
-            let source_stream = source
+            let finite = source.is_finite();
+            let executor =
+                if finite {
+                    None
+                } else {
+                    Some(self.executor.as_ref().ok_or_else(|| anyhow::anyhow!(
+                    "live input source `{description}` requires InputPipeline::with_executor"
+                ))?)
+                };
+            let (source_stream, control) = match source
                 .clone()
-                .open(bindings, variables)
+                .open_owned(bindings, variables)
                 .await
-                .with_context(|| format!("input source `{description}` could not be opened"))?;
-            let stream: InputStream<V> = Box::pin(async_stream::stream! {
+                .with_context(|| format!("input source `{description}` could not be opened"))
+            {
+                Ok(opened_source) => opened_source,
+                Err(primary) => {
+                    let mut error = primary;
+                    for source in opened {
+                        for cleanup in source.close().await {
+                            error =
+                                error.context(format!("input cleanup also failed: {cleanup:#}"));
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+            let stream_description = description.clone();
+            let stream: ReconfigurableInputStream<V> = Box::pin(async_stream::stream! {
                 let mut source_stream = source_stream;
                 while let Some(result) = source_stream.next().await {
-                    yield result.with_context(|| {
-                        format!("input source `{description}` emitted an error")
-                    });
+                    yield result
+                        .map(ReconfigurableInputItem::Data)
+                        .map_err(|error| anyhow::Error::new(error).context(
+                            format!("input source `{stream_description}` emitted an error")
+                        ));
                 }
             });
-            streams.push(stream);
-        }
-        let mut stream = input::compose_input_streams(streams);
-        for stage in self.stages.iter().cloned() {
-            stream = crate::io::aggregation::apply_stage(stream, stage)?;
-        }
-        Ok(stream)
-    }
-
-    async fn open_reconfigurable_source_stream(
-        &self,
-        source_plan: &ResolvedSource,
-        control: &ReconfigurationControl,
-    ) -> anyhow::Result<ReconfigurableInputStream<V>>
-    where
-        V: FileInputValue + RosStreamValue,
-    {
-        let source = self
-            .sources
-            .sources
-            .get(source_plan.source())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "resolved input source `{}` is not registered",
-                    source_plan.source()
+            let source = if finite {
+                OpenedInputSource::direct(description, stream)
+            } else {
+                OpenedInputSource::relay_with_control(
+                    description,
+                    stream,
+                    Rc::clone(executor.unwrap()),
+                    control,
                 )
-            })?
-            .clone();
-        let description = source_plan.source().clone();
-        let bindings = source_plan.bindings().to_vec();
-        let variables = bindings
-            .iter()
-            .map(|binding| binding.variable().clone())
-            .collect::<BTreeSet<_>>();
-        let stream = if source_plan.source() == &control.source {
-            source
-                .open_with_control(bindings, variables, control.route.clone())
-                .await
-                .with_context(|| {
-                    format!("reconfiguration source `{description}` could not be opened")
-                })?
-        } else {
-            let stream = source
-                .open(bindings, variables)
-                .await
-                .with_context(|| format!("input source `{description}` could not be opened"))?;
-            let stream: ReconfigurableInputStream<V> =
-                Box::pin(stream.map(|item| item.map(ReconfigurableInputItem::Data)));
-            stream
+            };
+            opened.push(source);
+        }
+        let sources = Rc::new(RefCell::new(InputSourceSet::new(opened)));
+        let mut raw: ReconfigurableInputStream<V> =
+            Box::pin(SharedInputSourceSet(Rc::clone(&sources)));
+        let failure_sources = Rc::clone(&sources);
+        let stream: InputStream<V> = Box::pin(async_stream::stream! {
+            while let Some(item) = raw.next().await {
+                let item = match item {
+                    Ok(item) => item,
+                    Err(primary) => {
+                        failure_sources.borrow_mut().stop_all();
+                        let mut error = primary;
+                        while let Some(cleanup_item) = raw.next().await {
+                            if let Err(cleanup) = cleanup_item {
+                                error = error.context(format!("input cleanup also failed: {cleanup:#}"));
+                            }
+                        }
+                        yield Err(crate::core::InputError::from(error));
+                        return;
+                    }
+                };
+                yield match item {
+                        ReconfigurableInputItem::Data(batch) => Ok(batch),
+                        ReconfigurableInputItem::Reconfigure(_) | ReconfigurableInputItem::Boundary(_) => {
+                            Err(crate::core::InputError::source("ordinary input received a lifecycle control item"))
+                        }
+                    };
+            }
+        });
+        let stream = match self.policy.clone() {
+            Some(policy) => crate::io::aggregation::apply_policy(stream, policy)?,
+            None => stream,
         };
-        Ok(contextualize_reconfigurable_stream(stream, description))
+        Ok(OpenedInput::new(stream, sources))
     }
 
     async fn open_reconfigurable_source_plan(
@@ -1737,10 +1981,46 @@ impl<V> InputPipeline<V> {
         V: FileInputValue + RosStreamValue,
     {
         let id = source_plan.source().clone();
-        let stream = self
-            .open_reconfigurable_source_stream(source_plan, control)
-            .await?;
-        Ok(OpenedInputSource::relay(id, stream, executor))
+        if source_plan.source() == &control.source {
+            let source = self
+                .sources
+                .sources
+                .get(source_plan.source())
+                .ok_or_else(|| anyhow::anyhow!("input source `{id}` is not registered"))?
+                .clone();
+            let bindings = source_plan.bindings().to_vec();
+            let variables = bindings
+                .iter()
+                .map(|binding| binding.variable().clone())
+                .collect();
+            let (stream, owner) = source
+                .open_with_control_owner(bindings, variables, control.route.clone())
+                .await
+                .with_context(|| format!("reconfiguration source `{id}` could not be opened"))?;
+            let stream = contextualize_reconfigurable_stream(stream, id.clone());
+            return Ok(OpenedInputSource::relay_with_control(
+                id, stream, executor, owner,
+            ));
+        }
+        let source = self
+            .sources
+            .sources
+            .get(source_plan.source())
+            .ok_or_else(|| anyhow::anyhow!("input source `{id}` is not registered"))?
+            .clone();
+        let bindings = source_plan.bindings().to_vec();
+        let variables = bindings
+            .iter()
+            .map(|binding| binding.variable().clone())
+            .collect();
+        let (stream, owner) = source
+            .open_reconfigurable_owned(bindings, variables)
+            .await
+            .with_context(|| format!("input source `{id}` could not be opened"))?;
+        let stream = contextualize_reconfigurable_stream(stream, id.clone());
+        Ok(OpenedInputSource::relay_with_control(
+            id, stream, executor, owner,
+        ))
     }
 
     pub(crate) async fn open_reconfigurable_source_plans(
@@ -1754,10 +2034,22 @@ impl<V> InputPipeline<V> {
     {
         let mut opened = Vec::with_capacity(plans.len());
         for plan in plans {
-            opened.push(
-                self.open_reconfigurable_source_plan(plan, control, Rc::clone(&executor))
-                    .await?,
-            );
+            match self
+                .open_reconfigurable_source_plan(plan, control, Rc::clone(&executor))
+                .await
+            {
+                Ok(source) => opened.push(source),
+                Err(primary) => {
+                    let mut error = primary;
+                    for source in opened {
+                        for cleanup in source.close().await {
+                            error =
+                                error.context(format!("input cleanup also failed: {cleanup:#}"));
+                        }
+                    }
+                    return Err(error);
+                }
+            }
         }
         Ok(opened)
     }
@@ -1771,30 +2063,33 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        let pipeline_configuration = self.configuration_fingerprint();
-        self.validate_resolved(resolved, pipeline_configuration)?;
-        if let [source_plan] = resolved.sources()
-            && source_plan.source() == &control.source
-        {
-            let id = source_plan.source().clone();
-            let stream = self
-                .open_reconfigurable_source_stream(source_plan, control)
-                .await?;
-            return Ok(vec![OpenedInputSource::direct(id, stream)]);
-        }
+        self.validate_resolved(resolved)?;
         let mut opened = self
             .open_reconfigurable_source_plans(resolved.sources(), control, Rc::clone(&executor))
             .await?;
         if opened.iter().all(|source| source.id != control.source) {
             let control_plan = ResolvedSource::new(control.source.clone(), []);
-            opened.push(
-                self.open_reconfigurable_source_plan(&control_plan, control, executor)
-                    .await?,
-            );
+            match self
+                .open_reconfigurable_source_plan(&control_plan, control, executor)
+                .await
+            {
+                Ok(source) => opened.push(source),
+                Err(primary) => {
+                    let mut error = primary;
+                    for source in opened {
+                        for cleanup in source.close().await {
+                            error =
+                                error.context(format!("input cleanup also failed: {cleanup:#}"));
+                        }
+                    }
+                    return Err(error);
+                }
+            }
         }
         Ok(opened)
     }
 
+    #[cfg(test)]
     pub(crate) async fn open_reconfigurable(
         &self,
         resolved: ResolvedInput,
@@ -1803,32 +2098,26 @@ impl<V> InputPipeline<V> {
     where
         V: FileInputValue + RosStreamValue,
     {
-        let pipeline_configuration = self.configuration_fingerprint();
-        self.validate_resolved(&resolved, pipeline_configuration)?;
-        let mut plans = resolved.sources().to_vec();
-        if plans
-            .iter()
-            .all(|source| source.source() != &control.source)
-        {
-            plans.push(ResolvedSource::new(control.source.clone(), []));
-        }
-        let mut streams = Vec::with_capacity(plans.len());
-        for plan in &plans {
-            streams.push(
-                self.open_reconfigurable_source_stream(plan, control)
-                    .await?,
-            );
-        }
-        Ok(compose_reconfigurable_input_streams(streams))
+        let executor = self.executor.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("reconfigurable input requires InputPipeline::with_executor")
+        })?;
+        let sources = self
+            .open_reconfigurable_sources(&resolved, control, Rc::clone(executor))
+            .await?;
+        Ok(Box::pin(SharedInputSourceSet(Rc::new(RefCell::new(
+            InputSourceSet::new(sources),
+        )))))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InputPipelineReconfigurationPlan {
-    active_fingerprint: u128,
+    session: SessionId,
+    expected_revision: SessionRevision,
     candidate: ResolvedInput,
     removed: Box<[SourceId]>,
     added: Box<[ResolvedSource]>,
+    rebound: Box<[ResolvedSource]>,
 }
 
 impl InputPipelineReconfigurationPlan {
@@ -1837,7 +2126,7 @@ impl InputPipelineReconfigurationPlan {
     }
 
     pub(crate) fn is_changed(&self) -> bool {
-        !self.removed.is_empty() || !self.added.is_empty()
+        !self.removed.is_empty() || !self.added.is_empty() || !self.rebound.is_empty()
     }
 
     pub(crate) fn removed_sources(&self) -> &[SourceId] {
@@ -1848,14 +2137,58 @@ impl InputPipelineReconfigurationPlan {
         &self.added
     }
 
-    pub(crate) fn active_fingerprint(&self) -> u128 {
-        self.active_fingerprint
+    pub(crate) fn rebound_sources(&self) -> &[ResolvedSource] {
+        &self.rebound
+    }
+
+    pub(crate) fn session(&self) -> SessionId {
+        self.session
+    }
+
+    pub(crate) fn expected_revision(&self) -> SessionRevision {
+        self.expected_revision
     }
 }
 
 #[cfg(test)]
 mod resolution_tests {
+    use std::cell::Cell;
+    use std::num::NonZeroUsize;
+
     use super::*;
+
+    #[test]
+    fn cross_value_mapping_retains_stop_and_drain_lifecycle() {
+        smol::block_on(async {
+            let stopped = Rc::new(Cell::new(false));
+            let stop_flag = Rc::clone(&stopped);
+            let stream: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
+                InputBatch::update("x", Value::Int(3)),
+            )]));
+            let input = OpenedInput::with_stop(stream, move || stop_flag.set(true));
+            let mapped = input.map_values(|stream| {
+                Box::pin(
+                    stream
+                        .map(|item| item.map(|batch| batch.map_values(|value| value.to_string()))),
+                )
+            });
+            let mut drain = mapped.into_drain();
+            assert!(stopped.get());
+            assert_eq!(
+                drain
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .updates()
+                    .next()
+                    .unwrap()
+                    .value,
+                "3"
+            );
+            assert!(drain.next().await.is_none());
+        });
+    }
 
     fn mqtt_routes(route: &str) -> BTreeMap<VarName, Route> {
         BTreeMap::from([(
@@ -1919,7 +2252,7 @@ mod resolution_tests {
         let resolved = pipeline.resolve(&variables, None).unwrap();
         assert_eq!(resolved.sources().len(), 1);
         assert_eq!(resolved.sources()[0].source(), "default");
-        assert_eq!(resolved.sources()[0].bindings()[0].route(), "/x");
+        assert_eq!(resolved.sources()[0].bindings()[0].route().address(), "/x");
     }
 
     #[test]
@@ -1976,7 +2309,7 @@ mod resolution_tests {
         let resolved = pipeline.resolve(&variables, Some(&config)).unwrap();
         assert_eq!(resolved.sources()[0].source(), "telemetry");
         assert_eq!(
-            resolved.sources()[0].bindings()[0].route(),
+            resolved.sources()[0].bindings()[0].route().address(),
             "/replacement/x"
         );
     }
@@ -2118,7 +2451,7 @@ mod resolution_tests {
             InputSources::new()
                 .insert(
                     "a",
-                    InputSource::<Value>::manual_with_control(
+                    InputSource::<Value>::channel_with_control(
                         BTreeMap::from([("x".into(), x_fanout.clone())]),
                         Some(control_fanout),
                     )
@@ -2127,7 +2460,7 @@ mod resolution_tests {
                 )
                 .insert(
                     "b",
-                    InputSource::<Value>::manual(BTreeMap::from([
+                    InputSource::<Value>::channel(BTreeMap::from([
                         ("x".into(), x_fanout),
                         ("y".into(), y_fanout),
                     ])),
@@ -2168,32 +2501,163 @@ mod resolution_tests {
 
         let active = pipeline.resolve(&x, Some(&on_a)).unwrap();
         let added = pipeline.resolve(&xy, Some(&split)).unwrap();
+        let session = SessionId::new();
+        let revision = SessionRevision::initial();
         let add_plan = pipeline
-            .plan_reconfiguration(&active, added.clone())
+            .plan_reconfiguration(&active, added.clone(), session, revision)
             .unwrap();
+        assert_eq!(add_plan.session(), session);
+        assert_eq!(add_plan.expected_revision(), revision);
         assert!(add_plan.removed_sources().is_empty());
         assert_eq!(add_plan.added_sources()[0].source(), "b");
 
         let moved = pipeline.resolve(&x, Some(&on_b)).unwrap();
-        let move_plan = pipeline.plan_reconfiguration(&active, moved).unwrap();
+        let move_plan = pipeline
+            .plan_reconfiguration(&active, moved, SessionId::new(), SessionRevision::initial())
+            .unwrap();
         assert_eq!(move_plan.removed_sources(), &[SourceId::from("a")]);
         assert_eq!(move_plan.added_sources()[0].source(), "b");
 
         let no_op = pipeline
-            .plan_reconfiguration(&added, added.clone())
+            .plan_reconfiguration(
+                &added,
+                added.clone(),
+                SessionId::new(),
+                SessionRevision::initial(),
+            )
             .unwrap();
         assert!(!no_op.is_changed());
     }
 
     #[test]
-    fn reconfigurable_input_composes_data_and_control_from_different_sources() {
+    fn mqtt_binding_change_plans_native_rebind_without_reopening_source() {
+        let pipeline = InputPipeline::<Value>::new(InputSource::mqtt(None, None));
+        let variables = BTreeSet::from([VarName::new("x")]);
+        let configured = |route: &str| InputConfiguration {
+            source: None,
+            inputs: Some(BTreeMap::from([(
+                VarName::new("x"),
+                Route::new(route.to_owned().into_boxed_str(), None).unwrap(),
+            )])),
+            sources: None,
+        };
+        let active = pipeline
+            .resolve(&variables, Some(&configured("old")))
+            .unwrap();
+        let candidate = pipeline
+            .resolve(&variables, Some(&configured("new")))
+            .unwrap();
+
+        let plan = pipeline
+            .plan_reconfiguration(
+                &active,
+                candidate,
+                SessionId::new(),
+                SessionRevision::initial(),
+            )
+            .unwrap();
+
+        assert!(plan.removed_sources().is_empty());
+        assert!(plan.added_sources().is_empty());
+        assert_eq!(plan.rebound_sources()[0].source(), "default");
+    }
+
+    #[test]
+    fn channel_native_boundary_preserves_complete_rows_and_retained_subscription() {
         smol::block_on(async {
+            let (x_sender, x) = Fanout::<Value>::new();
+            let (y_sender, y) = Fanout::<Value>::new();
+            let (_control_sender, control) = Fanout::<Value>::new();
+            let (mut stream, owner) = crate::io::channel::reconfigurable_stream(
+                BTreeMap::from([
+                    (VarName::new("x"), x.clone()),
+                    (VarName::new("y"), y.clone()),
+                ]),
+                BTreeSet::from([VarName::new("x"), VarName::new("y")]),
+                control,
+            );
+            let x_subscriptions = x.sub_events();
+
+            x_sender.send(Value::Int(1)).await;
+            y_sender.send(Value::Int(2)).await;
+            owner.pause(7).await.unwrap();
+
+            let ReconfigurableInputItem::Data(batch) = stream.next().await.unwrap().unwrap() else {
+                panic!("complete queued channel row must precede its boundary")
+            };
+            assert_eq!(batch.tick_count(), 1);
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Boundary(7)
+            ));
+
+            owner
+                .rebind(BTreeSet::from([VarName::new("x")]))
+                .await
+                .unwrap();
+            // Poll the queued rebind command before producing the next row.
+            let next = Box::pin(stream.next());
+            x_sender.send(Value::Int(3)).await;
+            let ReconfigurableInputItem::Data(batch) = next.await.unwrap().unwrap() else {
+                panic!("retained channel variable must continue after rebind")
+            };
+            assert_eq!(*batch.updates().next().unwrap().value, Value::Int(3));
+            assert_eq!(x.sub_events(), x_subscriptions);
+        });
+    }
+
+    #[cfg(feature = "ros")]
+    #[test]
+    fn ros_binding_change_is_rejected_during_plan_preparation() {
+        let executor = Rc::new(LocalExecutor::new());
+        let format = FormatId::new("Int32");
+        let pipeline = InputPipeline::new(InputSource::ros(
+            BTreeMap::from([(
+                VarName::new("x"),
+                Route::new("/old", Some(format.clone())).unwrap(),
+            )]),
+            executor,
+        ));
+        let variables = BTreeSet::from([VarName::new("x")]);
+        let active = pipeline.resolve(&variables, None).unwrap();
+        let candidate_config = InputConfiguration {
+            source: None,
+            inputs: None,
+            sources: Some(BTreeMap::from([(
+                SourceId::from("default"),
+                BTreeMap::from([(VarName::new("x"), Route::new("/new", Some(format)).unwrap())]),
+            )])),
+        };
+        let candidate = pipeline
+            .resolve(&variables, Some(&candidate_config))
+            .unwrap();
+
+        let error = pipeline
+            .plan_reconfiguration(
+                &active,
+                candidate,
+                SessionId::new(),
+                SessionRevision::initial(),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot change bindings in place")
+        );
+    }
+
+    #[test]
+    fn reconfigurable_input_composes_data_and_control_from_different_sources() {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (data_sender, data_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let data_source =
-                InputSource::<Value>::manual(BTreeMap::from([("x".into(), data_fanout)]));
+                InputSource::<Value>::channel(BTreeMap::from([("x".into(), data_fanout)]));
             let control_source =
-                InputSource::<Value>::manual_with_control(BTreeMap::new(), Some(control_fanout))
+                InputSource::<Value>::channel_with_control(BTreeMap::new(), Some(control_fanout))
                     .with_reconfiguration_route("control")
                     .unwrap();
             let pipeline = InputPipeline::from_sources(
@@ -2205,6 +2669,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2222,21 +2688,23 @@ mod resolution_tests {
                         saw_data = *batch.updates().next().unwrap().value == Value::Int(7)
                     }
                     ReconfigurableInputItem::Reconfigure(_) => saw_control = true,
+                    ReconfigurableInputItem::Boundary(_) => panic!("no boundary was requested"),
                 }
             }
             assert!(saw_data && saw_control);
-        });
+        }));
     }
 
     #[test]
     fn reconfigurable_input_composes_bindings_spanning_sources() {
-        smol::block_on(async {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (x_sender, x_fanout) = Fanout::<Value>::new();
             let (y_sender, y_fanout) = Fanout::<Value>::new();
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let data_source =
-                InputSource::<Value>::manual(BTreeMap::from([("x".into(), x_fanout)]));
-            let control_source = InputSource::<Value>::manual_with_control(
+                InputSource::<Value>::channel(BTreeMap::from([("x".into(), x_fanout)]));
+            let control_source = InputSource::<Value>::channel_with_control(
                 BTreeMap::from([("y".into(), y_fanout)]),
                 Some(control_fanout),
             )
@@ -2251,6 +2719,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2269,19 +2739,21 @@ mod resolution_tests {
                         variables.insert(batch.updates().next().unwrap().variable.clone());
                     }
                     ReconfigurableInputItem::Reconfigure(_) => saw_control = true,
+                    ReconfigurableInputItem::Boundary(_) => panic!("no boundary was requested"),
                 }
             }
             assert_eq!(variables, BTreeSet::from(["x".into(), "y".into()]));
             assert!(saw_control);
-        });
+        }));
     }
 
     #[test]
     fn inactive_sources_do_not_block_reconfigurable_opening() {
-        smol::block_on(async {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let (_data_sender, data_fanout) = Fanout::<Value>::new();
-            let control_source = InputSource::<Value>::manual_with_control(
+            let control_source = InputSource::<Value>::channel_with_control(
                 BTreeMap::from([("x".into(), data_fanout)]),
                 Some(control_fanout),
             )
@@ -2300,6 +2772,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("control", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2311,18 +2785,19 @@ mod resolution_tests {
                 stream.next().await.unwrap().unwrap(),
                 ReconfigurableInputItem::Reconfigure(_)
             ));
-        });
+        }));
     }
 
     #[test]
     fn ros_control_topic_collision_is_rejected_before_opening() {
-        smol::block_on(async {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let source = InputSource::<Value>::ros(
                 BTreeMap::from([(
                     VarName::new("x"),
                     Route::new(
                         "/shared".to_owned().into_boxed_str(),
-                        Some(CodecId::new("Int32".to_owned().into_boxed_str())),
+                        Some(FormatId::new("json")),
                     )
                     .unwrap(),
                 )]),
@@ -2333,7 +2808,12 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("default", "/shared").unwrap();
 
-            let error = match pipeline.open_reconfigurable(resolved, &control).await {
+            let error = match pipeline
+                .clone()
+                .with_executor(executor.clone())
+                .open_reconfigurable(resolved, &control)
+                .await
+            {
                 Ok(_) => panic!("a ROS control topic cannot reuse an active data topic"),
                 Err(error) => error,
             };
@@ -2344,15 +2824,16 @@ mod resolution_tests {
                 ),
                 "unexpected error: {message}"
             );
-        });
+        }));
     }
 
     #[test]
-    fn manual_control_does_not_discard_data_queued_before_the_barrier() {
-        smol::block_on(async {
+    fn channel_control_does_not_discard_data_queued_before_the_barrier() {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let (data_sender, data_fanout) = Fanout::<Value>::new();
-            let source = InputSource::manual_with_control(
+            let source = InputSource::channel_with_control(
                 BTreeMap::from([(VarName::new("x"), data_fanout)]),
                 Some(control_fanout),
             );
@@ -2361,6 +2842,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("default", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2381,15 +2864,16 @@ mod resolution_tests {
                 panic!("data queued before a control barrier must remain live");
             };
             assert_eq!(*batch.updates().next().unwrap().value, Value::Int(7));
-        });
+        }));
     }
 
     #[test]
-    fn manual_control_is_eventually_delivered_with_ready_data() {
-        smol::block_on(async {
+    fn channel_control_is_eventually_delivered_with_ready_data() {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let (data_sender, data_fanout) = Fanout::<Value>::new();
-            let source = InputSource::manual_with_control(
+            let source = InputSource::channel_with_control(
                 BTreeMap::from([(VarName::new("x"), data_fanout)]),
                 Some(control_fanout),
             );
@@ -2398,6 +2882,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("default", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2407,25 +2893,40 @@ mod resolution_tests {
             }
 
             let first = stream.next().await.unwrap().unwrap();
-            assert!(matches!(first, ReconfigurableInputItem::Data(_)));
+            let ReconfigurableInputItem::Data(first) = first else {
+                panic!("expected data")
+            };
+            let mut values = vec![first.updates().next().unwrap().value.clone()];
 
             control_sender
                 .send(Value::Str(r#"{"specification":"in x"}"#.into()))
                 .await;
 
-            let item = stream.next().await.unwrap().unwrap();
-            assert!(matches!(item, ReconfigurableInputItem::Reconfigure(_)));
-            let item = stream.next().await.unwrap().unwrap();
-            assert!(matches!(item, ReconfigurableInputItem::Data(_)));
-        });
+            let mut control_position = None;
+            for position in 1..=32 {
+                match stream.next().await.unwrap().unwrap() {
+                    ReconfigurableInputItem::Data(batch) => {
+                        values.push(batch.updates().next().unwrap().value.clone());
+                    }
+                    ReconfigurableInputItem::Reconfigure(_) => {
+                        assert!(control_position.replace(position).is_none());
+                    }
+                    ReconfigurableInputItem::Boundary(_) => panic!("no boundary was requested"),
+                }
+            }
+            // At most one queued and one held relay item can precede control.
+            assert!(control_position.is_some_and(|position| position <= 3));
+            assert_eq!(values, (0..32).map(Value::Int).collect::<Vec<_>>());
+        }));
     }
 
     #[test]
-    fn terminated_manual_control_does_not_stop_ready_data() {
-        smol::block_on(async {
+    fn terminated_channel_control_does_not_stop_ready_data() {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.clone().run(async {
             let (control_sender, control_fanout) = Fanout::<Value>::new();
             let (data_sender, data_fanout) = Fanout::<Value>::new();
-            let source = InputSource::manual_with_control(
+            let source = InputSource::channel_with_control(
                 BTreeMap::from([(VarName::new("x"), data_fanout)]),
                 Some(control_fanout),
             );
@@ -2434,6 +2935,8 @@ mod resolution_tests {
             let resolved = pipeline.resolve(&variables, None).unwrap();
             let control = ReconfigurationControl::new("default", "control").unwrap();
             let mut stream = pipeline
+                .clone()
+                .with_executor(executor.clone())
                 .open_reconfigurable(resolved, &control)
                 .await
                 .unwrap();
@@ -2449,7 +2952,7 @@ mod resolution_tests {
                 };
                 assert_eq!(*batch.updates().next().unwrap().value, Value::Int(expected));
             }
-        });
+        }));
     }
 
     #[test]
@@ -2525,14 +3028,14 @@ mod resolution_tests {
                 (VarName::new("current"), "knowledge:current".to_owned()),
                 (VarName::new("future"), "knowledge:future".to_owned()),
             ]),
-            retry: crate::io::RedisKnowledgeRetry::default(),
+            retry: crate::io::RetryPolicy::input_default(),
         });
         let pipeline = InputPipeline::new(source);
         let resolved = pipeline
             .resolve(&BTreeSet::from([VarName::new("current")]), None)
             .unwrap();
         assert_eq!(
-            resolved.sources()[0].bindings()[0].route(),
+            resolved.sources()[0].bindings()[0].route().address(),
             "knowledge:current"
         );
         assert!(
@@ -2554,7 +3057,7 @@ mod resolution_tests {
                 database: 2,
                 publish_initial: false,
                 keys: BTreeMap::from([(VarName::new("x"), "catalog:x".to_owned())]),
-                retry: crate::io::RedisKnowledgeRetry::default(),
+                retry: crate::io::RetryPolicy::input_default(),
             },
         ));
         let config = InputConfiguration {
@@ -2572,5 +3075,40 @@ mod resolution_tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("active Redis knowledge key"));
+    }
+
+    #[test]
+    fn ordinary_owner_stops_live_ingress_and_flushes_its_window() {
+        let executor = Rc::new(LocalExecutor::new());
+        let task_executor = Rc::clone(&executor);
+        smol::block_on(executor.run(async move {
+            let (sender, fanout) = Fanout::<Value>::new();
+            let pipeline = InputPipeline::new(InputSource::channel(BTreeMap::from([(
+                VarName::new("x"),
+                fanout,
+            )])))
+            .with_executor(task_executor)
+            .with_policy(InputPolicy::Batch(
+                crate::io::InputWindow::new(None, NonZeroUsize::new(10)).unwrap(),
+            ))
+            .unwrap();
+            let input = pipeline
+                .build(BTreeSet::from([VarName::new("x")]))
+                .await
+                .unwrap();
+
+            sender.send(Value::Int(1)).await;
+            smol::future::yield_now().await;
+            let mut drain = input.into_drain_with_deadline(ShutdownDeadline::after(
+                std::time::Duration::from_secs(1),
+            ));
+            let batch = drain.next().await.unwrap().unwrap();
+            assert_eq!(*batch.updates().next().unwrap().value, Value::Int(1));
+
+            // The producer remains live, but stopping the local relay fixes
+            // the admission boundary and lets cleanup reach EOF.
+            sender.send(Value::Int(2)).await;
+            assert!(drain.next().await.is_none());
+        }));
     }
 }

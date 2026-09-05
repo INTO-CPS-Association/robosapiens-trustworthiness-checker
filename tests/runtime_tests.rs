@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::core::{
-    ExecutionPolicy, LocalStream, OutputBackend, OutputInterface, OutputWriter, Runtime,
-    RuntimeSpec, Semantics, StreamType,
+    ExecutionPolicy, LocalStream, OutputInterface, OutputWriter, Runtime, RuntimeSpec, Semantics,
+    StreamType,
 };
-use trustworthiness_checker::io::output::ManualOutputBackend;
+use trustworthiness_checker::io::channel::{open_output, output};
 use trustworthiness_checker::io::{file, map};
 use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
@@ -25,19 +25,18 @@ use trustworthiness_checker::{
 use trustworthiness_checker::{VarName, async_test};
 use winnow::Parser;
 
-async fn manual_output(
+async fn channel_output(
     variables: impl IntoIterator<Item = VarName>,
 ) -> (OutputWriter<Value>, LocalStream<BTreeMap<VarName, Value>>) {
-    let (backend, receiver) = ManualOutputBackend::<Value>::channel(1024);
+    let (sender, receiver) = output(1024);
     let variables = variables
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let interface = OutputInterface::outputs(variables.iter().cloned())
         .expect("test output interface is valid");
-    let writer = backend
-        .open(interface)
+    let writer = open_output(sender, interface)
         .await
-        .expect("test manual output backend opens");
+        .expect("test channel output opens");
     let queues = variables
         .iter()
         .cloned()
@@ -153,7 +152,7 @@ async fn run_typed_runtime_with_spec(
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
-    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
@@ -180,7 +179,7 @@ async fn run_typed_lalr_runtime_with_spec(
     let spec_input = spec_str;
     let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
-    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
@@ -207,7 +206,7 @@ async fn run_untyped_lalr_runtime_with_spec(
     let spec_input = spec_str;
     let spec = parse_str(spec_input)?;
     let input_stream = map::input_stream(input_stream);
-    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
@@ -265,7 +264,7 @@ async fn run_gradual_typed_runtime_with_spec(
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
     let input_stream = map::input_stream(input_stream);
-    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
@@ -1128,7 +1127,7 @@ echoed = payload
     )
     .await?;
     let input_stream = file::input_stream(input_data, spec.input_vars().clone());
-    let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
@@ -1476,7 +1475,7 @@ id = Map.get(robot, "id")
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
         let input_stream = map::input_stream(BTreeMap::from([("tick".into(), vec![0.into()])]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1549,7 +1548,7 @@ renamed = Map.insert(robot, "name", "bb8")
                 ])),
             ],
         )]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1768,7 +1767,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1825,7 +1824,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec!["x * x".into(), "x * x + 1".into(), "x * x + 2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1882,7 +1881,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let x = vec![1.into(), 2.into(), 3.into()];
         let e = vec![Value::Deferred, "x + 1".into(), "x + 2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -1939,7 +1938,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec![Value::Deferred, "x + 1".into(), Value::Deferred];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2004,7 +2003,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
             ("y".into(), y),
             ("e".into(), e),
         ]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2066,7 +2065,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
         let x = vec!["x0".into(), "x1".into(), "x2".into()];
         let y = vec!["y0".into(), "y1".into(), "y2".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2115,7 +2114,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let y = vec![Value::Deferred, "y1".into(), Value::Deferred, "y3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2174,7 +2173,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
         let x = vec!["x0".into(), "x1".into(), "x2".into(), "x3".into()];
         let e = vec![Value::Deferred, "x".into(), "x".into(), "x".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2238,7 +2237,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
             "y_happy".into(),
         ];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("y".into(), y)]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2307,7 +2306,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
             .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2343,7 +2342,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2389,7 +2388,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2439,7 +2438,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2485,7 +2484,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2533,7 +2532,7 @@ async fn test_index_past_mult_dependencies(
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2591,7 +2590,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
             .expect("test DSRV specification should parse");
 
         let input_stream = boolean_pair_input_stream();
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2637,7 +2636,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
             .expect("test DSRV specification should parse");
 
         let input_stream = string_pair_input_stream();
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2682,7 +2681,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
             .expect("test DSRV specification should parse");
 
         let input_stream = constraint_input_stream(spec_untyped.input_vars().clone());
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2731,7 +2730,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
             "x".into(),
             vec![Value::Deferred, Value::Deferred, Value::Deferred],
         )]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2780,7 +2779,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
             "x".into(),
             vec![1.into(), Value::Deferred, 5.into()],
         )]));
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2826,7 +2825,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
             .expect("test DSRV specification should parse");
 
         let input_stream = empty_input_stream();
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2885,7 +2884,7 @@ async fn test_simple_add_monitor_does_not_go_away(
         // Test that monitor continues to work even after output handler goes out of scope
         let outputs = {
             // Create output handler based on configuration
-            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+            let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
             // Build base monitor with common settings
             let builder = GeneralRuntimeBuilder::new()
@@ -2939,7 +2938,7 @@ async fn test_simple_add_monitor_large_input(
         let input_stream = trustworthiness_checker::dsrv_fixtures::simple_add_input_stream(100);
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3008,7 +3007,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let input_stream = integer_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3052,7 +3051,7 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let input_stream = integer_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3100,7 +3099,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let x = vec![0.into(), 1.into(), 2.into()];
         let e = vec!["x + 1".into(), "x + 2".into(), "x + 3".into()];
         let input_stream = map::input_stream(BTreeMap::from([("x".into(), x), ("e".into(), e)]));
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3148,7 +3147,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
             .expect("test DSRV specification should parse");
 
         let input_stream = dynamic_expression_input_stream();
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3198,7 +3197,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let input_stream = integer_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3247,7 +3246,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let input_stream = float_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3292,7 +3291,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
-            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+            let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
@@ -3328,7 +3327,7 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
-            let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+            let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
@@ -3442,7 +3441,7 @@ async fn test_drop_guard_cancellation_behaviour(
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3488,7 +3487,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         let input_stream = map::input_stream(BTreeMap::new());
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3536,7 +3535,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let input_stream = integer_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3581,7 +3580,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
         let spec = (spec_str)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3630,7 +3629,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let input_stream = string_pair_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3669,7 +3668,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let input_stream = constraint_style_input_stream();
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -3712,7 +3711,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let input_stream = maple_valid_input_stream(10);
 
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3774,7 +3773,7 @@ async fn test_restricted_dynamic_monitor(
         let input_stream = dynamic_expression_input_stream();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3839,7 +3838,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_1();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3915,7 +3914,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_2();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -3991,7 +3990,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_3();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -4067,7 +4066,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         let input_stream = defer_input_stream_4();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -4132,7 +4131,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         let input_stream = dynamic_defer_composition_input_stream();
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec_untyped.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec_untyped.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -4223,7 +4222,7 @@ async fn test_benchmark_regression_long_add_defer(
         let input_stream = add_defer_input_stream(SIZE);
 
         // Create output handler based on configuration
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
@@ -4278,7 +4277,7 @@ async fn test_map_get_deferred_propagates(
             ],
         )]));
 
-        let (output_writer, outputs) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
@@ -4318,7 +4317,7 @@ mod reconf_tests {
     use tc_testutils::streams::with_timeout;
     use tracing::info;
     use trustworthiness_checker::io::{
-        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
+        InputPipeline, InputSource, OutputBackendConfig, OutputPipeline,
     };
     use trustworthiness_checker::runtime::RuntimeBuilder;
     use trustworthiness_checker::runtime::builder::SemiSyncValueConfig;
@@ -4331,7 +4330,7 @@ mod reconf_tests {
 
     const RECONF_TOPIC: &str = "RECONF_ME";
 
-    fn manual_input_source(
+    fn channel_input_source(
         variables: impl IntoIterator<Item = &'static str>,
     ) -> (InputSource, BTreeMap<VarName, FanoutSender<Value>>) {
         let mut senders = BTreeMap::new();
@@ -4396,18 +4395,18 @@ mod reconf_tests {
             Value::Int(14),
             Value::Int(16),
         ];
-        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x", "y"]);
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
             .input_pipeline(InputPipeline::new(input_factory))
-            .expect("manual input factory should support reconfiguration")
-            .output_pipeline_builder(output_builder)
+            .expect("channel input factory should support reconfiguration")
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
@@ -4483,17 +4482,17 @@ mod reconf_tests {
         let spec = (spec_simple_add_monitor_typed())
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x", "y"]);
 
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec.clone())
             .input_pipeline(InputPipeline::new(input_factory))
-            .expect("manual input factory should support reconfiguration")
-            .output_pipeline_builder(output_builder)
+            .expect("channel input factory should support reconfiguration")
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(RECONF_TOPIC.into())
@@ -4541,12 +4540,13 @@ mod reconf_tests {
             let spec = source_text
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
-            let (input_source, mut tx_fans) = manual_input_source(["x"]);
+            let (input_source, mut tx_fans) = channel_input_source(["x"]);
             let input_source = input_source
                 .with_reconfiguration_route("configured-control")
                 .expect("configured control route should be accepted");
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
-            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let (ack_tx, mut ack_rx) = bounded::channel::<
                 trustworthiness_checker::runtime::dataflow::ReconfigurationAck,
             >(2)
@@ -4556,8 +4556,8 @@ mod reconf_tests {
                 .executor(ex.clone())
                 .model(spec)
                 .input_pipeline(InputPipeline::new(input_source))
-                .expect("manual input source should support reconfiguration")
-                .output_pipeline_builder(output_builder)
+                .expect("channel input source should support reconfiguration")
+                .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
                 .semantics(semantics)
                 .acknowledgements(ack_tx)
@@ -4605,15 +4605,15 @@ mod reconf_tests {
         let spec = "in x\nout z\nz = x"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let (input_source, mut tx_fans) = manual_input_source(["x"]);
+        let (input_source, mut tx_fans) = channel_input_source(["x"]);
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
-            .expect("manual input source should support reconfiguration")
-            .output_pipeline_builder(output_builder)
+            .expect("channel input source should support reconfiguration")
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
             .build()
@@ -4670,14 +4670,14 @@ mod reconf_tests {
         let input =
             InputSource::in_memory_rows(BTreeMap::from([(VarName::new("x"), vec![Value::Int(1)])]));
         let (out_tx, _out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex)
             .model(spec)
             .input_pipeline(InputPipeline::new(input))
             .expect("input pipeline should be accepted by the public builder")
-            .output_pipeline_builder(output_builder)
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
             .build()
@@ -4708,16 +4708,17 @@ mod reconf_tests {
             let spec = source
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
-            let (input_source, mut tx_fans) = manual_input_source(["x"]);
+            let (input_source, mut tx_fans) = channel_input_source(["x"]);
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(2).into_split();
-            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
                 .model(spec)
                 .input_pipeline(InputPipeline::new(input_source))
-                .expect("manual input source should support reconfiguration")
-                .output_pipeline_builder(output_builder)
+                .expect("channel input source should support reconfiguration")
+                .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfSemiSync)
                 .semantics(semantics)
                 .reconf_topic(RECONF_TOPIC.into())
@@ -4783,18 +4784,18 @@ mod reconf_tests {
             Value::Int(14),
             Value::Int(16),
         ];
-        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x", "y"]);
         let in_len = xs.len();
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -4909,17 +4910,17 @@ mod reconf_tests {
             Value::Int(12),
         ];
 
-        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -4964,25 +4965,30 @@ mod reconf_tests {
         })
         .to_string();
 
-        // Wait for sub events to be triggered, i.e., new input stream has subscribed
-        let sub_event_futs: Vec<_> = tx_fans
-            .iter()
-            .filter(|(var, _)| var.name() != "y") // New spec does not have y
-            .map(|(var, fan_tx)| {
-                let fan_rc = fan_tx.fanout();
-                let label = format!("sub event on {}", var);
-                let wait_fut = async move {
-                    let fan = fan_rc.as_ref();
-                    let seen = fan.sub_events();
-                    with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
-                };
-                Box::pin(wait_fut)
-            })
-            .collect();
-
+        // Removing y leaves x subscribed. Sending a missing value to y
+        // lets Fanout observe and prune the retired receiver.
+        let y_fanout = tx_fans.get(&VarName::new("y")).unwrap().fanout();
+        let seen = y_fanout.prune_events();
+        let x_fanout = tx_fans.get(&VarName::new("x")).unwrap().fanout();
+        let x_subscriptions = x_fanout.sub_events();
         send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
-
-        future::join_all(sub_event_futs).await;
+        with_timeout(
+            async {
+                while y_fanout.prune_events() == seen {
+                    tx_fans
+                        .get(&VarName::new("y"))
+                        .unwrap()
+                        .send(Value::NoVal)
+                        .await;
+                    smol::future::yield_now().await;
+                }
+            },
+            3,
+            "removed y subscription",
+        )
+        .await
+        .expect("removed input stayed subscribed");
+        assert_eq!(x_fanout.sub_events(), x_subscriptions);
         info!("Finished reconf, now sending post-reconf values");
 
         // Post-reconf: Only x
@@ -5024,17 +5030,17 @@ mod reconf_tests {
 
         // Note: Defines Fanout for y initially but is not used until after reconf.
         // Needed because we cannot modify the InputStreamFactory after giving it to Runtime
-        let (input_factory, mut tx_fans) = manual_input_source(["x", "y"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x", "y"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -5065,24 +5071,17 @@ mod reconf_tests {
         })
         .to_string();
 
-        // Wait for sub events to be triggered, i.e., new input stream has subscribed
-        let sub_event_futs: Vec<_> = tx_fans
-            .iter()
-            .map(|(var, fan_tx)| {
-                let fan_rc = fan_tx.fanout();
-                let label = format!("sub event on {}", var);
-                let wait_fut = async move {
-                    let fan = fan_rc.as_ref();
-                    let seen = fan.sub_events();
-                    with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
-                };
-                Box::pin(wait_fut)
-            })
-            .collect();
-
+        // Only the added variable obtains a new subscription. Existing x and
+        // control receivers remain attached to the same source owner.
+        let y_fanout = tx_fans.get(&VarName::new("y")).unwrap().fanout();
+        let seen = y_fanout.sub_events();
+        let x_fanout = tx_fans.get(&VarName::new("x")).unwrap().fanout();
+        let x_subscriptions = x_fanout.sub_events();
         send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans).await;
-
-        future::join_all(sub_event_futs).await;
+        with_timeout(y_fanout.wait_for_sub_event(seen), 3, "added y subscription")
+            .await
+            .expect("new input was not subscribed");
+        assert_eq!(x_fanout.sub_events(), x_subscriptions);
         info!("Finished reconf, now sending post-reconf values");
 
         // Post-reconf: interleave x and y with NoVal for the others
@@ -5126,17 +5125,17 @@ mod reconf_tests {
         let ws = vec![Value::Int(2), Value::Int(3)];
         let ws_len = ws.len();
 
-        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -5227,17 +5226,17 @@ mod reconf_tests {
         let ws = vec![Value::Int(4), Value::Int(5)];
         let ws_len = ws.len();
 
-        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -5333,17 +5332,17 @@ mod reconf_tests {
             Value::Int(4),
         ];
 
-        let (input_factory, mut tx_fans) = manual_input_source(["x"]);
+        let (input_factory, mut tx_fans) = channel_input_source(["x"]);
 
         let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-        let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+        let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -5448,17 +5447,18 @@ mod reconf_tests {
                 ]
             };
 
-            let (input_factory, mut tx_fans) = manual_input_source(["x"]);
+            let (input_factory, mut tx_fans) = channel_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
-                    .output_builder(output_builder)
+                    .output_pipeline(output_pipeline)
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
             );
@@ -5566,17 +5566,18 @@ mod reconf_tests {
                 ]
             };
 
-            let (input_factory, mut tx_fans) = manual_input_source(["x"]);
+            let (input_factory, mut tx_fans) = channel_input_source(["x"]);
 
             let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
-            let output_builder = OutputBackendBuilder::new(OutputBackendConfig::Manual(out_tx));
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
                     .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
-                    .output_builder(output_builder)
+                    .output_pipeline(output_pipeline)
                     .reconf_topic(RECONF_TOPIC.into())
                     .use_context_transfer(use_context_transfer),
             );

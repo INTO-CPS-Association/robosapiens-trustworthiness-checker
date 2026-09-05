@@ -16,7 +16,7 @@ use trustworthiness_checker::benches_common::{
     monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
-use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
+use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
@@ -109,13 +109,13 @@ async fn run_dsrv_with_semantics(
     runtime_spec: RuntimeSpec,
     semantics: Semantics,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
         .model(spec)
         .input(input)
-        .output_pipeline_builder(output_builder)
+        .output_pipeline(output_pipeline)
         .runtime(runtime_spec)
         .semantics(semantics)
         .build()
@@ -150,8 +150,8 @@ async fn run_mstlo(
     input: InputStream<MstloTimedValue>,
     semantics: Semantics,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let output_writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let output_writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("MSTLO threshold benchmark output pipeline should open");
@@ -167,7 +167,7 @@ async fn run_mstlo(
     let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
         .executor(executor)
         .model(spec)
-        .input(input)
+        .input(input.into())
         .output_writer(output_writer)
         .semantics(semantics)
         .build()

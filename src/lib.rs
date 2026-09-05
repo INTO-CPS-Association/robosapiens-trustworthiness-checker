@@ -4,10 +4,11 @@ pub mod benches_common;
 pub mod causal;
 pub mod core;
 pub use core::{
-    DynOutputSink, ExecutionPolicy, FileInputValue, InputBatch, InputStream, InputTick,
-    InputUpdate, InputUpdateRef, JsonStreamValue, LocalStream, OutputBackend, OutputBatch,
-    OutputError, OutputInterface, OutputRole, OutputRoute, OutputUpdate, OutputWriter,
-    RosStreamValue, Runtime, SharedOutputBackend, Specification, Value, VarName,
+    DynOutputSink, ErrorDetails, ExecutionPolicy, FileInputValue, FormatId, InputBatch,
+    InputBinding, InputError, InputStream, InputTick, InputUpdate, InputUpdateRef, IoErrorKind,
+    JsonStreamValue, LocalStream, OutputBatch, OutputBinding, OutputError, OutputInterface,
+    OutputRole, OutputUpdate, OutputWriter, RosStreamValue, Route, Runtime, Specification, Value,
+    VarName,
 };
 pub mod cli;
 pub mod dataflow;

@@ -25,8 +25,8 @@ mod integration_tests {
         RosMsgType, VariableMappingData,
     };
     use trustworthiness_checker::io::{
-        CodecId, InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
-        OutputDestination, Route,
+        FormatId, InputPipeline, InputSource, OutputBackendConfig, OutputDestination,
+        OutputPipeline, Route,
     };
     use trustworthiness_checker::runtime::dataflow::ReconfigurationAck;
     use trustworthiness_checker::utils::cancellation_token::CancellationToken;
@@ -59,7 +59,7 @@ mod integration_tests {
             ),
         ]);
 
-        let mut input_stream = ros::input_stream(ex.clone(), var_topics)?;
+        let (mut input_stream, mut input_owner) = ros::open_ros_input(ex.clone(), var_topics)?;
 
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_xy_test_publisher_tasks_with_topics(
@@ -82,6 +82,7 @@ mod integration_tests {
         y_publisher_task.await?;
         info!("All publishers completed, shutting down MQTT server");
 
+        input_owner.shutdown().await?;
         Ok(())
     }
 
@@ -96,10 +97,10 @@ mod integration_tests {
             z.clone(),
             Route::new(
                 z_topic.clone().into_boxed_str(),
-                Some(CodecId::new("Int32")),
+                Some(FormatId::new("Int32")),
             )?,
         )]);
-        let mut writer = OutputBackendBuilder::from_destination(
+        let mut writer = OutputPipeline::from_destination(
             OutputDestination::new(
                 "ros",
                 OutputBackendConfig::ros(
@@ -108,7 +109,7 @@ mod integration_tests {
                 ),
             )
             .with_route_catalog(routes),
-        )
+        )?
         .build([z.clone()], [w.clone()], None)
         .await
         .map_err(anyhow::Error::from)?;
@@ -162,10 +163,10 @@ mod integration_tests {
             z.clone(),
             Route::new(
                 z_topic.clone().into_boxed_str(),
-                Some(CodecId::new("Int32")),
+                Some(FormatId::new("Int32")),
             )?,
         )]);
-        let mut writer = OutputBackendBuilder::from_destination(
+        let mut writer = OutputPipeline::from_destination(
             OutputDestination::new(
                 "ros",
                 OutputBackendConfig::ros(
@@ -174,7 +175,7 @@ mod integration_tests {
                 ),
             )
             .with_route_catalog(routes),
-        )
+        )?
         .build([z.clone()], std::iter::empty::<VarName>(), None)
         .await
         .map_err(anyhow::Error::from)?;
@@ -378,13 +379,13 @@ mod integration_tests {
                 VarName::new("x"),
                 Route::new(
                     input_a_topic.clone().into_boxed_str(),
-                    Some(CodecId::new("Int32")),
+                    Some(FormatId::new("Int32")),
                 )?,
             )]),
             ex.clone(),
         )
         .with_reconfiguration_route(control_topic.clone().into_boxed_str())?;
-        let output_builder = OutputBackendBuilder::<Value>::from_destination(
+        let output_pipeline = OutputPipeline::<Value>::from_destination(
             OutputDestination::new(
                 "ros",
                 OutputBackendConfig::ros(
@@ -399,10 +400,10 @@ mod integration_tests {
                 VarName::new("z"),
                 Route::new(
                     output_a_topic.clone().into_boxed_str(),
-                    Some(CodecId::new("Int32")),
+                    Some(FormatId::new("Int32")),
                 )?,
             )])),
-        );
+        )?;
 
         let input_a_publisher = RosTestPublisher::<Int32>::new(
             ex.clone(),
@@ -427,7 +428,7 @@ mod integration_tests {
             .executor(ex.clone())
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))?
-            .output_pipeline_builder(output_builder)
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::TypedUntimed)
             .reconf_topic(control_topic.clone())

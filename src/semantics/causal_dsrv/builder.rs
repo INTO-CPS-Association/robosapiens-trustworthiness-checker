@@ -9,11 +9,10 @@ use crate::core::OutputWriter;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::semi_sync::{SemiSyncRuntime, SemiSyncRuntimeBuilder};
-use crate::{InputStream, Value};
+use crate::{Value, io::OpenedInput};
 
 use super::{
-    CausalCheckedSemiSyncConfig, CausalDsrvSemantics, CausalSemiSyncConfig,
-    RoleCausalDsrvSemantics, annotate_input_for_spec,
+    CausalCheckedSemiSyncConfig, CausalDsrvSemantics, CausalSemiSyncConfig, RoleCausalDsrvSemantics,
 };
 
 /// A model-owned causal semi-synchronous runtime builder.
@@ -24,7 +23,7 @@ use super::{
 pub struct CausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<DsrvSpecification>,
-    input: Option<InputStream<Value>>,
+    input: Option<OpenedInput<Value>>,
     output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
 
@@ -39,8 +38,8 @@ impl<D: CausalDomain> CausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn input(mut self, input: InputStream<Value>) -> Self {
-        self.input = Some(input);
+    pub fn input(mut self, input: impl Into<OpenedInput<Value>>) -> Self {
+        self.input = Some(input.into());
         self
     }
 
@@ -117,7 +116,8 @@ where
     let input = input.ok_or_else(|| anyhow::anyhow!("causal runtime input was not configured"))?;
     let output_writer = output_writer
         .ok_or_else(|| anyhow::anyhow!("causal runtime output writer was not configured"))?;
-    let input = annotate_input_for_spec::<D, _>(input, &model);
+    let declared_inputs = model.input_vars().clone();
+    let input = input.map_values(|input| super::annotate_input::<D>(input, declared_inputs));
 
     Ok(SemiSyncRuntimeBuilder::<CausalSemiSyncConfig<D>, MS>::new()
         .executor(executor)
@@ -132,7 +132,7 @@ where
 pub struct CheckedCausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
     model: Option<CheckedDsrvSpecification>,
-    input: Option<InputStream<Value>>,
+    input: Option<OpenedInput<Value>>,
     output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
 
@@ -147,8 +147,8 @@ impl<D: CausalDomain> CheckedCausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn input(mut self, input: InputStream<Value>) -> Self {
-        self.input = Some(input);
+    pub fn input(mut self, input: impl Into<OpenedInput<Value>>) -> Self {
+        self.input = Some(input.into());
         self
     }
 
@@ -234,7 +234,8 @@ where
     let output_writer = output_writer.ok_or_else(|| {
         anyhow::anyhow!("checked causal runtime output writer was not configured")
     })?;
-    let input = annotate_input_for_spec::<D, _>(input, &model);
+    let declared_inputs = model.input_vars().clone();
+    let input = input.map_values(|input| super::annotate_input::<D>(input, declared_inputs));
 
     Ok(
         SemiSyncRuntimeBuilder::<CausalCheckedSemiSyncConfig<D>, MS>::new()

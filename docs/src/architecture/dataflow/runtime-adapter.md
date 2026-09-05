@@ -35,11 +35,11 @@ Buffered execution flushes after 256 logical ticks and emits a final non-empty p
 
 `OutputWriter` readiness is awaited before a batch is accepted. A slow destination therefore suspends the engine and eventually stops further input polling. The synchronous monitor itself has no asynchronous queue; pressure belongs to the adapter and output pipeline.
 
-A successful send means the writer accepted the batch according to its sink contract. It does not imply remote persistence or consumption.
+A successful `feed` means the writer admitted the batch according to its sink contract. `send` performs that admission and then waits for the writer's flush barrier. Neither result implies remote persistence or consumption.
 
 ## Completion and failure
 
-On normal end-of-stream, the adapter flushes a final partial output batch, flushes the writer, and closes it. End-of-stream does not synthesize extra ticks to drain delay state.
+On normal end-of-stream, the adapter submits a final partial output batch, flushes the writer, and closes it. End-of-stream does not synthesize extra ticks to drain delay state.
 
 A failed monitor evaluation contributes no output row. Rows accumulated since the previous completed flush are discarded on monitor or input error. Writer, input, and monitor errors terminate the run; close still follows the output cleanup contract where possible.
 

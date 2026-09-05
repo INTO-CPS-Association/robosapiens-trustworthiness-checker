@@ -1,26 +1,34 @@
 mod builders;
+pub mod channel;
 pub mod cli;
 pub mod file;
+pub mod lifecycle;
 pub mod map;
 pub mod mqtt;
+pub mod retry;
 #[cfg(feature = "ros")]
 pub mod ros;
 
 pub mod testing;
 
 pub(crate) use self::builders::InputPipelineReconfigurationPlan;
-pub use self::builders::{InputPipeline, InputSource, InputSources, OutputBackendBuilder};
+pub use self::builders::{InputDrain, InputPipeline, InputSource, InputSources, OpenedInput};
 pub mod config;
+pub use crate::core::{FormatId, InputBinding, OutputBinding, Route};
 pub use config::{
-    CodecId, DestinationConfig, DestinationId, DestinationKind, InputConfigFile,
-    InputConfiguration, InputReduction, InputStage, InputWindow, MsgTypeMapping, OutputConfigFile,
-    OutputConfiguration, OutputStageConfig, ReconfigurationRequest, ResolvedBinding, ResolvedInput,
-    ResolvedSource, Route, SourceConfig, SourceId, TopicMapping, WireRoute,
+    DestinationConfig, DestinationId, DestinationKind, InputConfigFile, InputConfiguration,
+    InputPolicy, InputReduction, InputWindow, MsgTypeMapping, OutputCoalescingConfig,
+    OutputConfigFile, OutputConfiguration, OutputDeliveryConfig, OutputQueueConfig,
+    ReconfigurationRequest, ResolvedInput, ResolvedSource, SourceConfig, SourceId, TopicMapping,
 };
 
-pub use redis_config::{
-    RedisKnowledgeConfig, RedisKnowledgeRetry, decode_redis_knowledge_value, redis_keyspace_channel,
+pub use lifecycle::{
+    PipelineGeneration, SessionId, SessionRevision, ShutdownDeadline, ShutdownTimeout,
 };
+pub use redis_config::{
+    RedisKnowledgeConfig, decode_redis_knowledge_value, redis_keyspace_channel,
+};
+pub use retry::{InvalidRetryPolicy, RetryLimit, RetryPolicy, RetryTracker};
 pub mod output;
 pub use output::*;
 mod aggregation;

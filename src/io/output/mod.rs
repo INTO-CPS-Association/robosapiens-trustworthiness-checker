@@ -4,7 +4,7 @@
 //!
 //! [`OutputPipeline`] resolves model outputs and request-local bindings against a
 //! stable [`OutputDestinations`] registry before opening resources. The resulting
-//! [`ResolvedOutput`] fixes variable ownership, mirroring, routes, codecs, stages,
+//! [`ResolvedOutput`] fixes variable ownership, mirroring, routes, codecs, and delivery,
 //! and backend interfaces. Opening exposes one runtime-facing
 //! [`crate::core::OutputWriter`]; one non-session destination uses a direct writer,
 //! while sessions and multi-destination outputs use a tick-preserving router.
@@ -13,17 +13,16 @@
 //!
 //! | Entity | Responsibility |
 //! |---|---|
-//! | [`OutputDestination`] | Holds one unopened backend, selection policy, route catalog, and destination-local stages. |
+//! | [`OutputDestination`] | Holds one unopened backend, selection policy, route catalog, and delivery policy. |
 //! | [`OutputDestinations`] | Owns the deterministic destination registry and optional default owner. |
-//! | [`OutputPipeline`] | Resolves complete plans and opens the backend owners and stage wrappers named by them. |
+//! | [`OutputPipeline`] | Resolves complete plans and opens backend and delivery owners. |
 //! | [`ResolvedOutput`] | Stores one immutable, resource-free output plan. |
-//! | [`OutputStage`] | Applies bounded buffering or logical-tick-preserving coalescing before or after routing according to ownership. |
+//! | [`DeliveryPolicy`] | Selects direct delivery or bounded queued/coalesced delivery per destination. |
 //! | [`OutputPipelineSession`] | Retains fixed destination owners and mutable selected-variable/interface state for live reconfiguration. |
 //!
 //! # Ownership and ordering
 //!
-//! Shared stages wrap the complete delivery path before routing. Destination-local
-//! stages wrap one opened backend owner after routing. Router readiness waits for
+//! Each destination applies its policy before entering the router. Router readiness waits for
 //! every active destination writer; with several owners, admitted batches are
 //! selected by each destination's resolved variable set and empty selections are
 //! skipped. This preserves per-destination logical tick order but provides neither
@@ -32,76 +31,44 @@
 //! # Implementation mapping
 //!
 //! `pipeline` implements resolution, opening, routing, session ownership, and live
-//! interface handoff. `stages` and `pump` implement buffer/coalescing wrappers and
-//! their worker/barrier lifecycle. `backend` and the transport modules implement
+//! interface handoff. `delivery` implements bounded worker and barrier lifecycle.
+//! `backend` and the transport modules implement
 //! unopened backend configuration and opened destination writers.
 
 mod backend;
+mod configuration;
+mod delivery;
 mod pipeline;
 mod sinks;
-mod stages;
 
-#[cfg(feature = "mqtt")]
 mod mqtt;
 #[cfg(feature = "redis")]
 mod redis;
 #[cfg(feature = "ros")]
 mod ros;
 
-mod pump;
-
-pub use backend::{MqttOutputBackendKind, OutputBackendConfig, OutputBackendKind};
+#[cfg(any(test, feature = "test-support"))]
+pub use backend::TestOutputOpener;
+pub use backend::{OutputBackendConfig, OutputBackendKind};
+pub use delivery::{CoalescingLimits, Delivery, DeliveryPolicy, QueueLimits};
 pub(crate) use pipeline::OutputPipelineReconfigurationPlan;
 pub use pipeline::{
     OutputDestination, OutputDestinationSelection, OutputDestinations, OutputPipeline,
-    OutputPipelineSession, ResolvedDestination, ResolvedOutput, ResolvedOutputBinding,
+    OutputPipelineSession, ResolvedDestination, ResolvedOutput,
 };
-pub use sinks::{
-    AsyncFnSink, LimitedNullOutputBackend, LocalBatchSink, ManualOutputBackend,
-    ManualOutputReceiver, ManualOutputSender, NullOutputBackend, StdoutOutputBackend,
-    local_batch_sink,
-};
-pub use stages::{OutputBuffer, OutputCoalescing, OutputStage};
+pub use sinks::{AsyncFnSink, LocalBatchSink, local_batch_sink};
+pub(crate) use sinks::{InterfaceSink, open_limited_null, open_null, open_stdout};
 
-#[cfg(feature = "mqtt")]
-pub use mqtt::{MQTT_MAX_RETRIES, MqttOutputBackend};
-pub use pump::OutputPump;
-#[cfg(feature = "redis")]
-pub use redis::RedisOutputBackend;
-#[cfg(feature = "ros")]
-pub use ros::RosOutputBackend;
 #[cfg(feature = "ros")]
 pub(crate) use ros::{
-    RosPublisher, create_value_ros_publisher, validate_ros_interface, validate_value_interface,
+    RosPublisher, create_value_ros_publisher, open as open_ros_output, validate_ros_interface,
+    validate_value_interface,
 };
 
 pub use crate::io::config::{
-    DestinationConfig, DestinationId, DestinationKind, OutputConfigFile, OutputStageConfig,
+    DestinationConfig, DestinationId, DestinationKind, OutputCoalescingConfig, OutputConfigFile,
+    OutputDeliveryConfig, OutputQueueConfig,
 };
-
-use std::{cell::RefCell, rc::Rc};
-
-/// Wrap an output interface so a reconfiguration handle can swap it in place.
-///
-/// The borrow is confined to the synchronous assignment inside the handle, so
-/// the next publish observes the replacement without reconnecting the backend.
-pub(crate) fn make_reconfigurable_interface(
-    interface: crate::core::OutputInterface,
-) -> (
-    Rc<RefCell<crate::core::OutputInterface>>,
-    crate::core::OutputInterfaceReconfigurationHandle,
-) {
-    let interface = Rc::new(RefCell::new(interface));
-    let handle_interface = Rc::clone(&interface);
-    let handle = crate::core::OutputInterfaceReconfigurationHandle::new(move |replacement| {
-        let interface = Rc::clone(&handle_interface);
-        Box::pin(async move {
-            *interface.borrow_mut() = replacement;
-            Ok(())
-        })
-    });
-    (interface, handle)
-}
 
 pub(crate) fn remember_error(
     slot: &mut Option<crate::core::OutputError>,
@@ -121,18 +88,5 @@ pub(crate) fn combine_errors(
     if primary == cleanup {
         return primary;
     }
-    match primary {
-        crate::core::OutputError::Backend(message) => {
-            crate::core::OutputError::Backend(format!("{message}; additionally: {cleanup}"))
-        }
-        crate::core::OutputError::Source(message) => {
-            crate::core::OutputError::Source(format!("{message}; additionally: {cleanup}"))
-        }
-        crate::core::OutputError::Invalid(message) => {
-            crate::core::OutputError::Invalid(format!("{message}; additionally: {cleanup}"))
-        }
-        crate::core::OutputError::Closed => {
-            crate::core::OutputError::Backend(format!("{primary}; additionally: {cleanup}"))
-        }
-    }
+    primary.with_cleanup(cleanup)
 }

@@ -20,12 +20,12 @@ use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::core::REDIS_HOSTNAME;
 use trustworthiness_checker::io::{
-    InputPipeline, InputReduction, InputSource, InputSources, InputStage, InputWindow,
-    OutputBackendBuilder, OutputBackendConfig, RedisKnowledgeConfig, RedisKnowledgeRetry, Route,
+    InputPipeline, InputPolicy, InputReduction, InputSource, InputSources, InputWindow,
+    OutputBackendConfig, OutputPipeline, RedisKnowledgeConfig, RetryPolicy, Route,
 };
 
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
-use trustworthiness_checker::{InputBatch, InputStream, InputUpdate, Runtime, Value, VarName};
+use trustworthiness_checker::{InputBatch, InputUpdate, Runtime, Value, VarName};
 
 fn key(prefix: &str, name: &str) -> String {
     format!("tc:redis-knowledge:{prefix}:{name}")
@@ -49,7 +49,10 @@ async fn enable_keyspace_notifications(
 }
 
 async fn next_batch(
-    input: &mut InputStream<Value>,
+    input: &mut (
+             impl futures::Stream<Item = Result<InputBatch<Value>, trustworthiness_checker::InputError>>
+             + Unpin
+         ),
     label: &str,
 ) -> anyhow::Result<InputBatch<Value>> {
     with_timeout(input.next(), 5, label)
@@ -69,11 +72,12 @@ fn knowledge_config(
         database: 2,
         publish_initial,
         keys: mappings.into_iter().collect(),
-        retry: RedisKnowledgeRetry {
-            max_attempts: NonZeroU32::new(3),
-            initial_delay: std::time::Duration::from_millis(1),
-            max_delay: std::time::Duration::from_millis(5),
-        },
+        retry: RetryPolicy::new(
+            trustworthiness_checker::io::RetryLimit::Attempts(NonZeroU32::new(3).unwrap()),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(5),
+        )
+        .unwrap(),
     }
 }
 
@@ -95,7 +99,9 @@ fn singleton_update(batch: &InputBatch<Value>) -> anyhow::Result<InputUpdate<Val
 }
 
 #[apply(async_test)]
-async fn redis_knowledge_initial_snapshot_is_ordered_singleton_ticks() -> anyhow::Result<()> {
+async fn redis_knowledge_initial_snapshot_is_ordered_singleton_ticks(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     let container = start_redis().await;
     let port = container.get_host_port_ipv4(6379).await?;
     let mut connection = redis_connection(port).await?;
@@ -125,6 +131,7 @@ async fn redis_knowledge_initial_snapshot_is_ordered_singleton_ticks() -> anyhow
         ],
     );
     let mut input = InputPipeline::new(InputSource::redis_knowledge(config))
+        .with_executor(Rc::clone(&executor))
         .build(variables)
         .await?;
 
@@ -165,7 +172,9 @@ async fn redis_knowledge_initial_snapshot_is_ordered_singleton_ticks() -> anyhow
 }
 
 #[apply(async_test)]
-async fn redis_knowledge_changes_suppress_equivalent_and_deletion_state() -> anyhow::Result<()> {
+async fn redis_knowledge_changes_suppress_equivalent_and_deletion_state(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     let container = start_redis().await;
     let port = container.get_host_port_ipv4(6379).await?;
     let mut connection = redis_connection(port).await?;
@@ -188,6 +197,7 @@ async fn redis_knowledge_changes_suppress_equivalent_and_deletion_state() -> any
         ],
     );
     let mut input = InputPipeline::new(InputSource::redis_knowledge(config))
+        .with_executor(Rc::clone(&executor))
         .build(BTreeSet::from([mode.clone(), marker.clone()]))
         .await?;
     let _ = next_batch(&mut input, "initial knowledge state").await?;
@@ -212,7 +222,9 @@ async fn redis_knowledge_changes_suppress_equivalent_and_deletion_state() -> any
 }
 
 #[apply(async_test)]
-async fn redis_knowledge_selects_exact_keys_only() -> anyhow::Result<()> {
+async fn redis_knowledge_selects_exact_keys_only(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     let container = start_redis().await;
     let port = container.get_host_port_ipv4(6379).await?;
     let mut connection = redis_connection(port).await?;
@@ -227,6 +239,7 @@ async fn redis_knowledge_selects_exact_keys_only() -> anyhow::Result<()> {
 
     let config = knowledge_config(port, true, [(selected.clone(), selected_key.clone())]);
     let mut input = InputPipeline::new(InputSource::redis_knowledge(config))
+        .with_executor(Rc::clone(&executor))
         .build(BTreeSet::from([selected.clone()]))
         .await?;
     let initial = next_batch(&mut input, "exact-key initial snapshot").await?;
@@ -242,8 +255,9 @@ async fn redis_knowledge_selects_exact_keys_only() -> anyhow::Result<()> {
 }
 
 #[apply(async_test)]
-async fn redis_knowledge_notification_burst_exposes_latest_state_without_duplicate_final_value()
--> anyhow::Result<()> {
+async fn redis_knowledge_notification_burst_exposes_latest_state_without_duplicate_final_value(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     let container = start_redis().await;
     let port = container.get_host_port_ipv4(6379).await?;
     let mut connection = redis_connection(port).await?;
@@ -266,6 +280,7 @@ async fn redis_knowledge_notification_burst_exposes_latest_state_without_duplica
         ],
     );
     let mut input = InputPipeline::new(InputSource::redis_knowledge(config))
+        .with_executor(Rc::clone(&executor))
         .build(BTreeSet::from([burst.clone(), marker.clone()]))
         .await?;
     let _ = next_batch(&mut input, "burst initial snapshot").await?;
@@ -295,7 +310,9 @@ async fn redis_knowledge_notification_burst_exposes_latest_state_without_duplica
 }
 
 #[apply(async_test)]
-async fn redis_knowledge_composes_with_pubsub_and_window_stage() -> anyhow::Result<()> {
+async fn redis_knowledge_composes_with_pubsub_and_window_stage(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
     let container = start_redis().await;
     let port = container.get_host_port_ipv4(6379).await?;
     let mut connection = redis_connection(port).await?;
@@ -325,6 +342,7 @@ async fn redis_knowledge_composes_with_pubsub_and_window_stage() -> anyhow::Resu
         .insert("phase-events", events)
         .insert("knowledge", knowledge);
     let mut input = InputPipeline::from_sources(sources)
+        .with_executor(Rc::clone(&executor))
         .build(BTreeSet::from([event.clone(), state.clone()]))
         .await?;
     let _ = next_batch(&mut input, "mixed initial knowledge state").await?;
@@ -352,7 +370,7 @@ async fn redis_knowledge_composes_with_pubsub_and_window_stage() -> anyhow::Resu
         )])),
         Some(port),
     );
-    let stage = InputStage::WindowToStep {
+    let policy = InputPolicy::WindowToStep {
         window: InputWindow::new(None, NonZeroUsize::new(2))?,
         reduction: InputReduction::LastUpdateWins,
     };
@@ -361,7 +379,8 @@ async fn redis_knowledge_composes_with_pubsub_and_window_stage() -> anyhow::Resu
             .insert("phase-events", staged_events)
             .insert("knowledge", staged_knowledge),
     )
-    .with_stage(stage)?
+    .with_policy(policy)?
+    .with_executor(Rc::clone(&executor))
     .build(BTreeSet::from([event.clone(), state.clone()]))
     .await?;
 
@@ -418,7 +437,7 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
         [(plan.clone(), plan_key.clone())],
     ));
     let variables = BTreeSet::from([analyze.clone(), execute.clone(), plan.clone()]);
-    let stage = InputStage::WindowToStep {
+    let policy = InputPolicy::WindowToStep {
         window: InputWindow::new(None, NonZeroUsize::new(3))?,
         reduction: InputReduction::LastUpdateWins,
     };
@@ -427,7 +446,8 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
             .insert("maple-k-events", events)
             .insert("knowledge", knowledge),
     )
-    .with_stage(stage)?
+    .with_policy(policy)?
+    .with_executor(Rc::clone(&executor))
     .build(variables)
     .await?;
 
@@ -443,7 +463,7 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
         .executor(executor.clone())
         .model(spec.clone())
         .input(input)
-        .output_pipeline_builder(OutputBackendBuilder::new(OutputBackendConfig::manual(
+        .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
             output_sender,
         )));
     let runtime = builder.build().await?;

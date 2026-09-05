@@ -11,7 +11,7 @@ use std::rc::Rc;
 use strum_macros::Display;
 
 #[cfg(feature = "ros")]
-use super::SharedOutputBackend;
+use super::{OutputError, OutputInterface, OutputWriter};
 use super::{StreamData, VarName};
 
 /* Enum specifying which semantics is to be used */
@@ -80,15 +80,19 @@ pub trait FileInputValue: JsonStreamValue {
 #[cfg(feature = "ros")]
 /// A stream value accepted by ROS input and output handlers.
 pub trait RosStreamValue: StreamData + Sized {
-    fn ros_input_stream(
+    fn open_ros_input(
         executor: Rc<LocalExecutor<'static>>,
         mapping: BTreeMap<String, (String, String)>,
-    ) -> anyhow::Result<crate::core::InputStream<Self>>;
+    ) -> anyhow::Result<(
+        crate::core::InputStream<Self>,
+        crate::io::ros::RosInputControl,
+    )>;
 
-    fn ros_output_backend(
+    fn open_ros_output(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
-    ) -> anyhow::Result<SharedOutputBackend<Self>>;
+        interface: OutputInterface,
+    ) -> futures::future::LocalBoxFuture<'static, Result<OutputWriter<Self>, OutputError>>;
 }
 
 #[cfg(not(feature = "ros"))]

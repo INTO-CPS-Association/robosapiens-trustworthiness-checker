@@ -12,7 +12,7 @@ use mstlo::{
 use smol::LocalExecutor;
 use trustworthiness_checker::core::{Runtime, Specification};
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::io::{OutputBackendBuilder, OutputBackendConfig};
+use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::RuntimeBuilder;
 use trustworthiness_checker::runtime::mstlo::{MstloRuntimeBuilder, MstloTimedValue, MstloValue};
@@ -240,8 +240,8 @@ async fn run_runtime(
     specification: MstloSpecification,
     input: InputStream<MstloTimedValue>,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let output_writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let output_writer = output_pipeline
         .build(
             specification.output_vars(),
             std::iter::empty::<VarName>(),
@@ -252,7 +252,7 @@ async fn run_runtime(
     let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
         .executor(executor)
         .model(specification)
-        .input(input)
+        .input(input.into())
         .output_writer(output_writer)
         .semantics(MstloSemantics::DelayedQualitative)
         .synchronization_strategy(SynchronizationStrategy::ZeroOrderHold)

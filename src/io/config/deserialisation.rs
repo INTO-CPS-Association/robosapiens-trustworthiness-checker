@@ -36,16 +36,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            routes[&VarName::new("pressure")].route.as_ref(),
+            routes[&VarName::new("pressure")].address(),
             "/robot/sensors/pressure"
         );
         assert_eq!(
-            routes[&VarName::new("pose")]
-                .codec
-                .as_ref()
-                .unwrap()
-                .0
-                .as_ref(),
+            routes[&VarName::new("pose")].format().unwrap().as_str(),
             "geometry_msgs/msg/Pose"
         );
     }

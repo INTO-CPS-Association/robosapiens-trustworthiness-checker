@@ -50,9 +50,9 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `mqtt_output` | `--mqtt-output` |  | flag (no value) | no | — | — | false | — | Enable generic MQTT output mode | Requires the Cargo feature `mqtt`. |
+| `mqtt_output` | `--mqtt-output` |  | flag (no value) | no | — | — | false | — | Enable generic MQTT output mode | — |
 | `output_config` | `--output-config <OUTPUT_CONFIG>` | OUTPUT_CONFIG | 1 value(s) | no | — | — | — | — | Advanced multi-destination output configuration file | — |
-| `output_mqtt_file` | `--output-mqtt-file <OUTPUT_MQTT_FILE>` | OUTPUT_MQTT_FILE | 1 value(s) | no | — | — | — | — | MQTT topics configuration file for output | Requires the Cargo feature `mqtt`. |
+| `output_mqtt_file` | `--output-mqtt-file <OUTPUT_MQTT_FILE>` | OUTPUT_MQTT_FILE | 1 value(s) | no | — | — | — | — | MQTT topics configuration file for output | — |
 | `output_redis_file` | `--output-redis-file <OUTPUT_REDIS_FILE>` | OUTPUT_REDIS_FILE | 1 value(s) | no | — | — | — | — | Redis channels configuration file for output | Requires the Cargo feature `redis`. |
 | `output_ros_file` | `--output-ros-file <OUTPUT_ROS_FILE>` | OUTPUT_ROS_FILE | 1 value(s) | no | — | — | — | — | ROS topics configuration file for output | Requires the Cargo feature `ros`. |
 | `output_stdout` | `--output-stdout` |  | flag (no value) | no | — | — | false | — | Output monitoring results to stdout | — |
@@ -64,6 +64,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `execution_policy` | `--execution-policy <EXECUTION_POLICY>` | EXECUTION_POLICY | 1 value(s) | no | — | `buffered` — Permit runtime-specific pipelining and output batching<br>`synchronous` — Complete the current tick's downstream computation before accepting the next. This requires a runtime with a global logical-tick boundary | buffered | — | Input execution policy for Dataflow and MSTLO runtimes | — |
+| `io_shutdown_timeout_ms` | `--io-shutdown-timeout-ms <MILLISECONDS>` | MILLISECONDS | 1 value(s) | no | — | — | — | — | Whole graceful I/O shutdown limit; omitted means unlimited | — |
 | `mstlo_algorithm` | `--mstlo-algorithm <MSTLO_ALGORITHM>` | MSTLO_ALGORITHM | 1 value(s) | no | — | `incremental`<br>`naive` | incremental | — | MSTLO monitor algorithm | — |
 | `mstlo_synchronization` | `--mstlo-synchronization <MSTLO_SYNCHRONIZATION>` | MSTLO_SYNCHRONIZATION | 1 value(s) | no | — | `linear`<br>`none`<br>`zero-order-hold` | zero-order-hold | — | MSTLO multi-signal synchronization strategy | — |
 | `mstlo_vars` | `--mstlo-vars <MSTLO_VARS>...` | MSTLO_VARS | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | MSTLO variable bindings as name=value pairs | — |
@@ -98,10 +99,10 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 | `distribution_graph` | `--distribution-graph <DISTRIBUTION_GRAPH>` | DISTRIBUTION_GRAPH | 1 value(s) | no | — | — | — | — | Path to distribution graph JSON5 file for local monitoring | — |
 | `local_node` | `--local-node <LOCAL_NODE>` | LOCAL_NODE | 1 value(s) | no | — | — | — | — | Identifier for this node in distributed monitoring | — |
 | `local_topics` | `--local-topics <LOCAL_TOPICS>` | LOCAL_TOPICS | 1 value(s); repeatable | no | — | — | — | — | List of local topics to monitor in distributed mode | — |
-| `mqtt_centralised_distributed` | `--mqtt-centralised-distributed <MQTT_CENTRALISED_DISTRIBUTED>...` | MQTT_CENTRALISED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for MQTT-based centralised distributed monitoring | Requires the Cargo feature `mqtt`. |
-| `mqtt_dynamic_optimized` | `--mqtt-dynamic-optimized <MQTT_DYNAMIC_OPTIMIZED>...` | MQTT_DYNAMIC_OPTIMIZED | 1–unbounded value(s); repeatable; delimiter ` ` | no | `distribution_constraints` | — | — | — | Node locations for MQTT-based dynamic optimized distributed monitoring | Requires the Cargo feature `mqtt`; optimized modes also need constraints. |
-| `mqtt_randomized_distributed` | `--mqtt-randomized-distributed <MQTT_RANDOMIZED_DISTRIBUTED>...` | MQTT_RANDOMIZED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for MQTT-based randomized distributed monitoring | Requires the Cargo feature `mqtt`. |
-| `mqtt_static_optimized` | `--mqtt-static-optimized <MQTT_STATIC_OPTIMIZED>...` | MQTT_STATIC_OPTIMIZED | 1–unbounded value(s); repeatable; delimiter ` ` | no | `distribution_constraints` | — | — | — | Node locations for MQTT-based static optimized distributed monitoring | Requires the Cargo feature `mqtt`; optimized modes also need constraints. |
+| `mqtt_centralised_distributed` | `--mqtt-centralised-distributed <MQTT_CENTRALISED_DISTRIBUTED>...` | MQTT_CENTRALISED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for MQTT-based centralised distributed monitoring | — |
+| `mqtt_dynamic_optimized` | `--mqtt-dynamic-optimized <MQTT_DYNAMIC_OPTIMIZED>...` | MQTT_DYNAMIC_OPTIMIZED | 1–unbounded value(s); repeatable; delimiter ` ` | no | `distribution_constraints` | — | — | — | Node locations for MQTT-based dynamic optimized distributed monitoring | Optimized modes require distribution constraints. |
+| `mqtt_randomized_distributed` | `--mqtt-randomized-distributed <MQTT_RANDOMIZED_DISTRIBUTED>...` | MQTT_RANDOMIZED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for MQTT-based randomized distributed monitoring | — |
+| `mqtt_static_optimized` | `--mqtt-static-optimized <MQTT_STATIC_OPTIMIZED>...` | MQTT_STATIC_OPTIMIZED | 1–unbounded value(s); repeatable; delimiter ` ` | no | `distribution_constraints` | — | — | — | Node locations for MQTT-based static optimized distributed monitoring | Optimized modes require distribution constraints. |
 | `ros_centralised_distributed` | `--ros-centralised-distributed <ROS_CENTRALISED_DISTRIBUTED>...` | ROS_CENTRALISED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for ROS-based centralised distributed monitoring | Requires the Cargo feature `ros`. |
 | `ros_dynamic_optimized` | `--ros-dynamic-optimized <ROS_DYNAMIC_OPTIMIZED>...` | ROS_DYNAMIC_OPTIMIZED | 1–unbounded value(s); repeatable; delimiter ` ` | no | `distribution_constraints` | — | — | — | Node locations for ROS-based dynamic optimized distributed monitoring | Requires the Cargo feature `ros`; optimized modes also need constraints. |
 | `ros_randomized_distributed` | `--ros-randomized-distributed <ROS_RANDOMIZED_DISTRIBUTED>...` | ROS_RANDOMIZED_DISTRIBUTED | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | Node locations for ROS-based randomized distributed monitoring | Requires the Cargo feature `ros`. |
@@ -115,9 +116,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `mqtt_paho` | `--mqtt-paho` |  | flag (no value) | no | — | — | false | `mqtt_rumqttc` | Use the legacy Paho MQTT input backend | Requires the Cargo feature `mqtt`. |
 | `mqtt_port` | `--mqtt-port <MQTT_PORT>` | MQTT_PORT | 1 value(s) | no | — | — | — | — | Port number for MQTT broker connection | — |
-| `mqtt_rumqttc` | `--mqtt-rumqttc` |  | flag (no value) | no | — | — | false | `mqtt_paho` | Use the rumqttc MQTT input backend (default) | — |
 | `redis_knowledge_database` | `--redis-knowledge-database <REDIS_KNOWLEDGE_DATABASE>` | REDIS_KNOWLEDGE_DATABASE | 1 value(s) | no | — | — | — | — | Override the targeted Redis knowledge source database (default: 2) | Requires the Cargo feature `redis`. |
 | `redis_knowledge_keys` | `--redis-knowledge-key <INPUT=KEY>` | INPUT=KEY | 1 value(s); repeatable | no | — | — | — | — | Map a checker input variable to a Redis knowledge key; repeatable | Requires the Cargo feature `redis`. |
 | `redis_knowledge_no_initial` | `--redis-knowledge-no-initial` |  | flag (no value) | no | — | — | false | `redis_knowledge_publish_initial` | Disable the Redis knowledge initial snapshot | Requires the Cargo feature `redis`. |

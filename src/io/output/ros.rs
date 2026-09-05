@@ -9,22 +9,19 @@
 use std::{
     cell::RefCell,
     collections::BTreeMap,
-    marker::PhantomData,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
 };
 
-use async_trait::async_trait;
 use futures::{Future, FutureExt, Sink, StreamExt};
 use smol::LocalExecutor;
 use uuid::Uuid;
 
 use crate::{
     core::{
-        OutputBackend, OutputBatch, OutputError, OutputInterface,
-        OutputInterfaceReconfigurationHandle, OutputRoute, OutputWriter, StreamData, Value,
-        VarName,
+        OutputBatch, OutputBinding, OutputError, OutputInterface, OutputSink, OutputWriter,
+        StreamData, Value, VarName,
     },
     io::ros::{
         ValuePublisher, create_value_publisher,
@@ -33,7 +30,7 @@ use crate::{
     utils::cancellation_token::CancellationToken,
 };
 
-/// The type-erased publisher held by a [`RosOutputBackend`] sink.
+/// The type-erased publisher held by an opened ROS sink.
 ///
 /// ROS message types are heterogeneous, so one publisher object is retained per
 /// output route.  The value-specific conversion remains in the existing ROS
@@ -44,37 +41,7 @@ pub(crate) trait RosPublisher<V: StreamData>: 'static {
 
 pub(crate) type InterfaceValidator = fn(&OutputInterface) -> Result<(), OutputError>;
 pub(crate) type PublisherFactory<V> =
-    fn(&mut r2r::Node, &OutputRoute) -> Result<Box<dyn RosPublisher<V>>, OutputError>;
-
-/// A reusable local ROS output backend.
-///
-/// The backend stores only node configuration and type-specific factory
-/// functions.  Every call to [`OutputBackend::open`] receives its own retained
-/// ROS session and joined spinner task.
-pub struct RosOutputBackend<V: StreamData> {
-    executor: Rc<LocalExecutor<'static>>,
-    node_name: String,
-    validate_interface: InterfaceValidator,
-    publisher_factory: PublisherFactory<V>,
-    _value: PhantomData<fn() -> V>,
-}
-
-impl<V: StreamData> RosOutputBackend<V> {
-    pub(crate) fn new(
-        executor: Rc<LocalExecutor<'static>>,
-        node_name: String,
-        validate_interface: InterfaceValidator,
-        publisher_factory: PublisherFactory<V>,
-    ) -> Self {
-        Self {
-            executor,
-            node_name,
-            validate_interface,
-            publisher_factory,
-            _value: PhantomData,
-        }
-    }
-}
+    fn(&mut r2r::Node, &OutputBinding) -> Result<Box<dyn RosPublisher<V>>, OutputError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PublisherReconciliationChange {
@@ -89,12 +56,11 @@ type PublisherOwner<V> = Rc<dyn RosPublisher<V>>;
 /// A publisher owner is reusable only when it still describes the same output
 /// binding.  Comparing the route metadata rather than the parsed ROS type also
 /// keeps the factory contract unchanged for the Value and MSTLO backends.
-fn publisher_routes_are_compatible(old: &OutputRoute, candidate: &OutputRoute) -> bool {
-    !old.role.is_auxiliary()
-        && !candidate.role.is_auxiliary()
-        && old.variable == candidate.variable
-        && old.topic == candidate.topic
-        && old.message_type == candidate.message_type
+fn publisher_routes_are_compatible(old: &OutputBinding, candidate: &OutputBinding) -> bool {
+    !old.role().is_auxiliary()
+        && !candidate.role().is_auxiliary()
+        && old.variable() == candidate.variable()
+        && old.route() == candidate.route()
 }
 
 /// Compute the minimal publisher-owner changes needed for a candidate
@@ -106,39 +72,39 @@ fn publisher_reconciliation_plan(
 ) -> PublisherReconciliationPlan {
     let mut plan = BTreeMap::new();
 
-    for old_route in active.routes() {
-        if old_route.role.is_auxiliary() {
+    for old_route in active.bindings() {
+        if old_route.role().is_auxiliary() {
             continue;
         }
 
-        match candidate.route(&old_route.variable) {
-            Some(candidate_route) if !candidate_route.role.is_auxiliary() => {
+        match candidate.binding(old_route.variable()) {
+            Some(candidate_route) if !candidate_route.role().is_auxiliary() => {
                 if !publisher_routes_are_compatible(old_route, candidate_route) {
                     plan.insert(
-                        old_route.variable.clone(),
+                        old_route.variable().clone(),
                         PublisherReconciliationChange::Rebind,
                     );
                 }
             }
             _ => {
                 plan.insert(
-                    old_route.variable.clone(),
+                    old_route.variable().clone(),
                     PublisherReconciliationChange::Remove,
                 );
             }
         }
     }
 
-    for candidate_route in candidate.routes() {
-        if candidate_route.role.is_auxiliary() {
+    for candidate_route in candidate.bindings() {
+        if candidate_route.role().is_auxiliary() {
             continue;
         }
 
-        match active.route(&candidate_route.variable) {
-            Some(old_route) if !old_route.role.is_auxiliary() => {}
+        match active.binding(candidate_route.variable()) {
+            Some(old_route) if !old_route.role().is_auxiliary() => {}
             _ => {
                 plan.insert(
-                    candidate_route.variable.clone(),
+                    candidate_route.variable().clone(),
                     PublisherReconciliationChange::Add,
                 );
             }
@@ -168,13 +134,13 @@ fn create_publishers<V: StreamData>(
 ) -> Result<BTreeMap<VarName, PublisherOwner<V>>, OutputError> {
     let mut publishers = BTreeMap::new();
     for route in interface
-        .routes()
+        .bindings()
         .iter()
-        .filter(|route| !route.role.is_auxiliary())
+        .filter(|route| !route.role().is_auxiliary())
     {
         let publisher = (publisher_factory)(node, route)?;
         let publisher: PublisherOwner<V> = Rc::from(publisher);
-        publishers.insert(route.variable.clone(), publisher);
+        publishers.insert(route.variable().clone(), publisher);
     }
     Ok(publishers)
 }
@@ -192,23 +158,23 @@ fn reconcile_publisher_owners<V: StreamData>(
     let mut candidate_publishers = BTreeMap::new();
 
     for route in candidate
-        .routes()
+        .bindings()
         .iter()
-        .filter(|route| !route.role.is_auxiliary())
+        .filter(|route| !route.role().is_auxiliary())
     {
-        let publisher = match active.route(&route.variable) {
+        let publisher = match active.binding(route.variable()) {
             Some(active_route) if publisher_routes_are_compatible(active_route, route) => {
-                active_publishers.get(&route.variable).cloned()
+                active_publishers.get(route.variable()).cloned()
             }
-            _ => created_publishers.get(&route.variable).cloned(),
+            _ => created_publishers.get(route.variable()).cloned(),
         }
         .ok_or_else(|| {
             OutputError::backend(format!(
                 "ROS publisher reconciliation did not produce an owner for `{}`",
-                route.variable
+                route.variable()
             ))
         })?;
-        candidate_publishers.insert(route.variable.clone(), publisher);
+        candidate_publishers.insert(route.variable().clone(), publisher);
     }
 
     Ok(candidate_publishers)
@@ -221,7 +187,7 @@ fn validate_candidate_interface(
     // OutputInterface is validated by its constructor, but retain this check at
     // the backend boundary because route metadata is ROS-specific and is not
     // part of core validation.
-    OutputInterface::validate_routes(interface.routes())?;
+    OutputInterface::validate_bindings(interface.bindings())?;
     validate_interface(interface)
 }
 
@@ -255,7 +221,7 @@ fn reconfigure_session<V: StreamData>(
             .then_some(variable)
         })
         .map(|variable| {
-            candidate.route(variable).ok_or_else(|| {
+            candidate.binding(variable).ok_or_else(|| {
                 OutputError::backend(format!(
                     "ROS publisher reconciliation has no candidate route for `{variable}`"
                 ))
@@ -272,7 +238,7 @@ fn reconfigure_session<V: StreamData>(
         for route in routes_to_create {
             let publisher = (publisher_factory)(&mut node, route)?;
             let publisher: PublisherOwner<V> = Rc::from(publisher);
-            created_publishers.insert(route.variable.clone(), publisher);
+            created_publishers.insert(route.variable().clone(), publisher);
         }
     }
 
@@ -293,74 +259,60 @@ fn reconfigure_session<V: StreamData>(
     Ok(())
 }
 
-#[async_trait(?Send)]
-impl<V: StreamData> OutputBackend for RosOutputBackend<V> {
-    type Val = V;
+pub(crate) async fn open<V: StreamData>(
+    executor: Rc<LocalExecutor<'static>>,
+    node_name: String,
+    interface: OutputInterface,
+    validate_interface: InterfaceValidator,
+    publisher_factory: PublisherFactory<V>,
+) -> Result<OutputWriter<V>, OutputError> {
+    validate_candidate_interface(&interface, validate_interface)?;
 
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        validate_candidate_interface(&interface, self.validate_interface)?;
-
-        let context = r2r::Context::create().map_err(|error| {
-            OutputError::backend(format!("failed to create ROS context: {error:?}"))
-        })?;
-        let node_name = format!("{}_{}", self.node_name, Uuid::new_v4().simple());
-        let mut node = r2r::Node::create(context, &node_name, "").map_err(|error| {
-            OutputError::backend(format!(
-                "failed to create ROS node `{node_name}`: {error:?}"
-            ))
-        })?;
-        let publishers = create_publishers(&mut node, &interface, self.publisher_factory)?;
-
-        let session = Rc::new(RefCell::new(RosSession {
-            node: RefCell::new(node),
-            state: RosSessionState {
-                interface,
-                publishers,
-            },
-        }));
-
-        let cancellation = CancellationToken::new();
-        let cancellation_for_spinner = cancellation.clone();
-        let session_for_spinner = Rc::clone(&session);
-        let spinner = self.executor.spawn(async move {
-            let mut spin_ticks = smol::Timer::interval(crate::io::ros::ROS_SPIN_INTERVAL);
-            let mut cancelled = cancellation_for_spinner.cancelled().fuse();
-            loop {
-                futures::select_biased! {
-                    _ = cancelled => break,
-                    _ = spin_ticks.next().fuse() => {
-                        // `spin_once` is synchronous.  The node borrow ends
-                        // before the spinner awaits its next tick, leaving the
-                        // node available for a reconfiguration factory call.
-                        let session = session_for_spinner.borrow();
-                        session
-                            .node
-                            .borrow_mut()
-                            .spin_once(crate::io::ros::ROS_SPIN_TIMEOUT);
-                    },
-                }
-            }
-        });
-
-        let validate_interface = self.validate_interface;
-        let publisher_factory = self.publisher_factory;
-        let session_for_handle = Rc::clone(&session);
-        let interface_reconfiguration =
-            OutputInterfaceReconfigurationHandle::new(move |candidate| {
-                let session = Rc::clone(&session_for_handle);
-                Box::pin(async move {
-                    reconfigure_session(&session, candidate, validate_interface, publisher_factory)
-                })
-            });
-
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            RosSink::new(session, cancellation, Some(spinner)),
-            Some(interface_reconfiguration),
+    let context = r2r::Context::create().map_err(|error| {
+        OutputError::backend(format!("failed to create ROS context: {error:?}"))
+    })?;
+    let node_name = format!("{}_{}", node_name, Uuid::new_v4().simple());
+    let mut node = r2r::Node::create(context, &node_name, "").map_err(|error| {
+        OutputError::backend(format!(
+            "failed to create ROS node `{node_name}`: {error:?}"
         ))
-    }
+    })?;
+    let publishers = create_publishers(&mut node, &interface, publisher_factory)?;
+
+    let session = Rc::new(RefCell::new(RosSession {
+        node: RefCell::new(node),
+        state: RosSessionState {
+            interface,
+            publishers,
+        },
+    }));
+
+    let cancellation = CancellationToken::new();
+    let cancellation_for_spinner = cancellation.clone();
+    let session_for_spinner = Rc::clone(&session);
+    let spinner = executor.spawn(async move {
+        let mut spin_ticks = smol::Timer::interval(crate::io::ros::ROS_SPIN_INTERVAL);
+        let mut cancelled = cancellation_for_spinner.cancelled().fuse();
+        loop {
+            futures::select_biased! {
+                _ = cancelled => break,
+                _ = spin_ticks.next().fuse() => {
+                    // `spin_once` is synchronous.  The node borrow ends
+                    // before the spinner awaits its next tick, leaving the
+                    // node available for a reconfiguration factory call.
+                    let session = session_for_spinner.borrow();
+                    session
+                        .node
+                        .borrow_mut()
+                        .spin_once(crate::io::ros::ROS_SPIN_TIMEOUT);
+                },
+            }
+        }
+    });
+
+    let mut sink = RosSink::new(session, cancellation, Some(spinner));
+    sink.rebinding = Some((validate_interface, publisher_factory));
+    Ok(OutputWriter::from_output_sink(sink))
 }
 
 /// Validate the common ROS metadata carried by output routes and apply a
@@ -369,15 +321,15 @@ pub(crate) fn validate_ros_interface(
     interface: &OutputInterface,
     validate_message_type: fn(&RosMsgType) -> Result<(), OutputError>,
 ) -> Result<(), OutputError> {
-    for route in interface.routes() {
-        if route.role.is_auxiliary() {
+    for route in interface.bindings() {
+        if route.role().is_auxiliary() {
             // Auxiliary values are consumed but never need a ROS publisher.
             continue;
         }
 
         let (_, message_type) = ros_output_route_mapping(route)?;
         validate_message_type(&message_type).map_err(|error| {
-            OutputError::invalid(format!("ROS output route `{}`: {error}", route.variable))
+            OutputError::invalid(format!("ROS output route `{}`: {error}", route.variable()))
         })?;
     }
     Ok(())
@@ -415,13 +367,13 @@ impl RosPublisher<Value> for DynamicValuePublisher {
 /// existing scalar conversions and JSON/string fallback.
 pub(crate) fn create_value_ros_publisher(
     node: &mut r2r::Node,
-    route: &OutputRoute,
+    route: &OutputBinding,
 ) -> Result<Box<dyn RosPublisher<Value>>, OutputError> {
     let (topic, message_type) = ros_output_route_mapping(route)?;
     let publisher = create_value_publisher(node, topic, &message_type).map_err(|error| {
         OutputError::backend(format!(
             "failed to create ROS publisher for `{}` on `{topic}`: {error}",
-            route.variable
+            route.variable()
         ))
     })?;
     Ok(Box::new(DynamicValuePublisher {
@@ -438,6 +390,7 @@ struct RosSink<V: StreamData> {
     close_started: bool,
     closed: bool,
     failure: Option<OutputError>,
+    rebinding: Option<(InterfaceValidator, PublisherFactory<V>)>,
 }
 
 impl<V: StreamData> RosSink<V> {
@@ -454,13 +407,14 @@ impl<V: StreamData> RosSink<V> {
             close_started: false,
             closed: false,
             failure: None,
+            rebinding: None,
         }
     }
 
     fn state_error(&self) -> Option<OutputError> {
         self.failure
             .clone()
-            .or_else(|| self.closed.then_some(OutputError::Closed))
+            .or_else(|| self.closed.then_some(OutputError::closed()))
     }
 
     fn fail(&mut self, error: OutputError) -> OutputError {
@@ -481,14 +435,14 @@ impl<V: StreamData> RosSink<V> {
                 let route = session
                     .state
                     .interface
-                    .route(update.variable)
+                    .binding(update.variable)
                     .ok_or_else(|| {
                         OutputError::invalid(format!(
                             "output update variable `{}` has no ROS route",
                             update.variable
                         ))
                     })?;
-                if route.role.is_auxiliary() || update.value.is_no_val() {
+                if route.role().is_auxiliary() || update.value.is_no_val() {
                     continue;
                 }
 
@@ -506,6 +460,30 @@ impl<V: StreamData> RosSink<V> {
             }
         }
         Ok(())
+    }
+}
+
+impl<V: StreamData> OutputSink<V> for RosSink<V> {
+    fn poll_rebind(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        interface: &OutputInterface,
+    ) -> Poll<Result<(), OutputError>> {
+        let this = self.get_mut();
+        if let Some(error) = this.state_error() {
+            return Poll::Ready(Err(error));
+        }
+        let Some((validate, create)) = this.rebinding else {
+            return Poll::Ready(Err(OutputError::invalid(
+                "ROS owner cannot change bindings",
+            )));
+        };
+        Poll::Ready(reconfigure_session(
+            &this.session,
+            interface.clone(),
+            validate,
+            create,
+        ))
     }
 }
 
@@ -560,7 +538,7 @@ impl<V: StreamData> Sink<OutputBatch<V>> for RosSink<V> {
     ) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
         if this.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
 
         if !this.close_started {
@@ -601,23 +579,28 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
-    use crate::core::{OutputRole, OutputRoute};
+    use crate::core::{OutputBinding, OutputRole};
 
     fn var(name: &str) -> VarName {
         VarName::new(name)
     }
 
-    fn route(name: &str, topic: &str, message_type: &str, role: OutputRole) -> OutputRoute {
-        OutputRoute::new(
+    fn route(name: &str, topic: &str, message_type: &str, role: OutputRole) -> OutputBinding {
+        OutputBinding::new(
             var(name),
-            Some(topic.to_owned()),
-            Some(message_type.to_owned()),
+            Some(
+                crate::core::Route::new(
+                    topic,
+                    Some(crate::core::FormatId::new(message_type).unwrap()),
+                )
+                .unwrap(),
+            ),
             role,
         )
     }
 
-    fn interface(routes: impl IntoIterator<Item = OutputRoute>) -> OutputInterface {
-        OutputInterface::from_routes(routes).expect("test routes should be valid")
+    fn interface(routes: impl IntoIterator<Item = OutputBinding>) -> OutputInterface {
+        OutputInterface::from_bindings(routes).expect("test routes should be valid")
     }
 
     #[test]

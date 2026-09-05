@@ -58,16 +58,8 @@ const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
     ),
     ("input_config", "Live input sources", None),
     ("output_stdout", "Output destinations and routing", None),
-    (
-        "mqtt_output",
-        "Output destinations and routing",
-        Some("Requires the Cargo feature `mqtt`."),
-    ),
-    (
-        "output_mqtt_file",
-        "Output destinations and routing",
-        Some("Requires the Cargo feature `mqtt`."),
-    ),
+    ("mqtt_output", "Output destinations and routing", None),
+    ("output_mqtt_file", "Output destinations and routing", None),
     (
         "redis_output",
         "Output destinations and routing",
@@ -86,6 +78,11 @@ const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
     ("output_config", "Output destinations and routing", None),
     ("runtime", "Runtime and execution policy", None),
     ("execution_policy", "Runtime and execution policy", None),
+    (
+        "io_shutdown_timeout_ms",
+        "Runtime and execution policy",
+        None,
+    ),
     ("mstlo_algorithm", "Runtime and execution policy", None),
     (
         "mstlo_synchronization",
@@ -124,22 +121,22 @@ const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
     (
         "mqtt_centralised_distributed",
         "Distributed monitoring and scheduling",
-        Some("Requires the Cargo feature `mqtt`."),
+        None,
     ),
     (
         "mqtt_randomized_distributed",
         "Distributed monitoring and scheduling",
-        Some("Requires the Cargo feature `mqtt`."),
+        None,
     ),
     (
         "mqtt_static_optimized",
         "Distributed monitoring and scheduling",
-        Some("Requires the Cargo feature `mqtt`; optimized modes also need constraints."),
+        Some("Optimized modes require distribution constraints."),
     ),
     (
         "mqtt_dynamic_optimized",
         "Distributed monitoring and scheduling",
-        Some("Requires the Cargo feature `mqtt`; optimized modes also need constraints."),
+        Some("Optimized modes require distribution constraints."),
     ),
     (
         "ros_centralised_distributed",
@@ -193,16 +190,6 @@ const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
         Some("Used by ROS scheduling; ROS operation requires the Cargo feature `ros`."),
     ),
     ("mqtt_port", "MQTT, Redis, and ROS transport settings", None),
-    (
-        "mqtt_paho",
-        "MQTT, Redis, and ROS transport settings",
-        Some("Requires the Cargo feature `mqtt`."),
-    ),
-    (
-        "mqtt_rumqttc",
-        "MQTT, Redis, and ROS transport settings",
-        None,
-    ),
     (
         "redis_port",
         "MQTT, Redis, and ROS transport settings",

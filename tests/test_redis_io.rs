@@ -38,8 +38,8 @@ mod integration_tests {
         core::{ExecutionPolicy, JsonStreamValue, REDIS_HOSTNAME, Runtime, RuntimeSpec, Semantics},
         io::redis::{self as tc_redis},
         io::{
-            InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig,
-            OutputDestination, Route,
+            InputPipeline, InputSource, OutputBackendConfig, OutputDestination, OutputPipeline,
+            Route,
         },
         runtime::{
             builder::GeneralRuntimeBuilder,
@@ -64,13 +64,13 @@ mod integration_tests {
                 )
             })
             .collect();
-        OutputBackendBuilder::<V>::from_destination(
+        OutputPipeline::<V>::from_destination(
             OutputDestination::new(
                 "redis",
                 OutputBackendConfig::redis(REDIS_HOSTNAME, Some(port)),
             )
             .with_route_catalog(route_catalog),
-        )
+        )?
         .build(outputs, auxiliary, None)
         .await
         .map_err(anyhow::Error::from)
@@ -283,7 +283,7 @@ mod integration_tests {
             Some(port),
         )
         .with_reconfiguration_route(control.clone().into_boxed_str())?;
-        let output_builder = OutputBackendBuilder::<Value>::from_destination(
+        let output_pipeline = OutputPipeline::<Value>::from_destination(
             OutputDestination::new(
                 "redis",
                 OutputBackendConfig::redis(REDIS_HOSTNAME, Some(port)),
@@ -292,7 +292,7 @@ mod integration_tests {
                 VarName::new("z"),
                 Route::new(output_a.clone().into_boxed_str(), None)?,
             )])),
-        );
+        )?;
         let specification = "in x: Int\nout z: Int\nz = x + 1";
         let spec = specification.parse::<DsrvSpecification>()?;
         let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
@@ -301,7 +301,7 @@ mod integration_tests {
             .executor(executor.clone())
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))?
-            .output_pipeline_builder(output_builder)
+            .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::TypedUntimed)
             .acknowledgements(ack_tx)
@@ -1458,15 +1458,15 @@ mod integration_tests {
     ) -> anyhow::Result<()> {
         let variable = VarName::new("error_var");
         let route = Route::new("error_topic", None)?;
-        let builder = OutputBackendBuilder::<Value>::from_destination(
+        let output_pipeline = OutputPipeline::<Value>::from_destination(
             OutputDestination::new(
                 "redis",
                 OutputBackendConfig::redis("invalid-host", Some(9999)),
             )
             .with_route_catalog(BTreeMap::from([(variable.clone(), route)])),
-        );
+        )?;
         assert!(
-            builder
+            output_pipeline
                 .resolve([variable], std::iter::empty::<VarName>(), None)
                 .is_ok()
         );

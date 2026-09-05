@@ -15,8 +15,8 @@ use trustworthiness_checker::benches_common::monitor_outputs_jit_dataflow_reconf
 use trustworthiness_checker::benches_common::monitor_outputs_quickened_dataflow_reconf_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_dataflow_reconf_limited;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_reconf_limited;
-use trustworthiness_checker::benches_common::output_builder_dsrv_paper_bench;
-use trustworthiness_checker::io::OutputBackendBuilder;
+use trustworthiness_checker::benches_common::output_pipeline_dsrv_paper_bench;
+use trustworthiness_checker::io::OutputPipeline;
 use trustworthiness_checker::stream_utils::FanoutSender;
 
 use criterion::BenchmarkId;
@@ -101,7 +101,7 @@ async fn run_reconfiguration_monitor(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input: ReconfigurationInput,
-    output_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     ct: bool,
 ) {
     match (runtime, input) {
@@ -110,7 +110,7 @@ async fn run_reconfiguration_monitor(
                 executor,
                 spec,
                 input_source,
-                output_builder,
+                output_pipeline,
                 ct,
             )
             .await;
@@ -123,7 +123,7 @@ async fn run_reconfiguration_monitor(
                 executor,
                 spec,
                 input_pipeline,
-                output_builder,
+                output_pipeline,
                 ct,
             )
             .await;
@@ -133,7 +133,7 @@ async fn run_reconfiguration_monitor(
                 executor,
                 spec,
                 input_pipeline,
-                output_builder,
+                output_pipeline,
                 ct,
             )
             .await;
@@ -146,7 +146,7 @@ async fn run_reconfiguration_monitor(
                 executor,
                 spec,
                 input_pipeline,
-                output_builder,
+                output_pipeline,
                 ct,
             )
             .await;
@@ -157,7 +157,7 @@ async fn run_reconfiguration_monitor(
                 executor,
                 spec,
                 input_pipeline,
-                output_builder,
+                output_pipeline,
                 ct,
             )
             .await;
@@ -201,8 +201,8 @@ async fn run_reconf_bench(
             (ReconfigurationInput::Dataflow(input), tx_fans)
         }
     };
-    let (output_builder, mut rx) =
-        output_builder_dsrv_paper_bench(spec_1.output_vars().clone(), executor.clone());
+    let (output_pipeline, mut rx) =
+        output_pipeline_dsrv_paper_bench(spec_1.output_vars().clone(), executor.clone());
     let mut is_spec_1 = true;
 
     let _handle = executor.spawn(run_reconfiguration_monitor(
@@ -210,7 +210,7 @@ async fn run_reconf_bench(
         executor.clone(),
         spec_1.clone(),
         input,
-        output_builder,
+        output_pipeline,
         ct,
     ));
 

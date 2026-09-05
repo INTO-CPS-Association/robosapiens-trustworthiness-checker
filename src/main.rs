@@ -14,12 +14,12 @@ use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
 use trustworthiness_checker::cli::adapters::{
     DistributionModeBuilder, RedisKnowledgeOverrides, apply_redis_knowledge_overrides,
-    input_source, output_pipeline_builder, redis_knowledge_config_from_cli,
+    input_source, output_pipeline, redis_knowledge_config_from_cli,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
-    InputConfigFile, InputPipeline, InputReduction, InputSource, InputSources, InputStage,
+    InputConfigFile, InputPipeline, InputPolicy, InputReduction, InputSource, InputSources,
     InputWindow, RedisKnowledgeConfig,
 };
 use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
@@ -72,7 +72,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         return run_mstlo(executor, cli, runtime).await;
     }
 
-    let builder = GeneralRuntimeBuilder::<LangSpecification, Value>::new();
+    let builder = GeneralRuntimeBuilder::<LangSpecification, Value>::new().shutdown_timeout(
+        cli.io_shutdown_timeout_ms
+            .map(std::time::Duration::from_millis),
+    );
 
     let mqtt_port = cli.mqtt_port;
     let redis_port = cli.redis_port;
@@ -177,14 +180,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         )
     };
 
-    let output_builder = output_pipeline_builder::<Value>(
+    let output_pipeline = output_pipeline::<Value>(
         cli.output_selection.clone(),
         executor.clone(),
         mqtt_port,
         redis_port,
     )?;
-    let output_builder = output_builder.executor(executor.clone());
-    let builder = builder.output_pipeline_builder(output_builder);
+    let output_pipeline = output_pipeline.with_executor(executor.clone());
+    let builder = builder.output_pipeline(output_pipeline);
 
     // Create the runtime
     let monitor = builder.build().await?;
@@ -220,19 +223,23 @@ async fn run_mstlo(
         .build(model.input_vars())
         .await
         .context("MSTLO input stream could not be built")?;
-    let output_backend_builder = output_pipeline_builder::<MstloTimedValue>(
+    let output_pipeline = output_pipeline::<MstloTimedValue>(
         cli.output_selection.clone(),
         executor.clone(),
         cli.mqtt_port,
         cli.redis_port,
     )?;
-    let output_backend_builder = output_backend_builder.executor(executor.clone());
+    let output_pipeline = output_pipeline.with_executor(executor.clone());
 
     let builder = GeneralRuntimeBuilder::<MstloSpecification, MstloTimedValue>::new()
+        .shutdown_timeout(
+            cli.io_shutdown_timeout_ms
+                .map(std::time::Duration::from_millis),
+        )
         .executor(executor)
         .model(model)
         .input(input)
-        .output_pipeline_builder(output_backend_builder)
+        .output_pipeline(output_pipeline)
         .runtime(RuntimeSpec::Mstlo(execution_policy))
         .semantics(cli.semantics)
         .mstlo_algorithm(cli.mstlo_algorithm)
@@ -264,8 +271,13 @@ where
         let mut config: InputConfigFile =
             json5::from_str(&contents).context("input config JSON5 could not be parsed")?;
         apply_redis_knowledge_overrides(&mut config, &overrides)?;
-        let sources =
-            InputSources::<V>::from_config(config, executor, mqtt_port, redis_port, mqtt_backend)?;
+        let sources = InputSources::<V>::from_config(
+            config,
+            executor.clone(),
+            mqtt_port,
+            redis_port,
+            mqtt_backend,
+        )?;
         InputPipeline::from_sources(sources)
     } else if input_mode.redis_knowledge_input {
         let Some(redis_knowledge_builder) = redis_knowledge_builder else {
@@ -278,7 +290,7 @@ where
     } else {
         InputPipeline::new(input_source(
             input_mode,
-            executor,
+            executor.clone(),
             mqtt_port,
             redis_port,
             mqtt_backend,
@@ -290,10 +302,10 @@ where
             Some(Duration::from_millis(window_ms)),
             cli.input_window_update_limit,
         )?;
-        pipeline = pipeline.with_stage(
+        pipeline = pipeline.with_policy(
             match cli.input_window_mode.unwrap_or(InputWindowMode::Batch) {
-                InputWindowMode::Batch => InputStage::Batch(window),
-                InputWindowMode::AtomicStep => InputStage::WindowToStep {
+                InputWindowMode::Batch => InputPolicy::Batch(window),
+                InputWindowMode::AtomicStep => InputPolicy::WindowToStep {
                     window,
                     reduction: InputReduction::LastUpdateWins,
                 },
@@ -301,17 +313,17 @@ where
         )?;
     } else if cli.input_window_update_limit.is_some() {
         let window = InputWindow::new(None, cli.input_window_update_limit)?;
-        pipeline = pipeline.with_stage(
+        pipeline = pipeline.with_policy(
             match cli.input_window_mode.unwrap_or(InputWindowMode::Batch) {
-                InputWindowMode::Batch => InputStage::Batch(window),
-                InputWindowMode::AtomicStep => InputStage::WindowToStep {
+                InputWindowMode::Batch => InputPolicy::Batch(window),
+                InputWindowMode::AtomicStep => InputPolicy::WindowToStep {
                     window,
                     reduction: InputReduction::LastUpdateWins,
                 },
             },
         )?;
     }
-    Ok(pipeline)
+    Ok(pipeline.with_executor(executor))
 }
 
 fn parse_mstlo_variables(bindings: Option<&[String]>) -> anyhow::Result<Variables> {

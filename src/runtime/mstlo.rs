@@ -24,6 +24,7 @@ use crate::{
         FileInputValue, JsonStreamValue, OutputBatch, OutputError, OutputUpdate, OutputWriter,
         StreamData, input,
     },
+    io::OpenedInput,
     lang::mstlo::MstloSpecification,
     runtime::builder::RuntimeBuilder,
 };
@@ -245,7 +246,7 @@ struct MstloRuntime<RS, V = Value> {
     monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
     monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
     routing: MstloRouting,
-    input_stream: InputStream<V>,
+    input_stream: OpenedInput<V>,
     output_writer: Option<OutputWriter<V>>,
     execution_policy: ExecutionPolicy,
 }
@@ -277,7 +278,7 @@ pub struct MstloRuntimeBuilder<V = Value> {
     semantics: Semantics,
     synchronization_strategy: SynchronizationStrategy,
     variables: Variables,
-    input: Option<InputStream<V>>,
+    input: Option<OpenedInput<V>>,
     output_writer: Option<OutputWriter<V>>,
     execution_policy: ExecutionPolicy,
 }
@@ -295,7 +296,7 @@ where
         let (input, controller) = crate::io::controlled(input);
         (
             self.execution_policy(ExecutionPolicy::Synchronous)
-                .input(input),
+                .input(input.into()),
             controller,
         )
     }
@@ -344,7 +345,7 @@ where
         monitors: BTreeMap<VarName, StlMonitor<f64, RS>>,
         monitor_signals: BTreeMap<VarName, BTreeSet<&'static str>>,
         routing: MstloRouting,
-        input_stream: InputStream<V>,
+        input_stream: OpenedInput<V>,
         output_writer: Option<OutputWriter<V>>,
         execution_policy: ExecutionPolicy,
     ) -> Box<dyn Runtime>
@@ -395,7 +396,7 @@ where
         self
     }
 
-    fn input(mut self, input: InputStream<V>) -> Self {
+    fn input(mut self, input: OpenedInput<V>) -> Self {
         self.input = Some(input);
         self
     }
@@ -940,7 +941,7 @@ where
         }
         let ticks = events.into_iter().map(|event| vec![event]).collect();
         let batch = OutputBatch::from_ticks(ticks)?;
-        writer.send(batch).await
+        crate::runtime::output::submit_batch(writer, batch).await
     }
 }
 
@@ -954,7 +955,15 @@ where
         let signal_names = Self::signal_names(&self.input_vars);
 
         let Some(mut writer) = self.output_writer.take() else {
-            return Err(anyhow!("MSTLO output writer must be set"));
+            let primary = anyhow!("MSTLO output writer must be set");
+            let mut drain = self.input_stream.into_drain();
+            let mut error = primary;
+            while let Some(item) = drain.next().await {
+                if let Err(cleanup) = item {
+                    error = combine_errors(error, anyhow::Error::new(cleanup));
+                }
+            }
+            return Err(error);
         };
         {
             let mut input = MstloInputState::new_direct(
@@ -965,14 +974,14 @@ where
             )?;
             let mut input_batches = self.input_stream;
             let execution_policy = self.execution_policy;
-            let mut first_error = None;
+            let mut first_error: Option<anyhow::Error> = None;
             let mut downstream_closed = false;
 
             'input: while let Some(batch) = input_batches.next().await {
                 let batch = match batch {
                     Ok(batch) => batch,
                     Err(error) => {
-                        first_error = Some(error);
+                        first_error = Some(error.into());
                         break;
                     }
                 };
@@ -1018,11 +1027,26 @@ where
                 }
             }
 
+            // Stop live sources and await their cleanup before closing output.
+            // Both phases share the writer's one absolute shutdown deadline.
+            let deadline = writer.shutdown_deadline();
+            let mut drain = input_batches.into_drain_with_deadline(deadline);
+            while let Some(batch) = drain.next().await {
+                if let Err(error) = batch {
+                    let cleanup = anyhow::Error::new(error);
+                    first_error = Some(match first_error {
+                        Some(primary) => combine_errors(primary, cleanup),
+                        None => cleanup,
+                    });
+                }
+            }
+
             // Preserve output produced before a source/evaluation failure, then
             // make close the externally meaningful completion barrier.
             if !downstream_closed {
                 match input.flush_direct(&mut writer).await {
-                    Ok(()) | Err(OutputError::Closed) => {}
+                    Ok(()) => {}
+                    Err(error) if error.is_closed() => {}
                     Err(error) if first_error.is_none() => {
                         first_error = Some(anyhow::Error::new(error));
                     }
@@ -1030,7 +1054,8 @@ where
                 }
             }
 
-            let cleanup = crate::runtime::output::finish_writer(&mut writer).await;
+            let cleanup =
+                crate::runtime::output::finish_writer_with_deadline(&mut writer, deadline).await;
             match first_error {
                 Some(primary) => match cleanup {
                     Ok(()) => Err(primary.context("Input stream/MSTLO processing failed")),
@@ -1059,7 +1084,7 @@ mod tests {
     use crate::{InputBatch, InputStream, LocalStream, OutputBatch, OutputError, OutputWriter};
 
     use crate::async_test;
-    use crate::io::testing::{manual_output, null_output};
+    use crate::io::testing::{channel_output, null_output};
     use crate::runtime::builder::RuntimeBuilder;
     use futures::{Sink, StreamExt, stream};
     use macro_rules_attribute::apply;
@@ -1079,7 +1104,9 @@ mod tests {
     use tc_testutils::streams::with_timeout;
 
     fn failing_input() -> InputStream<Value> {
-        Box::pin(stream::iter([Err(anyhow::anyhow!("input failed"))]))
+        Box::pin(stream::iter([Err(crate::InputError::source(
+            "input failed",
+        ))]))
     }
 
     struct CleanupFailingSink {
@@ -1553,7 +1580,7 @@ mod tests {
             .executor(executor)
             .model(formula)
             .semantics(Semantics::EagerQualitative)
-            .input(input)
+            .input(input.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1573,12 +1600,12 @@ mod tests {
             MstloTimedValue::new(Duration::from_millis(10), MstloValue::Float(4.0)),
         ]);
         let output_var = VarName::new("out");
-        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var])).await;
+        let (output_writer, outputs) = channel_output(BTreeSet::from([output_var])).await;
 
         let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor)
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1609,12 +1636,12 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var.clone()])).await;
+        let (output_writer, outputs) = channel_output(BTreeSet::from([output_var.clone()])).await;
 
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1650,7 +1677,7 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let (output_writer, mut outputs) = manual_output(BTreeSet::from([output_var])).await;
+        let (output_writer, mut outputs) = channel_output(BTreeSet::from([output_var])).await;
         let (builder, controller) = MstloRuntimeBuilder::new()
             .executor(executor)
             .model(formula)
@@ -1688,7 +1715,7 @@ mod tests {
                     Box::new(FormulaDefinition::GreaterThan("y", 0.0)),
                 ),
             );
-            let (input_stream, mut input) = crate::io::testing::channel();
+            let (input_stream, mut input) = crate::io::channel::channel();
             input
                 .send_tick(
                     vars.into_iter()
@@ -1702,11 +1729,11 @@ mod tests {
             drop(input);
 
             let (output_writer, outputs) =
-                manual_output(BTreeSet::from([VarName::new("out")])).await;
+                channel_output(BTreeSet::from([VarName::new("out")])).await;
             let runtime = MstloRuntimeBuilder::new()
                 .executor(executor)
                 .model(formula)
-                .input(input_stream)
+                .input(input_stream.into())
                 .output_writer(output_writer)
                 .build()
                 .await;
@@ -1733,7 +1760,7 @@ mod tests {
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor)
             .model(formula)
-            .input(failing_input())
+            .input(failing_input().into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1759,7 +1786,7 @@ mod tests {
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor)
             .model(formula)
-            .input(failing_input())
+            .input(failing_input().into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1802,7 +1829,7 @@ mod tests {
 
         let runtime = MstloRuntimeBuilder::new()
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(writer)
             .build()
             .await;
@@ -1850,7 +1877,7 @@ mod tests {
             }));
         let runtime = MstloRuntimeBuilder::new()
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(writer)
             .build()
             .await;
@@ -1882,7 +1909,7 @@ mod tests {
             ),
         ]))
         .unwrap();
-        let (output_writer, outputs) = manual_output(BTreeSet::from([
+        let (output_writer, outputs) = channel_output(BTreeSet::from([
             VarName::new("gt"),
             VarName::new("gt_high"),
             VarName::new("lt"),
@@ -1892,7 +1919,7 @@ mod tests {
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -1937,13 +1964,13 @@ mod tests {
         )]))
         .unwrap();
         let output_var = VarName::new("out");
-        let (output_writer, outputs) = manual_output(BTreeSet::from([output_var.clone()])).await;
+        let (output_writer, outputs) = channel_output(BTreeSet::from([output_var.clone()])).await;
 
         let runtime = MstloRuntimeBuilder::new()
             .executor(executor.clone())
             .model(formula)
             .variables(variables)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;

@@ -1,20 +1,17 @@
-use crate::core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input};
+use crate::core::{DeferrableStreamData, OutputWriter, Runtime, Specification};
 use crate::io::reconfigurable_input::{
-    ReconfigurableInput, ReconfigurableInputItem, ReconfigurableInputStream,
+    InputPipelineSession, ReconfigurableInput, ReconfigurableInputItem,
 };
 use crate::io::{
-    InputConfiguration, InputPipeline, OutputBackendBuilder, OutputConfiguration,
-    ReconfigurationRequest,
+    InputConfiguration, InputPipeline, OutputConfiguration, OutputPipeline, ReconfigurationRequest,
 };
 use crate::lang::core::{DependencyGraphExpr, DependencyGraphSpec};
 use crate::runtime::{
     RuntimeBuilder,
-    semi_sync::{
-        ExprEvalutor, SemiSyncContext, SemiSyncOutput, SemiSyncRuntime, SemiSyncRuntimeBuilder,
-    },
+    semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime},
 };
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
-use crate::{InputStream, Value, VarName};
+use crate::{Value, VarName};
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
@@ -39,7 +36,7 @@ where
     model: Option<AC::Spec>,
     input_pipeline: Option<InputPipeline<AC::Val>>,
     resolved_input: Option<crate::io::config::ResolvedInput>,
-    output_builder: Option<OutputBackendBuilder<AC::Val>>,
+    output_pipeline: Option<OutputPipeline<AC::Val>>,
     resolved_output: Option<crate::io::output::ResolvedOutput>,
     reconf_topic: Option<String>,
     input_config: Option<InputConfiguration>,
@@ -66,7 +63,7 @@ where
             model: None,
             input_pipeline: None,
             resolved_input: None,
-            output_builder: None,
+            output_pipeline: None,
             resolved_output: None,
             reconf_topic: None,
             input_config: None,
@@ -88,7 +85,7 @@ where
         self
     }
 
-    fn input(self, _input: InputStream<AC::Val>) -> Self {
+    fn input(self, _input: crate::io::OpenedInput<AC::Val>) -> Self {
         self.with_setup_error("direct input streams are not supported by the reconfigurable runtime; configure an InputPipeline")
     }
 
@@ -112,15 +109,16 @@ where
                 && builder.setup_error.is_none()
                 && builder.resolved_output.is_none()
             {
-                match (builder.output_builder.as_ref(), builder.model.as_ref()) {
-                    (Some(output_builder), Some(model)) => {
-                        match output_builder.resolve(model.output_vars(), model.aux_vars(), None) {
+                match (builder.output_pipeline.as_ref(), builder.model.as_ref()) {
+                    (Some(output_pipeline), Some(model)) => {
+                        match output_pipeline.resolve(model.output_vars(), model.aux_vars(), None) {
                             Ok(resolved) => builder.resolved_output = Some(resolved),
                             Err(error) => setup_error = Some(error.to_string()),
                         }
                     }
                     (None, _) => {
-                        setup_error = Some("reconfigurable output builder is not configured".into())
+                        setup_error =
+                            Some("reconfigurable output pipeline is not configured".into())
                     }
                     (_, None) => {
                         setup_error = Some("reconfigurable runtime model is not configured".into())
@@ -152,22 +150,23 @@ where
                     .resolved_input
                     .clone()
                     .expect("resolved reconfigurable input plan must be present");
-                let output_builder = builder
-                    .output_builder
+                let output_pipeline = builder
+                    .output_pipeline
                     .clone()
-                    .expect("resolved reconfigurable output builder must be present")
-                    .executor(executor);
+                    .expect("resolved reconfigurable output pipeline must be present")
+                    .with_executor(executor);
+                let shutdown_timeout = output_pipeline.shutdown_timeout();
                 let resolved_output = builder
                     .resolved_output
                     .clone()
                     .expect("resolved reconfigurable output plan must be present");
 
                 // Input is opened during build so callers can safely send the
-                // first manual tick immediately after spawning the runtime.
+                // first channel tick immediately after spawning the runtime.
                 // Both opens still start only after all resolution is complete.
                 let (input_result, output_result) = futures::join!(
-                    input_ref.open_stream(resolved_input),
-                    output_builder.open(resolved_output),
+                    input_ref.open_session(resolved_input),
+                    output_pipeline.open_session(resolved_output),
                 );
                 let input_result = input_result.map_err(|error| {
                     let message =
@@ -185,7 +184,12 @@ where
                         output_writer = Some(opened_output);
                     }
                     (Err(input_error), Ok(mut opened_output)) => {
-                        let cleanup = opened_output.close().await;
+                        let deadline = opened_output.writer().shutdown_deadline();
+                        let cleanup = crate::runtime::output::finish_writer_with_deadline(
+                            opened_output.writer_mut(),
+                            deadline,
+                        )
+                        .await;
                         drop(opened_output);
                         drop(input.take());
                         setup_error = Some(match cleanup {
@@ -197,9 +201,21 @@ where
                         .to_string());
                     }
                     (Ok(opened_input), Err(output_error)) => {
-                        drop(opened_input);
+                        let deadline = shutdown_timeout.map_or_else(
+                            crate::io::ShutdownDeadline::none,
+                            crate::io::ShutdownDeadline::after,
+                        );
+                        let mut drain = opened_input.into_drain_with_deadline(deadline);
+                        let mut error = output_error;
+                        while let Some(item) = drain.next().await {
+                            if let Err(cleanup) = item {
+                                error = error.context(format!(
+                                    "reconfigurable input cleanup also failed: {cleanup:#}"
+                                ));
+                            }
+                        }
                         drop(input.take());
-                        setup_error = Some(output_error.to_string());
+                        setup_error = Some(error.to_string());
                     }
                     (Err(input_error), Err(output_error)) => {
                         drop(input.take());
@@ -243,8 +259,8 @@ where
         self
     }
 
-    pub fn output_builder(mut self, output_builder: OutputBackendBuilder<AC::Val>) -> Self {
-        self.output_builder = Some(output_builder);
+    pub fn output_pipeline(mut self, output_pipeline: OutputPipeline<AC::Val>) -> Self {
+        self.output_pipeline = Some(output_pipeline);
         self.resolved_output = None;
         self
     }
@@ -286,6 +302,7 @@ where
             .executor
             .clone()
             .ok_or_else(|| anyhow!("reconfigurable runtime executor is not configured"))?;
+        let pipeline = pipeline.with_executor(executor.clone());
         let input = ReconfigurableInput::new(pipeline, self.reconf_topic.clone(), executor)
             .context("reconfigurable input could not be configured")?;
         let resolved_input = match self.resolved_input.clone() {
@@ -314,8 +331,8 @@ where
 {
     builder: ReconfSemiSyncRuntimeBuilder<AC, MS>,
     input: Option<ReconfigurableInput<AC::Val>>,
-    input_stream: Option<ReconfigurableInputStream<AC::Val>>,
-    output: Option<OutputWriter<AC::Val>>,
+    input_stream: Option<InputPipelineSession<AC::Val>>,
+    output: Option<crate::io::output::OutputPipelineSession<AC::Val>>,
     setup_error: Option<String>,
     _marker: std::marker::PhantomData<MS>,
 }
@@ -328,16 +345,6 @@ where
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
-    async fn setup_inner_monitor(
-        monitor: SemiSyncRuntime<AC, MS>,
-    ) -> anyhow::Result<(
-        SemiSyncOutput<AC::Val>,
-        SemiSyncContext<AC>,
-        Vec<ExprEvalutor<AC, MS>>,
-    )> {
-        monitor.setup_runtime_without_input().await
-    }
-
     /// Explicitly retain context by variable identity and align every retained
     /// history to the longest retained history with `NoVal` on the left.
     fn transfer_context(
@@ -404,7 +411,7 @@ where
 
     fn resolve_output(
         &self,
-        builder: &OutputBackendBuilder<AC::Val>,
+        builder: &OutputPipeline<AC::Val>,
         model: &AC::Spec,
         request: Option<&OutputConfiguration>,
     ) -> anyhow::Result<crate::io::output::ResolvedOutput> {
@@ -417,7 +424,6 @@ where
         &mut self,
         input: &ReconfigurableInput<AC::Val>,
         request: ReconfigurationRequest,
-        context: &mut SemiSyncContext<AC>,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
         request.validate_structure()?;
         let parse_spec = self
@@ -436,12 +442,11 @@ where
         next_builder.resolved_input = Some(resolved_input);
         next_builder.input_config = Some(request.input.clone());
 
-        if let Some(output_builder) = next_builder.output_builder.as_ref() {
+        if let Some(output_pipeline) = next_builder.output_pipeline.as_ref() {
             next_builder.resolved_output =
-                Some(self.resolve_output(output_builder, &next_model, Some(&request.output))?);
+                Some(self.resolve_output(output_pipeline, &next_model, Some(&request.output))?);
         }
 
-        next_builder.starting_history = Some(self.transfer_context(context, &next_model));
         debug!("Prepared replacement reconfigurable semi-sync builder");
         Ok(Some(next_builder))
     }
@@ -449,7 +454,7 @@ where
     async fn process_input_updates(
         &mut self,
         input: &ReconfigurableInput<AC::Val>,
-        input_stream: &mut ReconfigurableInputStream<AC::Val>,
+        input_stream: &mut InputPipelineSession<AC::Val>,
         context: &mut SemiSyncContext<AC>,
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
@@ -491,105 +496,248 @@ where
                         }
                     }
                 }
+                ReconfigurableInputItem::Boundary(_) => {
+                    anyhow::bail!("unexpected input lifecycle boundary")
+                }
                 ReconfigurableInputItem::Reconfigure(request) => {
-                    return self.handle_reconfig_input(input, request, context).await;
+                    return self.handle_reconfig_input(input, request).await;
                 }
             }
         }
     }
 
-    /// Own all resources of the active monitor locally. The replacement builder is
-    /// returned only after input, context, evaluators, output, and processing
-    /// futures have left this scope.
+    /// Replace model evaluation at an ordered boundary while retaining the
+    /// input and output owners. Terminal paths drain both sides once.
     async fn run_active_monitor(
         &mut self,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
         if let Some(error) = self.setup_error.take() {
             return Err(anyhow!(error));
         }
-        let executor = self
-            .builder
-            .executor
-            .clone()
-            .ok_or_else(|| anyhow!("reconfigurable runtime executor is not configured"))?;
         let model = self.builder.model_ref()?.clone();
         let input = self
             .input
             .take()
             .ok_or_else(|| anyhow!("reconfigurable input is not configured"))?;
-        let mut input_stream = self
-            .input_stream
-            .take()
-            .ok_or_else(|| anyhow!("reconfigurable input stream is not configured"))?;
-        let writer = self
+        let mut input_stream = self.input_stream.take();
+        let mut output = self
             .output
             .take()
             .ok_or_else(|| anyhow!("reconfigurable output pipeline is not configured"))?;
-
-        // Input and output plans were resolved before either resource opened in
-        // the builder. The input stream is already subscribed here so a tick
-        // sent immediately after build cannot be lost.
-
-        let monitor = SemiSyncRuntimeBuilder::new()
-            .executor(executor)
-            .model(model)
-            .input(input::empty_input_stream())
-            .starting_history(self.builder.starting_history.clone().unwrap_or_default())
-            .output_writer(writer)
-            .build()
-            .await;
-        let (output, mut context, mut expr_evals) = Self::setup_inner_monitor(monitor).await?;
-        let active_cancellation = context.cancellation_token();
-        let mut output_future = Box::pin(output.run().fuse());
-        let mut output_completed = false;
-        let pending_builder = {
-            let mut process = Box::pin(
-                self.process_input_updates(
-                    &input,
-                    &mut input_stream,
-                    &mut context,
-                    &mut expr_evals,
-                )
-                .fuse(),
-            );
-            loop {
-                if output_completed {
-                    // Output completion is terminal for the active monitor. The
-                    // processing future is cancellation-aware, so a pending
-                    // input cannot keep the runtime alive indefinitely.
-                    active_cancellation.cancel();
-                    break process.await;
-                }
-                futures::select! {
-                    input = process.as_mut() => break input,
-                    output = output_future.as_mut() => {
-                        output_completed = true;
-                        // Cancel before awaiting processing. This covers both
-                        // normal output EOF and an intentional downstream
-                        // close, while preserving a ready replacement request.
-                        active_cancellation.cancel();
-                        if let Err(error) = output.context("reconfigurable output failed") {
-                            break Err(error);
+        let output_resolution = output.resolved().clone();
+        let output_id = output.session_id();
+        let output_revision = output.revision();
+        let shutdown_timeout = output.writer().shutdown_timeout();
+        let make_deadline = || {
+            shutdown_timeout.map_or_else(
+                crate::io::ShutdownDeadline::none,
+                crate::io::ShutdownDeadline::after,
+            )
+        };
+        let mut terminal_deadline = None;
+        let setup = SemiSyncRuntime::<AC, MS>::setup_evaluation(
+            model,
+            self.builder.starting_history.clone().unwrap_or_default(),
+        )
+        .await;
+        let mut pending_builder = match setup {
+            Err(error) => Err(error),
+            Ok((streams, mut context, mut expr_evals)) => {
+                let cancellation = context.cancellation_token();
+                let mut output_future = Box::pin(
+                    crate::runtime::output::consume_row_streams(streams, output.writer_mut())
+                        .fuse(),
+                );
+                let mut output_completed = false;
+                let mut pending = {
+                    let process = Box::pin(self.process_input_updates(
+                        &input,
+                        input_stream.as_mut().expect("active input session"),
+                        &mut context,
+                        &mut expr_evals,
+                    ));
+                    match futures::future::select(process, output_future.as_mut()).await {
+                        futures::future::Either::Left((result, _)) => result,
+                        futures::future::Either::Right((result, process)) => {
+                            output_completed = true;
+                            cancellation.cancel();
+                            drop(process);
+                            result
+                                .context("reconfigurable output failed")
+                                .map(|()| None)
                         }
-                    },
+                    }
+                };
+                if !matches!(pending, Ok(Some(_))) {
+                    terminal_deadline = Some(make_deadline());
                 }
+
+                // Both plans are pure: reject unsupported bindings before
+                // pausing any source or changing any destination.
+                let plans = match &pending {
+                    Ok(Some(next)) => (|| {
+                        let active = input_stream.as_ref().expect("active input session");
+                        let input_plan = input.pipeline().plan_reconfiguration(
+                            active.active(),
+                            next.resolved_input.clone().expect("resolved input"),
+                            active.session_id(),
+                            active.revision(),
+                        )?;
+                        let output_plan = next
+                            .output_pipeline
+                            .as_ref()
+                            .expect("output pipeline")
+                            .plan_reconfiguration(
+                            &output_resolution,
+                            next.resolved_output.clone().expect("resolved output"),
+                            output_id,
+                            output_revision,
+                        )?;
+                        Ok::<_, anyhow::Error>((input_plan, output_plan, active.revision()))
+                    })()
+                    .map(Some),
+                    _ => Ok(None),
+                };
+                let mut output_plan = None;
+                let mut input_revision = None;
+                match plans {
+                    Err(error) => pending = Err(error),
+                    Ok(Some((plan, next_output, revision))) => {
+                        let input_failure_deadline = Rc::new(std::cell::Cell::new(None));
+                        let mut rebind =
+                            Box::pin(input_stream.take().expect("active input session").rebind(
+                                plan,
+                                shutdown_timeout,
+                                input_failure_deadline.clone(),
+                                async |batch| {
+                                    for tick in batch.into_ticks() {
+                                        SemiSyncRuntime::<AC, MS>::advance_tick(
+                                            tick,
+                                            &mut context,
+                                            &mut expr_evals,
+                                        )
+                                        .await?;
+                                    }
+                                    Ok(())
+                                },
+                            ));
+                        let rebound =
+                            match futures::future::select(rebind.as_mut(), output_future.as_mut())
+                                .await
+                            {
+                                futures::future::Either::Left((result, _)) => result,
+                                futures::future::Either::Right((result, _)) => {
+                                    output_completed = true;
+                                    cancellation.cancel();
+                                    let deadline =
+                                        input_failure_deadline.get().unwrap_or_else(|| {
+                                            let deadline = *terminal_deadline
+                                                .get_or_insert_with(make_deadline);
+                                            input_failure_deadline.set(Some(deadline));
+                                            deadline
+                                        });
+                                    terminal_deadline = Some(deadline);
+                                    pending = result
+                                        .context("reconfigurable output failed")
+                                        .map(|()| None);
+                                    // The callback observes cancellation; retain the
+                                    // consumed owner until its transition finishes or
+                                    // the shared terminal deadline expires.
+                                    match deadline.timeout(rebind.as_mut()).await {
+                                        Ok(result) => result,
+                                        Err(timeout) => Err(anyhow::Error::new(timeout)),
+                                    }
+                                }
+                            };
+                        drop(rebind);
+                        match rebound {
+                            Ok(session) => {
+                                input_stream = Some(session);
+                                input_revision = Some(revision);
+                                output_plan = Some(next_output);
+                                if let Ok(Some(next)) = &mut pending {
+                                    next.starting_history =
+                                        Some(self.transfer_context(&context, next.model_ref()?));
+                                }
+                            }
+                            Err(error) => {
+                                if terminal_deadline.is_none() {
+                                    terminal_deadline = input_failure_deadline.get();
+                                }
+                                terminal_deadline.get_or_insert_with(make_deadline);
+                                pending = Err(error.context("input rebind failed"));
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                }
+                context.cancel();
+                if !output_completed {
+                    if matches!(pending, Ok(Some(_))) {
+                        if let Err(error) = output_future.as_mut().await {
+                            terminal_deadline.get_or_insert_with(make_deadline);
+                            pending = Err(error.context("reconfigurable output failed"));
+                        }
+                    } else {
+                        let deadline = *terminal_deadline.get_or_insert_with(make_deadline);
+                        match deadline.timeout(output_future.as_mut()).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                pending = Err(error.context("reconfigurable output failed"));
+                            }
+                            Err(timeout) => pending = Err(anyhow::Error::new(timeout)),
+                        }
+                    }
+                }
+                drop(output_future);
+                if matches!(pending, Ok(Some(_))) {
+                    let transition = async {
+                        output
+                            .apply_reconfiguration(output_plan.expect("prepared output plan"))
+                            .await?;
+                        input_stream
+                            .as_mut()
+                            .expect("rebound input session")
+                            .commit_revision(input_revision.expect("prepared input revision"))?;
+                        output.commit_revision(output_revision)?;
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await;
+                    if let Err(error) = transition {
+                        terminal_deadline.get_or_insert_with(make_deadline);
+                        pending = Err(error.context("session reconfiguration failed"));
+                    }
+                }
+                pending
             }
         };
-
-        // Cancellation stops the active monitor's producers, but the
-        // output future remains owned here until its flush/close barrier has
-        // completed. This drains coalescers and buffers before any old input
-        // resources are dropped or the replacement is built.
-        context.cancel();
-        if !output_completed {
-            output_future
-                .await
-                .context("reconfigurable output failed")?;
+        if matches!(pending_builder, Ok(Some(_))) {
+            self.input = Some(input);
+            self.input_stream = input_stream;
+            self.output = Some(output);
+            return pending_builder;
         }
-        drop(input_stream);
-        drop(input);
-        drop(context);
-        drop(expr_evals);
+
+        let deadline = terminal_deadline.unwrap_or_else(make_deadline);
+        if let Some(session) = input_stream {
+            let mut drain = session.into_drain_with_deadline(deadline);
+            while let Some(item) = drain.next().await {
+                if let Err(error) = item {
+                    pending_builder = Err(match pending_builder {
+                        Ok(_) => error,
+                        Err(primary) => anyhow!("{primary:#}; additionally: {error:#}"),
+                    });
+                }
+            }
+        }
+        if let Err(error) =
+            crate::runtime::output::finish_writer_with_deadline(output.writer_mut(), deadline).await
+        {
+            pending_builder = Err(match pending_builder {
+                Ok(_) => error,
+                Err(primary) => anyhow!("{primary:#}; additionally: {error:#}"),
+            });
+        }
         pending_builder
     }
 }
@@ -609,7 +757,7 @@ where
             let Some(builder) = pending_update else {
                 return Ok(());
             };
-            self = Box::new(builder.build().await);
+            self.builder = builder;
             info!("Starting reconfigured runtime");
         }
     }
@@ -620,6 +768,7 @@ mod tests {
     use std::{
         cell::Cell,
         collections::BTreeMap,
+        future::Future,
         pin::Pin,
         rc::Rc,
         task::{Context, Poll},
@@ -629,12 +778,15 @@ mod tests {
     use async_trait::async_trait;
     use async_unsync::bounded;
     use futures::{Sink, future::Either};
+    use macro_rules_attribute::apply;
 
     use super::*;
-    use crate::core::{OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter};
+    use crate::async_test;
+    use crate::core::{OutputBatch, OutputError, OutputInterface, OutputWriter};
+    use crate::io::output::TestOutputOpener;
     #[cfg(not(feature = "ros"))]
-    use crate::io::{CodecId, Route};
-    use crate::io::{InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig};
+    use crate::io::{FormatId, Route};
+    use crate::io::{InputPipeline, InputSource, OutputBackendConfig, OutputPipeline};
     use crate::runtime::RuntimeBuilder;
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::semantics::UntimedDsrvSemantics;
@@ -650,7 +802,7 @@ mod tests {
         source.parse().map_err(anyhow::Error::from)
     }
 
-    fn manual_input() -> (
+    fn channel_input() -> (
         InputSource,
         FanoutSender<Value>,
         Rc<Fanout<Value>>,
@@ -659,7 +811,7 @@ mod tests {
     ) {
         let (data_sender, data_fanout) = Fanout::new();
         let (control_sender, control_fanout) = Fanout::new();
-        let source = InputSource::manual_with_control(
+        let source = InputSource::channel_with_control(
             BTreeMap::from([(VarName::new("x"), Rc::clone(&data_fanout))]),
             Some(Rc::clone(&control_fanout)),
         );
@@ -676,14 +828,14 @@ mod tests {
         executor: Rc<smol::LocalExecutor<'static>>,
         model: &str,
         input: InputSource,
-        output: OutputBackendBuilder<Value>,
+        output: OutputPipeline<Value>,
     ) -> TestRuntime {
         ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
             .parse_spec(parse_spec)
             .executor(executor)
             .model(model.parse().expect("test model should parse"))
             .input_pipeline(InputPipeline::new(input))
-            .output_builder(output)
+            .output_pipeline(output)
             .reconf_topic("reconf".to_owned())
             .build()
             .await
@@ -708,6 +860,8 @@ mod tests {
         fail_on_attempt: Option<usize>,
         close_error: Option<OutputError>,
         send_error: Option<OutputError>,
+        pending_close: bool,
+        close_delay: Option<Duration>,
     }
 
     impl CountingBackend {
@@ -719,6 +873,8 @@ mod tests {
                 fail_on_attempt,
                 close_error,
                 send_error: None,
+                pending_close: false,
+                close_delay: None,
             }
         }
 
@@ -727,8 +883,18 @@ mod tests {
             self
         }
 
-        fn builder(&self) -> OutputBackendBuilder<Value> {
-            OutputBackendBuilder::new(OutputBackendConfig::custom(self.clone()))
+        fn with_pending_close(mut self) -> Self {
+            self.pending_close = true;
+            self
+        }
+
+        fn with_close_delay(mut self, delay: Duration) -> Self {
+            self.close_delay = Some(delay);
+            self
+        }
+
+        fn builder(&self) -> OutputPipeline<Value> {
+            OutputPipeline::from_backend(OutputBackendConfig::test(self.clone()))
         }
     }
 
@@ -739,6 +905,9 @@ mod tests {
         send_error: Option<OutputError>,
         ready: bool,
         closed: bool,
+        pending_close: bool,
+        close_delay: Option<Duration>,
+        close_timer: Option<Pin<Box<smol::Timer>>>,
     }
 
     impl Drop for CountingSink {
@@ -755,7 +924,7 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             if self.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.ready = true;
             Poll::Ready(Ok(()))
@@ -766,7 +935,7 @@ mod tests {
             _batch: OutputBatch<Value>,
         ) -> Result<(), Self::Error> {
             if self.closed {
-                return Err(OutputError::Closed);
+                return Err(OutputError::closed());
             }
             if !self.ready {
                 return Err(OutputError::backend("counting sink was not ready"));
@@ -783,7 +952,7 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             if self.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.ready = true;
             Poll::Ready(Ok(()))
@@ -791,10 +960,21 @@ mod tests {
 
         fn poll_close(
             mut self: Pin<&mut Self>,
-            _context: &mut Context<'_>,
+            context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
+            if self.pending_close {
+                return Poll::Pending;
+            }
+            if let Some(delay) = self.close_delay {
+                let timer = self
+                    .close_timer
+                    .get_or_insert_with(|| Box::pin(smol::Timer::after(delay)));
+                if timer.as_mut().poll(context).is_pending() {
+                    return Poll::Pending;
+                }
+            }
             if self.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.closes.set(self.closes.get() + 1);
             self.closed = true;
@@ -803,9 +983,7 @@ mod tests {
     }
 
     #[async_trait(?Send)]
-    impl OutputBackend for CountingBackend {
-        type Val = Value;
-
+    impl TestOutputOpener<Value> for CountingBackend {
         async fn open(
             &self,
             _interface: OutputInterface,
@@ -822,185 +1000,230 @@ mod tests {
                 send_error: self.send_error.clone(),
                 ready: false,
                 closed: false,
+                pending_close: self.pending_close,
+                close_delay: self.close_delay,
+                close_timer: None,
             }))
         }
     }
 
-    #[test]
-    fn output_closed_cancels_pending_input() {
-        smol::block_on(async {
-            let executor = Rc::new(smol::LocalExecutor::new());
-            let (input, data_sender, _data_fanout, _control_sender, _control_fanout) =
-                manual_input();
-            let output = CountingBackend::new(None, None)
-                .with_send_error(OutputError::Closed)
-                .builder();
-            let runtime = build_runtime(executor, FINITE_FIRST_OUTPUT_MODEL, input, output).await;
-            let send_first_tick = async move {
-                data_sender.send(Value::Int(1)).await;
-            };
-            let run = Box::pin(runtime.run());
-            let send_first_tick = Box::pin(send_first_tick);
-            let joined = Box::pin(futures::future::join(run, send_first_tick));
-            let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
-            let result = match futures::future::select(joined, timeout).await {
-                Either::Left(((result, ()), _timeout)) => result,
-                Either::Right((_timeout, _joined)) => {
-                    panic!("closed output did not cancel pending input before the timeout")
-                }
-            };
-            assert!(
-                result.is_ok(),
-                "closed output should end the active monitor: {result:?}"
-            );
-        });
-    }
+    #[apply(async_test)]
+    async fn terminal_output_close_uses_configured_shutdown_deadline(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let (input, data_sender, _data_fanout, control_sender, _control_fanout) = channel_input();
+        let output = CountingBackend::new(None, None)
+            .with_pending_close()
+            .builder()
+            .with_shutdown_timeout(Some(Duration::from_millis(10)));
+        let runtime = build_runtime(executor, PENDING_MODEL, input, output).await;
+        data_sender.send(Value::Int(1)).await;
+        drop(data_sender);
+        drop(control_sender);
 
-    #[test]
-    fn healthy_monitor_forwards_immediate_input() {
-        smol::block_on(async {
-            let executor = Rc::new(smol::LocalExecutor::new());
-            let (input, data_sender, _data_fanout, _control_sender, _control_fanout) =
-                manual_input();
-            let (output_sender, mut output_receiver) =
-                bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
-            let output = OutputBackendBuilder::new(OutputBackendConfig::Manual(output_sender));
-            let runtime = build_runtime(executor, PENDING_MODEL, input, output).await;
-
-            // Queue the tick before the runtime is polled. A healthy build must
-            // already own its input subscription, otherwise the fan-out drops
-            // this value and the monitor waits forever for its first tick.
-            data_sender.send(Value::Int(7)).await;
-            let first = Box::pin(futures::future::select(
-                Box::pin(output_receiver.recv()),
-                Box::pin(runtime.run()),
-            ));
-            let output = match futures::future::select(
-                first,
-                Box::pin(smol::Timer::after(Duration::from_secs(1))),
-            )
+        let error = run_with_timeout(runtime)
             .await
-            {
-                Either::Left((Either::Left((Some(output), _run)), _timeout)) => output,
-                Either::Left((Either::Left((None, _run)), _timeout)) => {
-                    panic!("healthy output channel closed")
-                }
-                Either::Left((Either::Right((result, _output)), _timeout)) => {
-                    panic!("healthy monitor ended before output: {result:?}")
-                }
-                Either::Right((_timeout, _first)) => {
-                    panic!("healthy monitor did not forward immediate input")
-                }
-            };
-            assert_eq!(output.get(&VarName::new("z")), Some(&Value::Int(7)));
-        });
+            .expect_err("pending output close should reach its shutdown deadline");
+        assert!(
+            error.to_string().contains("shutdown deadline expired"),
+            "{error:#}"
+        );
     }
 
-    #[test]
-    fn initial_output_failure_drops_open_input() {
-        smol::block_on(async {
-            let executor = Rc::new(smol::LocalExecutor::new());
-            let (input, data_sender, data_fanout, _control_sender, _control_fanout) =
-                manual_input();
-            let backend = CountingBackend::new(Some(0), None);
-            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
-
-            let error = run_with_timeout(runtime)
-                .await
-                .expect_err("initial output open should fail");
-            assert!(
-                error.to_string().contains("counting output open failed"),
-                "{error}"
+    #[apply(async_test)]
+    async fn input_cleanup_and_output_close_share_one_shutdown_deadline(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let (input, _data_sender, _data_fanout, control_sender, _control_fanout) = channel_input();
+        let output = CountingBackend::new(None, None)
+            .with_close_delay(Duration::from_millis(100))
+            .builder()
+            .with_shutdown_timeout(Some(Duration::from_millis(150)));
+        let mut runtime = build_runtime(executor, PENDING_MODEL, input, output).await;
+        let cleanup_completed = Rc::new(Cell::new(false));
+        runtime
+            .input_stream
+            .as_mut()
+            .expect("input session")
+            .add_delayed_cleanup_for_test(
+                Duration::from_millis(100),
+                Rc::clone(&cleanup_completed),
             );
-            assert_eq!(backend.opens.get(), 1);
-            assert_eq!(backend.closes.get(), 0);
-            assert_eq!(backend.drops.get(), 0);
-            assert!(data_fanout.sub_events() > 0, "input source was not opened");
+        control_sender.send(Value::Str("invalid JSON".into())).await;
 
-            let seen = data_fanout.prune_events();
+        let error = run_with_timeout(runtime)
+            .await
+            .expect_err("output close must expire in the remainder of the input cleanup budget");
+        assert!(cleanup_completed.get(), "input cleanup did not complete");
+        assert!(
+            error.to_string().contains("shutdown deadline expired"),
+            "{error:#}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn output_closed_cancels_pending_input(executor: Rc<smol::LocalExecutor<'static>>) {
+        let (input, data_sender, _data_fanout, _control_sender, _control_fanout) = channel_input();
+        let output = CountingBackend::new(None, None)
+            .with_send_error(OutputError::closed())
+            .builder();
+        let runtime = build_runtime(executor, FINITE_FIRST_OUTPUT_MODEL, input, output).await;
+        let send_first_tick = async move {
             data_sender.send(Value::Int(1)).await;
-            assert!(
-                data_fanout.prune_events() > seen,
-                "opened input source was not dropped after output failure"
-            );
-        });
+        };
+        let run = Box::pin(runtime.run());
+        let send_first_tick = Box::pin(send_first_tick);
+        let joined = Box::pin(futures::future::join(run, send_first_tick));
+        let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
+        let result = match futures::future::select(joined, timeout).await {
+            Either::Left(((result, ()), _timeout)) => result,
+            Either::Right((_timeout, _joined)) => {
+                panic!("closed output did not cancel pending input before the timeout")
+            }
+        };
+        assert!(
+            result.is_ok(),
+            "closed output should end the active monitor: {result:?}"
+        );
+    }
+
+    #[apply(async_test)]
+    async fn healthy_monitor_forwards_immediate_input(executor: Rc<smol::LocalExecutor<'static>>) {
+        let (input, data_sender, _data_fanout, _control_sender, _control_fanout) = channel_input();
+        let (output_sender, mut output_receiver) =
+            bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
+        let output = OutputPipeline::from_backend(OutputBackendConfig::channel(output_sender));
+        let runtime = build_runtime(executor, PENDING_MODEL, input, output).await;
+
+        // Queue the tick before the runtime is polled. A healthy build must
+        // already own its input subscription, otherwise the fan-out drops
+        // this value and the monitor waits forever for its first tick.
+        data_sender.send(Value::Int(7)).await;
+        let first = Box::pin(futures::future::select(
+            Box::pin(output_receiver.recv()),
+            Box::pin(runtime.run()),
+        ));
+        let output = match futures::future::select(
+            first,
+            Box::pin(smol::Timer::after(Duration::from_secs(1))),
+        )
+        .await
+        {
+            Either::Left((Either::Left((Some(output), _run)), _timeout)) => output,
+            Either::Left((Either::Left((None, _run)), _timeout)) => {
+                panic!("healthy output channel closed")
+            }
+            Either::Left((Either::Right((result, _output)), _timeout)) => {
+                panic!("healthy monitor ended before output: {result:?}")
+            }
+            Either::Right((_timeout, _first)) => {
+                panic!("healthy monitor did not forward immediate input")
+            }
+        };
+        assert_eq!(output.get(&VarName::new("z")), Some(&Value::Int(7)));
+    }
+
+    #[apply(async_test)]
+    async fn initial_output_failure_drops_open_input(executor: Rc<smol::LocalExecutor<'static>>) {
+        let (input, data_sender, data_fanout, _control_sender, _control_fanout) = channel_input();
+        let backend = CountingBackend::new(Some(0), None);
+        let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+
+        let error = run_with_timeout(runtime)
+            .await
+            .expect_err("initial output open should fail");
+        assert!(
+            error.to_string().contains("counting output open failed"),
+            "{error}"
+        );
+        assert_eq!(backend.opens.get(), 1);
+        assert_eq!(backend.closes.get(), 0);
+        assert_eq!(backend.drops.get(), 0);
+        assert!(data_fanout.sub_events() > 0, "input source was not opened");
+
+        let seen = data_fanout.prune_events();
+        data_sender.send(Value::Int(1)).await;
+        assert!(
+            data_fanout.prune_events() > seen,
+            "opened input source was not dropped after output failure"
+        );
     }
 
     #[cfg(not(feature = "ros"))]
-    #[test]
-    fn initial_input_failure_closes_output_and_preserves_cleanup_error() {
-        smol::block_on(async {
-            let executor = Rc::new(smol::LocalExecutor::new());
-            let input = InputSource::ros(
-                BTreeMap::from([(
-                    VarName::new("x"),
-                    Route::new("x".to_owned().into_boxed_str(), Some(CodecId::new("json")))
-                        .unwrap(),
-                )]),
-                Rc::clone(&executor),
-            );
-            let backend = CountingBackend::new(
-                None,
-                Some(OutputError::backend("counting output close failed")),
-            );
-            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+    #[apply(async_test)]
+    async fn initial_input_failure_closes_output_and_preserves_cleanup_error(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let input = InputSource::ros(
+            BTreeMap::from([(
+                VarName::new("x"),
+                Route::new("x".to_owned().into_boxed_str(), Some(FormatId::new("json"))).unwrap(),
+            )]),
+            Rc::clone(&executor),
+        );
+        let backend = CountingBackend::new(
+            None,
+            Some(OutputError::backend("counting output close failed")),
+        );
+        let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
 
-            let error = run_with_timeout(runtime)
-                .await
-                .expect_err("ROS-disabled input open should fail");
-            let message = error.to_string();
-            assert!(message.contains("ROS support not enabled"), "{message}");
-            assert!(
-                message.contains("counting output close failed"),
-                "{message}"
-            );
-            assert_eq!(backend.opens.get(), 1);
-            assert_eq!(backend.closes.get(), 1);
-            assert_eq!(backend.drops.get(), 1);
-        });
+        let error = run_with_timeout(runtime)
+            .await
+            .expect_err("ROS-disabled input open should fail");
+        let message = error.to_string();
+        assert!(message.contains("ROS support not enabled"), "{message}");
+        assert!(
+            message.contains("counting output close failed"),
+            "{message}"
+        );
+        assert_eq!(backend.opens.get(), 1);
+        assert_eq!(backend.closes.get(), 1);
+        assert_eq!(backend.drops.get(), 1);
     }
 
-    #[test]
-    fn replacement_output_failure_drops_new_input_and_closes_old_output() {
-        smol::block_on(async {
-            let executor = Rc::new(smol::LocalExecutor::new());
-            let (input, data_sender, data_fanout, control_sender, _control_fanout) = manual_input();
-            let backend = CountingBackend::new(Some(1), None);
-            let runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
-            let request = async move {
-                let payload = serde_json::json!({ "specification": PENDING_MODEL }).to_string();
-                control_sender.send(Value::Str(payload.into())).await;
-            };
-            let run = Box::pin(runtime.run());
-            let request = Box::pin(request);
-            let joined = Box::pin(futures::future::join(run, request));
-            let timeout = Box::pin(smol::Timer::after(Duration::from_secs(1)));
-            let result = match futures::future::select(joined, timeout).await {
-                Either::Left(((result, ()), _timeout)) => result,
-                Either::Right((_timeout, _joined)) => {
-                    panic!("replacement failure did not finish before the timeout")
-                }
-            };
-
-            let error = result.expect_err("replacement output open should fail");
-            assert!(
-                error.to_string().contains("counting output open failed"),
-                "{error}"
-            );
-            assert_eq!(backend.opens.get(), 2);
-            assert_eq!(backend.closes.get(), 1);
-            assert_eq!(backend.drops.get(), 1);
-            assert!(
-                data_fanout.sub_events() >= 2,
-                "replacement input source was not opened"
-            );
-
-            let seen = data_fanout.prune_events();
-            data_sender.send(Value::Int(1)).await;
-            assert!(
-                data_fanout.prune_events() > seen,
-                "replacement input source was not dropped after output failure"
-            );
-        });
+    #[apply(async_test)]
+    async fn reconfiguration_retains_unchanged_input_and_output_owners(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let (input, data_sender, data_fanout, control_sender, _control_fanout) = channel_input();
+        // A second open would fail: unchanged destinations must retain their owner.
+        let backend = CountingBackend::new(Some(1), None);
+        let mut runtime = build_runtime(executor, PENDING_MODEL, input, backend.builder()).await;
+        let subscriptions = data_fanout.sub_events();
+        let send = async {
+            let payload = serde_json::json!({ "specification": PENDING_MODEL }).to_string();
+            control_sender.send(Value::Str(payload.into())).await;
+        };
+        let transition = futures::future::join(runtime.run_active_monitor(), send);
+        let next = match futures::future::select(
+            Box::pin(transition),
+            Box::pin(smol::Timer::after(Duration::from_secs(1))),
+        )
+        .await
+        {
+            Either::Left(((result, ()), _)) => result.unwrap().expect("prepared model"),
+            Either::Right(_) => panic!("reconfiguration did not finish"),
+        };
+        assert_eq!(backend.opens.get(), 1);
+        assert_eq!(backend.closes.get(), 0);
+        assert_eq!(backend.drops.get(), 0);
+        assert_eq!(data_fanout.sub_events(), subscriptions);
+        assert_eq!(runtime.input_stream.as_ref().unwrap().revision().get(), 1);
+        assert_eq!(runtime.output.as_ref().unwrap().revision().get(), 1);
+        runtime.builder = next;
+        let fail = async {
+            control_sender.send(Value::Str("invalid JSON".into())).await;
+        };
+        let (result, ()) = futures::join!(run_with_timeout(runtime), fail);
+        assert!(result.is_err());
+        assert_eq!(backend.opens.get(), 1);
+        assert_eq!(backend.closes.get(), 1);
+        assert_eq!(backend.drops.get(), 1);
+        let seen = data_fanout.prune_events();
+        data_sender.send(Value::Int(1)).await;
+        assert!(
+            data_fanout.prune_events() > seen,
+            "input owner was not released"
+        );
     }
 }

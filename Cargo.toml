@@ -38,12 +38,7 @@ serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 json5 = "1.3.1"
 toml = "1.1.4"
-# mqtt client
-# Disable the default dependency on SSL to avoid a build dependency on OpenSSL
-paho-mqtt = { version = "0.14.0", optional = true, default-features = false, features = [
-    "bundled",
-    "ssl",
-] }
+# MQTT 3.1.1 client
 rumqttc = { version = "0.25.1", default-features = false }
 async-trait = "0.1.92"
 tracing = { version = "0.1.44", features = [
@@ -122,15 +117,15 @@ lto = false
 codegen-units = 16
 
 [features]
-default = ["mqtt", "redis"]
+default = ["redis"]
 jemalloc = ["dep:tikv-jemallocator"]
-mqtt = ["dep:paho-mqtt"]
 redis = ["dep:redis"]
 sat = ["dep:sat-solver", "jemalloc"]
-ros = ["dep:r2r", "tc-testutils/ros", "mqtt"]
+ros = ["dep:r2r", "tc-testutils/ros"]
 testcontainers = ["redis", "tc-testutils/testcontainers"]
 span-tracing = []
 extended-proptests = []
+test-support = []
 jit = [
     "dep:cranelift-codegen",
     "dep:cranelift-frontend",
@@ -223,7 +218,7 @@ required-features = ["jemalloc"]
 [[bench]]
 name = "output_pipeline"
 harness = false
-required-features = ["jemalloc"]
+required-features = ["jemalloc", "test-support"]
 
 [[bench]]
 name = "jit_layers"

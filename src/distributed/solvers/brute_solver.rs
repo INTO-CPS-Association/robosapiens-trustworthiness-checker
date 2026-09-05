@@ -20,8 +20,8 @@ use crate::{
         },
         scheduling::planning_context::PlanningContext,
     },
-    io::OutputBackendBuilder,
-    io::output::{ManualOutputBackend, OutputBackendConfig, OutputDestination},
+    io::OutputPipeline,
+    io::output::{OutputBackendConfig, OutputDestination},
     runtime::RuntimeBuilder,
     runtime::{asynchronous::AbstractAsyncRuntimeBuilder, distributed::DistAsyncRuntimeBuilder},
     semantics::{
@@ -79,7 +79,7 @@ impl CandidateRuntime {
         };
 
         // Release the receiver before cancelling the producer. This lets the owned runtime see
-        // the closed manual transport while the task is being joined, instead of leaving a
+        // the closed channel transport while the task is being joined, instead of leaving a
         // producer and its error-bearing output writer detached from the solver.
         drop(output_stream);
         // `Task::cancel` must be driven by the executor that owns the task. Calling
@@ -164,16 +164,17 @@ where
             context_input_data,
             self.input_vars.iter().cloned().collect(),
         );
-        let (manual_backend, receiver) = ManualOutputBackend::<Value>::channel(1);
+        let (sender, receiver) = async_unsync::bounded::channel(1).into_split();
         let output_stream: LocalStream<BTreeMap<VarName, Value>> = Box::pin(
             futures::stream::unfold(receiver, |mut receiver| async move {
                 receiver.recv().await.map(|row| (row, receiver))
             }),
         );
-        let output_builder = OutputBackendBuilder::from_destination(OutputDestination::new(
+        let output_pipeline = OutputPipeline::from_destination(OutputDestination::new(
             "solver",
-            OutputBackendConfig::Manual(manual_backend.sender().clone()),
-        ));
+            OutputBackendConfig::channel(sender),
+        ))
+        .expect("solver output destination should construct");
 
         let potential_dist_graph_stream = Box::pin(repeat(labelled_graph.clone()));
         let context_builder = self
@@ -204,7 +205,7 @@ where
                     .expect("Model must be set on monitor builder")
                     .clone(),
             )
-            .input(input_stream);
+            .input(input_stream.into());
 
         let executor = self.executor.clone();
 
@@ -222,7 +223,7 @@ where
         // - NoVal/Deferred/other => false
         let output_stream = candidate_constraint_stream(output_stream, order);
         let task = executor.spawn(async move {
-            let writer = output_builder
+            let writer = output_pipeline
                 .build(&output_variables, std::iter::empty::<VarName>(), None)
                 .await
                 .map_err(|error| {

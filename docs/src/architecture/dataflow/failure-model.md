@@ -27,9 +27,9 @@ If canonical evaluation returns an error, the tick fails. No output row or monit
 
 ## Runtime data path
 
-An input error stops further ticks. A monitor error discards output rows accumulated since the previous completed adapter flush. An output send, flush, or close error terminates the runtime. `OutputWriter` keeps the first operation error sticky while close continues through all stages and destinations.
+An input error stops further ticks. A monitor error discards output rows accumulated since the previous completed adapter flush. An output feed, send, flush, or close error terminates the runtime. `feed` admits a batch, while `send` admits it and waits for the downstream flush barrier. `OutputWriter` keeps the first operation error sticky while close still attempts cleanup for every delivery owner and native destination.
 
-Normal input end is not failure: the runtime sends a final non-empty partial batch, flushes, and closes. It does not create extra ticks to drain temporal operators.
+Normal input end is not failure: the runtime submits a final non-empty partial batch, flushes, and closes. It does not create extra ticks to drain temporal operators.
 
 ## Root cutover
 
@@ -52,7 +52,7 @@ Output delivery has no transaction across destinations. One destination can obse
 
 ## Separate semisynchronous boundary
 
-The semisynchronous implementation ends the complete old generation before opening the replacement. Replacement input/output opening failures therefore occur after old-generation teardown and do not use the in-place dataflow acknowledgement/revision protocol.
+The semisynchronous implementation retains its opened input and output sessions while replacing the monitor/evaluation generation. Its session rebind or monitor preparation failures therefore terminate the run without using the in-place dataflow acknowledgement payload; compatible variable history may be transferred to the next monitor generation.
 
 ## Implementation mapping
 

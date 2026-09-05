@@ -7,7 +7,7 @@ use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use crate::core::{
     InputBatch, InputSegment, InputStream, InputUpdate, LocalStream, OwnedInputTicks, VarName,
 };
-use crate::io::config::{InputReduction, InputStage};
+use crate::io::config::{InputPolicy, InputReduction};
 
 /// Injectable timer used by input windows. Tests can provide a simulated timer;
 /// production uses the real smol timer.
@@ -26,16 +26,16 @@ impl InputTimer for RealTimeInputTimer {
     }
 }
 
-pub(crate) fn apply_stage<V: 'static>(
+pub(crate) fn apply_policy<V: 'static>(
     input: InputStream<V>,
-    stage: InputStage,
+    policy: InputPolicy,
 ) -> anyhow::Result<InputStream<V>> {
-    apply_stage_with_timer(input, stage, RealTimeInputTimer)
+    apply_policy_with_timer(input, policy, RealTimeInputTimer)
 }
 
-pub(super) fn apply_stage_with_timer<V: 'static, T: InputTimer>(
+pub(super) fn apply_policy_with_timer<V: 'static, T: InputTimer>(
     mut input: InputStream<V>,
-    stage: InputStage,
+    policy: InputPolicy,
     timer: T,
 ) -> anyhow::Result<InputStream<V>> {
     let events: WindowEventStream<V, Infallible> = Box::pin(async_stream::try_stream! {
@@ -43,12 +43,13 @@ pub(super) fn apply_stage_with_timer<V: 'static, T: InputTimer>(
             yield WindowEvent::Data(batch?);
         }
     });
-    let mut output = drive_window(events, stage, timer)?;
+    let mut output = drive_window(events, policy, timer)?;
     Ok(Box::pin(async_stream::try_stream! {
         while let Some(event) = output.next().await {
             match event? {
                 WindowEvent::Data(batch) => yield batch,
                 WindowEvent::Control(never) => match never {},
+                WindowEvent::Boundary(_) => unreachable!("ordinary input has no lifecycle boundary"),
             }
         }
     }))
@@ -57,21 +58,22 @@ pub(super) fn apply_stage_with_timer<V: 'static, T: InputTimer>(
 pub(super) enum WindowEvent<V, C> {
     Data(InputBatch<V>),
     Control(C),
+    Boundary(u64),
 }
 
 pub(super) type WindowEventStream<V, C> = LocalStream<anyhow::Result<WindowEvent<V, C>>>;
 
 pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
     mut source: WindowEventStream<V, C>,
-    stage: InputStage,
+    policy: InputPolicy,
     timer: T,
 ) -> anyhow::Result<WindowEventStream<V, C>> {
-    let window = stage.window().clone();
+    let window = policy.window().clone();
     anyhow::ensure!(
         window.is_bounded(),
         "input window requires max_delay or update_limit"
     );
-    let mut pending = WindowAccumulator::new(stage);
+    let mut pending = WindowAccumulator::new(policy);
 
     Ok(Box::pin(async_stream::try_stream! {
         loop {
@@ -81,6 +83,10 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                     Some(Err(error)) => Err(error)?,
                     Some(Ok(WindowEvent::Control(control))) => {
                         yield WindowEvent::Control(control);
+                        continue;
+                    }
+                    Some(Ok(WindowEvent::Boundary(boundary))) => {
+                        yield WindowEvent::Boundary(boundary);
                         continue;
                     }
                     Some(Ok(WindowEvent::Data(batch))) => {
@@ -114,6 +120,11 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                                 Some(Ok(WindowEvent::Control(control))) => {
                                     yield WindowEvent::Data(pending.take()?);
                                     yield WindowEvent::Control(control);
+                                    break;
+                                }
+                                Some(Ok(WindowEvent::Boundary(boundary))) => {
+                                    yield WindowEvent::Data(pending.take()?);
+                                    yield WindowEvent::Boundary(boundary);
                                     break;
                                 }
                                 Some(Ok(WindowEvent::Data(batch))) => {
@@ -153,6 +164,13 @@ pub(super) fn drive_window<V: 'static, C: 'static, T: InputTimer>(
                                 yield WindowEvent::Data(pending.take()?);
                             }
                             yield WindowEvent::Control(control);
+                            break;
+                        }
+                        Some(Ok(WindowEvent::Boundary(boundary))) => {
+                            if !pending.is_empty() {
+                                yield WindowEvent::Data(pending.take()?);
+                            }
+                            yield WindowEvent::Boundary(boundary);
                             break;
                         }
                         Some(Ok(WindowEvent::Data(batch))) => {
@@ -368,10 +386,10 @@ enum WindowAccumulator<V> {
 }
 
 impl<V> WindowAccumulator<V> {
-    fn new(stage: InputStage) -> Self {
-        match stage {
-            InputStage::Batch(_) => Self::Batch(PendingBatch::new()),
-            InputStage::WindowToStep {
+    fn new(policy: InputPolicy) -> Self {
+        match policy {
+            InputPolicy::Batch(_) => Self::Batch(PendingBatch::new()),
+            InputPolicy::WindowToStep {
                 reduction: InputReduction::LastUpdateWins,
                 ..
             } => Self::Atomic(PendingAtomic::new()),
@@ -431,7 +449,11 @@ mod tests {
     }
 
     fn stream(items: Vec<anyhow::Result<InputBatch<i32>>>) -> InputStream<i32> {
-        Box::pin(futures::stream::iter(items))
+        Box::pin(futures::stream::iter(
+            items
+                .into_iter()
+                .map(|item| item.map_err(crate::InputError::from)),
+        ))
     }
 
     #[derive(Clone, Copy)]
@@ -460,8 +482,8 @@ mod tests {
                     .chain(futures::stream::pending()),
             );
             let stage =
-                InputStage::Batch(InputWindow::new(Some(Duration::from_secs(1)), None).unwrap());
-            let mut output = apply_stage_with_timer(input, stage, ImmediateTimer).unwrap();
+                InputPolicy::Batch(InputWindow::new(Some(Duration::from_secs(1)), None).unwrap());
+            let mut output = apply_policy_with_timer(input, stage, ImmediateTimer).unwrap();
 
             let batch = output.next().await.unwrap().unwrap();
             assert_eq!(batch.update_count(), 1);
@@ -471,10 +493,10 @@ mod tests {
     #[test]
     fn update_limit_flushes_before_a_pending_deadline() {
         smol::block_on(async {
-            let stage = InputStage::Batch(
+            let stage = InputPolicy::Batch(
                 InputWindow::new(Some(Duration::from_secs(1)), NonZeroUsize::new(2)).unwrap(),
             );
-            let mut output = apply_stage_with_timer(
+            let mut output = apply_policy_with_timer(
                 stream(vec![
                     Ok(InputBatch::update("x", 1)),
                     Ok(InputBatch::update("x", 2)),
@@ -500,7 +522,7 @@ mod tests {
             ])
             .unwrap();
             let mut output =
-                apply_stage(stream(vec![Ok(batch)]), InputStage::Batch(window(2))).unwrap();
+                apply_policy(stream(vec![Ok(batch)]), InputPolicy::Batch(window(2))).unwrap();
 
             assert_eq!(output.next().await.unwrap().unwrap().update_count(), 2);
             assert_eq!(output.next().await.unwrap().unwrap().update_count(), 1);
@@ -511,19 +533,19 @@ mod tests {
     #[test]
     fn source_error_flushes_pending_data_before_the_error() {
         smol::block_on(async {
-            let mut output = apply_stage(
+            let mut output = apply_policy(
                 stream(vec![
                     Ok(InputBatch::update("x", 1)),
                     Err(anyhow::anyhow!("boom")),
                 ]),
-                InputStage::Batch(window(2)),
+                InputPolicy::Batch(window(2)),
             )
             .unwrap();
 
             assert_eq!(output.next().await.unwrap().unwrap().update_count(), 1);
             assert_eq!(
                 output.next().await.unwrap().unwrap_err().to_string(),
-                "boom"
+                "input source error: boom"
             );
             assert!(output.next().await.is_none());
         });
@@ -538,7 +560,7 @@ mod tests {
             )
             .unwrap();
             let mut output =
-                apply_stage(stream(vec![Ok(packed)]), InputStage::Batch(window(3))).unwrap();
+                apply_policy(stream(vec![Ok(packed)]), InputPolicy::Batch(window(3))).unwrap();
 
             let first = output.next().await.unwrap().unwrap();
             assert_eq!(first.update_count(), 4);
@@ -564,11 +586,11 @@ mod tests {
                 vec![update("x", 3)],
             ])
             .unwrap();
-            let stage = InputStage::WindowToStep {
+            let stage = InputPolicy::WindowToStep {
                 window: window(3),
                 reduction: InputReduction::LastUpdateWins,
             };
-            let mut output = apply_stage(stream(vec![Ok(batch)]), stage).unwrap();
+            let mut output = apply_policy(stream(vec![Ok(batch)]), stage).unwrap();
             let result = output.next().await.unwrap().unwrap();
 
             assert_eq!(
@@ -585,7 +607,7 @@ mod tests {
             let batch =
                 InputBatch::tick(vec![update("x", 1), update("y", 2), update("z", 3)]).unwrap();
             let mut output =
-                apply_stage(stream(vec![Ok(batch)]), InputStage::Batch(window(2))).unwrap();
+                apply_policy(stream(vec![Ok(batch)]), InputPolicy::Batch(window(2))).unwrap();
 
             let result = output.next().await.unwrap().unwrap();
             assert_eq!(result.tick_count(), 1);
@@ -597,7 +619,7 @@ mod tests {
     #[test]
     fn control_barrier_flushes_coalesced_data_and_continues_after_control() {
         smol::block_on(async {
-            let stage = InputStage::WindowToStep {
+            let stage = InputPolicy::WindowToStep {
                 window: InputWindow::new(None, NonZeroUsize::new(10)).unwrap(),
                 reduction: InputReduction::LastUpdateWins,
             };
@@ -628,6 +650,41 @@ mod tests {
                 vec![update("x", 2)]
             );
             assert!(output.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn lifecycle_boundary_flushes_the_existing_window_before_marker() {
+        smol::block_on(async {
+            let stage = InputPolicy::WindowToStep {
+                window: InputWindow::new(None, NonZeroUsize::new(10)).unwrap(),
+                reduction: InputReduction::LastUpdateWins,
+            };
+            let events = Box::pin(futures::stream::iter([
+                Ok::<_, anyhow::Error>(WindowEvent::<i32, ()>::Data(InputBatch::update("x", 1))),
+                Ok(WindowEvent::Boundary(7)),
+                Ok(WindowEvent::Data(InputBatch::update("x", 2))),
+            ]));
+            let mut output = drive_window(events, stage, NeverTimer).unwrap();
+
+            let Some(Ok(WindowEvent::Data(batch))) = output.next().await else {
+                panic!("old window must be flushed before its lifecycle boundary");
+            };
+            assert_eq!(
+                batch.ticks().next().unwrap().to_updates(),
+                vec![update("x", 1)]
+            );
+            assert!(matches!(
+                output.next().await,
+                Some(Ok(WindowEvent::Boundary(7)))
+            ));
+            let Some(Ok(WindowEvent::Data(batch))) = output.next().await else {
+                panic!("new data must follow the lifecycle boundary");
+            };
+            assert_eq!(
+                batch.ticks().next().unwrap().to_updates(),
+                vec![update("x", 2)]
+            );
         });
     }
 }

@@ -1,7 +1,7 @@
 use async_channel::{Receiver, Sender};
 use futures::StreamExt;
 
-use crate::{InputBatch, InputStream};
+use crate::InputBatch;
 
 enum Completion {
     Tick,
@@ -45,22 +45,25 @@ impl InputController {
 
 /// Gate one logical data tick per permit. This adapter is data-only; control
 /// messages are handled by the reconfigurable input adapter.
-pub fn controlled<V: 'static>(inner: InputStream<V>) -> (InputStream<V>, InputController) {
+pub fn controlled<V: 'static>(
+    inner: impl Into<crate::io::OpenedInput<V>>,
+) -> (crate::io::OpenedInput<V>, InputController) {
     let (permits, permit_receiver) = async_channel::bounded::<Permit>(1);
-    let mut batches = inner;
-    let stream = Box::pin(async_stream::try_stream! {
-        while let Some(batch) = batches.next().await {
-            for tick in batch?.into_ticks() {
-                let Ok(permit) = permit_receiver.recv().await else {
-                    return;
-                };
-                yield InputBatch::from_ticks(vec![tick])?;
-                let _ = permit.completion.send(Completion::Tick).await;
+    let input = inner.into().map_stream(|mut batches| {
+        Box::pin(async_stream::try_stream! {
+            while let Some(batch) = batches.next().await {
+                for tick in batch?.into_ticks() {
+                    let Ok(permit) = permit_receiver.recv().await else {
+                        return;
+                    };
+                    yield InputBatch::from_ticks(vec![tick])?;
+                    let _ = permit.completion.send(Completion::Tick).await;
+                }
             }
-        }
-        terminate_pending(&permit_receiver).await;
+            terminate_pending(&permit_receiver).await;
+        })
     });
-    (stream, InputController { permits })
+    (input, InputController { permits })
 }
 
 #[cfg(test)]

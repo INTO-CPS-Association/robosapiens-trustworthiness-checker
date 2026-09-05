@@ -61,7 +61,7 @@ Differential and focused tests in these modules compare optimized behavior with 
 | typed control and persistent input sessions (`ReconfigurableInputItem`, `InputPipelineSession`) | `src/io/reconfigurable_input.rs` |
 | logical output batches and writer lifecycle | `src/core/output.rs` |
 | output resolution, routing, sessions, and handoff (`OutputPipeline`, `OutputPipelineSession`) | `src/io/output/pipeline.rs` |
-| output buffer and coalescing stages | `src/io/output/stages.rs` |
+| per-destination delivery policy, queue, coalescing, barriers, and cleanup | `src/io/output/delivery.rs` |
 
 Transport-backed integration coverage is in `tests/test_mqtt_io.rs`, `tests/test_redis_io.rs`, and `tests/test_ros_io.rs` under their feature requirements. General runtime integration is in `tests/runtime_tests.rs`.
 

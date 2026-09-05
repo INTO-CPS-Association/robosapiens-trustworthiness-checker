@@ -105,11 +105,13 @@ There is no separate user-facing reconfiguration acknowledgement.
 
 A control message is locally ordered at the observed control barrier: pending
 local data before that barrier is emitted first, then the semisynchronous
-runtime closes the old generation and starts the replacement. This is **not** a
-global transaction. There is no cross-process atomicity, and input changes,
-output changes, and remote delivery can be observed at different completion
-points. If the replacement fails to parse or typecheck, the process returns an
-error; external effects already applied are not rolled back.
+runtime rebinds its persistent I/O sessions and starts the replacement monitor
+generation. Compatible variable history can be transferred when context
+transfer is enabled. This is **not** a global transaction. There is no
+cross-process atomicity, and input changes, output changes, and remote delivery
+can be observed at different completion points. If the replacement fails to
+parse or typecheck, the process returns an error; external effects already
+applied are not rolled back.
 
 ## Completion and cleanup
 

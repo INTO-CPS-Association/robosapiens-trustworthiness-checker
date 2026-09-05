@@ -16,7 +16,7 @@ use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
 use crate::io::output::OutputBackendConfig;
-use crate::io::{InputPipeline, InputSource, OutputBackendBuilder};
+use crate::io::{InputPipeline, InputSource, OutputPipeline};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
@@ -95,14 +95,14 @@ pub async fn monitor_runtime_outputs(
         (Some(_), RuntimeSpec::Dataflow(_)) | (None, _) => OutputBackendConfig::null(),
         (Some(limit), _) => OutputBackendConfig::limited_null(limit),
     };
-    let output_builder = OutputBackendBuilder::new(output_backend);
+    let output_pipeline = OutputPipeline::from_backend(output_backend);
 
     let monitor = crate::runtime::GeneralRuntimeBuilder::new()
         .runtime(runtime)
         .semantics(semantics)
         .executor(executor)
         .model(spec)
-        .output_pipeline_builder(output_builder)
+        .output_pipeline(output_pipeline)
         .input(input_stream)
         .build()
         .await
@@ -215,8 +215,8 @@ pub async fn monitor_outputs_typed_semisync(
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("typed semi-sync output pipeline should open");
@@ -226,7 +226,7 @@ pub async fn monitor_outputs_typed_semisync(
             .executor(executor)
             .model(spec)
             .output_writer(writer)
-            .input(input_stream)
+            .input(input_stream.into())
             .build()
             .await;
     monitor.run().await.expect("Error running monitor");
@@ -256,8 +256,8 @@ pub async fn monitor_outputs_dataflow(
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("dataflow output pipeline should open");
@@ -267,7 +267,7 @@ pub async fn monitor_outputs_dataflow(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -280,8 +280,8 @@ pub async fn monitor_outputs_dataflow_limited(
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("dataflow output pipeline should open");
@@ -291,7 +291,7 @@ pub async fn monitor_outputs_dataflow_limited(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -303,8 +303,8 @@ pub async fn monitor_outputs_quickened_dataflow(
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("quickened dataflow output pipeline should open");
@@ -313,7 +313,7 @@ pub async fn monitor_outputs_quickened_dataflow(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -326,8 +326,8 @@ pub async fn monitor_outputs_quickened_dataflow_limited(
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("quickened dataflow output pipeline should open");
@@ -336,7 +336,7 @@ pub async fn monitor_outputs_quickened_dataflow_limited(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -350,8 +350,8 @@ pub async fn monitor_outputs_jit_dataflow(
     spec: CheckedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("JIT dataflow output pipeline should open");
@@ -363,7 +363,7 @@ pub async fn monitor_outputs_jit_dataflow(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -378,8 +378,8 @@ pub async fn monitor_outputs_jit_dataflow_limited(
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("JIT dataflow output pipeline should open");
@@ -391,7 +391,7 @@ pub async fn monitor_outputs_jit_dataflow_limited(
         .executor(executor)
         .model(spec)
         .output_writer(writer)
-        .input(input_stream)
+        .input(input_stream.into())
         .build()
         .await;
     runtime.run().await.expect("Error running monitor");
@@ -401,7 +401,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_source: InputSource,
-    output_pipeline_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
@@ -410,7 +410,7 @@ pub async fn monitor_outputs_untyped_reconf_limited(
             .executor(executor)
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
-            .output_builder(output_pipeline_builder)
+            .output_pipeline(output_pipeline)
             .reconf_topic(RECONF_TOPIC.into())
             .use_context_transfer(use_context_transfer);
     let monitor = Box::new(builder).build().await;
@@ -422,7 +422,7 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_pipeline: InputPipeline,
-    output_backend_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
@@ -435,7 +435,7 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
         .executor(executor)
         .model(spec)
         .input_pipeline(input_pipeline)
-        .output_builder(output_backend_builder)
+        .output_pipeline(output_pipeline)
         .reconf_topic(RECONF_TOPIC)
         .context_transfer(transfer_policy)
         .quickening(false);
@@ -448,7 +448,7 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_pipeline: InputPipeline,
-    output_backend_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
@@ -465,7 +465,7 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
-        .output_builder(output_backend_builder)
+        .output_pipeline(output_pipeline)
         .reconf_topic(RECONF_TOPIC)
         .context_transfer(transfer_policy)
         .quickening(false);
@@ -478,7 +478,7 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_pipeline: InputPipeline,
-    output_backend_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
@@ -495,7 +495,7 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
-        .output_builder(output_backend_builder)
+        .output_pipeline(output_pipeline)
         .reconf_topic(RECONF_TOPIC)
         .context_transfer(transfer_policy);
     let runtime = Box::new(builder).build().await;
@@ -508,7 +508,7 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
     executor: Rc<LocalExecutor<'static>>,
     spec: DsrvSpecification,
     input_pipeline: InputPipeline,
-    output_backend_builder: OutputBackendBuilder,
+    output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
     let transfer_policy = if use_context_transfer {
@@ -525,7 +525,7 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
-        .output_builder(output_backend_builder)
+        .output_pipeline(output_pipeline)
         .reconf_topic(RECONF_TOPIC)
         .context_transfer(transfer_policy)
         .jit(crate::dataflow::JitConfig::after_events(
@@ -575,8 +575,8 @@ pub async fn monitor_outputs_typed_async(
     // Currently cannot be deduplicated since it includes the type
     // checking. The async runtime keeps independent named streams, so it uses
     // the drain adapter over the sink-based null backend.
-    let output_builder = OutputBackendBuilder::<Value>::new(OutputBackendConfig::null());
-    let writer = output_builder
+    let output_pipeline = OutputPipeline::<Value>::from_backend(OutputBackendConfig::null());
+    let writer = output_pipeline
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("typed async output pipeline should open");
@@ -584,7 +584,7 @@ pub async fn monitor_outputs_typed_async(
         AsyncRuntimeBuilder::<CheckedValueConfig, CheckedUntimedDsrvSemantics>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(writer)
             .build()
             .await;
@@ -617,15 +617,12 @@ pub fn input_factory_dsrv_paper_bench(
     (InputPipeline::new(input_source), tx_fans)
 }
 
-pub fn output_builder_dsrv_paper_bench(
+pub fn output_pipeline_dsrv_paper_bench(
     _output_var_names: BTreeSet<VarName>,
     _ex: Rc<LocalExecutor<'static>>,
-) -> (
-    OutputBackendBuilder,
-    bounded::Receiver<BTreeMap<VarName, Value>>,
-) {
+) -> (OutputPipeline, bounded::Receiver<BTreeMap<VarName, Value>>) {
     let (out_tx, out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(1024).into_split();
-    let output_builder = OutputBackendBuilder::new(OutputBackendConfig::manual(out_tx));
+    let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
 
-    (output_builder, out_rx)
+    (output_pipeline, out_rx)
 }

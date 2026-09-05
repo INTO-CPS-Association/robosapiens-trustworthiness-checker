@@ -1,5 +1,4 @@
 use std::rc::Rc;
-#[cfg(feature = "mqtt")]
 use std::{
     collections::BTreeMap,
     mem,
@@ -10,30 +9,19 @@ use std::{
 };
 
 use crate::{LocalStream, distributed::distribution_graphs::DistributionGraph};
-#[cfg(feature = "mqtt")]
 use crate::{
     distributed::distribution_graphs::{NodeName, Pos, dist_graph_from_positions},
-    io::mqtt::MqttFactory,
+    io::mqtt,
 };
 
 use async_stream::stream;
-#[cfg(feature = "mqtt")]
 use async_unsync::bounded;
-#[cfg(feature = "mqtt")]
 use futures::future::join_all;
-#[cfg(feature = "mqtt")]
-use paho_mqtt as mqtt;
-#[cfg(feature = "mqtt")]
 use serde_json::Value as JValue;
-#[cfg(feature = "mqtt")]
 use smol::{LocalExecutor, stream::StreamExt};
-#[cfg(feature = "mqtt")]
 use tracing::{debug, info, info_span, warn};
 
-#[cfg(feature = "mqtt")]
 const QOS: i32 = 1;
-#[cfg(feature = "mqtt")]
-const MQTT_FACTORY: MqttFactory = MqttFactory::Paho;
 
 pub trait DistGraphProvider {
     fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>>;
@@ -73,7 +61,6 @@ impl DistGraphProvider for StaticDistGraphProvider {
     }
 }
 
-#[cfg(feature = "mqtt")]
 pub struct MqttDistGraphProvider {
     pub executor: Rc<LocalExecutor<'static>>,
     pub central_node: NodeName,
@@ -81,7 +68,6 @@ pub struct MqttDistGraphProvider {
     position_stream: Option<LocalStream<Vec<Pos>>>,
 }
 
-#[cfg(feature = "mqtt")]
 impl DistGraphProvider for MqttDistGraphProvider {
     fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
         let central_node = self.central_node.clone();
@@ -97,16 +83,14 @@ impl DistGraphProvider for MqttDistGraphProvider {
     }
 }
 
-#[cfg(feature = "mqtt")]
 static PROVIDER_ID: LazyLock<AtomicUsize> = LazyLock::new(|| 0.into());
 
-#[cfg(feature = "mqtt")]
 impl MqttDistGraphProvider {
     pub fn new(
         executor: Rc<LocalExecutor<'static>>,
         central_node: NodeName,
         locations: BTreeMap<NodeName, String>,
-    ) -> Result<Self, mqtt::Error> {
+    ) -> anyhow::Result<Self> {
         let topics = locations.values().cloned().collect::<Vec<_>>();
         let (location_txs, mut location_rxs): (Vec<_>, Vec<_>) = locations
             .values()
@@ -134,23 +118,23 @@ impl MqttDistGraphProvider {
                 let _ = span.enter();
                 debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
-                let (client, mut output) =
-                MQTT_FACTORY.connect_and_receive(&"localhost", u32::MAX)
-                        .await
-                        .unwrap();
+                let (client, mut output) = mqtt::connect_and_receive("tcp://localhost")
+                    .await
+                    .unwrap();
 
-                loop {
-                    match client.subscribe_many_same_qos(&topics, QOS).await {
-                        Ok(_) => break,
-                        Err(e) => {
-                            warn!(?topics, err=?e, "Failed to subscribe to topics");
-                            info!("Retrying in 100ms");
-                            let _e = client.reconnect().await;
-                        }
-                    }
+                if let Err(error) = client.subscribe_many_same_qos(&topics, QOS).await {
+                    warn!(?topics, ?error, "Failed to subscribe to MQTT graph topics");
+                    return;
                 }
 
                 while let Some(msg) = output.next().await {
+                    let msg = match msg {
+                        Ok(msg) => msg,
+                        Err(error) => {
+                            warn!(?error, "MQTT graph input stopped");
+                            break;
+                        }
+                    };
                     let topic = msg.topic;
                     if let Some(index) = topics.iter().position(|t| t == &topic) {
                         if let Ok(Some(Some(pos))) =

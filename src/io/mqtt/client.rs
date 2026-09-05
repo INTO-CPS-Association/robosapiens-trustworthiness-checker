@@ -1,76 +1,34 @@
-use anyhow::anyhow;
-use async_stream::stream;
-use async_trait::async_trait;
-use futures::{StreamExt, stream::BoxStream};
-use paho_mqtt::{self as mqtt};
-use std::fmt::Debug;
-use std::time::Duration;
-use tracing::{Level, debug, info, instrument};
-use uuid::Uuid;
+use crate::{core::InputError, io::RetryPolicy};
+use futures::stream::BoxStream;
+use tracing::info;
 
-/* Factory for the generic Paho client used by MQTT output, distribution,
- * and the compatibility input backend. Input backend selection lives in
- * `input_backend` because rumqttc does not implement this client interface. */
+pub(crate) mod mqtt311;
+pub use mqtt311::MqttClient;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum MqttFactory {
-    Paho,
+pub async fn connect(uri: &str) -> anyhow::Result<MqttClient> {
+    info!(?uri, "Connecting to MQTT broker");
+    connect_with_retry(uri, RetryPolicy::output_default()).await
 }
-
-impl MqttFactory {
-    /// Connect to the MQTT broker at the given URI and return the connected client
-    pub async fn connect(&self, uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
-        info!(?uri, "Connecting to MQTT broker with factory {:?}", self);
-        match self {
-            MqttFactory::Paho => paho::connect(uri).await,
-        }
-    }
-
-    /// Connect to the MQTT broker at the given URI and return the connected client and a stream
-    /// for receiving data
-    pub async fn connect_and_receive(
-        &self,
-        uri: &str,
-        max_reconnect_attempts: u32,
-    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
-        info!(
-            ?uri,
-            "Connecting and receiving to MQTT broker with factory {:?}", self
-        );
-        match self {
-            MqttFactory::Paho => paho::connect_and_receive(uri, max_reconnect_attempts).await,
-        }
-    }
+pub async fn connect_with_retry(uri: &str, retry: RetryPolicy) -> anyhow::Result<MqttClient> {
+    mqtt311::connect(uri, retry).await
 }
-
-#[async_trait]
-pub trait MqttClient: Send + Sync {
-    async fn publish(&self, message: MqttMessage) -> anyhow::Result<()>;
-
-    async fn reconnect(&self) -> anyhow::Result<()>;
-
-    async fn disconnect(&self) -> anyhow::Result<()>;
-
-    fn set_raw_message_callback(&self, cb: Box<dyn FnMut(&str, &[u8]) + Send>);
-
-    fn remove_raw_message_callback(&self);
-
-    // TODO: Rewrite into taking str and iterators
-    async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()>;
-    async fn subscribe_many(&self, topics: &Vec<String>, qos: &[i32]) -> anyhow::Result<()>;
-    async fn subscribe_many_same_qos(&self, topics: &Vec<String>, qos: i32) -> anyhow::Result<()> {
-        let qos_vec = vec![qos; topics.len()];
-        self.subscribe_many(topics, &qos_vec).await
-    }
-    async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()>;
-
-    fn clone_box(&self) -> Box<dyn MqttClient>;
+pub async fn connect_and_receive(
+    uri: &str,
+) -> anyhow::Result<(
+    MqttClient,
+    BoxStream<'static, Result<MqttMessage, InputError>>,
+)> {
+    info!(?uri, "Connecting to MQTT broker and opening receive stream");
+    connect_and_receive_with_retry(uri, RetryPolicy::input_default()).await
 }
-
-impl Clone for Box<dyn MqttClient> {
-    fn clone(&self) -> Box<dyn MqttClient> {
-        self.clone_box()
-    }
+pub async fn connect_and_receive_with_retry(
+    uri: &str,
+    retry: RetryPolicy,
+) -> anyhow::Result<(
+    MqttClient,
+    BoxStream<'static, Result<MqttMessage, InputError>>,
+)> {
+    mqtt311::connect_and_receive(uri, retry).await
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -79,7 +37,6 @@ pub struct MqttMessage {
     pub payload: String,
     pub qos: i32,
 }
-
 impl MqttMessage {
     pub fn new(topic: String, payload: String, qos: i32) -> Self {
         Self {
@@ -87,235 +44,5 @@ impl MqttMessage {
             payload,
             qos,
         }
-    }
-}
-
-pub struct PahoClient {
-    client: mqtt::AsyncClient,
-}
-
-fn validate_subscription_result_codes(
-    result_codes: &[i32],
-    expected_topics: usize,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        result_codes.len() == expected_topics,
-        "MQTT subscribe response returned {} result codes for {} requested topics",
-        result_codes.len(),
-        expected_topics,
-    );
-
-    if let Some((index, code)) = result_codes
-        .iter()
-        .enumerate()
-        .find(|(_, code)| **code < 0 || **code > 2)
-    {
-        anyhow::bail!(
-            "MQTT subscription at topic index {index} was not accepted (Paho result code {code})"
-        );
-    }
-
-    Ok(())
-}
-
-fn validate_single_subscription_response(response: mqtt::ServerResponse) -> anyhow::Result<()> {
-    let code = response
-        .subscribe_response()
-        .ok_or_else(|| anyhow!("Paho subscribe response did not contain a result code"))?;
-    validate_subscription_result_codes(&[code], 1)
-}
-
-fn validate_many_subscription_response(
-    response: mqtt::ServerResponse,
-    expected_topics: usize,
-) -> anyhow::Result<()> {
-    let result_codes = response
-        .subscribe_many_response()
-        .ok_or_else(|| anyhow!("Paho subscribe-many response did not contain result codes"))?;
-    validate_subscription_result_codes(&result_codes, expected_topics)
-}
-
-#[async_trait]
-impl MqttClient for PahoClient {
-    async fn publish(&self, message: MqttMessage) -> anyhow::Result<()> {
-        self.client
-            .publish(mqtt::Message::new(
-                message.topic,
-                message.payload,
-                message.qos,
-            ))
-            .await?;
-        Ok(())
-    }
-
-    async fn reconnect(&self) -> anyhow::Result<()> {
-        match self.client.reconnect().await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    async fn disconnect(&self) -> anyhow::Result<()> {
-        match self.client.disconnect(None).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    fn set_raw_message_callback(&self, mut cb: Box<dyn FnMut(&str, &[u8]) + Send>) {
-        self.client.set_message_callback(move |_, message| {
-            if let Some(message) = message {
-                cb(message.topic(), message.payload());
-            }
-        });
-    }
-
-    fn remove_raw_message_callback(&self) {
-        self.client.remove_message_callback();
-    }
-
-    async fn subscribe(&self, topic: &String, qos: i32) -> anyhow::Result<()> {
-        let response = self
-            .client
-            .subscribe(topic, qos)
-            .await
-            .map_err(|error| anyhow!("{}", error))?;
-        validate_single_subscription_response(response)
-    }
-
-    async fn subscribe_many(&self, topics: &Vec<String>, qos: &[i32]) -> anyhow::Result<()> {
-        let response = self
-            .client
-            .subscribe_many(topics, qos)
-            .await
-            .map_err(|error| anyhow!("{}", error))?;
-        validate_many_subscription_response(response, topics.len())
-    }
-
-    async fn unsubscribe_many(&self, topics: &Vec<String>) -> anyhow::Result<()> {
-        match self.client.unsubscribe_many(topics).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-
-    fn clone_box(&self) -> Box<dyn MqttClient> {
-        Box::new(PahoClient {
-            client: self.client.clone(),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_all_mqtt_subscription_grants() {
-        assert!(validate_subscription_result_codes(&[0, 1, 2], 3).is_ok());
-    }
-
-    #[test]
-    fn rejects_broker_refused_subscription() {
-        let error = validate_subscription_result_codes(&[0, 0x80, 1], 3)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("topic index 1"));
-        assert!(error.contains("128"));
-    }
-
-    #[test]
-    fn rejects_a_response_with_the_wrong_number_of_codes() {
-        let error = validate_subscription_result_codes(&[0], 2)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("1 result codes"));
-        assert!(error.contains("2 requested topics"));
-    }
-}
-
-mod paho {
-    use super::*;
-
-    async fn connect_impl(
-        mqtt_client: mqtt::AsyncClient,
-        opts: mqtt::ConnectOptions,
-    ) -> Result<mqtt::AsyncClient, mqtt::Error> {
-        // Try to connect to the broker
-        mqtt_client.connect(opts).await.map(|_| mqtt_client)
-    }
-
-    fn new_client_impl(
-        uri: &str,
-    ) -> Result<(mqtt::AsyncClient, mqtt::ConnectOptions), mqtt::Error> {
-        let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-            .server_uri(uri)
-            .client_id(format!(
-                "robosapiens_trustworthiness_checker_{}",
-                Uuid::new_v4()
-            ))
-            .finalize();
-
-        let opts = mqtt::ConnectOptionsBuilder::new_v3()
-            .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(false)
-            .automatic_reconnect(Duration::from_millis(500), Duration::from_secs(60))
-            .finalize();
-
-        // Error means requester has gone away - we don't care in that case
-        let (client, opts) = mqtt::AsyncClient::new(create_opts).map(|client| (client, opts))?;
-        debug!(?uri, client_id = client.client_id(), "Created MQTT client",);
-
-        Ok((client, opts))
-    }
-
-    #[instrument(level=Level::INFO, skip(client))]
-    fn message_stream(
-        mut client: mqtt::AsyncClient,
-        _max_reconnect_attempts: u32,
-    ) -> BoxStream<'static, MqttMessage> {
-        // Note: Important that we call get_stream before the async block, otherwise
-        // we risk MQTT client receiving messages before stream is registered
-        let stream = client.get_stream(10);
-        Box::pin(stream! {
-            let mut stream = Box::pin(stream);
-            while let Some(msg) = stream.next().await {
-                match msg {
-                    Some(message) => {
-                        debug!(?message, topic = message.topic(), "Received MQTT message");
-                        let message = MqttMessage::new(
-                            message.topic().to_string(),
-                            message.payload_str().to_string(),
-                            message.qos() as i32,
-                        );
-                        yield message;
-                    }
-                    None => {
-                        debug!("MQTT connection lost, waiting for auto-reconnect");
-                        smol::Timer::after(Duration::from_millis(200)).await;
-                        stream = Box::pin(client.get_stream(10));
-                    }
-                }
-            }
-            debug!("MQTT stream ended permanently. Disconnecting.");
-        })
-    }
-
-    pub(crate) async fn connect(uri: &str) -> anyhow::Result<Box<dyn MqttClient>> {
-        let (client, opts) = new_client_impl(uri)?;
-        let client = connect_impl(client, opts).await?;
-        Ok(Box::new(PahoClient { client }) as Box<dyn MqttClient>)
-    }
-
-    pub(crate) async fn connect_and_receive(
-        uri: &str,
-        max_reconnect_attempts: u32,
-    ) -> anyhow::Result<(Box<dyn MqttClient>, BoxStream<'static, MqttMessage>)> {
-        let (client, opts) = new_client_impl(uri)?;
-        let stream = message_stream(client.clone(), max_reconnect_attempts);
-        let client = connect_impl(client, opts).await?;
-        Ok((Box::new(PahoClient { client }), stream))
     }
 }

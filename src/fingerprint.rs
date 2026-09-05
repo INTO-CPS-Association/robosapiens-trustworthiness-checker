@@ -33,18 +33,6 @@ impl FingerprintBuilder {
         self.write_bytes(&value.to_le_bytes());
     }
 
-    pub(crate) fn write_u64(&mut self, value: u64) {
-        self.write_bytes(&value.to_le_bytes());
-    }
-
-    pub(crate) fn write_usize(&mut self, value: usize) {
-        self.write_u64(value as u64);
-    }
-
-    pub(crate) fn write_bool(&mut self, value: bool) {
-        self.write_bytes(&[u8::from(value)]);
-    }
-
     pub(crate) fn write_bytes(&mut self, value: &[u8]) {
         self.mix_u64(value.len() as u64);
         for &byte in value {

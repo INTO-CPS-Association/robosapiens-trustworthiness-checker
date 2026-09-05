@@ -1,13 +1,16 @@
 #[cfg(test)]
+use crate::io::RetryLimit;
+use crate::io::RetryPolicy;
+#[cfg(test)]
 use std::num::NonZeroU32;
-use std::{collections::BTreeMap, time::Duration};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration};
 
 use anyhow::{Context, anyhow};
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture, stream::FuturesUnordered};
 
 use crate::core::{InputBatch, InputStream, InputUpdate, Value, VarName};
 use crate::io::redis_config::{
-    RedisKnowledgeConfig, RedisKnowledgeRetry, decode_redis_knowledge_value, redis_keyspace_channel,
+    RedisKnowledgeConfig, decode_redis_knowledge_value, redis_keyspace_channel,
 };
 
 /// The Redis knowledge provider is intentionally Value-specific. Generic input
@@ -16,8 +19,39 @@ use crate::io::redis_config::{
 pub(crate) fn open_value_redis_knowledge(
     config: RedisKnowledgeConfig,
     bindings: BTreeMap<VarName, String>,
-) -> LocalBoxFuture<'static, anyhow::Result<InputStream<Value>>> {
-    Box::pin(open_value_source(config, bindings))
+) -> LocalBoxFuture<'static, anyhow::Result<(InputStream<Value>, RedisKnowledgeInputControl)>> {
+    Box::pin(async move {
+        let tasks = Rc::new(RefCell::new(Vec::new()));
+        let stream = open_value_source(config, bindings, Rc::clone(&tasks)).await?;
+        Ok((stream, RedisKnowledgeInputControl { tasks }))
+    })
+}
+
+type NotificationTasks = Rc<RefCell<Vec<Rc<NotificationTask>>>>;
+
+pub(crate) struct RedisKnowledgeInputControl {
+    tasks: NotificationTasks,
+}
+
+impl RedisKnowledgeInputControl {
+    pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
+        let tasks = self.tasks.borrow().clone();
+        for task in &tasks {
+            task.cancel();
+        }
+        for task in tasks {
+            task.join().await;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RedisKnowledgeInputControl {
+    fn drop(&mut self) {
+        for task in self.tasks.borrow().iter() {
+            task.cancel();
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -106,8 +140,26 @@ type SharedNotificationTracker = std::sync::Arc<std::sync::Mutex<NotificationTra
 struct NotificationDrain {
     tracker: SharedNotificationTracker,
     wake: async_channel::Receiver<()>,
+    task: Rc<NotificationTask>,
+    tasks: NotificationTasks,
+}
+
+struct NotificationTask {
     cancel: async_channel::Sender<()>,
-    task: Option<smol::Task<()>>,
+    task: RefCell<Option<smol::Task<()>>>,
+}
+
+impl NotificationTask {
+    fn cancel(&self) {
+        let _ = self.cancel.try_send(());
+    }
+
+    async fn join(&self) {
+        let task = self.task.borrow_mut().take();
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
 }
 
 impl NotificationDrain {
@@ -115,6 +167,7 @@ impl NotificationDrain {
         messages: redis::aio::PubSubStream,
         channel_indices: BTreeMap<String, usize>,
         tracker: SharedNotificationTracker,
+        tasks: &NotificationTasks,
     ) -> Self {
         tracker
             .lock()
@@ -134,11 +187,16 @@ impl NotificationDrain {
             )
             .await;
         });
+        let task = Rc::new(NotificationTask {
+            cancel,
+            task: RefCell::new(Some(task)),
+        });
+        tasks.borrow_mut().push(Rc::clone(&task));
         Self {
             tracker,
             wake: wake_receiver,
-            cancel,
-            task: Some(task),
+            task,
+            tasks: Rc::clone(tasks),
         }
     }
 
@@ -163,19 +221,17 @@ impl NotificationDrain {
     }
 
     async fn stop(&mut self) {
-        let _ = self.cancel.try_send(());
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
-        }
+        self.task.cancel();
+        self.task.join().await;
+        self.tasks
+            .borrow_mut()
+            .retain(|task| !Rc::ptr_eq(task, &self.task));
     }
 }
 
 impl Drop for NotificationDrain {
     fn drop(&mut self) {
-        let _ = self.cancel.try_send(());
-        // Dropping the owned task cancels it. It is intentionally not detached;
-        // the task cannot outlive the opened source.
-        let _ = self.task.take();
+        self.task.cancel();
     }
 }
 
@@ -316,7 +372,7 @@ impl KnowledgeTimer for RealKnowledgeTimer {
 }
 
 async fn retry_operation<T, F>(
-    retry: &RedisKnowledgeRetry,
+    retry: &RetryPolicy,
     timer: &impl KnowledgeTimer,
     mut operation: F,
 ) -> Result<T, AttemptError>
@@ -324,27 +380,16 @@ where
     T: 'static,
     F: FnMut() -> LocalBoxFuture<'static, Result<T, AttemptError>>,
 {
-    let mut attempts = 0u32;
-    let mut delay = retry.initial_delay;
+    let mut tracker = retry.tracker();
     loop {
-        attempts = attempts.saturating_add(1);
         match operation().await {
             Ok(value) => return Ok(value),
             Err(error) if !error.retryable => return Err(error),
-            Err(error)
-                if retry
-                    .max_attempts
-                    .is_some_and(|max_attempts| attempts >= max_attempts.get()) =>
-            {
-                return Err(error);
-            }
             Err(error) => {
-                let _ = error;
+                let Some(delay) = tracker.record_failure() else {
+                    return Err(error);
+                };
                 timer.sleep(delay).await;
-                delay = delay
-                    .checked_mul(2)
-                    .unwrap_or(retry.max_delay)
-                    .min(retry.max_delay);
             }
         }
     }
@@ -354,6 +399,7 @@ async fn connect_once(
     config: &RedisKnowledgeConfig,
     channels: &[String],
     tracker: SharedNotificationTracker,
+    tasks: NotificationTasks,
 ) -> Result<RedisKnowledgeConnection, AttemptError> {
     let url = redis_url(config);
     let client = redis::Client::open(url).map_err(|error| {
@@ -398,7 +444,7 @@ async fn connect_once(
         .enumerate()
         .map(|(index, channel)| (channel, index))
         .collect();
-    let mut drain = NotificationDrain::start(messages, channel_indices, tracker);
+    let mut drain = NotificationDrain::start(messages, channel_indices, tracker, &tasks);
     let command = match client.get_multiplexed_async_connection().await {
         Ok(command) => command,
         Err(error) => {
@@ -423,6 +469,7 @@ async fn connect_with_retry(
     config: &RedisKnowledgeConfig,
     channels: Vec<String>,
     tracker: SharedNotificationTracker,
+    tasks: NotificationTasks,
 ) -> anyhow::Result<RedisKnowledgeConnection> {
     let retry = config.retry.clone();
     let config = config.clone();
@@ -430,7 +477,8 @@ async fn connect_with_retry(
         let config = config.clone();
         let channels = channels.clone();
         let tracker = tracker.clone();
-        Box::pin(async move { connect_once(&config, &channels, tracker).await })
+        let tasks = tasks.clone();
+        Box::pin(async move { connect_once(&config, &channels, tracker, tasks).await })
     })
     .await
     .map_err(|error| error.error)
@@ -484,6 +532,7 @@ async fn connect_with_snapshot(
     channels: Vec<String>,
     selected: Vec<SelectedKey>,
     tracker: SharedNotificationTracker,
+    tasks: NotificationTasks,
 ) -> anyhow::Result<(RedisKnowledgeConnection, Vec<Value>)> {
     let retry = config.retry.clone();
     let config = config.clone();
@@ -492,8 +541,9 @@ async fn connect_with_snapshot(
         let channels = channels.clone();
         let selected = selected.clone();
         let tracker = tracker.clone();
+        let tasks = tasks.clone();
         Box::pin(async move {
-            let mut connection = connect_once(&config, &channels, tracker).await?;
+            let mut connection = connect_once(&config, &channels, tracker, tasks).await?;
             match read_snapshot_once(&config, &mut connection.command, &selected).await {
                 Ok(values) => Ok((connection, values)),
                 Err(error) => {
@@ -715,6 +765,7 @@ async fn recover_connection(
     channels: &[String],
     selected: &[SelectedKey],
     tracker: SharedNotificationTracker,
+    tasks: NotificationTasks,
     state: &mut KnowledgeStateMachine,
 ) -> anyhow::Result<(RedisKnowledgeConnection, Option<InputBatch<Value>>)> {
     // Stop and await the old drain before opening a replacement. This makes
@@ -723,7 +774,7 @@ async fn recover_connection(
     connection.stop_drain().await;
     state.reset_reads_for_reconnect();
     let (new_connection, values) =
-        connect_with_snapshot(config, channels.to_vec(), selected.to_vec(), tracker).await?;
+        connect_with_snapshot(config, channels.to_vec(), selected.to_vec(), tracker, tasks).await?;
     let updates = reconnect_updates(state, selected, values)?;
     Ok((new_connection, updates))
 }
@@ -731,6 +782,7 @@ async fn recover_connection(
 async fn open_value_source(
     config: RedisKnowledgeConfig,
     bindings: BTreeMap<VarName, String>,
+    tasks: NotificationTasks,
 ) -> anyhow::Result<InputStream<Value>> {
     config.validate()?;
     let selected = selected_keys(&config, bindings)?;
@@ -746,12 +798,18 @@ async fn open_value_source(
     )));
     let mut state = KnowledgeStateMachine::new(selected.len());
     let (mut connection, initial) = if config.publish_initial {
-        connect_with_snapshot(&config, channels.clone(), selected.clone(), tracker.clone())
-            .await
-            .context("Redis knowledge source could not acquire its initial snapshot")?
+        connect_with_snapshot(
+            &config,
+            channels.clone(),
+            selected.clone(),
+            tracker.clone(),
+            tasks.clone(),
+        )
+        .await
+        .context("Redis knowledge source could not acquire its initial snapshot")?
     } else {
         (
-            connect_with_retry(&config, channels.clone(), tracker.clone())
+            connect_with_retry(&config, channels.clone(), tracker.clone(), tasks.clone())
                 .await
                 .context("Redis knowledge source could not connect")?,
             Vec::new(),
@@ -786,6 +844,7 @@ async fn open_value_source(
                     &channels,
                     &selected,
                     tracker.clone(),
+                    tasks.clone(),
                     &mut state,
                 )
                 .await {
@@ -842,6 +901,7 @@ async fn open_value_source(
                             &channels,
                             &selected,
                             tracker.clone(),
+                            tasks.clone(),
                             &mut state,
                         )
                         .await {
@@ -921,6 +981,7 @@ async fn open_value_source(
                                 &channels,
                                 &selected,
                                 tracker.clone(),
+                                tasks.clone(),
                                 &mut state,
                             )
                             .await {
@@ -945,7 +1006,9 @@ async fn open_value_source(
             }
         }
     };
-    Ok(Box::pin(stream))
+    Ok(Box::pin(
+        stream.map(|item| item.map_err(crate::InputError::from)),
+    ))
 }
 
 #[cfg(test)]
@@ -961,12 +1024,41 @@ mod redis_knowledge_tests {
 
     use futures::future;
 
-    fn retry_config(max_attempts: Option<NonZeroU32>) -> RedisKnowledgeRetry {
-        RedisKnowledgeRetry {
-            max_attempts,
-            initial_delay: Duration::from_millis(2),
-            max_delay: Duration::from_millis(5),
-        }
+    #[test]
+    fn owner_shutdown_joins_registered_notification_tasks() {
+        smol::block_on(async {
+            let (cancel, cancelled) = async_channel::bounded(1);
+            let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let task_completed = std::sync::Arc::clone(&completed);
+            let task = smol::spawn(async move {
+                let _ = cancelled.recv().await;
+                smol::Timer::after(Duration::from_millis(10)).await;
+                task_completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            let notification = Rc::new(NotificationTask {
+                cancel,
+                task: RefCell::new(Some(task)),
+            });
+            let mut owner = RedisKnowledgeInputControl {
+                tasks: Rc::new(RefCell::new(vec![notification])),
+            };
+
+            owner.shutdown().await.unwrap();
+
+            assert!(
+                completed.load(std::sync::atomic::Ordering::SeqCst),
+                "shutdown returned before notification join"
+            );
+        });
+    }
+
+    fn retry_config(max_attempts: Option<NonZeroU32>) -> RetryPolicy {
+        RetryPolicy::new(
+            max_attempts.map_or(RetryLimit::Unlimited, RetryLimit::Attempts),
+            Duration::from_millis(2),
+            Duration::from_millis(5),
+        )
+        .unwrap()
     }
 
     #[derive(Clone)]
@@ -1026,12 +1118,12 @@ mod redis_knowledge_tests {
 
     #[test]
     fn retry_defaults_are_long_lived_and_serde_uses_milliseconds() {
-        let retry = RedisKnowledgeRetry::default();
-        assert_eq!(retry.max_attempts, None);
-        assert_eq!(retry.initial_delay, Duration::from_millis(250));
-        assert_eq!(retry.max_delay, Duration::from_secs(5));
+        let retry = RetryPolicy::input_default();
+        assert_eq!(retry.limit(), RetryLimit::Unlimited);
+        assert_eq!(retry.initial_backoff(), Duration::from_millis(250));
+        assert_eq!(retry.max_backoff(), Duration::from_secs(5));
 
-        let decoded: RedisKnowledgeRetry =
+        let decoded: RetryPolicy =
             json5::from_str(r#"{max_attempts:null, initial_delay_ms:250, max_delay_ms:5000}"#)
                 .unwrap();
         assert_eq!(decoded, retry);
@@ -1048,7 +1140,7 @@ mod redis_knowledge_tests {
             r#"{initial_delay_ms:1, max_delay_ms:0}"#,
             r#"{initial_delay_ms:1, max_delay_ms:1, unknown:2}"#,
         ] {
-            assert!(json5::from_str::<RedisKnowledgeRetry>(json).is_err());
+            assert!(json5::from_str::<RetryPolicy>(json).is_err());
         }
     }
 
@@ -1063,7 +1155,7 @@ mod redis_knowledge_tests {
                 (VarName::new("x"), "same".to_owned()),
                 (VarName::new("y"), "same".to_owned()),
             ]),
-            retry: RedisKnowledgeRetry::default(),
+            retry: RetryPolicy::input_default(),
         };
         let error = config.validate().unwrap_err();
         assert!(error.to_string().contains("mapped to both"));

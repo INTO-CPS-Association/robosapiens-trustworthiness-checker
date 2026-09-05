@@ -78,7 +78,7 @@ flowchart TB
     end
 
     runtime --> execute
-    commit --> output["Output architecture: stages and destination owners"]
+    commit --> output["Output architecture: delivery policies and destination owners"]
     control["Root reconfiguration control"] -. "ordered cutover" .-> runtime
 ```
 
@@ -105,7 +105,7 @@ flowchart TB
 | compiled monitor (`DataflowMonitor`) | Owns the current row, compiled definition, scheduler, evaluator execution, history, and the common temporal commit boundary. |
 | compiled definition (`DataflowProgram`) | Holds immutable stream programs, environment layout, monitor plan, output projection, and semantic identity produced by compilation. |
 | evaluator execution (`MonitorExecution`) | Owns persistent evaluator instances and replaceable canonical, quickened, or native execution routes. |
-| output pipeline (`OutputPipeline`) | Preserves logical output ticks while staging, selecting, routing, and delivering values to opened destination owners. |
+| output pipeline (`OutputPipeline`) | Preserves logical output ticks while selecting, routing, and delivering values to opened destination owners under per-destination delivery policies. |
 | reconfigurable runtime (`DataflowRuntime`, configured by `ReconfigurableDataflowRuntimeBuilder`) | Serializes data evaluation and ordered replacement across persistent input, monitor, and output owners. |
 
 A compiled monitor does not own transports or drive itself. Input and output batching may change physical granularity, but it must not add, merge, or reorder logical ticks unless an explicit input reduction says so.

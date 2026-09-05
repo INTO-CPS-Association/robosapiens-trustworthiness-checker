@@ -8,6 +8,7 @@ SKELETON_DIR="$BUILD_DIR/trustworthiness_checker"
 WHEELS_DIR="$BUILD_DIR/wheels"
 DIST_DIR="$FMU_DIR/dist"
 FMU_PATH="$DIST_DIR/trustworthiness_checker.fmu"
+TC_BUILD_PROFILE="${TC_BUILD_PROFILE:-release}"
 UNIFMU_BINARY="unifmu"
 FMU_PLATFORM="linux64"
 case "$(uname -s)" in
@@ -82,9 +83,8 @@ fi
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/trustworthiness-checker-uv-cache}"
 
-# Keep prebuilt Python wheels in BUILD_DIR. Docker images can prepare the
-# native extension once; regenerating a monitor then only replaces its UniFMU
-# skeleton and specification-specific interface.
+# Keep the freshly built Python wheel in BUILD_DIR for inspection and reuse by
+# the packaging steps in this invocation.
 rm -rf "$SKELETON_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR"
 
@@ -107,25 +107,25 @@ GENERATOR_ARGS=(
 if [[ -f "$SPEC_DIR/fmi.toml" ]]; then
     GENERATOR_ARGS+=(--annotations "$SPEC_DIR/fmi.toml")
 fi
-cargo run --quiet --no-default-features --bin generate_fmu_interface -- "${GENERATOR_ARGS[@]}"
+cargo run --quiet --profile "$TC_BUILD_PROFILE" --no-default-features --bin generate_fmu_interface -- "${GENERATOR_ARGS[@]}"
 
 build_wheel() {
     uv run --project "$ROOT/integrations/python" --locked maturin build \
         --manifest-path "$ROOT/integrations/python/Cargo.toml" \
         --interpreter "$PYTHON" \
-        --release \
+        --profile "$TC_BUILD_PROFILE" \
         --out "$WHEELS_DIR"
 }
 
-if ! compgen -G "$WHEELS_DIR/trustworthiness_checker-*.whl" >/dev/null; then
-    build_wheel
-fi
+# Always refresh the native binding. Reusing a version-named wheel after Rust
+# source changes can silently package an older checker implementation.
+build_wheel
 
 WHEEL_PATH=("$WHEELS_DIR"/trustworthiness_checker-*.whl)
 uv pip install \
     --target "$SKELETON_DIR/resources" \
     "${WHEEL_PATH[0]}" \
-    "protobuf==5.27.3" \
+    "protobuf==5.29.6" \
     "pyzmq==27.1.0"
 
 (

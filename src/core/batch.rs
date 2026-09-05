@@ -99,6 +99,7 @@ pub(crate) enum Storage<S> {
 }
 
 impl<S> Storage<S> {
+    #[inline(always)]
     pub(crate) fn cursor(&self) -> SegmentCursor<'_, S> {
         match self {
             Self::Single(segment) => SegmentCursor::Single(Some(segment)),
@@ -146,6 +147,7 @@ pub(crate) enum SegmentCursor<'a, S> {
 
 impl<'a, S> Iterator for SegmentCursor<'a, S> {
     type Item = &'a S;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Single(segment) => segment.take(),
@@ -191,6 +193,7 @@ impl<'a, V> Tick<'a, V> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    #[inline(always)]
     pub fn updates(&self) -> TickUpdates<'a, V> {
         match self.representation {
             TickRepresentation::Slice(updates) => TickUpdates::Slice(updates.iter()),
@@ -218,6 +221,7 @@ pub enum TickUpdates<'a, V> {
 }
 impl<'a, V> Iterator for TickUpdates<'a, V> {
     type Item = UpdateRef<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         let (variable, value) = match self {
             Self::Slice(v) => v.next().map(|v| (&v.variable, &v.value))?,
@@ -244,6 +248,7 @@ enum SegmentTicks<'a, V> {
     },
 }
 impl<'a, V> SegmentTicks<'a, V> {
+    #[inline(always)]
     fn new<S: SegmentAccess<V>>(s: &'a S) -> Self {
         match s.view() {
             SegmentView::Singleton(v) => Self::Singleton(v.iter()),
@@ -254,6 +259,7 @@ impl<'a, V> SegmentTicks<'a, V> {
             },
         }
     }
+    #[inline(always)]
     fn next(&mut self) -> Option<Tick<'a, V>> {
         let representation = match self {
             Self::Singleton(v) => TickRepresentation::Slice(slice::from_ref(v.next()?)),
@@ -273,6 +279,7 @@ pub struct Ticks<'a, S, V> {
     remaining: usize,
 }
 impl<'a, S: SegmentAccess<V>, V> Ticks<'a, S, V> {
+    #[inline(always)]
     pub(crate) fn new(segments: SegmentCursor<'a, S>, remaining: usize) -> Self {
         Self {
             segments,
@@ -283,6 +290,7 @@ impl<'a, S: SegmentAccess<V>, V> Ticks<'a, S, V> {
 }
 impl<'a, S: SegmentAccess<V>, V> Iterator for Ticks<'a, S, V> {
     type Item = Tick<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(t) = self.current.as_mut().and_then(SegmentTicks::next) {
@@ -311,6 +319,7 @@ enum SegmentUpdates<'a, V> {
 }
 
 impl<'a, V> SegmentUpdates<'a, V> {
+    #[inline(always)]
     fn new<S: SegmentAccess<V>>(segment: &'a S) -> Self {
         match segment.view() {
             SegmentView::Singleton(updates) | SegmentView::Tick(updates) => {
@@ -325,6 +334,7 @@ impl<'a, V> SegmentUpdates<'a, V> {
         }
     }
 
+    #[inline(always)]
     fn next(&mut self) -> Option<UpdateRef<'a, V>> {
         match self {
             Self::Slice(updates) => updates.next().map(|update| UpdateRef {
@@ -352,7 +362,8 @@ pub struct Updates<'a, S, V> {
     remaining: usize,
 }
 impl<'a, S: SegmentAccess<V>, V> Updates<'a, S, V> {
-    pub(crate) fn new(segments: SegmentCursor<'a, S>, _ticks: usize, remaining: usize) -> Self {
+    #[inline(always)]
+    pub(crate) fn new(segments: SegmentCursor<'a, S>, remaining: usize) -> Self {
         Self {
             segments,
             current: None,
@@ -362,6 +373,7 @@ impl<'a, S: SegmentAccess<V>, V> Updates<'a, S, V> {
 }
 impl<'a, S: SegmentAccess<V>, V> Iterator for Updates<'a, S, V> {
     type Item = UpdateRef<'a, V>;
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(u) = self.current.as_mut().and_then(SegmentUpdates::next) {

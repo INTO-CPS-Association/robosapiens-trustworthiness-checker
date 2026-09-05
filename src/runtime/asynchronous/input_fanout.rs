@@ -1,23 +1,69 @@
 use std::collections::BTreeMap;
 
-use async_stream::try_stream;
 use futures::StreamExt;
 use unsync::spsc;
 
-use crate::core::{DeferrableStreamData, input};
-use crate::{InputStream, LocalStream, VarName};
+use crate::core::DeferrableStreamData;
+use crate::{LocalStream, VarName};
 
 const CHANNEL_SIZE: usize = 10;
 
 pub(super) struct InputFanout<V> {
     pub streams: BTreeMap<VarName, LocalStream<V>>,
-    pub drive: LocalStream<anyhow::Result<()>>,
+    pub drive: InputFanoutDrive<V>,
 }
 
-pub(super) fn fan_out_input<V>(
-    input: InputStream<V>,
-    selection: std::collections::BTreeSet<VarName>,
-) -> InputFanout<V>
+pub(super) struct InputFanoutDrive<V> {
+    senders: Vec<Option<spsc::Sender<V>>>,
+    indices: BTreeMap<VarName, usize>,
+}
+
+impl<V: DeferrableStreamData> InputFanoutDrive<V> {
+    pub async fn run<S>(&mut self, input: &mut S) -> anyhow::Result<()>
+    where
+        S: futures::Stream<Item = Result<crate::InputBatch<V>, crate::InputError>> + Unpin,
+    {
+        let result = self.forward(input).await;
+        // The driver is borrowed so the runtime can retain the input owner for
+        // draining. Explicitly close fan-out channels when forwarding ends:
+        // downstream expressions need EOF before the runtime can finish.
+        self.senders.clear();
+        result
+    }
+
+    async fn forward<S>(&mut self, input: &mut S) -> anyhow::Result<()>
+    where
+        S: futures::Stream<Item = Result<crate::InputBatch<V>, crate::InputError>> + Unpin,
+    {
+        while let Some(batch) = input.next().await {
+            for tick in batch?.into_ticks() {
+                let mut values = vec![V::no_val_value(); self.senders.len()];
+                for event in tick {
+                    let index = self.indices.get(&event.variable).copied().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "input stream emitted undeclared async variable `{}`",
+                            event.variable
+                        )
+                    })?;
+                    values[index] = event.value;
+                }
+                for (sender, value) in self.senders.iter_mut().zip(values) {
+                    if let Some(active) = sender
+                        && active.send(value).await.is_err()
+                    {
+                        *sender = None;
+                    }
+                }
+                if self.senders.iter().all(Option::is_none) {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn fan_out_input<V>(selection: std::collections::BTreeSet<VarName>) -> InputFanout<V>
 where
     V: DeferrableStreamData,
 {
@@ -35,35 +81,10 @@ where
             (Some(sender), output)
         })
         .unzip();
-    let width = senders.len();
-    let mut senders = senders;
-    let tick_indices = indices.clone();
-    let drive = Box::pin(try_stream! {
-        let mut ticks = input::into_tick_stream(input);
-        while let Some(tick) = ticks.next().await {
-            let mut values = vec![V::no_val_value(); width];
-            for event in tick? {
-                let index = tick_indices.get(&event.variable).copied().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "input stream emitted undeclared async variable `{}`",
-                        event.variable
-                    )
-                })?;
-                values[index] = event.value;
-            }
-            for (sender, value) in senders.iter_mut().zip(values) {
-                if let Some(active) = sender
-                    && active.send(value).await.is_err()
-                {
-                    *sender = None;
-                }
-            }
-            yield ();
-            if senders.iter().all(Option::is_none) {
-                return;
-            }
-        }
-    });
+    let drive = InputFanoutDrive {
+        senders,
+        indices: indices.clone(),
+    };
 
     let streams = indices.into_keys().zip(streams).collect();
     InputFanout { streams, drive }
@@ -87,22 +108,27 @@ mod tests {
                 (VarName::new("x"), vec![Value::Int(1), Value::Int(2)]),
                 (VarName::new("y"), vec![Value::Int(10), Value::Int(20)]),
             ]));
-            let fanout = fan_out_input(
-                input,
-                std::collections::BTreeSet::from([VarName::new("x"), VarName::new("y")]),
-            );
+            let fanout = fan_out_input(std::collections::BTreeSet::from([
+                VarName::new("x"),
+                VarName::new("y"),
+            ]));
             let mut streams = fanout.streams;
             let mut drive = fanout.drive;
             let mut x = streams.remove(&VarName::new("x")).unwrap();
             let mut y = streams.remove(&VarName::new("y")).unwrap();
 
-            for expected in [(1, 10), (2, 20)] {
-                let (step, x, y) = futures::join!(drive.next(), x.next(), y.next());
-                assert!(matches!(step, Some(Ok(()))));
-                assert_eq!(x, Some(Value::Int(expected.0)));
-                assert_eq!(y, Some(Value::Int(expected.1)));
-            }
-            assert!(drive.next().await.is_none());
+            let mut input = input;
+            let consumer = async {
+                for expected in [(1, 10), (2, 20)] {
+                    let (x, y) = futures::join!(x.next(), y.next());
+                    assert_eq!(x, Some(Value::Int(expected.0)));
+                    assert_eq!(y, Some(Value::Int(expected.1)));
+                }
+                assert_eq!(x.next().await, None);
+                assert_eq!(y.next().await, None);
+            };
+            let (drive_result, ()) = futures::join!(drive.run(&mut input), consumer);
+            assert!(drive_result.is_ok());
         });
     }
 
@@ -113,9 +139,10 @@ mod tests {
                 InputBatch::update(VarName::new("unknown"), Value::Int(1)),
             )]));
             let mut drive =
-                fan_out_input(input, std::collections::BTreeSet::from([VarName::new("x")])).drive;
+                fan_out_input(std::collections::BTreeSet::from([VarName::new("x")])).drive;
+            let mut input = input;
 
-            let error = drive.next().await.unwrap().unwrap_err();
+            let error = drive.run(&mut input).await.unwrap_err();
             assert!(
                 error
                     .to_string()

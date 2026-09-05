@@ -15,12 +15,12 @@ The default values are DSRV, `gradual-typed-untimed`, the `async` runtime, and b
 - `--reconf-topic` and `--no-context-transfer` require a reconfigurable runtime. The selected control route is the configured route, the CLI override, or `reconf` when no route is supplied.
 - `--input-window-mode` requires `--input-window-ms` or `--input-window-update-limit`. For file input, `atomic-step` also requires an update limit.
 - Redis knowledge options require `--redis-knowledge-input` or `--input-config`; `--redis-knowledge-source` requires `--input-config`. Redis knowledge input is not supported for MSTLO.
-- `--mqtt-paho` and `--mqtt-rumqttc` conflict. MQTT output uses Paho regardless of the input backend selection.
+- MQTT input and output use rumqttc. The former implementation-selector flags are no longer accepted.
 - `--distributed-work` is present in generated parser metadata and requires `--local-node`, but the current adapter/runtime construction does not consume it to establish the waiting behavior described by its Clap help. Do not use it as an operational contract.
 
 ## Features and resources
 
-The default Cargo features include MQTT and Redis. ROS routes, ROS distribution, and ROS scheduling require `--features ros` plus a sourced ROS 2 environment and interface overlay. SAT-backed distribution solving requires `--features sat`. Parsing an option does not prove that its external broker, ROS graph, or feature-gated backend can be opened.
+MQTT is always compiled; Redis is enabled by default. ROS routes, ROS distribution, and ROS scheduling require `--features ros` plus a sourced ROS 2 environment and interface overlay. SAT-backed distribution solving requires `--features sat`. Parsing an option does not prove that its external broker, ROS graph, or feature-gated backend can be opened.
 
 ## Observable process behavior
 

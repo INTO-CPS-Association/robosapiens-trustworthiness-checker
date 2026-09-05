@@ -1,14 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
-    rc::Rc,
     time::Duration,
 };
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::fingerprint::FingerprintBuilder;
-use crate::io::{RedisKnowledgeConfig, RedisKnowledgeRetry};
+pub use crate::core::{FormatId, InputBinding, Route};
+use crate::io::PipelineGeneration;
+use crate::io::{RedisKnowledgeConfig, RetryPolicy};
 use crate::{VarName, core::REDIS_HOSTNAME};
 
 pub type TopicMapping = BTreeMap<VarName, String>;
@@ -29,72 +29,75 @@ pub enum DestinationKind {
     Ros,
 }
 
-/// A serializable output stage. Runtime code turns this into an
-/// [`crate::io::output::OutputStage`]
-/// after validating its numeric bounds. Keeping this wire type independent of
-/// executors and opened backends makes output reconfiguration resource-free.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum OutputStageConfig {
-    Buffer {
-        max_batches: usize,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_updates: Option<usize>,
-    },
-    Coalesce {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_delay_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tick_limit: Option<usize>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        update_limit: Option<usize>,
-    },
+#[serde(deny_unknown_fields)]
+pub struct OutputQueueConfig {
+    pub max_batches: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_updates: Option<usize>,
 }
 
-impl OutputStageConfig {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputCoalescingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_delay_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputDeliveryConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<OutputQueueConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coalesce: Option<OutputCoalescingConfig>,
+}
+
+impl OutputDeliveryConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
-        match self {
-            Self::Buffer {
-                max_batches,
-                max_updates,
-            } => {
+        if let Some(queue) = &self.queue {
+            anyhow::ensure!(
+                queue.max_batches > 0,
+                "output delivery queue max_batches must be greater than zero"
+            );
+            if let Some(limit) = queue.max_updates {
                 anyhow::ensure!(
-                    *max_batches > 0,
-                    "output buffer max_batches must be greater than zero"
+                    limit > 0,
+                    "output delivery queue max_updates must be greater than zero"
                 );
-                if let Some(max_updates) = max_updates {
-                    anyhow::ensure!(
-                        *max_updates > 0,
-                        "output buffer max_updates must be greater than zero"
-                    );
-                }
-                Ok(())
-            }
-            Self::Coalesce {
-                max_delay_ms,
-                tick_limit,
-                update_limit,
-            } => {
-                anyhow::ensure!(
-                    max_delay_ms.is_some() || tick_limit.is_some() || update_limit.is_some(),
-                    "output coalescing requires a delay, tick_limit, or update_limit"
-                );
-                if let Some(tick_limit) = tick_limit {
-                    anyhow::ensure!(
-                        *tick_limit > 0,
-                        "output coalescing tick_limit must be greater than zero"
-                    );
-                }
-                if let Some(update_limit) = update_limit {
-                    anyhow::ensure!(
-                        *update_limit > 0,
-                        "output coalescing update_limit must be greater than zero"
-                    );
-                }
-                let _ = max_delay_ms;
-                Ok(())
             }
         }
+        if let Some(coalesce) = &self.coalesce {
+            anyhow::ensure!(
+                coalesce.tick_limit.is_some()
+                    || coalesce.update_limit.is_some()
+                    || coalesce.max_delay_ms.is_some(),
+                "output coalescing requires max_delay_ms, tick_limit, or update_limit"
+            );
+            if let Some(limit) = coalesce.tick_limit {
+                anyhow::ensure!(
+                    limit > 0,
+                    "output coalescing tick_limit must be greater than zero"
+                );
+            }
+            if let Some(limit) = coalesce.update_limit {
+                anyhow::ensure!(
+                    limit > 0,
+                    "output coalescing update_limit must be greater than zero"
+                );
+            }
+            if let Some(delay) = coalesce.max_delay_ms {
+                anyhow::ensure!(
+                    delay > 0,
+                    "output coalescing max_delay_ms must be greater than zero"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -108,23 +111,19 @@ pub struct DestinationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<crate::io::RetryPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub routes: BTreeMap<VarName, Route>,
-    /// Legacy alias for a route-free partition, primarily for local destinations.
-    /// It is mutually exclusive with `partition` and `mirror`; new configs may
-    /// use `partition` instead. `None` means that the selector is absent;
-    /// present selections must not be empty.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub variables: Option<BTreeSet<VarName>>,
     /// Variables assigned to this destination as a disjoint partition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition: Option<BTreeSet<VarName>>,
     /// Mirror all model outputs assigned to a primary destination.
     #[serde(default)]
     pub mirror: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stages: Vec<OutputStageConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<OutputDeliveryConfig>,
 }
 
 impl DestinationConfig {
@@ -153,20 +152,17 @@ impl DestinationConfig {
             kind,
             host: None,
             port: None,
+            retry: None,
             limit: None,
             routes: BTreeMap::new(),
-            variables: None,
             partition: None,
             mirror: false,
-            stages: Vec::new(),
+            delivery: None,
         }
     }
 
     fn establishes_role(&self) -> bool {
-        !self.routes.is_empty()
-            || self.variables.is_some()
-            || self.partition.is_some()
-            || self.mirror
+        !self.routes.is_empty() || self.partition.is_some() || self.mirror
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -185,6 +181,11 @@ impl DestinationConfig {
                 );
             }
             DestinationKind::LimitedNull => {
+                anyhow::ensure!(
+                    self.retry.is_none(),
+                    "output destination kind {:?} does not support `retry`",
+                    self.kind
+                );
                 anyhow::ensure!(
                     self.host.is_none(),
                     "output destination kind {:?} does not support `host`",
@@ -207,6 +208,11 @@ impl DestinationConfig {
             }
             DestinationKind::Stdout | DestinationKind::Null | DestinationKind::Ros => {
                 anyhow::ensure!(
+                    self.retry.is_none(),
+                    "output destination kind {:?} does not support `retry`",
+                    self.kind
+                );
+                anyhow::ensure!(
                     self.host.is_none(),
                     "output destination kind {:?} does not support `host`",
                     self.kind
@@ -224,25 +230,11 @@ impl DestinationConfig {
             }
         }
 
-        let selector_count = usize::from(self.variables.is_some())
-            + usize::from(self.partition.is_some())
-            + usize::from(self.mirror);
+        let selector_count = usize::from(self.partition.is_some()) + usize::from(self.mirror);
         anyhow::ensure!(
             selector_count <= 1,
-            "output destination selector fields `variables`, `partition`, and `mirror` are mutually exclusive"
+            "output destination selector fields `partition` and `mirror` are mutually exclusive"
         );
-        if let Some(variables) = &self.variables {
-            anyhow::ensure!(
-                !variables.is_empty(),
-                "output destination `variables` cannot be empty"
-            );
-            anyhow::ensure!(
-                self.routes
-                    .keys()
-                    .all(|variable| variables.contains(variable)),
-                "output destination `variables` must include every declared route variable"
-            );
-        }
         if let Some(partition) = &self.partition {
             anyhow::ensure!(
                 !partition.is_empty(),
@@ -260,40 +252,32 @@ impl DestinationConfig {
                 !variable.name().trim().is_empty(),
                 "output route variable cannot be empty"
             );
-            let route = Route::new(route.route.clone(), route.codec.clone())?;
+            let route = Route::new(route.address(), route.format().cloned())?;
             match self.kind {
                 DestinationKind::Mqtt | DestinationKind::Redis => {
-                    if let Some(codec) = &route.codec {
+                    if let Some(codec) = route.format() {
                         anyhow::ensure!(
-                            matches!(codec.0.as_ref(), "json" | "json5"),
-                            "output codec `{codec}` is not supported by {:?}",
+                            matches!(codec.as_str(), "json" | "json5"),
+                            "output route format `{codec}` is not supported by {:?}",
                             self.kind
                         );
                     }
                 }
                 DestinationKind::Ros => anyhow::ensure!(
-                    route.codec.is_some(),
-                    "ROS output route for `{variable}` requires a codec"
+                    route.format().is_some(),
+                    "ROS output route for `{variable}` requires a route format"
                 ),
                 DestinationKind::Stdout | DestinationKind::Null | DestinationKind::LimitedNull => {
                     anyhow::ensure!(
-                        route.codec.is_none(),
-                        "output backend {:?} does not support a codec",
+                        route.format().is_none(),
+                        "output backend {:?} does not support a route format",
                         self.kind
                     )
                 }
             }
         }
-        if let Some(variables) = &self.variables {
-            for variable in variables {
-                anyhow::ensure!(
-                    !variable.name().trim().is_empty(),
-                    "output destination variable cannot be empty"
-                );
-            }
-        }
-        for stage in &self.stages {
-            stage.validate()?;
+        if let Some(delivery) = &self.delivery {
+            delivery.validate()?;
         }
         Ok(())
     }
@@ -306,8 +290,6 @@ impl DestinationConfig {
 pub struct OutputConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<DestinationId>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shared_stages: Vec<OutputStageConfig>,
     #[serde(default)]
     pub destinations: BTreeMap<DestinationId, DestinationConfig>,
 }
@@ -316,7 +298,6 @@ impl OutputConfigFile {
     pub fn new(destinations: BTreeMap<DestinationId, DestinationConfig>) -> Self {
         Self {
             default: None,
-            shared_stages: Vec::new(),
             destinations,
         }
     }
@@ -372,12 +353,9 @@ impl OutputConfigFile {
                 let is_inferred_default = inferred_default.as_ref() == Some(id);
                 anyhow::ensure!(
                     is_configured_default || is_inferred_default || destination.establishes_role(),
-                    "non-default output destination `{id}` in a multi-destination config must explicitly declare a role with `partition`, `variables`, `mirror`, or `routes`; only the configured or unique inferred default may use primary `All`"
+                    "non-default output destination `{id}` in a multi-destination config must explicitly declare a role with `partition`, `mirror`, or `routes`; only the configured or unique inferred default may use primary `All`"
                 );
             }
-        }
-        for stage in &self.shared_stages {
-            stage.validate()?;
         }
         Ok(())
     }
@@ -386,54 +364,10 @@ impl OutputConfigFile {
 /// Stable identifier for a configured local input source.
 pub type SourceId = String;
 
-/// Codec selected by a route. MQTT and Redis can omit it because their value
-/// codec is the source's normal JSON5 codec; ROS routes generally specify it.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct CodecId(pub Box<str>);
-
-impl CodecId {
-    pub fn new(codec: impl Into<Box<str>>) -> Self {
-        Self(codec.into())
-    }
-}
-
-impl std::fmt::Display for CodecId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// Normalized route shared by input, output, and reconfiguration messages.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Route {
-    pub route: Box<str>,
-    pub codec: Option<CodecId>,
-}
-
-impl Route {
-    pub fn new(route: impl Into<Box<str>>, codec: Option<CodecId>) -> anyhow::Result<Self> {
-        let route = route.into();
-        anyhow::ensure!(!route.trim().is_empty(), "route cannot be empty");
-        if let Some(codec) = &codec {
-            anyhow::ensure!(!codec.0.trim().is_empty(), "route codec cannot be empty");
-        }
-        Ok(Self { route, codec })
-    }
-}
-
-impl Serialize for Route {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match &self.codec {
-            Some(codec) => (self.route.as_ref(), codec).serialize(serializer),
-            None => self.route.serialize(serializer),
-        }
-    }
-}
-
 /// Compact wire route: either a route string or `[route, codec]`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum WireRoute {
+pub(crate) enum WireRoute {
     Route(String),
     RouteAndCodec(String, String),
 }
@@ -449,19 +383,11 @@ impl<'de> Deserialize<'de> for Route {
 impl WireRoute {
     pub fn into_route(self) -> anyhow::Result<Route> {
         match self {
-            Self::Route(route) => Route::new(route, None),
-            Self::RouteAndCodec(route, codec) => Route::new(route, Some(CodecId::new(codec))),
-        }
-    }
-
-    fn validate(&self) -> anyhow::Result<()> {
-        match self {
-            Self::Route(route) => Route::new(route.as_str(), None),
+            Self::Route(route) => Route::new(route, None).map_err(anyhow::Error::from),
             Self::RouteAndCodec(route, codec) => {
-                Route::new(route.as_str(), Some(CodecId::new(codec.as_str())))
+                Route::new(route, Some(FormatId::new(codec))).map_err(anyhow::Error::from)
             }
         }
-        .map(|_| ())
     }
 }
 
@@ -548,13 +474,13 @@ fn validate_input_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<()
             !variable.name().trim().is_empty(),
             "input variable cannot be empty"
         );
-        Route::new(route.route.clone(), route.codec.clone())?;
+        Route::new(route.address(), route.format().cloned())?;
     }
     Ok(())
 }
 
 /// Request-specific output routing. Destination implementations and their
-/// local catalogs remain owned by [`crate::io::OutputBackendBuilder`].
+/// local catalogs remain owned by [`crate::io::OutputPipeline`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputConfiguration {
@@ -612,7 +538,7 @@ fn validate_output_routes(routes: &BTreeMap<VarName, Route>) -> anyhow::Result<(
             !variable.name().trim().is_empty(),
             "output variable cannot be empty"
         );
-        Route::new(route.route.clone(), route.codec.clone())?;
+        Route::new(route.address(), route.format().cloned())?;
     }
     Ok(())
 }
@@ -733,8 +659,10 @@ pub enum SourceConfig {
         host: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<crate::io::RetryPolicy>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        routes: BTreeMap<VarName, WireRoute>,
+        routes: BTreeMap<VarName, Route>,
         /// Transport-local route carrying monitor reconfiguration messages.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reconfiguration_route: Option<Box<str>>,
@@ -744,8 +672,10 @@ pub enum SourceConfig {
         host: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<crate::io::RetryPolicy>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        routes: BTreeMap<VarName, WireRoute>,
+        routes: BTreeMap<VarName, Route>,
         /// Transport-local route carrying monitor reconfiguration messages.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reconfiguration_route: Option<Box<str>>,
@@ -761,12 +691,12 @@ pub enum SourceConfig {
         #[serde(default = "default_redis_knowledge_publish_initial")]
         publish_initial: bool,
         keys: BTreeMap<VarName, String>,
-        #[serde(default)]
-        retry: RedisKnowledgeRetry,
+        #[serde(default = "RetryPolicy::input_default")]
+        retry: RetryPolicy,
     },
     Ros {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        routes: BTreeMap<VarName, WireRoute>,
+        routes: BTreeMap<VarName, Route>,
         /// Transport-local route carrying monitor reconfiguration messages.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reconfiguration_route: Option<Box<str>>,
@@ -783,13 +713,13 @@ impl SourceConfig {
         }
     }
 
-    pub fn routes(&self) -> &BTreeMap<VarName, WireRoute> {
+    pub fn routes(&self) -> &BTreeMap<VarName, Route> {
         match self {
             Self::Mqtt { routes, .. } | Self::Redis { routes, .. } | Self::Ros { routes, .. } => {
                 routes
             }
             Self::RedisKnowledge { .. } => {
-                static EMPTY_ROUTES: std::sync::OnceLock<BTreeMap<VarName, WireRoute>> =
+                static EMPTY_ROUTES: std::sync::OnceLock<BTreeMap<VarName, Route>> =
                     std::sync::OnceLock::new();
                 EMPTY_ROUTES.get_or_init(BTreeMap::new)
             }
@@ -880,12 +810,7 @@ impl InputConfigFile {
                     }
                 }
                 _ => {
-                    for (variable, route) in config.routes() {
-                        route.validate().map_err(|error| {
-                            anyhow::anyhow!(
-                                "input source `{source}` has an invalid route for `{variable}`: {error}"
-                            )
-                        })?;
+                    for (variable, _route) in config.routes() {
                         if let Some(previous) = variables.insert(variable.clone(), source) {
                             anyhow::bail!(
                                 "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
@@ -935,7 +860,7 @@ pub enum InputReduction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InputStage {
+pub enum InputPolicy {
     Batch(InputWindow),
     WindowToStep {
         window: InputWindow,
@@ -943,7 +868,7 @@ pub enum InputStage {
     },
 }
 
-impl InputStage {
+impl InputPolicy {
     pub fn window(&self) -> &InputWindow {
         match self {
             Self::Batch(window) => window,
@@ -952,49 +877,15 @@ impl InputStage {
     }
 }
 
-/// An immutable, request-specific binding resolved from source catalogs and
-/// monitor configuration. These types stay inside input orchestration; callers
-/// configure sources and routes rather than constructing resolved inputs.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ResolvedBinding {
-    variable: VarName,
-    route: Box<str>,
-    codec: CodecId,
-}
-
-impl ResolvedBinding {
-    pub(crate) fn new(variable: VarName, route: Box<str>, codec: CodecId) -> Self {
-        Self {
-            variable,
-            route,
-            codec,
-        }
-    }
-
-    pub fn variable(&self) -> &VarName {
-        &self.variable
-    }
-
-    pub fn route(&self) -> &str {
-        &self.route
-    }
-
-    pub fn codec(&self) -> &CodecId {
-        &self.codec
-    }
-}
-
+/// Canonical request-specific binding resolved from the source catalog.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ResolvedSource {
     source: SourceId,
-    bindings: Box<[ResolvedBinding]>,
+    bindings: Box<[InputBinding]>,
 }
 
 impl ResolvedSource {
-    pub(crate) fn new(
-        source: SourceId,
-        bindings: impl IntoIterator<Item = ResolvedBinding>,
-    ) -> Self {
+    pub(crate) fn new(source: SourceId, bindings: impl IntoIterator<Item = InputBinding>) -> Self {
         Self {
             source,
             bindings: bindings.into_iter().collect(),
@@ -1005,22 +896,8 @@ impl ResolvedSource {
         &self.source
     }
 
-    pub fn bindings(&self) -> &[ResolvedBinding] {
+    pub fn bindings(&self) -> &[InputBinding] {
         &self.bindings
-    }
-
-    pub(crate) fn configuration_key(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("input-source-resolution-v1");
-        key.write_str(&self.source);
-        let mut bindings = self.bindings.iter().collect::<Vec<_>>();
-        bindings.sort_by(|left, right| left.variable().name().cmp(&right.variable().name()));
-        key.write_usize(bindings.len());
-        for binding in bindings {
-            key.write_str(&binding.variable().name());
-            key.write_str(binding.route());
-            key.write_str(&binding.codec().0);
-        }
-        key.finish()
     }
 }
 
@@ -1028,74 +905,35 @@ impl ResolvedSource {
 pub struct ResolvedInput {
     sources: Box<[ResolvedSource]>,
     #[serde(skip)]
-    pipeline_identity: Rc<()>,
-    #[serde(skip)]
-    pipeline_configuration: u128,
-    #[serde(skip)]
-    fingerprint: u128,
+    generation: PipelineGeneration,
 }
 
 impl ResolvedInput {
     pub(crate) fn new(sources: impl IntoIterator<Item = ResolvedSource>) -> Self {
-        let mut resolved = Self {
+        Self {
             sources: sources.into_iter().collect(),
-            pipeline_identity: Rc::new(()),
-            pipeline_configuration: 0,
-            fingerprint: 0,
-        };
-        resolved.fingerprint = resolved.compute_fingerprint();
-        resolved
+            generation: PipelineGeneration::new(),
+        }
     }
 
-    pub(crate) fn attach_to_pipeline(
-        mut self,
-        pipeline_identity: &Rc<()>,
-        pipeline_configuration: u128,
-    ) -> Self {
-        self.pipeline_identity = Rc::clone(pipeline_identity);
-        self.pipeline_configuration = pipeline_configuration;
-        self.fingerprint = self.compute_fingerprint();
+    pub(crate) fn attach_to_pipeline(mut self, generation: PipelineGeneration) -> Self {
+        self.generation = generation;
         self
     }
 
     pub(crate) fn validate_for_pipeline(
         &self,
-        pipeline_identity: &Rc<()>,
-        pipeline_configuration: u128,
+        generation: PipelineGeneration,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.fingerprint == self.compute_fingerprint(),
-            "resolved input fingerprint does not match its structure"
-        );
-        anyhow::ensure!(
-            self.pipeline_configuration == pipeline_configuration,
+            self.generation == generation,
             "resolved input durable configuration does not match the pipeline"
-        );
-        anyhow::ensure!(
-            Rc::ptr_eq(&self.pipeline_identity, pipeline_identity),
-            "resolved input belongs to a different pipeline instance"
         );
         Ok(())
     }
 
     pub fn sources(&self) -> &[ResolvedSource] {
         &self.sources
-    }
-
-    pub(crate) fn fingerprint(&self) -> u128 {
-        self.fingerprint
-    }
-
-    fn compute_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("input-resolution-v1");
-        key.write_u128(self.pipeline_configuration);
-        let mut sources = self.sources.iter().collect::<Vec<_>>();
-        sources.sort_by(|left, right| left.source().cmp(right.source()));
-        key.write_usize(sources.len());
-        for source in sources {
-            key.write_u128(source.configuration_key());
-        }
-        key.finish()
     }
 }
 
@@ -1108,27 +946,25 @@ mod tests {
     }
 
     #[test]
-    fn resolved_input_fingerprint_rejects_tampering() {
-        let identity = Rc::new(());
-        let mut resolved = ResolvedInput::new([ResolvedSource::new(
+    fn resolved_input_rejects_a_different_pipeline_generation() {
+        let generation = PipelineGeneration::new();
+        let resolved = ResolvedInput::new([ResolvedSource::new(
             "source".to_owned(),
-            [ResolvedBinding::new(
+            [InputBinding::new(
                 VarName::new("x"),
-                "/x".into(),
-                CodecId::new("json"),
+                Route::new("/x", Some(FormatId::new("json"))).unwrap(),
             )],
         )])
-        .attach_to_pipeline(&identity, 1);
-        resolved.sources[0].bindings[0].route = "tampered".into();
+        .attach_to_pipeline(generation);
 
         let error = resolved
-            .validate_for_pipeline(&identity, 1)
-            .expect_err("tampered resolutions must fail their integrity check");
+            .validate_for_pipeline(PipelineGeneration::new())
+            .expect_err("a foreign generation must be rejected");
 
         assert!(
             error
                 .to_string()
-                .contains("resolved input fingerprint does not match its structure")
+                .contains("durable configuration does not match")
         );
     }
 
@@ -1169,9 +1005,7 @@ mod tests {
             "in legacy"
         );
         assert_eq!(
-            config.input.inputs.unwrap()[&VarName::new("pressure")]
-                .route
-                .as_ref(),
+            config.input.inputs.unwrap()[&VarName::new("pressure")].address(),
             "/pressure"
         );
 
@@ -1222,11 +1056,11 @@ mod tests {
             ),
             (
                 r#"{sources:{broker:{kind:"mqtt",routes:{value:""}}}}"#,
-                "route cannot be empty",
+                "route address cannot be empty",
             ),
             (
                 r#"{sources:{robot:{kind:"ros",routes:{pose:["/pose",""]}}}}"#,
-                "route codec cannot be empty",
+                "route format cannot be empty",
             ),
             (
                 r#"{sources:{control:{kind:"mqtt",reconfiguration_route:""}}}"#,
@@ -1235,7 +1069,10 @@ mod tests {
         ];
 
         for (json, expected) in cases {
-            let error = input_config(json).validate().unwrap_err();
+            let error = json5::from_str::<InputConfigFile>(json)
+                .map_err(anyhow::Error::from)
+                .and_then(|config| config.validate())
+                .unwrap_err();
             assert!(
                 error.to_string().contains(expected),
                 "{json} produced unexpected error: {error}"
@@ -1261,7 +1098,10 @@ mod tests {
         ];
 
         for (json, expected) in cases {
-            let error = input_config(json).validate().unwrap_err();
+            let error = json5::from_str::<InputConfigFile>(json)
+                .map_err(anyhow::Error::from)
+                .and_then(|config| config.validate())
+                .unwrap_err();
             assert!(
                 error.to_string().contains(expected),
                 "{json} produced unexpected error: {error}"
@@ -1352,7 +1192,7 @@ mod tests {
         };
         assert_eq!(*database, 2);
         assert!(*publish_initial);
-        assert_eq!(retry, &RedisKnowledgeRetry::default());
+        assert_eq!(retry, &RetryPolicy::input_default());
         let serialized = serde_json::to_value(&config).unwrap();
         assert_eq!(
             serialized["sources"]["knowledge"]["kind"],
@@ -1392,17 +1232,19 @@ mod tests {
     }
 
     #[test]
-    fn output_config_round_trips_compact_routes_and_stages() {
+    fn output_config_round_trips_compact_routes_and_delivery() {
         let config = OutputConfigFile::from_json(
             r#"{
                 default: "telemetry",
-                shared_stages: [{kind:"buffer",max_batches:4}],
                 destinations: {
                     telemetry: {
                         kind: "mqtt",
                         host: "broker",
                         routes: {pressure: "/pressure", pose: ["/pose", "json"]},
-                        stages: [{kind:"coalesce",tick_limit:3,max_delay_ms:25}]
+                        delivery: {
+                            queue: {max_batches:4},
+                            coalesce: {tick_limit:3,max_delay_ms:25}
+                        }
                     }
                 }
             }"#,
@@ -1421,10 +1263,10 @@ mod tests {
     }
 
     #[test]
-    fn output_config_rejects_zero_stage_bounds_and_bad_defaults() {
+    fn output_config_rejects_zero_delivery_bounds_and_bad_defaults() {
         let cases = [
             (
-                r#"{destinations:{out:{kind:"stdout",stages:[{kind:"buffer",max_batches:0}]}}}"#,
+                r#"{destinations:{out:{kind:"stdout",delivery:{queue:{max_batches:0}}}}}"#,
                 "max_batches",
             ),
             (
@@ -1433,7 +1275,7 @@ mod tests {
             ),
             (
                 r#"{destinations:{out:{kind:"stdout",routes:{x:["/x",""]}}}}"#,
-                "codec",
+                "format",
             ),
             (
                 r#"{destinations:{out:{kind:"mqtt",routes:{x:["/x","ros"]}}}}"#,
@@ -1466,7 +1308,7 @@ mod tests {
                 destinations: {
                     primary: {kind: "null"},
                     partitioned: {kind: "stdout", partition: ["x"]},
-                    legacy: {kind: "stdout", variables: ["y"]},
+                    second_partition: {kind: "stdout", partition: ["y"]},
                     mirrored: {kind: "stdout", mirror: true},
                     routed: {kind: "stdout", routes: {z: "/z"}}
                 }
@@ -1488,39 +1330,19 @@ mod tests {
     }
 
     #[test]
-    fn output_config_rejects_empty_variables_and_presence_conflicts() {
+    fn output_config_rejects_removed_variables_alias() {
         let error =
-            OutputConfigFile::from_json(r#"{destinations:{out:{kind:"stdout",variables:[]}}}"#)
+            OutputConfigFile::from_json(r#"{destinations:{out:{kind:"stdout",variables:["x"]}}}"#)
                 .unwrap_err();
-        assert!(error.to_string().contains("variables") && error.to_string().contains("empty"));
-
-        for payload in [
-            r#"{destinations:{out:{kind:"stdout",variables:[],partition:["x"]}}}"#,
-            r#"{destinations:{out:{kind:"stdout",variables:[],mirror:true}}}"#,
-            r#"{destinations:{out:{kind:"stdout",variables:[],partition:["x"],mirror:true}}}"#,
-        ] {
-            let error = OutputConfigFile::from_json(payload).unwrap_err();
-            assert!(
-                error.to_string().contains("variables")
-                    && error.to_string().contains("partition")
-                    && error.to_string().contains("mirror"),
-                "{payload}: {error}"
-            );
-        }
+        assert!(error.to_string().contains("unknown field `variables`"));
     }
 
     #[test]
     fn output_config_rejects_conflicting_selectors() {
-        for payload in [
-            r#"{destinations:{out:{kind:"stdout",variables:["x"],partition:["x"]}}}"#,
-            r#"{destinations:{out:{kind:"stdout",variables:["x"],mirror:true}}}"#,
-            r#"{destinations:{out:{kind:"stdout",partition:["x"],mirror:true}}}"#,
-        ] {
+        for payload in [r#"{destinations:{out:{kind:"stdout",partition:["x"],mirror:true}}}"#] {
             let error = OutputConfigFile::from_json(payload).unwrap_err();
             assert!(
-                error.to_string().contains("variables")
-                    && error.to_string().contains("partition")
-                    && error.to_string().contains("mirror"),
+                error.to_string().contains("partition") && error.to_string().contains("mirror"),
                 "{payload}: {error}"
             );
         }

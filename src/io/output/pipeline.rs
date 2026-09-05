@@ -2,24 +2,28 @@ use std::{
     borrow::Borrow,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
     rc::Rc,
+    task::Poll,
+    time::Duration,
 };
 
 use futures::Sink;
 use smol::LocalExecutor;
 
-use crate::fingerprint::FingerprintBuilder;
-use crate::io::config::{CodecId, OutputConfiguration, Route};
+use crate::io::config::OutputConfiguration;
+use crate::io::{PipelineGeneration, SessionId, SessionRevision, ShutdownDeadline};
 use crate::{
     VarName,
     core::{
-        JsonStreamValue, OutputBatch, OutputError, OutputInterface,
-        OutputInterfaceReconfigurationHandle, OutputRole, OutputRoute, OutputWriter,
-        RosStreamValue,
+        FormatId, JsonStreamValue, OutputBatch, OutputBinding, OutputError, OutputInterface,
+        OutputRole, OutputWriter, RosStreamValue, Route,
     },
 };
 
-use super::{DestinationId, OutputBackendConfig, OutputStage};
+use super::delivery::DeliveryCancellation;
+use super::{Delivery, DeliveryPolicy, DestinationId, OutputBackendConfig};
 
 const JSON_CODEC: &str = "json";
 
@@ -50,7 +54,7 @@ pub struct OutputDestination<V = crate::Value> {
     backend: OutputBackendConfig<V>,
     routes: Option<BTreeMap<VarName, Route>>,
     selection: OutputDestinationSelection,
-    stages: Vec<OutputStage>,
+    delivery: DeliveryPolicy,
 }
 
 impl<V> OutputDestination<V> {
@@ -60,7 +64,7 @@ impl<V> OutputDestination<V> {
             backend,
             routes: None,
             selection: OutputDestinationSelection::All,
-            stages: Vec::new(),
+            delivery: DeliveryPolicy::direct(),
         }
     }
 
@@ -80,8 +84,8 @@ impl<V> OutputDestination<V> {
         &self.selection
     }
 
-    pub fn stages(&self) -> &[OutputStage] {
-        &self.stages
+    pub const fn delivery(&self) -> DeliveryPolicy {
+        self.delivery
     }
 
     pub fn with_routes<I, K, R>(mut self, routes: I) -> Self
@@ -146,24 +150,8 @@ impl<V> OutputDestination<V> {
         self
     }
 
-    pub fn with_stage(mut self, stage: OutputStage) -> Self {
-        self.stages.push(stage);
-        self
-    }
-
-    pub fn with_stages<I>(mut self, stages: I) -> Self
-    where
-        I: IntoIterator<Item = OutputStage>,
-    {
-        self.stages.extend(stages);
-        self
-    }
-
-    pub fn replace_stages<I>(mut self, stages: I) -> Self
-    where
-        I: IntoIterator<Item = OutputStage>,
-    {
-        self.stages = stages.into_iter().collect();
+    pub fn with_delivery(mut self, delivery: DeliveryPolicy) -> Self {
+        self.delivery = delivery;
         self
     }
 }
@@ -328,18 +316,18 @@ impl<V> OutputDestinations<V> {
 #[derive(Clone, Debug)]
 pub struct OutputPipeline<V = crate::Value> {
     destinations: OutputDestinations<V>,
-    shared_stages: Box<[OutputStage]>,
     executor: Option<Rc<LocalExecutor<'static>>>,
-    configuration_identity: Rc<()>,
+    shutdown_timeout: Option<Duration>,
+    generation: PipelineGeneration,
 }
 
 impl<V> OutputPipeline<V> {
     pub fn new(destinations: OutputDestinations<V>) -> Self {
         Self {
             destinations,
-            shared_stages: Box::default(),
             executor: None,
-            configuration_identity: Rc::new(()),
+            shutdown_timeout: None,
+            generation: PipelineGeneration::new(),
         }
     }
 
@@ -351,59 +339,27 @@ impl<V> OutputPipeline<V> {
         self
     }
 
+    pub fn with_shutdown_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.shutdown_timeout = timeout;
+        self
+    }
+
+    pub(crate) fn shutdown_timeout(&self) -> Option<Duration> {
+        self.shutdown_timeout
+    }
+
     pub fn from_destination(destination: OutputDestination<V>) -> anyhow::Result<Self> {
         Ok(Self::new(OutputDestinations::single(destination)?))
-    }
-
-    fn configuration_identity(&self) -> &Rc<()> {
-        &self.configuration_identity
-    }
-
-    fn configuration_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("output-pipeline-v1");
-        match &self.destinations.default {
-            Some(default) => {
-                key.write_bool(true);
-                key.write_str(default);
-            }
-            None => key.write_bool(false),
-        }
-        write_output_stages(&mut key, &self.shared_stages);
-        key.write_usize(self.destinations.destinations.len());
-        for (id, destination) in &self.destinations.destinations {
-            key.write_str(id);
-            key.write_u128(destination_configuration_key(destination));
-        }
-        key.finish()
     }
 
     pub fn destinations(&self) -> &OutputDestinations<V> {
         &self.destinations
     }
 
-    pub fn shared_stages(&self) -> &[OutputStage] {
-        &self.shared_stages
-    }
-
-    pub fn with_shared_stage(mut self, stage: OutputStage) -> Self {
-        let mut stages = self.shared_stages.into_vec();
-        stages.push(stage);
-        self.shared_stages = stages.into_boxed_slice();
-        self
-    }
-
-    pub fn with_shared_stages<I>(mut self, stages: I) -> Self
-    where
-        I: IntoIterator<Item = OutputStage>,
-    {
-        self.shared_stages = stages.into_iter().collect();
-        self
-    }
-
-    pub fn with_destination_stage(
+    pub fn with_destination_delivery(
         mut self,
         destination: impl Into<DestinationId>,
-        stage: OutputStage,
+        delivery: DeliveryPolicy,
     ) -> anyhow::Result<Self> {
         let destination = destination.into();
         let configured = self
@@ -413,27 +369,8 @@ impl<V> OutputPipeline<V> {
             .ok_or_else(|| {
                 anyhow::anyhow!("output destination `{destination}` is not configured")
             })?;
-        configured.stages.push(stage);
-        Ok(self)
-    }
-
-    pub fn replace_destination_stages<I>(
-        mut self,
-        destination: impl Into<DestinationId>,
-        stages: I,
-    ) -> anyhow::Result<Self>
-    where
-        I: IntoIterator<Item = OutputStage>,
-    {
-        let destination = destination.into();
-        let configured = self
-            .destinations
-            .destinations
-            .get_mut(&destination)
-            .ok_or_else(|| {
-                anyhow::anyhow!("output destination `{destination}` is not configured")
-            })?;
-        configured.stages = stages.into_iter().collect();
+        configured.delivery = delivery;
+        self.generation = PipelineGeneration::new();
         Ok(self)
     }
 
@@ -517,46 +454,30 @@ impl<V> OutputPipeline<V> {
                 output_routes,
             )?;
             validate_backend_routes(destination, &bindings)?;
-            let interface = OutputInterface::from_routes(bindings.iter().map(|binding| {
-                OutputRoute::new(
-                    binding.variable.clone(),
-                    binding.route.as_ref().map(|route| route.route.to_string()),
-                    binding
-                        .route
-                        .as_ref()
-                        .and_then(|route| route.codec.as_ref().map(|codec| codec.0.to_string())),
-                    binding.role,
-                )
-            }))
-            .map_err(anyhow::Error::from)?;
+            let interface = OutputInterface::from_bindings(bindings.iter().cloned())
+                .map_err(anyhow::Error::from)?;
 
-            let mut resolved_destination = ResolvedDestination {
+            let resolved_destination = ResolvedDestination {
                 id: destination.id.clone(),
                 bindings: bindings.into_boxed_slice(),
                 interface,
-                stages: destination.stages.clone().into_boxed_slice(),
+                delivery: destination.delivery,
                 primary: primary
                     .values()
                     .any(|primary_id| primary_id == &destination.id),
-                configuration_key: 0,
             };
-            resolved_destination.configuration_key = resolved_destination.compute_key();
             resolved_destinations.push(resolved_destination);
         }
 
-        let mut resolved = ResolvedOutput {
+        let resolved = ResolvedOutput {
             model_outputs: model_outputs
                 .into_iter()
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             auxiliary: auxiliary.into_iter().collect::<Vec<_>>().into_boxed_slice(),
             destinations: resolved_destinations.into_boxed_slice(),
-            shared_stages: self.shared_stages.clone(),
-            pipeline_identity: Rc::clone(self.configuration_identity()),
-            pipeline_configuration: self.configuration_fingerprint(),
-            fingerprint: 0,
+            generation: self.generation,
         };
-        resolved.fingerprint = resolved.compute_fingerprint();
         Ok(resolved)
     }
 
@@ -571,6 +492,8 @@ impl<V> OutputPipeline<V> {
         &self,
         active: &ResolvedOutput,
         candidate: ResolvedOutput,
+        session: SessionId,
+        expected_revision: SessionRevision,
     ) -> anyhow::Result<OutputPipelineReconfigurationPlan> {
         self.validate_resolution_for_reconfiguration(active, "active")?;
         self.validate_resolution_for_reconfiguration(&candidate, "candidate")?;
@@ -589,13 +512,14 @@ impl<V> OutputPipeline<V> {
                         candidate_destination.id
                     )
                 })?;
-            if active_destination.configuration_key() != candidate_destination.configuration_key() {
+            if *active_destination != candidate_destination {
                 changed.push(candidate_destination.id.clone());
             }
         }
 
         Ok(OutputPipelineReconfigurationPlan {
-            active_fingerprint: active.fingerprint,
+            session,
+            expected_revision,
             candidate,
             changed: changed.into_boxed_slice(),
         })
@@ -607,16 +531,8 @@ impl<V> OutputPipeline<V> {
         side: &str,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            resolved.fingerprint == resolved.compute_fingerprint(),
-            "{side} resolved output fingerprint does not match its structure"
-        );
-        anyhow::ensure!(
-            resolved.pipeline_configuration == self.configuration_fingerprint(),
+            resolved.generation == self.generation,
             "{side} resolved output durable configuration does not match the pipeline"
-        );
-        anyhow::ensure!(
-            Rc::ptr_eq(&resolved.pipeline_identity, self.configuration_identity()),
-            "{side} resolved output belongs to a different pipeline instance"
         );
         anyhow::ensure!(
             resolved.destinations.len() == self.destinations.destinations.len(),
@@ -636,22 +552,13 @@ impl<V> OutputPipeline<V> {
                 )
             })?;
             anyhow::ensure!(
-                destination.stages.as_ref() == configured.stages.as_slice(),
-                "{side} resolved output stages for destination `{}` do not match the pipeline",
+                destination.delivery == configured.delivery,
+                "{side} resolved output delivery policy for destination `{}` does not match the pipeline",
                 destination.id
             );
-            anyhow::ensure!(
-                destination.configuration_key() == destination.compute_key(),
-                "{side} resolved output destination `{}` key does not match its structure",
-                destination.id
-            );
-            OutputInterface::validate_routes(destination.interface.routes())
+            OutputInterface::validate_bindings(destination.interface.bindings())
                 .map_err(anyhow::Error::from)?;
         }
-        anyhow::ensure!(
-            resolved.shared_stages.as_ref() == self.shared_stages.as_ref(),
-            "{side} resolved shared output stages do not match the pipeline"
-        );
         Ok(())
     }
 
@@ -686,12 +593,11 @@ impl<V> OutputPipeline<V> {
         self.validate_resolved_for_open(&resolved)?;
         if resolved.destinations.len() == 1 {
             let opened = self.open_destination(&resolved.destinations[0]).await?;
-            return apply_stages_in_order(
-                opened.writer,
-                &resolved.shared_stages,
-                self.executor.as_ref(),
-            )
-            .await;
+            let mut writer = opened.writer;
+            if let Some(executor) = &self.executor {
+                writer.attach_drop_executor(Rc::clone(executor));
+            }
+            return Ok(writer.with_shutdown_timeout(self.shutdown_timeout));
         }
         self.open_session(resolved)
             .await
@@ -722,14 +628,11 @@ impl<V> OutputPipeline<V> {
 
         let router = OutputRouter::new(opened);
         let router_state = router.state();
-        let writer = OutputWriter::from_sink(router);
-        let writer =
-            match apply_stages_in_order(writer, &resolved.shared_stages, self.executor.as_ref())
-                .await
-            {
-                Ok(writer) => writer,
-                Err(error) => return Err(error),
-            };
+        let mut writer = OutputWriter::from_output_sink(router);
+        if let Some(executor) = &self.executor {
+            writer.attach_drop_executor(Rc::clone(executor));
+        }
+        let writer = writer.with_shutdown_timeout(self.shutdown_timeout);
         Ok(OutputPipelineSession::new(
             self.clone(),
             resolved,
@@ -751,9 +654,12 @@ impl<V> OutputPipeline<V> {
                 .map_err(OutputError::from)?;
         }
         for destination in &resolved.destinations {
-            validate_stage_executor(&destination.stages, self.executor.as_ref())?;
+            if destination.delivery.queue.is_some() && self.executor.is_none() {
+                return Err(OutputError::invalid(
+                    "worker-backed output delivery requires a runtime local executor",
+                ));
+            }
         }
-        validate_stage_executor(&resolved.shared_stages, self.executor.as_ref())?;
         Ok(())
     }
 
@@ -771,16 +677,12 @@ impl<V> OutputPipeline<V> {
             ))
         })?;
         let writer = destination.backend.open(resolved.interface.clone()).await?;
-        let writer =
-            match apply_stages_in_order(writer, &resolved.stages, self.executor.as_ref()).await {
-                Ok(writer) => writer,
-                Err(error) => return Err(error),
-            };
-        let interface_reconfiguration = writer.interface_reconfiguration();
+        let (writer, cancellation) =
+            Delivery::new(writer, self.executor.clone(), resolved.delivery)?.into_parts();
         Ok(OpenedDestination {
             id: resolved.id.clone(),
             variables: variables_for_destination(resolved),
-            interface_reconfiguration,
+            cancellation,
             writer,
         })
     }
@@ -1031,7 +933,7 @@ fn resolve_deliveries<V>(
                 .find(|destination| &destination.id == default)
                 .filter(|destination| {
                     matches!(destination.selection, OutputDestinationSelection::All)
-                        && !destination.backend.requires_codec()
+                        && !destination.backend.requires_format()
                 })
                 .map(|destination| destination.id.clone())
         } else if all_primary_count == 1 {
@@ -1132,7 +1034,7 @@ fn validate_requested_routes(
             model_outputs.contains(variable) || auxiliary.contains(variable),
             "monitor output route is declared for unknown variable `{variable}`"
         );
-        Route::new(route.route.clone(), route.codec.clone())?;
+        Route::new(route.address(), route.format().cloned())?;
     }
     if require_model_coverage {
         let missing = model_outputs
@@ -1168,7 +1070,7 @@ fn resolve_destination_bindings<V>(
     auxiliary: &BTreeSet<VarName>,
     variables: &BTreeSet<VarName>,
     requested_routes: Option<&BTreeMap<VarName, Route>>,
-) -> anyhow::Result<Vec<ResolvedOutputBinding>> {
+) -> anyhow::Result<Vec<OutputBinding>> {
     let mut bindings = Vec::with_capacity(variables.len());
     for variable in variables {
         // A requested route is an override, not a replacement for
@@ -1193,18 +1095,14 @@ fn resolve_destination_bindings<V>(
         } else {
             OutputRole::Output
         };
-        bindings.push(ResolvedOutputBinding {
-            variable: variable.clone(),
-            route,
-            role,
-        });
+        bindings.push(OutputBinding::new(variable.clone(), route, role));
     }
     Ok(bindings)
 }
 
 fn validate_backend_routes<V>(
     destination: &OutputDestination<V>,
-    bindings: &[ResolvedOutputBinding],
+    bindings: &[OutputBinding],
 ) -> anyhow::Result<()> {
     let route_kind = match destination.backend.kind() {
         super::OutputBackendKind::Mqtt => "MQTT topic",
@@ -1215,22 +1113,22 @@ fn validate_backend_routes<V>(
     // name to keep the reported collision independent of construction order.
     let mut output_bindings = bindings
         .iter()
-        .filter(|binding| binding.role == OutputRole::Output)
+        .filter(|binding| binding.role() == OutputRole::Output)
         .collect::<Vec<_>>();
-    output_bindings.sort_by(|left, right| left.variable.name().cmp(&right.variable.name()));
+    output_bindings.sort_by(|left, right| left.variable().name().cmp(&right.variable().name()));
 
     let mut routes = BTreeMap::<&str, &VarName>::new();
     for binding in output_bindings {
-        let Some(route) = binding.route.as_ref() else {
+        let Some(route) = binding.route() else {
             continue;
         };
-        if let Some(previous_variable) = routes.insert(route.route.as_ref(), &binding.variable) {
+        if let Some(previous_variable) = routes.insert(route.address(), binding.variable()) {
             anyhow::bail!(
                 "output destination `{}` has duplicate {route_kind} `{}` for variables `{}` and `{}`",
                 destination.id,
-                route.route,
+                route.address(),
                 previous_variable,
-                binding.variable,
+                binding.variable(),
             );
         }
     }
@@ -1241,8 +1139,8 @@ fn default_route<V>(
     backend: &OutputBackendConfig<V>,
     variable: &VarName,
 ) -> anyhow::Result<Option<Route>> {
-    if backend.requires_codec() {
-        anyhow::bail!("backend requires an explicit codec for output `{variable}`")
+    if backend.requires_format() {
+        anyhow::bail!("backend requires an explicit route format for output `{variable}`")
     }
     if matches!(
         backend.kind(),
@@ -1250,7 +1148,7 @@ fn default_route<V>(
     ) {
         return Route::new(
             variable.name().into_boxed_str(),
-            Some(CodecId::new(JSON_CODEC)),
+            Some(FormatId::new(JSON_CODEC)),
         )
         .map(Some);
     }
@@ -1262,30 +1160,31 @@ fn normalize_route<V>(
     variable: &VarName,
     route: &Route,
 ) -> anyhow::Result<Option<Route>> {
-    let route = Route::new(route.route.clone(), route.codec.clone())?;
+    let route = Route::new(route.address(), route.format().cloned())?;
     match backend.kind() {
         super::OutputBackendKind::Mqtt | super::OutputBackendKind::Redis => {
-            if let Some(codec) = &route.codec {
+            if let Some(codec) = route.format() {
                 anyhow::ensure!(
-                    backend.supports_codec(&codec.0),
-                    "unsupported output codec `{}` for `{variable}`",
+                    backend.supports_format(codec.as_str()),
+                    "unsupported output route format `{}` for `{variable}`",
                     codec
                 );
             }
-            Route::new(route.route, Some(CodecId::new(JSON_CODEC))).map(Some)
+            Route::new(route.address(), Some(FormatId::new(JSON_CODEC))).map(Some)
         }
         super::OutputBackendKind::Ros => {
             anyhow::ensure!(
-                route.codec.is_some(),
-                "ROS output `{variable}` requires a codec"
+                route.format().is_some(),
+                "ROS output `{variable}` requires a route format"
             );
             Ok(Some(route))
         }
-        super::OutputBackendKind::Custom => Ok(Some(route)),
+        #[cfg(any(test, feature = "test-support"))]
+        super::OutputBackendKind::Test => Ok(Some(route)),
         _ => {
             anyhow::ensure!(
-                route.codec.is_none(),
-                "backend `{}` does not support an output codec for `{variable}`",
+                route.format().is_none(),
+                "backend `{}` does not support an output route format for `{variable}`",
                 backend.kind_name()
             );
             Ok(Some(route))
@@ -1293,72 +1192,18 @@ fn normalize_route<V>(
     }
 }
 
-fn validate_stage_executor(
-    stages: &[OutputStage],
-    executor: Option<&Rc<LocalExecutor<'static>>>,
-) -> Result<(), OutputError> {
-    for stage in stages {
-        match stage {
-            OutputStage::Coalesce(config)
-                if config.max_delay.is_none()
-                    && config.tick_limit.is_none()
-                    && config.update_limit.is_none() =>
-            {
-                return Err(OutputError::invalid(
-                    "output coalescing requires a delay, tick_limit, or update_limit",
-                ));
-            }
-            OutputStage::Coalesce(config) if config.max_delay.is_some() && executor.is_none() => {
-                return Err(OutputError::invalid(
-                    "worker-backed output stages require a runtime local executor",
-                ));
-            }
-            OutputStage::Buffer(config) if config.max_updates.is_none() && executor.is_none() => {
-                return Err(OutputError::invalid(
-                    "worker-backed output stages require a runtime local executor",
-                ));
-            }
-            OutputStage::Buffer(_) | OutputStage::Coalesce(_) => {}
-        }
-    }
-    Ok(())
-}
-
-async fn apply_stages_in_order<V: 'static>(
-    mut writer: OutputWriter<V>,
-    stages: &[OutputStage],
-    executor: Option<&Rc<LocalExecutor<'static>>>,
-) -> Result<OutputWriter<V>, OutputError> {
-    // Stage validation is also performed before any backend is opened. Keep the
-    // check here so a stage-wrapping failure still closes the writer currently
-    // being wrapped when this helper is used independently or a future caller
-    // supplies a different stage slice.
-    if let Err(error) = validate_stage_executor(stages, executor) {
-        let cleanup = writer.close().await.err();
-        return Err(with_cleanup(error, cleanup));
-    }
-    for stage in stages.iter().rev().copied() {
-        // `OutputStage::apply` reports exactly the configuration and executor
-        // failures checked above; the remaining operation only constructs the
-        // wrapper. If that implementation gains a later failure, its consumed
-        // writer cannot be recovered through the current API.
-        writer = stage.apply(writer, executor.map(Rc::clone))?;
-    }
-    Ok(writer)
-}
-
 fn variables_for_destination(resolved: &ResolvedDestination) -> BTreeSet<VarName> {
     resolved
         .bindings
         .iter()
-        .map(|binding| binding.variable.clone())
+        .map(|binding| binding.variable().clone())
         .collect()
 }
 
 struct OpenedDestination<V> {
     id: DestinationId,
     variables: BTreeSet<VarName>,
-    interface_reconfiguration: Option<OutputInterfaceReconfigurationHandle>,
+    cancellation: Option<DeliveryCancellation>,
     writer: OutputWriter<V>,
 }
 
@@ -1379,38 +1224,14 @@ fn with_cleanup(primary: OutputError, cleanup: Option<OutputError>) -> OutputErr
     }
 }
 
-/// The resolved route binding for one variable in one destination. Local
-/// destinations may intentionally have no transport route.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedOutputBinding {
-    variable: VarName,
-    route: Option<Route>,
-    role: OutputRole,
-}
-
-impl ResolvedOutputBinding {
-    pub fn variable(&self) -> &VarName {
-        &self.variable
-    }
-
-    pub fn route(&self) -> Option<&Route> {
-        self.route.as_ref()
-    }
-
-    pub fn role(&self) -> OutputRole {
-        self.role
-    }
-}
-
-/// A resolved destination with a fixed backend interface and ordered stages.
+/// A resolved destination with a fixed backend interface and delivery policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedDestination {
     id: DestinationId,
-    bindings: Box<[ResolvedOutputBinding]>,
+    bindings: Box<[OutputBinding]>,
     interface: OutputInterface,
-    stages: Box<[OutputStage]>,
+    delivery: DeliveryPolicy,
     primary: bool,
-    configuration_key: u128,
 }
 
 impl ResolvedDestination {
@@ -1418,7 +1239,7 @@ impl ResolvedDestination {
         &self.id
     }
 
-    pub fn bindings(&self) -> &[ResolvedOutputBinding] {
+    pub fn bindings(&self) -> &[OutputBinding] {
         &self.bindings
     }
 
@@ -1426,25 +1247,12 @@ impl ResolvedDestination {
         &self.interface
     }
 
-    pub fn stages(&self) -> &[OutputStage] {
-        &self.stages
+    pub const fn delivery(&self) -> DeliveryPolicy {
+        self.delivery
     }
 
     pub fn is_primary(&self) -> bool {
         self.primary
-    }
-
-    pub(crate) fn configuration_key(&self) -> u128 {
-        self.configuration_key
-    }
-
-    fn compute_key(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("output-destination-resolution-v1");
-        key.write_str(&self.id);
-        write_output_bindings(&mut key, &self.bindings);
-        write_output_interface(&mut key, &self.interface);
-        write_output_stages(&mut key, &self.stages);
-        key.finish()
     }
 }
 
@@ -1454,10 +1262,7 @@ pub struct ResolvedOutput {
     model_outputs: Box<[VarName]>,
     auxiliary: Box<[VarName]>,
     destinations: Box<[ResolvedDestination]>,
-    shared_stages: Box<[OutputStage]>,
-    pipeline_identity: Rc<()>,
-    pipeline_configuration: u128,
-    fingerprint: u128,
+    generation: PipelineGeneration,
 }
 
 impl ResolvedOutput {
@@ -1473,38 +1278,17 @@ impl ResolvedOutput {
         &self.destinations
     }
 
-    pub fn shared_stages(&self) -> &[OutputStage] {
-        &self.shared_stages
-    }
-
     pub fn destination(&self, id: &DestinationId) -> Option<&ResolvedDestination> {
         self.destinations
             .iter()
             .find(|destination| &destination.id == id)
     }
-
-    pub fn fingerprint(&self) -> u128 {
-        self.fingerprint
-    }
-
-    fn compute_fingerprint(&self) -> u128 {
-        let mut key = FingerprintBuilder::new("output-resolution-v1");
-        key.write_u128(self.pipeline_configuration);
-        write_var_names(&mut key, &self.model_outputs);
-        write_var_names(&mut key, &self.auxiliary);
-        write_output_stages(&mut key, &self.shared_stages);
-        key.write_usize(self.destinations.len());
-        for destination in &self.destinations {
-            key.write_u128(destination.configuration_key());
-            key.write_bool(destination.primary);
-        }
-        key.finish()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OutputPipelineReconfigurationPlan {
-    active_fingerprint: u128,
+    session: SessionId,
+    expected_revision: SessionRevision,
     candidate: ResolvedOutput,
     changed: Box<[DestinationId]>,
 }
@@ -1522,8 +1306,12 @@ impl OutputPipelineReconfigurationPlan {
         !self.changed.is_empty()
     }
 
-    pub(crate) fn active_fingerprint(&self) -> u128 {
-        self.active_fingerprint
+    pub(crate) fn session(&self) -> SessionId {
+        self.session
+    }
+
+    pub(crate) fn expected_revision(&self) -> SessionRevision {
+        self.expected_revision
     }
 }
 
@@ -1535,6 +1323,9 @@ pub struct OutputPipelineSession<V> {
     writer: OutputWriter<V>,
     router_state: Rc<RefCell<OutputRouterState<V>>>,
     sticky_error: Option<OutputError>,
+    session: SessionId,
+    revision: SessionRevision,
+    pending_revision: Option<SessionRevision>,
 }
 
 impl<V> OutputPipelineSession<V> {
@@ -1550,6 +1341,9 @@ impl<V> OutputPipelineSession<V> {
             writer,
             router_state,
             sticky_error: None,
+            session: SessionId::new(),
+            revision: SessionRevision::initial(),
+            pending_revision: None,
         }
     }
 
@@ -1557,8 +1351,31 @@ impl<V> OutputPipelineSession<V> {
         &self.resolved
     }
 
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session
+    }
+
+    pub(crate) fn revision(&self) -> SessionRevision {
+        self.revision
+    }
+
+    pub(crate) fn commit_revision(&mut self, expected: SessionRevision) -> Result<(), OutputError> {
+        if self.revision != expected || self.pending_revision != Some(expected) {
+            return Err(self.fail(OutputError::invalid(
+                "output session revision changed before coordinated commit",
+            )));
+        }
+        self.revision = self.revision.next();
+        self.pending_revision = None;
+        Ok(())
+    }
+
     pub fn writer(&self) -> &OutputWriter<V> {
         &self.writer
+    }
+
+    pub fn error(&self) -> Option<&OutputError> {
+        self.sticky_error.as_ref().or_else(|| self.writer.error())
     }
 
     pub fn writer_mut(&mut self) -> &mut OutputWriter<V> {
@@ -1584,13 +1401,19 @@ impl<V> OutputPipelineSession<V> {
     }
 
     pub async fn close(&mut self) -> Result<(), OutputError> {
-        let close = self.writer.close().await;
-        match self.sticky_error.clone() {
-            Some(error) => match close {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(super::combine_errors(error, cleanup)),
-            },
-            None => close,
+        let deadline = self.writer.shutdown_deadline();
+        self.close_with_deadline(deadline).await
+    }
+
+    pub async fn close_with_deadline(
+        &mut self,
+        deadline: ShutdownDeadline,
+    ) -> Result<(), OutputError> {
+        let close = self.writer.close_with_deadline(deadline).await;
+        match (self.sticky_error.clone(), close) {
+            (Some(primary), Ok(())) => Err(primary),
+            (Some(primary), Err(cleanup)) => Err(super::combine_errors(primary, cleanup)),
+            (None, result) => result,
         }
     }
 
@@ -1608,9 +1431,12 @@ impl<V> OutputPipelineSession<V> {
         if let Some(error) = &self.sticky_error {
             return Err(error.clone());
         }
-        if plan.active_fingerprint() != self.resolved.fingerprint() {
+        if plan.session() != self.session
+            || plan.expected_revision() != self.revision
+            || self.pending_revision.is_some()
+        {
             return Err(self.fail(OutputError::invalid(
-                "stale output pipeline reconfiguration plan does not match the active resolution",
+                "stale output pipeline reconfiguration plan does not match the active session revision",
             )));
         }
         if let Err(error) = self
@@ -1618,22 +1444,6 @@ impl<V> OutputPipelineSession<V> {
             .validate_resolution_for_reconfiguration(plan.candidate(), "candidate")
         {
             return Err(self.fail(OutputError::from(error)));
-        }
-
-        let affected = plan
-            .changed_destinations()
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if !affected.is_empty() {
-            let result = if self.resolved.shared_stages.is_empty() {
-                OutputRouterState::flush_destinations(&self.router_state, &affected).await
-            } else {
-                self.writer.flush().await
-            };
-            if let Err(error) = result {
-                return Err(self.fail(error));
-            }
         }
 
         for destination in plan.changed_destinations() {
@@ -1647,20 +1457,13 @@ impl<V> OutputPipelineSession<V> {
                         "changed output destination `{destination}` is absent from the candidate resolution",
                     )))
                 })?;
-            let handle = {
-                let state = RefCell::borrow(self.router_state.as_ref());
-                state.interface_reconfiguration(destination)
-            }
-            .ok_or_else(|| {
-                OutputError::invalid(format!(
-                    "output destination `{destination}` does not support interface reconfiguration",
-                ))
-            });
-            let handle = match handle {
-                Ok(handle) => handle,
-                Err(error) => return Err(self.fail(error)),
-            };
-            if let Err(error) = handle.reconfigure(target.interface.clone()).await {
+            if let Err(error) = OutputRouterState::rebind_destination(
+                &self.router_state,
+                destination,
+                target.interface.clone(),
+            )
+            .await
+            {
                 return Err(self.fail(error));
             }
             let variables = variables_for_destination(target);
@@ -1674,6 +1477,7 @@ impl<V> OutputPipelineSession<V> {
         }
 
         self.resolved = plan.candidate().clone();
+        self.pending_revision = Some(plan.expected_revision());
         Ok(())
     }
 
@@ -1720,6 +1524,14 @@ struct OutputRouterState<V> {
 }
 
 impl<V> OutputRouterState<V> {
+    fn cancel_delivery(&self) {
+        for destination in self.destinations.values() {
+            if let Some(cancellation) = &destination.cancellation {
+                cancellation.cancel();
+            }
+        }
+    }
+
     fn new(destinations: Vec<OpenedDestination<V>>) -> Self {
         let destinations = destinations
             .into_iter()
@@ -1742,7 +1554,7 @@ impl<V> OutputRouterState<V> {
             return Some(error.clone());
         }
         if self.closing || self.closed {
-            return Some(OutputError::Closed);
+            return Some(OutputError::closed());
         }
         None
     }
@@ -1770,15 +1582,6 @@ impl<V> OutputRouterState<V> {
         self.ready = false;
         Ok(())
     }
-
-    fn interface_reconfiguration(
-        &self,
-        id: &DestinationId,
-    ) -> Option<OutputInterfaceReconfigurationHandle> {
-        self.destinations
-            .get(id)
-            .and_then(|destination| destination.interface_reconfiguration.clone())
-    }
 }
 
 struct OutputRouter<V> {
@@ -1797,35 +1600,47 @@ impl<V> OutputRouter<V> {
     }
 }
 
-impl<V: 'static> OutputRouterState<V> {
-    async fn flush_destinations(
-        state: &Rc<RefCell<Self>>,
-        destinations: &BTreeSet<DestinationId>,
-    ) -> Result<(), OutputError> {
-        for id in destinations {
-            let mut destination = {
-                let mut state_ref = state.borrow_mut();
-                if let Some(error) = state_ref.state_error() {
-                    return Err(error);
-                }
-                state_ref.destinations.remove(id).ok_or_else(|| {
-                    OutputError::invalid(format!("output destination `{id}` is not active"))
-                })?
-            };
-            let result = destination.writer.flush().await;
-            let mut state_ref = state.borrow_mut();
-            assert!(
-                state_ref
-                    .destinations
-                    .insert(id.clone(), destination)
-                    .is_none(),
-                "flushed destination was removed temporarily"
-            );
-            if let Err(error) = result {
-                return Err(state_ref.remember(error));
-            }
+impl<V: Clone + 'static> crate::core::OutputSink<V> for OutputRouter<V> {
+    fn abort(self: Pin<&mut Self>) {
+        let mut state = self.state.borrow_mut();
+        state.cancel_delivery();
+        for destination in state.destinations.values_mut() {
+            destination.writer.abort();
         }
-        Ok(())
+        state.closing = true;
+        state.closed = true;
+    }
+}
+
+impl<V: 'static> OutputRouterState<V> {
+    async fn rebind_destination(
+        state: &Rc<RefCell<Self>>,
+        id: &DestinationId,
+        interface: OutputInterface,
+    ) -> Result<(), OutputError> {
+        futures::future::poll_fn(|cx| {
+            let mut state = state.borrow_mut();
+            if let Some(error) = state.state_error() {
+                return Poll::Ready(Err(error));
+            }
+            let result = {
+                let Some(destination) = state.destinations.get_mut(id) else {
+                    return Poll::Ready(Err(OutputError::invalid(format!(
+                        "output destination `{id}` is not active"
+                    ))));
+                };
+                // The writer retains the operation state if this future is
+                // cancelled; keep its owner in the router throughout.
+                let rebind = destination.writer.rebind(interface.clone());
+                futures::pin_mut!(rebind);
+                rebind.poll(cx)
+            };
+            match result {
+                Poll::Ready(Err(error)) => Poll::Ready(Err(state.remember(error))),
+                other => other,
+            }
+        })
+        .await
     }
 }
 
@@ -1923,7 +1738,7 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
         let this = self.get_mut();
         let mut state = this.state.borrow_mut();
         if state.closed {
-            return std::task::Poll::Ready(Err(OutputError::Closed));
+            return std::task::Poll::Ready(Err(OutputError::closed()));
         }
         let mut pending = false;
         let mut error = None;
@@ -1956,7 +1771,7 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
             return std::task::Poll::Ready(Err(state
                 .failure
                 .clone()
-                .unwrap_or(OutputError::Closed)));
+                .unwrap_or_else(OutputError::closed)));
         }
         state.closing = true;
         let mut pending = false;
@@ -2002,197 +1817,6 @@ impl<V: Clone + 'static> Sink<OutputBatch<V>> for OutputRouter<V> {
     }
 }
 
-fn write_var_names(key: &mut FingerprintBuilder, variables: &[VarName]) {
-    let mut names = variables.iter().map(VarName::name).collect::<Vec<_>>();
-    names.sort();
-    key.write_usize(names.len());
-    for name in names {
-        key.write_str(&name);
-    }
-}
-
-fn write_optional_string(key: &mut FingerprintBuilder, value: Option<&str>) {
-    match value {
-        Some(value) => {
-            key.write_bool(true);
-            key.write_str(value);
-        }
-        None => key.write_bool(false),
-    }
-}
-
-fn write_output_routes(key: &mut FingerprintBuilder, routes: &BTreeMap<VarName, Route>) {
-    let mut routes = routes.iter().collect::<Vec<_>>();
-    routes.sort_by(|(left, _), (right, _)| left.name().cmp(&right.name()));
-    key.write_usize(routes.len());
-    for (variable, route) in routes {
-        key.write_str(&variable.name());
-        key.write_str(&route.route);
-        write_optional_string(key, route.codec.as_ref().map(|codec| codec.0.as_ref()));
-    }
-}
-
-fn write_output_stages(key: &mut FingerprintBuilder, stages: &[OutputStage]) {
-    key.write_usize(stages.len());
-    for stage in stages {
-        match stage {
-            OutputStage::Buffer(config) => {
-                key.write_str("buffer");
-                key.write_usize(config.max_batches.get());
-                match config.max_updates {
-                    Some(limit) => {
-                        key.write_bool(true);
-                        key.write_usize(limit.get());
-                    }
-                    None => key.write_bool(false),
-                }
-            }
-            OutputStage::Coalesce(config) => {
-                key.write_str("coalesce");
-                match config.max_delay {
-                    Some(delay) => {
-                        key.write_bool(true);
-                        key.write_u128(delay.as_nanos());
-                    }
-                    None => key.write_bool(false),
-                }
-                match config.tick_limit {
-                    Some(limit) => {
-                        key.write_bool(true);
-                        key.write_usize(limit.get());
-                    }
-                    None => key.write_bool(false),
-                }
-                match config.update_limit {
-                    Some(limit) => {
-                        key.write_bool(true);
-                        key.write_usize(limit.get());
-                    }
-                    None => key.write_bool(false),
-                }
-            }
-        }
-    }
-}
-
-fn write_output_bindings(key: &mut FingerprintBuilder, bindings: &[ResolvedOutputBinding]) {
-    let mut bindings = bindings.iter().collect::<Vec<_>>();
-    bindings.sort_by(|left, right| left.variable.name().cmp(&right.variable.name()));
-    key.write_usize(bindings.len());
-    for binding in bindings {
-        key.write_str(&binding.variable.name());
-        key.write_bool(binding.role == OutputRole::Auxiliary);
-        match &binding.route {
-            Some(route) => {
-                key.write_bool(true);
-                key.write_str(&route.route);
-                write_optional_string(key, route.codec.as_ref().map(|codec| codec.0.as_ref()));
-            }
-            None => key.write_bool(false),
-        }
-    }
-}
-
-fn write_output_interface(key: &mut FingerprintBuilder, interface: &OutputInterface) {
-    let mut routes = interface.routes().iter().collect::<Vec<_>>();
-    routes.sort_by(|left, right| left.variable.name().cmp(&right.variable.name()));
-    key.write_usize(routes.len());
-    for route in routes {
-        key.write_str(&route.variable.name());
-        write_optional_string(key, route.topic.as_deref());
-        write_optional_string(key, route.message_type.as_deref());
-        key.write_bool(route.role == OutputRole::Auxiliary);
-    }
-}
-
-fn write_selection(key: &mut FingerprintBuilder, selection: &OutputDestinationSelection) {
-    match selection {
-        OutputDestinationSelection::All => key.write_str("all"),
-        OutputDestinationSelection::MirrorAll => key.write_str("mirror-all"),
-        OutputDestinationSelection::Partition(variables) => {
-            key.write_str("partition");
-            let variables = variables.iter().map(VarName::name).collect::<Vec<_>>();
-            key.write_usize(variables.len());
-            for variable in variables {
-                key.write_str(&variable);
-            }
-        }
-        OutputDestinationSelection::Mirror(variables) => {
-            key.write_str("mirror");
-            let variables = variables.iter().map(VarName::name).collect::<Vec<_>>();
-            key.write_usize(variables.len());
-            for variable in variables {
-                key.write_str(&variable);
-            }
-        }
-    }
-}
-
-fn backend_configuration_key<V>(backend: &OutputBackendConfig<V>) -> u128 {
-    let mut key = FingerprintBuilder::new("output-backend-v1");
-    match backend {
-        OutputBackendConfig::Stdout => key.write_str("stdout"),
-        OutputBackendConfig::Null => key.write_str("null"),
-        OutputBackendConfig::LimitedNull(limit) => {
-            key.write_str("limited-null");
-            key.write_usize(*limit);
-        }
-        OutputBackendConfig::Manual(sender) => {
-            key.write_str("manual");
-            key.write_usize(sender.max_capacity());
-        }
-        OutputBackendConfig::Mqtt {
-            host,
-            port,
-            backend,
-        } => {
-            key.write_str("mqtt");
-            key.write_str(host);
-            match port {
-                Some(port) => {
-                    key.write_bool(true);
-                    key.write_u64(*port as u64);
-                }
-                None => key.write_bool(false),
-            }
-            key.write_str(match backend {
-                super::MqttOutputBackendKind::Paho => "paho",
-            });
-        }
-        OutputBackendConfig::Redis { host, port } => {
-            key.write_str("redis");
-            key.write_str(host);
-            match port {
-                Some(port) => {
-                    key.write_bool(true);
-                    key.write_u64(*port as u64);
-                }
-                None => key.write_bool(false),
-            }
-        }
-        #[cfg(feature = "ros")]
-        OutputBackendConfig::Ros { node_name, .. } => {
-            key.write_str("ros");
-            key.write_str(node_name);
-        }
-        OutputBackendConfig::Custom(_) => key.write_str("custom"),
-    }
-    key.finish()
-}
-
-fn destination_configuration_key<V>(destination: &OutputDestination<V>) -> u128 {
-    let mut key = FingerprintBuilder::new("output-destination-v1");
-    key.write_str(&destination.id);
-    key.write_u128(backend_configuration_key(&destination.backend));
-    write_output_routes(
-        &mut key,
-        destination.routes.as_ref().unwrap_or(&BTreeMap::new()),
-    );
-    write_selection(&mut key, &destination.selection);
-    write_output_stages(&mut key, &destination.stages);
-    key.finish()
-}
-
 trait BackendKindName {
     fn kind_name(&self) -> &'static str;
 }
@@ -2203,11 +1827,12 @@ impl<V> BackendKindName for OutputBackendConfig<V> {
             super::OutputBackendKind::Stdout => "stdout",
             super::OutputBackendKind::Null => "null",
             super::OutputBackendKind::LimitedNull => "limited-null",
-            super::OutputBackendKind::Manual => "manual",
+            super::OutputBackendKind::Channel => "channel",
             super::OutputBackendKind::Mqtt => "mqtt",
             super::OutputBackendKind::Redis => "redis",
             super::OutputBackendKind::Ros => "ros",
-            super::OutputBackendKind::Custom => "custom",
+            #[cfg(any(test, feature = "test-support"))]
+            super::OutputBackendKind::Test => "test",
         }
     }
 }
@@ -2216,6 +1841,7 @@ impl<V> BackendKindName for OutputBackendConfig<V> {
 mod tests {
     use std::{
         cell::{Cell, RefCell},
+        num::NonZeroUsize,
         pin::Pin,
         rc::Rc,
         task::{Context, Poll},
@@ -2225,8 +1851,9 @@ mod tests {
     use futures::Sink;
 
     use super::*;
-    use crate::core::{OutputBackend, OutputInterfaceReconfigurationHandle, OutputUpdate, VarName};
-    use crate::io::output::{OutputBuffer, OutputCoalescing};
+    use crate::core::{OutputSink, OutputUpdate, VarName};
+    use crate::io::output::TestOutputOpener;
+    use crate::io::output::{CoalescingLimits, QueueLimits};
 
     #[derive(Clone)]
     struct RecordingBackend {
@@ -2261,7 +1888,9 @@ mod tests {
     }
 
     struct ReconfigurableRecordingSink {
-        interface: Rc<RefCell<OutputInterface>>,
+        interface: OutputInterface,
+        interface_updates: Rc<Cell<usize>>,
+        fail_interface_update: bool,
         closed: Rc<Cell<usize>>,
         flushes: Rc<Cell<usize>>,
         batches: Rc<RefCell<Vec<OutputBatch<crate::Value>>>>,
@@ -2386,7 +2015,7 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             if self.is_closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.ready = true;
             Poll::Ready(Ok(()))
@@ -2397,14 +2026,14 @@ mod tests {
             batch: OutputBatch<crate::Value>,
         ) -> Result<(), Self::Error> {
             if self.is_closed {
-                return Err(OutputError::Closed);
+                return Err(OutputError::closed());
             }
             if !self.ready {
                 return Err(OutputError::backend(
                     "reconfigurable recording sink was not ready",
                 ));
             }
-            self.interface.as_ref().borrow().validate_batch(&batch)?;
+            self.interface.validate_batch(&batch)?;
             self.ready = false;
             self.batches.borrow_mut().push(batch);
             Ok(())
@@ -2415,7 +2044,7 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             if self.is_closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.flushes.set(self.flushes.get() + 1);
             self.ready = true;
@@ -2427,7 +2056,7 @@ mod tests {
             _context: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
             if self.is_closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             self.is_closed = true;
             self.ready = true;
@@ -2436,41 +2065,41 @@ mod tests {
         }
     }
 
-    #[async_trait(?Send)]
-    impl crate::core::OutputBackend for ReconfigurableRecordingBackend {
-        type Val = crate::Value;
+    impl OutputSink<crate::Value> for ReconfigurableRecordingSink {
+        fn poll_rebind(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            interface: &OutputInterface,
+        ) -> Poll<Result<(), OutputError>> {
+            if self.fail_interface_update {
+                return Poll::Ready(Err(OutputError::backend(
+                    "intentional interface update failure",
+                )));
+            }
+            self.interface = interface.clone();
+            self.interface_updates.set(self.interface_updates.get() + 1);
+            Poll::Ready(Ok(()))
+        }
+    }
 
+    #[async_trait(?Send)]
+    impl TestOutputOpener<crate::Value> for ReconfigurableRecordingBackend {
         async fn open(
             &self,
             interface: OutputInterface,
-        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+        ) -> Result<OutputWriter<crate::Value>, OutputError> {
             self.opened.set(self.opened.get() + 1);
-            let interface = Rc::new(RefCell::new(interface));
-            let handle_interface = Rc::clone(&interface);
-            let interface_updates = Rc::clone(&self.interface_updates);
-            let fail_interface_update = self.fail_interface_update;
-            let handle = OutputInterfaceReconfigurationHandle::new(move |replacement| {
-                let interface = Rc::clone(&handle_interface);
-                let interface_updates = Rc::clone(&interface_updates);
-                Box::pin(async move {
-                    if fail_interface_update {
-                        return Err(OutputError::backend("intentional interface update failure"));
-                    }
-                    *interface.borrow_mut() = replacement;
-                    interface_updates.set(interface_updates.get() + 1);
-                    Ok(())
-                })
-            });
-            Ok(OutputWriter::from_sink_with_interface_reconfiguration(
+            Ok(OutputWriter::from_output_sink(
                 ReconfigurableRecordingSink {
                     interface,
+                    interface_updates: Rc::clone(&self.interface_updates),
+                    fail_interface_update: self.fail_interface_update,
                     closed: Rc::clone(&self.closed),
                     flushes: Rc::clone(&self.flushes),
                     batches: Rc::clone(&self.batches),
                     ready: false,
                     is_closed: false,
                 },
-                Some(handle),
             ))
         }
     }
@@ -2519,13 +2148,11 @@ mod tests {
     }
 
     #[async_trait(?Send)]
-    impl crate::core::OutputBackend for RecordingBackend {
-        type Val = crate::Value;
-
+    impl TestOutputOpener<crate::Value> for RecordingBackend {
         async fn open(
             &self,
             _interface: OutputInterface,
-        ) -> Result<OutputWriter<Self::Val>, OutputError> {
+        ) -> Result<OutputWriter<crate::Value>, OutputError> {
             if self.fail_open {
                 return Err(OutputError::backend("intentional open failure"));
             }
@@ -2567,17 +2194,17 @@ mod tests {
         let bindings = resolved.destinations()[0].bindings();
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].variable(), &VarName::new("x"));
-        assert_eq!(bindings[0].route().unwrap().route.as_ref(), "/configured/x");
+        assert_eq!(bindings[0].route().unwrap().address(), "/configured/x");
         assert_eq!(bindings[1].variable(), &VarName::new("y"));
         assert!(bindings[1].route().is_none());
         assert_eq!(resolved.destinations()[0].interface().len(), 2);
         assert_eq!(
             resolved.destinations()[0]
                 .interface()
-                .route(&VarName::new("x"))
+                .binding(&VarName::new("x"))
                 .unwrap()
-                .topic
-                .as_deref(),
+                .route()
+                .map(Route::address),
             Some("/configured/x")
         );
     }
@@ -2608,7 +2235,7 @@ mod tests {
         );
         assert_eq!(resolved.destinations()[0].bindings.len(), 2);
         assert_eq!(
-            resolved.destinations()[0].bindings[1].role,
+            resolved.destinations()[0].bindings[1].role(),
             OutputRole::Auxiliary
         );
         assert!(resolved.destinations()[0].bindings[1].route().is_none());
@@ -2621,7 +2248,7 @@ mod tests {
             OutputBackendConfig::Mqtt {
                 host: "broker".into(),
                 port: Some(1883),
-                backend: crate::io::output::MqttOutputBackendKind::Paho,
+                retry: crate::io::RetryPolicy::output_default(),
             },
         )
         .with_routes([(VarName::new("x"), route("topic"))]);
@@ -2629,15 +2256,12 @@ mod tests {
             .resolve([VarName::new("x")], std::iter::empty::<VarName>(), None)
             .unwrap();
         assert_eq!(
-            resolved.destinations()[0].bindings[0]
-                .route
-                .as_ref()
+            resolved.destinations()[0].bindings()[0]
+                .route()
                 .unwrap()
-                .codec
-                .as_ref()
+                .format()
                 .unwrap()
-                .0
-                .as_ref(),
+                .as_str(),
             "json"
         );
     }
@@ -2710,14 +2334,14 @@ mod tests {
                 Rc::new(RefCell::new(Vec::new()));
             let right_batches: Rc<RefCell<Vec<OutputBatch<crate::Value>>>> =
                 Rc::new(RefCell::new(Vec::new()));
-            let left = OutputBackendConfig::custom(RecordingBackend {
+            let left = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::new(Cell::new(0)),
                 batches: Rc::clone(&left_batches),
                 fail_open: false,
                 fail_close: false,
             });
-            let right = OutputBackendConfig::custom(RecordingBackend {
+            let right = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::new(Cell::new(0)),
                 batches: Rc::clone(&right_batches),
@@ -2763,14 +2387,14 @@ mod tests {
     fn partial_open_closes_every_previous_destination() {
         smol::block_on(async {
             let closed = Rc::new(Cell::new(0));
-            let first = OutputBackendConfig::custom(RecordingBackend {
+            let first = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::clone(&closed),
                 batches: Rc::new(RefCell::new(Vec::new())),
                 fail_open: false,
                 fail_close: false,
             });
-            let second = OutputBackendConfig::custom(RecordingBackend {
+            let second = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::clone(&closed),
                 batches: Rc::new(RefCell::new(Vec::new())),
@@ -2794,20 +2418,17 @@ mod tests {
     }
 
     #[test]
-    fn shared_stages_are_applied_before_destination_stages() {
-        let buffer = OutputStage::buffer(2).unwrap();
-        let coalesce = OutputStage::coalesce(2, None).unwrap();
+    fn destination_delivery_is_part_of_the_resolved_plan() {
+        let coalesce = CoalescingLimits::new(NonZeroUsize::new(2), None, None).unwrap();
+        let delivery = DeliveryPolicy::coalesce(coalesce);
         let destination =
             OutputDestination::<crate::Value>::new("only", OutputBackendConfig::null())
-                .with_stage(coalesce);
-        let pipeline = OutputPipeline::from_destination(destination)
-            .unwrap()
-            .with_shared_stage(buffer);
+                .with_delivery(delivery);
+        let pipeline = OutputPipeline::from_destination(destination).unwrap();
         let resolved = pipeline
             .resolve([VarName::new("x")], std::iter::empty::<VarName>(), None)
             .unwrap();
-        assert_eq!(resolved.shared_stages(), &[buffer]);
-        assert_eq!(resolved.destinations()[0].stages(), &[coalesce]);
+        assert_eq!(resolved.destinations()[0].delivery(), delivery);
     }
 
     #[test]
@@ -2874,7 +2495,7 @@ mod tests {
         assert_eq!(resolved.destinations()[0].bindings().len(), 1);
         assert_eq!(resolved.destinations()[1].bindings().len(), 2);
         assert_eq!(
-            resolved.fingerprint(),
+            resolved,
             pipeline
                 .resolve(
                     [VarName::new("x"), VarName::new("y")],
@@ -2882,7 +2503,6 @@ mod tests {
                     Some(&config),
                 )
                 .unwrap()
-                .fingerprint()
         );
     }
 
@@ -2891,14 +2511,14 @@ mod tests {
         smol::block_on(async {
             let left_batches = Rc::new(RefCell::new(Vec::new()));
             let right_batches = Rc::new(RefCell::new(Vec::new()));
-            let left = OutputBackendConfig::custom(RecordingBackend {
+            let left = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::new(Cell::new(0)),
                 batches: Rc::clone(&left_batches),
                 fail_open: false,
                 fail_close: false,
             });
-            let right = OutputBackendConfig::custom(RecordingBackend {
+            let right = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::new(Cell::new(0)),
                 batches: Rc::clone(&right_batches),
@@ -2986,8 +2606,7 @@ mod tests {
                 .bindings()[0]
                 .route()
                 .unwrap()
-                .route
-                .as_ref(),
+                .address(),
             "/mirror/x"
         );
     }
@@ -3030,77 +2649,17 @@ mod tests {
     }
 
     #[test]
-    fn invalid_stage_config_is_rejected_before_any_backend_opens() {
-        smol::block_on(async {
-            let opened = Rc::new(Cell::new(0));
-            let closed = Rc::new(Cell::new(0));
-            let stage = OutputStage::Coalesce(OutputCoalescing {
-                max_delay: None,
-                tick_limit: None,
-                update_limit: None,
-            });
-            let destination = OutputDestination::new(
-                "only",
-                OutputBackendConfig::custom(RecordingBackend {
-                    opened: Rc::clone(&opened),
-                    closed: Rc::clone(&closed),
-                    batches: Rc::new(RefCell::new(Vec::new())),
-                    fail_open: false,
-                    fail_close: false,
-                }),
-            )
-            .with_stage(stage);
-            let pipeline = pipeline(vec![destination]);
-            let resolved = pipeline
-                .resolve([VarName::new("x")], std::iter::empty::<VarName>(), None)
-                .unwrap();
-            let error = match pipeline.open(resolved).await {
-                Ok(_) => panic!("invalid stage should not open a backend"),
-                Err(error) => error,
-            };
-            assert!(error.to_string().contains("coalescing requires"));
-            assert_eq!(opened.get(), 0);
-            assert_eq!(closed.get(), 0);
-        });
-    }
-
-    #[test]
-    fn stage_wrap_failure_closes_the_current_writer() {
-        smol::block_on(async {
-            let closed = Rc::new(Cell::new(0));
-            let writer = OutputWriter::from_sink(RecordingSink {
-                closed: Rc::clone(&closed),
-                batches: Rc::new(RefCell::new(Vec::new())),
-                ready: false,
-                fail_close: true,
-            });
-            let invalid = OutputStage::Coalesce(OutputCoalescing {
-                max_delay: None,
-                tick_limit: None,
-                update_limit: None,
-            });
-            let error = match apply_stages_in_order(writer, &[invalid], None).await {
-                Ok(_) => panic!("invalid stage should fail while wrapping"),
-                Err(error) => error,
-            };
-            assert!(error.to_string().contains("coalescing requires"));
-            assert!(error.to_string().contains("intentional close failure"));
-            assert_eq!(closed.get(), 1);
-        });
-    }
-
-    #[test]
     fn partial_open_combines_destination_cleanup_errors() {
         smol::block_on(async {
             let closed = Rc::new(Cell::new(0));
-            let first = OutputBackendConfig::custom(RecordingBackend {
+            let first = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::clone(&closed),
                 batches: Rc::new(RefCell::new(Vec::new())),
                 fail_open: false,
                 fail_close: true,
             });
-            let second = OutputBackendConfig::custom(RecordingBackend {
+            let second = OutputBackendConfig::test(RecordingBackend {
                 opened: Rc::new(Cell::new(0)),
                 closed: Rc::clone(&closed),
                 batches: Rc::new(RefCell::new(Vec::new())),
@@ -3131,7 +2690,7 @@ mod tests {
             let first = pipeline(vec![
                 OutputDestination::new(
                     "out",
-                    OutputBackendConfig::custom(RecordingBackend {
+                    OutputBackendConfig::test(RecordingBackend {
                         opened: Rc::new(Cell::new(0)),
                         closed: Rc::new(Cell::new(0)),
                         batches: Rc::new(RefCell::new(Vec::new())),
@@ -3144,7 +2703,7 @@ mod tests {
             let second = pipeline(vec![
                 OutputDestination::new(
                     "out",
-                    OutputBackendConfig::custom(RecordingBackend {
+                    OutputBackendConfig::test(RecordingBackend {
                         opened: Rc::clone(&opened_elsewhere),
                         closed: Rc::new(Cell::new(0)),
                         batches: Rc::new(RefCell::new(Vec::new())),
@@ -3176,38 +2735,35 @@ mod tests {
             let second = pipeline
                 .resolve([VarName::new("y")], [VarName::new("debug")], None)
                 .unwrap();
-            assert_ne!(first.fingerprint(), second.fingerprint());
+            assert_ne!(first, second);
             pipeline.open(first).await.unwrap().close().await.unwrap();
             pipeline.open(second).await.unwrap().close().await.unwrap();
         });
     }
 
     #[test]
-    fn stage_wrappers_preserve_interface_reconfiguration() {
+    fn delivery_worker_preserves_interface_reconfiguration() {
         smol::block_on(async {
             let interface = OutputInterface::outputs([VarName::new("x")]).unwrap();
-
             let backend = ReconfigurableRecordingBackend::new();
-            let writer = backend.open(interface.clone()).await.unwrap();
-            let mut writer = OutputStage::Coalesce(OutputCoalescing::count(2).unwrap())
-                .apply(writer, None)
-                .unwrap();
-            assert!(writer.interface_reconfiguration().is_some());
-            writer.close().await.unwrap();
-
-            let writer = backend.open(interface.clone()).await.unwrap();
-            let mut writer = OutputStage::Buffer(OutputBuffer::with_limits(1, Some(1)).unwrap())
-                .apply(writer, None)
-                .unwrap();
-            assert!(writer.interface_reconfiguration().is_some());
-            writer.close().await.unwrap();
-
             let executor = Rc::new(LocalExecutor::new());
             let writer = backend.open(interface).await.unwrap();
-            let mut writer =
-                crate::io::output::OutputPump::new(writer, Rc::clone(&executor), 1).unwrap();
-            assert!(writer.interface_reconfiguration().is_some());
-            executor.run(async { writer.close().await.unwrap() }).await;
+            let policy = DeliveryPolicy::coalesce(
+                CoalescingLimits::new(NonZeroUsize::new(2), None, None).unwrap(),
+            )
+            .with_queue(QueueLimits::new(NonZeroUsize::new(1).unwrap(), None));
+            let mut writer = Delivery::new(writer, Some(Rc::clone(&executor)), policy)
+                .unwrap()
+                .into_writer();
+            executor
+                .run(async {
+                    writer
+                        .rebind(OutputInterface::outputs([VarName::new("x")]).unwrap())
+                        .await
+                        .unwrap();
+                    writer.close().await.unwrap()
+                })
+                .await;
         });
     }
 
@@ -3217,15 +2773,12 @@ mod tests {
             let first_backend = ReconfigurableRecordingBackend::new();
             let second_backend = ReconfigurableRecordingBackend::new();
             let pipeline = pipeline(vec![
-                OutputDestination::new("first", OutputBackendConfig::custom(first_backend.clone()))
+                OutputDestination::new("first", OutputBackendConfig::test(first_backend.clone()))
                     .partition([VarName::new("x")])
                     .with_routes([(VarName::new("x"), route("/old"))]),
-                OutputDestination::new(
-                    "second",
-                    OutputBackendConfig::custom(second_backend.clone()),
-                )
-                .partition([VarName::new("y")])
-                .with_routes([(VarName::new("y"), route("/same"))]),
+                OutputDestination::new("second", OutputBackendConfig::test(second_backend.clone()))
+                    .partition([VarName::new("y")])
+                    .with_routes([(VarName::new("y"), route("/same"))]),
             ]);
             let active = pipeline
                 .resolve(
@@ -3255,11 +2808,22 @@ mod tests {
                     Some(&candidate_configuration),
                 )
                 .unwrap();
-            let plan = pipeline.plan_reconfiguration(&active, candidate).unwrap();
-            assert_eq!(plan.changed_destinations().len(), 1);
-
             let mut session = pipeline.open_session(active).await.unwrap();
+            let plan = pipeline
+                .plan_reconfiguration(
+                    session.resolved(),
+                    candidate,
+                    session.session_id(),
+                    session.revision(),
+                )
+                .unwrap();
+            assert_eq!(plan.changed_destinations().len(), 1);
+            assert_eq!(plan.session(), session.session_id());
+            assert_eq!(plan.expected_revision(), SessionRevision::initial());
             session.apply_reconfiguration(plan).await.unwrap();
+            assert_eq!(session.revision(), SessionRevision::initial());
+            session.commit_revision(SessionRevision::initial()).unwrap();
+            assert_eq!(session.revision(), SessionRevision::initial().next());
 
             assert_eq!(first_backend.opened.get(), 1);
             assert_eq!(first_backend.closed.get(), 0);
@@ -3308,8 +2872,7 @@ mod tests {
                 .bindings()[0]
                 .route()
                 .unwrap()
-                .route
-                .as_ref(),
+                .address(),
             "/monitor/x"
         );
     }
@@ -3357,8 +2920,7 @@ mod tests {
                 .bindings()[0]
                 .route()
                 .unwrap()
-                .route
-                .as_ref(),
+                .address(),
             "/monitor/x"
         );
         assert_eq!(
@@ -3368,8 +2930,7 @@ mod tests {
                 .bindings()[0]
                 .route()
                 .unwrap()
-                .route
-                .as_ref(),
+                .address(),
             "/monitor/y"
         );
     }
@@ -3382,7 +2943,7 @@ mod tests {
             OpenedDestination {
                 id: "left".into(),
                 variables: BTreeSet::from([VarName::new("x")]),
-                interface_reconfiguration: None,
+                cancellation: None,
                 writer: OutputWriter::from_sink(GateSink {
                     gate: Rc::clone(&already_ready),
                     ready: false,
@@ -3391,7 +2952,7 @@ mod tests {
             OpenedDestination {
                 id: "right".into(),
                 variables: BTreeSet::new(),
-                interface_reconfiguration: None,
+                cancellation: None,
                 writer: OutputWriter::from_sink(GateSink {
                     gate: Rc::clone(&blocked),
                     ready: false,
@@ -3425,7 +2986,7 @@ mod tests {
             let mut writer = OutputWriter::from_sink(OutputRouter::new(vec![OpenedDestination {
                 id: "only".into(),
                 variables: BTreeSet::from([VarName::new("x")]),
-                interface_reconfiguration: None,
+                cancellation: None,
                 writer: destination,
             }]));
             let batch = OutputBatch::tick(vec![OutputUpdate::new(
@@ -3465,13 +3026,13 @@ mod tests {
                 OpenedDestination {
                     id: "left".into(),
                     variables: BTreeSet::from([VarName::new("x")]),
-                    interface_reconfiguration: None,
+                    cancellation: None,
                     writer: left,
                 },
                 OpenedDestination {
                     id: "right".into(),
                     variables: BTreeSet::from([VarName::new("x")]),
-                    interface_reconfiguration: None,
+                    cancellation: None,
                     writer: right,
                 },
             ]));

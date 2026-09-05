@@ -302,7 +302,7 @@ mod tests {
         CausalDomain, CausalRole, CausalSet, CausalValue, RoleCausalAntichain, RoleCausalSet,
     };
     use crate::core::Runtime;
-    use crate::io::{map, testing::manual_output};
+    use crate::io::{map, testing::channel_output};
     use crate::lang::dsrv::parser::parse_str;
     use crate::runtime::{RuntimeBuilder, semi_sync::SemiSyncRuntimeBuilder};
     use crate::semantics::MonitoringSemantics;
@@ -329,11 +329,11 @@ mod tests {
     {
         let spec = parse_str(source).expect("causal fixture should parse");
         let input = annotate_input::<D>(map::input_stream(input), spec.input_vars().clone());
-        let (output_writer, mut rows) = manual_output(spec.output_vars().clone()).await;
+        let (output_writer, mut rows) = channel_output(spec.output_vars().clone()).await;
         let runtime = SemiSyncRuntimeBuilder::<CausalSemiSyncConfig<D>, MS>::new()
             .executor(executor.clone())
             .model(spec)
-            .input(input)
+            .input(input.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -527,7 +527,7 @@ mod tests {
             "in property: Str\nin x: Int\nout result: Int\nresult = dynamic(property : Int)"
                 .parse::<crate::CheckedDsrvSpecification>()
                 .expect("checked causal fixture should type-check");
-        let (output_writer, mut rows) = manual_output(checked.output_vars().clone()).await;
+        let (output_writer, mut rows) = channel_output(checked.output_vars().clone()).await;
         let runtime = crate::semantics::CheckedCausalRuntimeBuilder::<RoleCausalSet>::role_new()
             .executor(executor.clone())
             .model(checked)

@@ -6,22 +6,18 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     future::Future,
     io::{self, Write},
-    marker::PhantomData,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
 };
 
-use async_trait::async_trait;
-use async_unsync::bounded;
 use futures::{Sink, future::LocalBoxFuture};
 
-use super::make_reconfigurable_interface;
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputRole,
+    JsonStreamValue, OutputBatch, OutputError, OutputInterface, OutputRole, OutputSink,
     OutputWriter, StreamData, VarName,
 };
 
@@ -92,7 +88,7 @@ impl<T: 'static> AsyncFnSink<T> {
     fn state_error(&self) -> Option<OutputError> {
         match &self.state {
             AsyncFnSinkState::Open => None,
-            AsyncFnSinkState::Closed => Some(OutputError::Closed),
+            AsyncFnSinkState::Closed => Some(OutputError::closed()),
             AsyncFnSinkState::Failed(error) => Some(error.clone()),
         }
     }
@@ -176,7 +172,7 @@ impl<T: 'static> Sink<T> for AsyncFnSink<T> {
     ) -> Poll<Result<(), Self::Error>> {
         let this = self.get_mut();
         if matches!(this.state, AsyncFnSinkState::Closed) {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         if matches!(this.poll_pending(context), Poll::Pending) {
             return Poll::Pending;
@@ -220,84 +216,90 @@ where
     AsyncFnSink::new(operation)
 }
 
-pub type ManualOutputSender<V> = bounded::Sender<BTreeMap<VarName, V>>;
-pub type ManualOutputReceiver<V> = bounded::Receiver<BTreeMap<VarName, V>>;
-
-/// A bounded, consumer-driven backend useful for embedding and tests.
-#[derive(Clone, Debug)]
-pub struct ManualOutputBackend<V: StreamData> {
-    sender: ManualOutputSender<V>,
-}
-
-impl<V: StreamData> ManualOutputBackend<V> {
-    pub fn new(sender: ManualOutputSender<V>) -> Self {
-        Self { sender }
-    }
-
-    pub fn channel(capacity: usize) -> (Self, ManualOutputReceiver<V>) {
-        let (sender, receiver) = bounded::channel(capacity).into_split();
-        (Self::new(sender), receiver)
-    }
-
-    pub fn sender(&self) -> &ManualOutputSender<V> {
-        &self.sender
-    }
-}
-
-#[async_trait(?Send)]
-impl<V: StreamData> OutputBackend for ManualOutputBackend<V> {
-    type Val = V;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
-        let sender = self.sender.clone();
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            LocalBatchSink::new(move |batch: OutputBatch<V>| {
-                let sender = sender.clone();
-                let interface = Rc::clone(&interface);
-                async move {
-                    let interface = interface.borrow().clone();
-                    send_manual_batch(sender, interface, batch).await
-                }
-            }),
-            Some(interface_reconfiguration),
-        ))
-    }
-}
-
-async fn send_manual_batch<V: StreamData>(
-    sender: ManualOutputSender<V>,
+/// Reusable opened owner for backends whose operation needs an interface snapshot.
+pub(crate) struct InterfaceSink<V> {
     interface: OutputInterface,
-    batch: OutputBatch<V>,
-) -> Result<(), OutputError> {
-    interface.validate_batch(&batch)?;
-    for tick in batch.ticks() {
-        let row = tick
-            .updates()
-            .map(|update| (update.variable.clone(), update.value.clone()))
-            .collect::<BTreeMap<_, _>>();
-        sender.send(row).await.map_err(|_| OutputError::Closed)?;
-    }
-    Ok(())
+    inner: AsyncFnSink<(OutputInterface, OutputBatch<V>)>,
 }
 
-/// A backend that discards complete logical ticks.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NullOutputBackend<V: StreamData>(PhantomData<fn() -> V>);
+impl<V: 'static> InterfaceSink<V> {
+    pub(crate) fn new<F, Fut>(interface: OutputInterface, operation: F) -> Self
+    where
+        F: FnMut(OutputInterface, OutputBatch<V>) -> Fut + 'static,
+        Fut: Future<Output = Result<(), OutputError>> + 'static,
+    {
+        let mut operation = operation;
+        Self {
+            interface,
+            inner: AsyncFnSink::new(move |(interface, batch)| operation(interface, batch)),
+        }
+    }
 
-impl<V: StreamData> NullOutputBackend<V> {
-    pub const fn new() -> Self {
-        Self(PhantomData)
+    pub(crate) fn with_close<F, Fut, C, CFut>(
+        interface: OutputInterface,
+        operation: F,
+        close: C,
+    ) -> Self
+    where
+        F: FnMut(OutputInterface, OutputBatch<V>) -> Fut + 'static,
+        Fut: Future<Output = Result<(), OutputError>> + 'static,
+        C: FnOnce() -> CFut + 'static,
+        CFut: Future<Output = Result<(), OutputError>> + 'static,
+    {
+        let mut operation = operation;
+        Self {
+            interface,
+            inner: AsyncFnSink::with_close(
+                move |(interface, batch)| operation(interface, batch),
+                close,
+            ),
+        }
+    }
+}
+
+impl<V: 'static> Sink<OutputBatch<V>> for InterfaceSink<V> {
+    type Error = OutputError;
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_ready(cx)
+    }
+    fn start_send(mut self: Pin<&mut Self>, batch: OutputBatch<V>) -> Result<(), Self::Error> {
+        let interface = self.interface.clone();
+        Pin::new(&mut self.inner).start_send((interface, batch))
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.inner).poll_close(cx)
+    }
+}
+
+impl<V: 'static> OutputSink<V> for InterfaceSink<V> {
+    fn poll_rebind(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        interface: &OutputInterface,
+    ) -> Poll<Result<(), OutputError>> {
+        self.interface = interface.clone();
+        Poll::Ready(Ok(()))
     }
 }
 
 struct NullSink {
-    _interface: Rc<RefCell<OutputInterface>>,
+    interface: OutputInterface,
     ready: bool,
     closed: bool,
+}
+
+impl<V> OutputSink<V> for NullSink {
+    fn poll_rebind(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        interface: &OutputInterface,
+    ) -> Poll<Result<(), OutputError>> {
+        self.interface = interface.clone();
+        Poll::Ready(Ok(()))
+    }
 }
 
 impl<V> Sink<OutputBatch<V>> for NullSink {
@@ -308,7 +310,7 @@ impl<V> Sink<OutputBatch<V>> for NullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.ready = true;
         Poll::Ready(Ok(()))
@@ -316,7 +318,7 @@ impl<V> Sink<OutputBatch<V>> for NullSink {
 
     fn start_send(mut self: Pin<&mut Self>, _batch: OutputBatch<V>) -> Result<(), Self::Error> {
         if self.closed {
-            return Err(OutputError::Closed);
+            return Err(OutputError::closed());
         }
         if !self.ready {
             return Err(OutputError::backend("null sink was not ready"));
@@ -330,7 +332,7 @@ impl<V> Sink<OutputBatch<V>> for NullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.ready = true;
         Poll::Ready(Ok(()))
@@ -341,7 +343,7 @@ impl<V> Sink<OutputBatch<V>> for NullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.closed = true;
         self.ready = true;
@@ -349,54 +351,33 @@ impl<V> Sink<OutputBatch<V>> for NullSink {
     }
 }
 
-#[async_trait(?Send)]
-impl<V: StreamData> OutputBackend for NullOutputBackend<V> {
-    type Val = V;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            NullSink {
-                _interface: interface,
-                ready: false,
-                closed: false,
-            },
-            Some(interface_reconfiguration),
-        ))
-    }
-}
-
-/// A discard backend that intentionally closes each opened writer after a
-/// logical tick limit. The reusable configuration contains only the limit;
-/// operational counters belong to the individual sink created by `open`.
-#[derive(Clone, Debug)]
-pub struct LimitedNullOutputBackend<V: StreamData> {
-    limit: usize,
-    _value: PhantomData<fn() -> V>,
-}
-
-impl<V: StreamData> LimitedNullOutputBackend<V> {
-    pub fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            _value: PhantomData,
-        }
-    }
-
-    pub fn limit(&self) -> usize {
-        self.limit
-    }
+pub(crate) async fn open_null<V: StreamData>(
+    interface: OutputInterface,
+) -> Result<OutputWriter<V>, OutputError> {
+    Ok(OutputWriter::from_output_sink(NullSink {
+        interface,
+        ready: false,
+        closed: false,
+    }))
 }
 
 struct LimitedNullSink {
-    _interface: Rc<RefCell<OutputInterface>>,
+    interface: OutputInterface,
     limit: usize,
     ticks: usize,
     ready: bool,
     closed: bool,
+}
+
+impl<V> OutputSink<V> for LimitedNullSink {
+    fn poll_rebind(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        interface: &OutputInterface,
+    ) -> Poll<Result<(), OutputError>> {
+        self.interface = interface.clone();
+        Poll::Ready(Ok(()))
+    }
 }
 
 impl<V> Sink<OutputBatch<V>> for LimitedNullSink {
@@ -407,7 +388,7 @@ impl<V> Sink<OutputBatch<V>> for LimitedNullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed || self.ticks >= self.limit {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.ready = true;
         Poll::Ready(Ok(()))
@@ -415,7 +396,7 @@ impl<V> Sink<OutputBatch<V>> for LimitedNullSink {
 
     fn start_send(mut self: Pin<&mut Self>, batch: OutputBatch<V>) -> Result<(), Self::Error> {
         if self.closed || self.ticks >= self.limit {
-            return Err(OutputError::Closed);
+            return Err(OutputError::closed());
         }
         if !self.ready {
             return Err(OutputError::backend("limited null sink was not ready"));
@@ -431,7 +412,7 @@ impl<V> Sink<OutputBatch<V>> for LimitedNullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.ready = true;
         Poll::Ready(Ok(()))
@@ -442,33 +423,24 @@ impl<V> Sink<OutputBatch<V>> for LimitedNullSink {
         _context: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
         if self.closed {
-            return Poll::Ready(Err(OutputError::Closed));
+            return Poll::Ready(Err(OutputError::closed()));
         }
         self.closed = true;
         Poll::Ready(Ok(()))
     }
 }
 
-#[async_trait(?Send)]
-impl<V: StreamData> OutputBackend for LimitedNullOutputBackend<V> {
-    type Val = V;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            LimitedNullSink {
-                _interface: interface,
-                limit: self.limit,
-                ticks: 0,
-                ready: false,
-                closed: false,
-            },
-            Some(interface_reconfiguration),
-        ))
-    }
+pub(crate) async fn open_limited_null<V: StreamData>(
+    limit: usize,
+    interface: OutputInterface,
+) -> Result<OutputWriter<V>, OutputError> {
+    Ok(OutputWriter::from_output_sink(LimitedNullSink {
+        interface,
+        limit,
+        ticks: 0,
+        ready: false,
+        closed: false,
+    }))
 }
 
 enum StdoutTarget {
@@ -485,52 +457,12 @@ impl Clone for StdoutTarget {
     }
 }
 
-/// A JSON-capable backend that writes one line per routed value.
-#[derive(Clone)]
-pub struct StdoutOutputBackend<V> {
-    target: StdoutTarget,
-    _value: PhantomData<fn() -> V>,
-}
-
-impl<V> StdoutOutputBackend<V> {
-    pub fn new() -> Self {
-        Self {
-            target: StdoutTarget::Stdout,
-            _value: PhantomData,
-        }
-    }
-
-    pub fn with_writer<W>(writer: W) -> Self
-    where
-        W: Write + 'static,
-    {
-        Self {
-            target: StdoutTarget::Writer(Rc::new(RefCell::new(Box::new(writer)))),
-            _value: PhantomData,
-        }
-    }
-
-    pub fn with_shared_writer<W>(writer: Rc<RefCell<W>>) -> Self
-    where
-        W: Write + 'static,
-    {
-        Self {
-            target: StdoutTarget::Writer(Rc::new(RefCell::new(Box::new(SharedWriter { writer })))),
-            _value: PhantomData,
-        }
-    }
-}
-
-impl<V> Default for StdoutOutputBackend<V> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
+#[cfg(test)]
 struct SharedWriter<W> {
     writer: Rc<RefCell<W>>,
 }
 
+#[cfg(test)]
 impl<W: Write> Write for SharedWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.writer.borrow_mut().write(bytes)
@@ -541,35 +473,44 @@ impl<W: Write> Write for SharedWriter<W> {
     }
 }
 
-#[async_trait(?Send)]
-impl<V: JsonStreamValue> OutputBackend for StdoutOutputBackend<V> {
-    type Val = V;
+pub(crate) async fn open_stdout<V: JsonStreamValue>(
+    interface: OutputInterface,
+) -> Result<OutputWriter<V>, OutputError> {
+    open_stdout_with_target(interface, StdoutTarget::Stdout).await
+}
 
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
-        let target = self.target.clone();
-        let row_number = Rc::new(Cell::new(0usize));
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            LocalBatchSink::new(move |batch: OutputBatch<V>| {
-                let interface = Rc::clone(&interface);
-                let target = target.clone();
-                let row_number = Rc::clone(&row_number);
-                async move {
-                    let interface = interface.borrow().clone();
-                    interface.validate_batch(&batch)?;
-                    let auxiliary = interface
-                        .routes_for(OutputRole::Auxiliary)
-                        .map(|route| route.variable.clone())
-                        .collect::<BTreeSet<_>>();
-                    write_stdout_batch(batch, &auxiliary, &target, &row_number)
-                }
-            }),
-            Some(interface_reconfiguration),
-        ))
-    }
+async fn open_stdout_with_target<V: JsonStreamValue>(
+    interface: OutputInterface,
+    target: StdoutTarget,
+) -> Result<OutputWriter<V>, OutputError> {
+    let row_number = Rc::new(Cell::new(0usize));
+    Ok(OutputWriter::from_output_sink(InterfaceSink::new(
+        interface,
+        move |interface, batch: OutputBatch<V>| {
+            let target = target.clone();
+            let row_number = Rc::clone(&row_number);
+            async move {
+                interface.validate_batch(&batch)?;
+                let auxiliary = interface
+                    .bindings_for(OutputRole::Auxiliary)
+                    .map(|binding| binding.variable().clone())
+                    .collect::<BTreeSet<_>>();
+                write_stdout_batch(batch, &auxiliary, &target, &row_number)
+            }
+        },
+    )))
+}
+
+#[cfg(test)]
+async fn open_stdout_with_shared_writer<V: JsonStreamValue, W: Write + 'static>(
+    interface: OutputInterface,
+    writer: Rc<RefCell<W>>,
+) -> Result<OutputWriter<V>, OutputError> {
+    open_stdout_with_target(
+        interface,
+        StdoutTarget::Writer(Rc::new(RefCell::new(Box::new(SharedWriter { writer })))),
+    )
+    .await
 }
 
 fn write_stdout_batch<V: JsonStreamValue>(
@@ -639,21 +580,23 @@ mod tests {
     }
 
     fn interface(names: &[&str]) -> OutputInterface {
-        OutputInterface::from_routes(
+        OutputInterface::from_bindings(
             names
                 .iter()
-                .map(|name| crate::core::OutputRoute::output(var(name))),
+                .map(|name| crate::core::OutputBinding::output(var(name))),
         )
         .unwrap()
     }
 
     #[test]
-    fn manual_backend_preserves_logical_ticks() {
+    fn channel_output_preserves_logical_ticks() {
         smol::block_on(async {
-            let (backend, mut receiver) = ManualOutputBackend::<i32>::channel(8);
-            let mut writer = backend.open(interface(&["x", "y"])).await.unwrap();
+            let (sender, mut receiver) = crate::io::channel::output(8);
+            let mut writer = crate::io::channel::open_output(sender, interface(&["x", "y"]))
+                .await
+                .unwrap();
             writer
-                .send_and_flush(
+                .send(
                     OutputBatch::from_ticks(vec![
                         vec![
                             OutputUpdate::new(var("x"), 1),
@@ -677,16 +620,13 @@ mod tests {
     }
 
     #[test]
-    fn manual_backend_applies_interface_updates_without_reopening() {
+    fn channel_output_applies_interface_updates_without_reopening() {
         smol::block_on(async {
-            let (backend, mut receiver) = ManualOutputBackend::<i32>::channel(8);
-            let mut writer = backend.open(interface(&["x"])).await.unwrap();
-            writer
-                .interface_reconfiguration()
-                .expect("manual backend exposes interface reconfiguration")
-                .reconfigure(interface(&["y"]))
+            let (sender, mut receiver) = crate::io::channel::output(8);
+            let mut writer = crate::io::channel::open_output(sender, interface(&["x"]))
                 .await
                 .unwrap();
+            writer.rebind(interface(&["y"])).await.unwrap();
 
             writer.send(OutputBatch::update(var("y"), 7)).await.unwrap();
             let row = receiver.recv().await.unwrap();
@@ -699,8 +639,9 @@ mod tests {
     #[test]
     fn limited_null_counts_ticks_and_closes_at_the_limit() {
         smol::block_on(async {
-            let backend = LimitedNullOutputBackend::<i32>::new(2);
-            let mut writer = backend.open(interface(&["x"])).await.unwrap();
+            let mut writer = open_limited_null::<i32>(2, interface(&["x"]))
+                .await
+                .unwrap();
             writer
                 .send(
                     OutputBatch::from_ticks(vec![
@@ -714,7 +655,7 @@ mod tests {
 
             assert_eq!(
                 writer.send(OutputBatch::update(var("x"), 3)).await,
-                Err(OutputError::Closed)
+                Err(OutputError::closed())
             );
         });
     }
@@ -723,13 +664,14 @@ mod tests {
     fn stdout_filters_auxiliary_and_no_val_while_advancing_ticks() {
         smol::block_on(async {
             let output = Rc::new(RefCell::new(Vec::<u8>::new()));
-            let backend = StdoutOutputBackend::<Value>::with_shared_writer(Rc::clone(&output));
-            let interface = OutputInterface::from_routes([
-                crate::core::OutputRoute::output(var("x")),
-                crate::core::OutputRoute::auxiliary(var("debug")),
+            let interface = OutputInterface::from_bindings([
+                crate::core::OutputBinding::output(var("x")),
+                crate::core::OutputBinding::auxiliary(var("debug")),
             ])
             .unwrap();
-            let mut writer = backend.open(interface).await.unwrap();
+            let mut writer = open_stdout_with_shared_writer(interface, Rc::clone(&output))
+                .await
+                .unwrap();
             writer
                 .send(
                     OutputBatch::from_ticks(vec![
@@ -764,10 +706,8 @@ mod tests {
                 },
             );
             let mut writer = OutputWriter::from_sink(sink);
-            let first = writer
-                .send_and_flush(OutputBatch::update(var("x"), 1))
-                .await;
-            assert_eq!(first, Err(OutputError::Backend("publish failed".into())));
+            let first = writer.send(OutputBatch::update(var("x"), 1)).await;
+            assert_eq!(first, Err(OutputError::backend("publish failed")));
             let _ = writer.close().await;
             assert_eq!(closes.get(), 1);
         });

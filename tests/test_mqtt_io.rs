@@ -1,6 +1,16 @@
 #[cfg(test)]
 #[cfg(feature = "testcontainers")]
 mod integration_tests {
+    fn input_retry() -> trustworthiness_checker::io::RetryPolicy {
+        use std::{num::NonZeroU32, time::Duration};
+        use trustworthiness_checker::io::{RetryLimit, RetryPolicy};
+        RetryPolicy::new(
+            RetryLimit::Attempts(NonZeroU32::MIN),
+            Duration::from_millis(250),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+    }
     use async_compat::Compat as TokioCompat;
 
     use futures::StreamExt;
@@ -18,7 +28,7 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{RuntimeSpec, Semantics, Specification};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
-    use trustworthiness_checker::io::mqtt::{MqttFactory, MqttInputBackend};
+    use trustworthiness_checker::io::mqtt::{self, MqttInputBackend, MqttMessage};
     use trustworthiness_checker::lang::mstlo::MstloSpecification;
 
     use trustworthiness_checker::runtime::mstlo::{
@@ -34,17 +44,13 @@ mod integration_tests {
         DsrvSpecification, Value, VarName,
         core::Runtime,
         dsrv_fixtures::{float_pair_input_stream, spec_simple_add_monitor_typed_float},
-        io::mqtt::{self, MqttMessage},
-        io::{OutputBackendBuilder, OutputBackendConfig, OutputDestination, Route},
+        io::{OutputBackendConfig, OutputDestination, OutputPipeline, Route},
         runtime::{RuntimeBuilder, builder::GeneralRuntimeBuilder},
     };
 
-    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Paho;
+    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Rumqttc;
 
-    fn mqtt_output_builder<V>(
-        port: u16,
-        routes: BTreeMap<VarName, String>,
-    ) -> OutputBackendBuilder<V> {
+    fn mqtt_output_pipeline<V>(port: u16, routes: BTreeMap<VarName, String>) -> OutputPipeline<V> {
         let routes = routes
             .into_iter()
             .map(|(variable, route)| {
@@ -55,10 +61,11 @@ mod integration_tests {
                 )
             })
             .collect();
-        OutputBackendBuilder::from_destination(
+        OutputPipeline::from_destination(
             OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
                 .with_route_catalog(routes),
         )
+        .expect("test MQTT output destination should construct")
     }
 
     async fn start_mqtt_get_port() -> (Box<dyn std::any::Any>, u16) {
@@ -160,7 +167,7 @@ mod integration_tests {
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output_pipeline_builder(mqtt_output_builder(mqtt_port, mqtt_topic))
+            .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topic))
             .runtime(RuntimeSpec::Async)
             .semantics(Semantics::Untimed)
             .build()
@@ -204,7 +211,7 @@ mod integration_tests {
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output_pipeline_builder(mqtt_output_builder(mqtt_port, mqtt_topics))
+            .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topics))
             .runtime(RuntimeSpec::Async)
             .semantics(Semantics::Untimed)
             .build()
@@ -244,7 +251,7 @@ mod integration_tests {
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
-                0,
+                input_retry(),
             ),
             5,
             "input_stream_connect",
@@ -284,7 +291,14 @@ mod integration_tests {
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
-                3,
+                trustworthiness_checker::io::RetryPolicy::new(
+                    trustworthiness_checker::io::RetryLimit::Attempts(
+                        std::num::NonZeroU32::new(3).unwrap(),
+                    ),
+                    std::time::Duration::from_millis(250),
+                    std::time::Duration::from_secs(5),
+                )
+                .unwrap(),
             ),
             5,
             "rumqttc_input_stream_connect",
@@ -303,9 +317,7 @@ mod integration_tests {
     }
 
     async fn publish_malformed_input(mqtt_port: u16, topic: &str) -> anyhow::Result<()> {
-        let publisher = MqttFactory::Paho
-            .connect(&format!("tcp://localhost:{mqtt_port}"))
-            .await?;
+        let publisher = mqtt::connect(&format!("tcp://localhost:{mqtt_port}")).await?;
         publisher
             .publish(MqttMessage::new(
                 topic.to_owned(),
@@ -313,36 +325,12 @@ mod integration_tests {
                 1,
             ))
             .await?;
-        publisher.disconnect().await
-    }
-
-    #[apply(async_test)]
-    async fn paho_input_reports_malformed_payload() -> anyhow::Result<()> {
-        let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
-        let mut batches = with_timeout_res(
-            mqtt::input_stream::<Value>(
-                MqttInputBackend::Paho,
-                "localhost",
-                Some(mqtt_port),
-                BTreeMap::from([(VarName::new("x"), X_TOPIC.to_owned())]),
-                0,
-            ),
-            5,
-            "paho malformed input connect",
-        )
-        .await?;
-
-        publish_malformed_input(mqtt_port, X_TOPIC).await?;
-        let error = with_timeout(batches.next(), 5, "paho malformed input")
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Paho input ended without reporting malformed data"))?
-            .unwrap_err();
-        assert!(error.to_string().contains("failed to parse value"));
+        publisher.disconnect().await?;
         Ok(())
     }
 
     #[apply(async_test)]
-    async fn rumqttc_input_reports_malformed_payload() -> anyhow::Result<()> {
+    async fn mqtt_input_reports_malformed_payload() -> anyhow::Result<()> {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
         let mut batches = with_timeout_res(
             mqtt::input_stream::<Value>(
@@ -350,7 +338,14 @@ mod integration_tests {
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([(VarName::new("x"), X_TOPIC.to_owned())]),
-                3,
+                trustworthiness_checker::io::RetryPolicy::new(
+                    trustworthiness_checker::io::RetryLimit::Attempts(
+                        std::num::NonZeroU32::new(3).unwrap(),
+                    ),
+                    std::time::Duration::from_millis(250),
+                    std::time::Duration::from_secs(5),
+                )
+                .unwrap(),
             ),
             5,
             "rumqttc malformed input connect",
@@ -381,7 +376,7 @@ mod integration_tests {
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
-                0,
+                input_retry(),
             ),
             5,
             "mstlo_input_connect",
@@ -403,7 +398,7 @@ mod integration_tests {
             VarName::new("robustness"),
             mstlo::FormulaDefinition::GreaterThan("x", 5.0),
         );
-        let output_writer = mqtt_output_builder(
+        let output_writer = mqtt_output_pipeline(
             mqtt_port,
             BTreeMap::from([(VarName::new("robustness"), MSTLO_OUT_TOPIC.to_owned())]),
         )
@@ -414,7 +409,7 @@ mod integration_tests {
         let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -477,7 +472,7 @@ mod integration_tests {
                     (VarName::new("x"), MSTLO_X_TOPIC.to_string()),
                     (VarName::new("y"), MSTLO_Y_TOPIC.to_string()),
                 ]),
-                0,
+                input_retry(),
             ),
             5,
             "mstlo_multi_input_connect",
@@ -515,7 +510,7 @@ mod integration_tests {
                 mstlo::FormulaDefinition::LessThan("y", 3.0),
             ),
         ]));
-        let output_writer = mqtt_output_builder(
+        let output_writer = mqtt_output_pipeline(
             mqtt_port,
             BTreeMap::from([
                 (VarName::new("gt"), MSTLO_GT_TOPIC.to_owned()),
@@ -527,7 +522,7 @@ mod integration_tests {
         let runtime = MstloRuntimeBuilder::<MstloTimedValue>::new()
             .executor(executor.clone())
             .model(formula)
-            .input(input_stream)
+            .input(input_stream.into())
             .output_writer(output_writer)
             .build()
             .await;
@@ -595,7 +590,7 @@ mod integration_tests {
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
-                0,
+                input_retry(),
             ),
             5,
             "input_stream_connect",
@@ -613,7 +608,7 @@ mod integration_tests {
             .executor(executor.clone())
             .model(spec.clone())
             .input(input_stream)
-            .output_pipeline_builder(OutputBackendBuilder::new(OutputBackendConfig::manual(
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
                 output_sender,
             )))
             .runtime(RuntimeSpec::Async)
@@ -767,7 +762,7 @@ echoed = payload
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
-                0,
+                input_retry(),
             ),
             5,
             "input_stream_connect",
@@ -814,7 +809,7 @@ mod reconf_tests {
     use trustworthiness_checker::core::values::Value;
     use trustworthiness_checker::dsrv_fixtures::*;
     use trustworthiness_checker::io::{
-        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, Route,
+        InputPipeline, InputSource, OutputBackendConfig, OutputPipeline, Route,
     };
 
     use trustworthiness_checker::runtime::RuntimeBuilder;
@@ -922,15 +917,15 @@ mod reconf_tests {
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let output_builder =
-            OutputBackendBuilder::new(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
+        let output_pipeline =
+            OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(parse_str)
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_source))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -1143,15 +1138,15 @@ mod reconf_tests {
         let ((mut x_tick, x_publisher_task), (mut y_tick, y_publisher_task)) =
             generate_test_publisher_tasks(executor.clone(), xs.clone(), ys.clone(), mqtt_port);
 
-        let output_builder =
-            OutputBackendBuilder::new(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
+        let output_pipeline =
+            OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
                 .parse_spec(parse_str)
                 .executor(executor.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_source))
-                .output_builder(output_builder)
+                .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
         );
         let monitor = monitor_builder.build().await;
@@ -1319,8 +1314,7 @@ mod reconf_dataflow_mqtt_tests {
 
     use trustworthiness_checker::io::mqtt::MqttInputBackend;
     use trustworthiness_checker::io::{
-        InputPipeline, InputSource, OutputBackendBuilder, OutputBackendConfig, OutputDestination,
-        Route,
+        InputPipeline, InputSource, OutputBackendConfig, OutputDestination, OutputPipeline, Route,
     };
     use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
     use trustworthiness_checker::runtime::dataflow::ReconfigurationAck;
@@ -1338,11 +1332,12 @@ mod reconf_dataflow_mqtt_tests {
             .expect("test MQTT route should be non-empty")
     }
 
-    fn mqtt_output_builder(port: u16) -> OutputBackendBuilder<Value> {
+    fn mqtt_output_pipeline(port: u16) -> OutputPipeline<Value> {
         let destination =
             OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
                 .with_route_catalog(BTreeMap::from([(VarName::new("z"), route(OUT_A))]));
-        OutputBackendBuilder::from_destination(destination)
+        OutputPipeline::from_destination(destination)
+            .expect("test MQTT output destination should construct")
     }
 
     async fn exercise_reconf_dataflow_mqtt(
@@ -1394,7 +1389,7 @@ mod reconf_dataflow_mqtt_tests {
             .executor(executor.clone())
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))?
-            .output_pipeline_builder(mqtt_output_builder(mqtt_port))
+            .output_pipeline(mqtt_output_pipeline(mqtt_port))
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::Untimed)
             .reconf_topic(CONTROL_TOPIC.to_owned())
@@ -1499,14 +1494,7 @@ mod reconf_dataflow_mqtt_tests {
     }
 
     #[apply(async_test)]
-    async fn test_reconf_dataflow_mqtt_paho_input(
-        executor: Rc<LocalExecutor<'static>>,
-    ) -> anyhow::Result<()> {
-        exercise_reconf_dataflow_mqtt(executor, MqttInputBackend::Paho).await
-    }
-
-    #[apply(async_test)]
-    async fn test_reconf_dataflow_mqtt_rumqttc_input(
+    async fn test_reconf_dataflow_mqtt_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         exercise_reconf_dataflow_mqtt(executor, MqttInputBackend::Rumqttc).await

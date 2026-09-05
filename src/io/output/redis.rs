@@ -1,90 +1,79 @@
 //! Sink-based Redis output.
 
-use std::{collections::BTreeMap, marker::PhantomData, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
-use async_trait::async_trait;
 use futures::future::try_join_all;
 use redis::{AsyncTypedCommands, aio::MultiplexedConnection};
 
 use crate::core::{
-    JsonStreamValue, OutputBackend, OutputBatch, OutputError, OutputInterface, OutputWriter,
-    REDIS_HOSTNAME, VarName,
+    JsonStreamValue, OutputBatch, OutputError, OutputInterface, OutputWriter, VarName,
 };
+use crate::io::{RetryPolicy, RetryTracker};
 
-use super::make_reconfigurable_interface;
-use super::sinks::LocalBatchSink;
+use super::sinks::InterfaceSink;
 
 type LocalRedisConnection = Rc<MultiplexedConnection>;
 
-/// A resource-free Redis backend configuration. A connection is opened only
-/// after a fixed output interface has been resolved.
-#[derive(Clone, Debug)]
-pub struct RedisOutputBackend<V = crate::Value> {
-    host: String,
+pub(crate) async fn open<V: JsonStreamValue>(
+    host: &str,
     port: Option<u16>,
-    _value: PhantomData<fn() -> V>,
-}
-
-impl<V> RedisOutputBackend<V> {
-    pub fn new(host: impl Into<String>, port: Option<u16>) -> Self {
-        Self {
-            host: host.into(),
-            port,
-            _value: PhantomData,
-        }
-    }
-
-    pub fn localhost(port: Option<u16>) -> Self {
-        Self::new(REDIS_HOSTNAME, port)
-    }
-
-    pub fn uri(&self) -> String {
-        match self.port {
-            Some(port) => format!("redis://{}:{}", self.host, port),
-            None => format!("redis://{}", self.host),
-        }
-    }
-}
-
-impl<V> Default for RedisOutputBackend<V> {
-    fn default() -> Self {
-        Self::localhost(None)
-    }
-}
-
-#[async_trait(?Send)]
-impl<V: JsonStreamValue> OutputBackend for RedisOutputBackend<V> {
-    type Val = V;
-
-    async fn open(
-        &self,
-        interface: OutputInterface,
-    ) -> Result<OutputWriter<Self::Val>, OutputError> {
-        let uri = self.uri();
-        let client = redis::Client::open(uri.clone()).map_err(|error| {
-            OutputError::backend(format!(
-                "failed to configure Redis client for `{uri}`: {error}"
-            ))
-        })?;
-        let connection = client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|error| {
-                OutputError::backend(format!("failed to connect to Redis at `{uri}`: {error}"))
-            })?;
-        let connection = Rc::new(connection);
-        let (interface, interface_reconfiguration) = make_reconfigurable_interface(interface);
-        Ok(OutputWriter::from_sink_with_interface_reconfiguration(
-            LocalBatchSink::new(move |batch: OutputBatch<V>| {
-                let connection = Rc::clone(&connection);
-                let interface = Rc::clone(&interface);
-                async move {
-                    let interface = interface.borrow().clone();
-                    publish_batch(connection, interface, batch).await
-                }
-            }),
-            Some(interface_reconfiguration),
+    retry: RetryPolicy,
+    interface: OutputInterface,
+) -> Result<OutputWriter<V>, OutputError> {
+    let uri = format!("redis://{}:{}", host, port.unwrap_or(6379));
+    let client = redis::Client::open(uri.clone()).map_err(|error| {
+        OutputError::backend(format!(
+            "failed to configure Redis client for `{uri}`: {error}"
         ))
+    })?;
+    let connection = open_connection(&client, &uri, retry).await?;
+    let connection = Rc::new(connection);
+    Ok(OutputWriter::from_output_sink(InterfaceSink::new(
+        interface,
+        move |interface, batch: OutputBatch<V>| {
+            let connection = Rc::clone(&connection);
+            async move { publish_batch(connection, interface, batch).await }
+        },
+    )))
+}
+
+fn retryable_connection_error(error: &redis::RedisError) -> bool {
+    match error.kind() {
+        redis::ErrorKind::Io => true,
+        redis::ErrorKind::Server(kind) => matches!(
+            kind,
+            redis::ServerErrorKind::BusyLoading
+                | redis::ServerErrorKind::TryAgain
+                | redis::ServerErrorKind::ClusterDown
+                | redis::ServerErrorKind::MasterDown
+        ),
+        _ => false,
+    }
+}
+
+async fn open_connection(
+    client: &redis::Client,
+    uri: &str,
+    retry: RetryPolicy,
+) -> Result<MultiplexedConnection, OutputError> {
+    let mut tracker = retry.tracker();
+    loop {
+        match client.get_multiplexed_async_connection().await {
+            Ok(connection) => return Ok(connection),
+            Err(error) if retryable_connection_error(&error) => {
+                let Some(delay) = tracker.record_failure() else {
+                    return Err(OutputError::backend(format!(
+                        "failed to connect to Redis at `{uri}`: {error}"
+                    )));
+                };
+                RetryTracker::backoff(delay).await;
+            }
+            Err(error) => {
+                return Err(OutputError::backend(format!(
+                    "failed to connect to Redis at `{uri}`: {error}"
+                )));
+            }
+        }
     }
 }
 
@@ -107,18 +96,18 @@ fn collect_messages<V: JsonStreamValue>(
     let mut messages = BTreeMap::<VarName, (String, Vec<String>)>::new();
     for tick in batch.ticks() {
         for update in tick.updates() {
-            let route = interface.route(update.variable).ok_or_else(|| {
+            let binding = interface.binding(update.variable).ok_or_else(|| {
                 OutputError::invalid(format!(
                     "output update variable `{}` has no Redis route",
                     update.variable
                 ))
             })?;
-            if route.role.is_auxiliary() {
+            if binding.role().is_auxiliary() {
                 continue;
             }
-            let topic = route
-                .topic
-                .clone()
+            let topic = binding
+                .route()
+                .map(|route| route.address().to_owned())
                 .unwrap_or_else(|| update.variable.to_string());
             let Some(payload) = payload_for(&topic, update.value)? else {
                 continue;
@@ -183,37 +172,55 @@ mod tests {
     #[test]
     fn redis_interface_reconfiguration_swaps_the_route_view() {
         smol::block_on(async {
-            let (interface, handle) = make_reconfigurable_interface(
-                OutputInterface::from_routes([crate::core::OutputRoute::new(
-                    var("x"),
-                    Some("old".into()),
-                    None,
-                    crate::core::OutputRole::Output,
-                )])
-                .unwrap(),
-            );
-            let replacement = OutputInterface::from_routes([crate::core::OutputRoute::new(
+            let interface = OutputInterface::from_bindings([crate::core::OutputBinding::new(
                 var("x"),
-                Some("new".into()),
-                None,
+                Some(crate::core::Route::new("old", None).unwrap()),
                 crate::core::OutputRole::Output,
             )])
             .unwrap();
-            handle.reconfigure(replacement.clone()).await.unwrap();
-            assert_eq!(*interface.borrow(), replacement);
+            let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded = Rc::clone(&seen);
+            let mut writer = OutputWriter::from_output_sink(InterfaceSink::new(
+                interface,
+                move |interface, batch: OutputBatch<Value>| {
+                    let recorded = Rc::clone(&recorded);
+                    async move {
+                        recorded
+                            .borrow_mut()
+                            .push(collect_messages(&batch, &interface)?);
+                        Ok(())
+                    }
+                },
+            ));
+            writer
+                .feed(OutputBatch::update(var("x"), Value::Int(1)))
+                .await
+                .unwrap();
+            let replacement = OutputInterface::from_bindings([crate::core::OutputBinding::new(
+                var("x"),
+                Some(crate::core::Route::new("new", None).unwrap()),
+                crate::core::OutputRole::Output,
+            )])
+            .unwrap();
+            writer.rebind(replacement).await.unwrap();
+            writer
+                .send(OutputBatch::update(var("x"), Value::Int(2)))
+                .await
+                .unwrap();
+            assert_eq!(seen.borrow()[0][&var("x")].0, "old");
+            assert_eq!(seen.borrow()[1][&var("x")].0, "new");
         });
     }
 
     #[test]
     fn redis_collection_uses_route_channel_and_skips_auxiliary() {
-        let interface = OutputInterface::from_routes([
-            crate::core::OutputRoute::new(
+        let interface = OutputInterface::from_bindings([
+            crate::core::OutputBinding::new(
                 var("x"),
-                Some("mapped/channel".into()),
-                None,
+                Some(crate::core::Route::new("mapped/channel", None).unwrap()),
                 crate::core::OutputRole::Output,
             ),
-            crate::core::OutputRoute::auxiliary(var("debug")),
+            crate::core::OutputBinding::auxiliary(var("debug")),
         ])
         .unwrap();
         let batch = OutputBatch::from_ticks(vec![vec![

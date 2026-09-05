@@ -1,6 +1,6 @@
 <svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 390" width="100%" role="img" aria-labelledby="input-window-ticks-title input-window-ticks-desc" style="width:100%; max-width:900px; height:auto;">
   <title id="input-window-ticks-title">Input ticks stay aligned until reduction emits at a physical flush</title>
-  <desc id="input-window-ticks-desc">Read left to right along one shared baseline. The incoming window has logical tick 1 with simultaneous x equals 1 and y equals 2, then logical tick 2 with x equals 3. The incoming-tick marks stop there. A dashed vertical rule at the next position is labeled physical flush and is a physical boundary, not a third incoming tick. InputStage::Batch emits the same two logical ticks at the same positions inside one physical batch. WindowToStep with LastUpdateWins emits one resulting simultaneous logical tick at the flush containing y equals 2 and x equals 3. No arrow between rows represents an additional ordering claim.</desc>
+  <desc id="input-window-ticks-desc">Read left to right along one shared baseline. The incoming window has logical tick 1 with simultaneous x equals 1 and y equals 2, then logical tick 2 with x equals 3. The incoming-tick marks stop there. A dashed vertical rule at the next position is labeled physical flush and is a physical boundary, not a third incoming tick. InputPolicy::Batch emits the same two logical ticks at the same positions inside one physical batch. InputPolicy::WindowToStep with LastUpdateWins emits one resulting simultaneous logical tick at the flush containing y equals 2 and x equals 3. No arrow between rows represents an additional ordering claim.</desc>
   <!--
     Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
     is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
@@ -96,12 +96,12 @@
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600"
-        fill="var(--fig-ink)">InputStage::Batch</text>
+        fill="var(--fig-ink)">InputPolicy::Batch</text>
   <text x="24" y="326"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600"
-        fill="var(--fig-ink)">WindowToStep</text>
+        fill="var(--fig-ink)">InputPolicy::WindowToStep</text>
   <text x="24" y="344"
         font-family="ui-monospace, monospace"
         font-size="11"

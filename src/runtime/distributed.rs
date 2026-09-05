@@ -10,7 +10,7 @@ use tracing::debug;
 use unsync::spsc;
 
 use crate::{
-    DsrvSpecification, InputStream, LocalStream, Value, VarName,
+    DsrvSpecification, LocalStream, Value, VarName,
     core::{OutputWriter, Runtime, input},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -51,40 +51,7 @@ use crate::{
     utils::cancellation_token::CancellationToken,
 };
 
-#[cfg(feature = "mqtt")]
 use crate::io::mqtt::dist_graph_provider as mqtt_dist_graph_provider;
-
-#[cfg(not(feature = "mqtt"))]
-mod mqtt_dist_graph_provider {
-    use std::{collections::BTreeMap, rc::Rc};
-
-    use crate::{
-        LocalStream,
-        distributed::distribution_graphs::{DistributionGraph, NodeName},
-        io::mqtt::dist_graph_provider::DistGraphProvider,
-    };
-
-    pub struct MqttDistGraphProvider {
-        pub central_node: NodeName,
-    }
-
-    impl MqttDistGraphProvider {
-        pub fn new(
-            _executor: Rc<smol::LocalExecutor<'static>>,
-            central_node: NodeName,
-            _locations: BTreeMap<NodeName, String>,
-        ) -> Result<Self, &'static str> {
-            let _ = central_node;
-            Err("MQTT support not enabled")
-        }
-    }
-
-    impl DistGraphProvider for MqttDistGraphProvider {
-        fn dist_graph_stream(&mut self) -> LocalStream<Rc<DistributionGraph>> {
-            Box::pin(futures::stream::pending())
-        }
-    }
-}
 
 #[cfg(feature = "ros")]
 use crate::io::ros::dist_graph_provider as ros_dist_graph_provider;
@@ -204,7 +171,7 @@ pub struct DistAsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> 
     pub async_monitor_builder: AsyncRuntimeBuilder<AC, S>,
     var_msg_types: Option<BTreeMap<VarName, String>>,
     topic_mapping: Option<TopicMapping>,
-    input: Option<InputStream<AC::Val>>,
+    input: Option<crate::io::OpenedInput<AC::Val>>,
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
     scheduler_mode: Option<SchedulerCommunication>,
@@ -405,7 +372,7 @@ pub enum SchedulerCommunication {
 }
 
 struct DirectSchedulerInputRuntime {
-    input_ticks: input::InputTickStream<Value>,
+    input: crate::io::OpenedInput<Value>,
     constraint_input_index: ConstraintInputIndex,
     constraint_sender: spsc::Sender<ConstraintInputBatch>,
     planning_context: Option<PlanningContext>,
@@ -415,57 +382,76 @@ struct DirectSchedulerInputRuntime {
 impl DirectSchedulerInputRuntime {
     async fn run(mut self) -> anyhow::Result<()> {
         let cancellation_token = self.cancellation_token.clone();
-        loop {
-            let tick = select! {
-                tick = self.input_ticks.next().fuse() => match tick {
-                    Some(tick) => tick?,
-                    None => break,
-                },
-                _ = cancellation_token.cancelled().fuse() => break,
-            };
-            let mut compact_batch = Vec::new();
-            let mut planning_batch = Vec::new();
-            for crate::InputUpdate {
-                variable, value, ..
-            } in tick
-            {
-                if matches!(value, Value::NoVal | Value::Deferred) {
-                    continue;
-                }
-
-                if let Some(index) = self.constraint_input_index.index_of(&variable) {
-                    compact_batch.push((index, value.clone()));
-                }
-                planning_batch.push((variable, value));
-            }
-
-            if let Some(planning_context) = &self.planning_context {
-                planning_context.record_batch(planning_batch);
-            }
-
-            if !compact_batch.is_empty() {
-                // Scheduler shutdown can close the receiver just before or just after it requests
-                // worker cancellation. Prefer cancellation, and classify a closed send observed
-                // after cancellation as normal shutdown rather than a worker error.
-                futures::select_biased! {
-                    _ = cancellation_token.cancelled().fuse() => return Ok(()),
-                    result = self.constraint_sender.send(compact_batch).fuse() => {
-                        match result {
-                            Ok(()) => {}
-                            Err(_) => {
-                                if cancellation_token.is_cancelled().await {
-                                    return Ok(());
-                                }
-                                return Err(anyhow::anyhow!(
-                                    "failed to send scheduler constraint input batch"
-                                ));
-                            }
+        let mut result = Ok(());
+        {
+            let mut input_ticks = input::borrowed_tick_stream(&mut self.input);
+            'input: loop {
+                let tick = select! {
+                    tick = input_ticks.next().fuse() => match tick {
+                        Some(Ok(tick)) => tick,
+                        Some(Err(error)) => {
+                            result = Err(error.into());
+                            break 'input;
                         }
+                        None => break,
                     },
+                    _ = cancellation_token.cancelled().fuse() => break,
+                };
+                let mut compact_batch = Vec::new();
+                let mut planning_batch = Vec::new();
+                for crate::InputUpdate {
+                    variable, value, ..
+                } in tick
+                {
+                    if matches!(value, Value::NoVal | Value::Deferred) {
+                        continue;
+                    }
+
+                    if let Some(index) = self.constraint_input_index.index_of(&variable) {
+                        compact_batch.push((index, value.clone()));
+                    }
+                    planning_batch.push((variable, value));
+                }
+
+                if let Some(planning_context) = &self.planning_context {
+                    planning_context.record_batch(planning_batch);
+                }
+
+                if !compact_batch.is_empty() {
+                    // Scheduler shutdown can close the receiver just before or just after it requests
+                    // worker cancellation. Prefer cancellation, and classify a closed send observed
+                    // after cancellation as normal shutdown rather than a worker error.
+                    futures::select_biased! {
+                        _ = cancellation_token.cancelled().fuse() => break 'input,
+                        send_result = self.constraint_sender.send(compact_batch).fuse() => {
+                            match send_result {
+                                Ok(()) => {}
+                                Err(_) => {
+                                    if cancellation_token.is_cancelled().await {
+                                        break 'input;
+                                    }
+                                    result = Err(anyhow::anyhow!(
+                                        "failed to send scheduler constraint input batch"
+                                    ));
+                                    break 'input;
+                                }
+                            }
+                        },
+                    }
                 }
             }
         }
-        Ok(())
+        let mut drain = self.input.into_drain();
+        while let Some(item) = drain.next().await {
+            if let Err(cleanup) = item {
+                let cleanup = anyhow::Error::new(cleanup);
+                result = Err(match result {
+                    Ok(()) => cleanup,
+                    Err(primary) => anyhow::anyhow!("{}; additionally: {}", primary, cleanup),
+                });
+            }
+        }
+        result
     }
 }
 
@@ -539,7 +525,7 @@ where
         self
     }
 
-    fn input(mut self, input: crate::InputStream<AC::Val>) -> Self {
+    fn input(mut self, input: crate::io::OpenedInput<AC::Val>) -> Self {
         self.input = Some(input);
         self
     }
@@ -1229,7 +1215,6 @@ where
                 let constraint_input_index =
                     ConstraintInputIndex::new(constraint_inputs.iter().cloned());
                 let input = self.input.expect("Input stream not set");
-                let input_ticks = input::into_tick_stream(input);
                 let constraint_channel_size =
                     constraint_input_index.len().saturating_mul(4).max(64);
                 let (constraint_sender, constraint_receiver) =
@@ -1253,7 +1238,7 @@ where
                 return DistributedRuntime {
                     async_monitor: None,
                     direct_input_runtime: Some(DirectSchedulerInputRuntime {
-                        input_ticks,
+                        input,
                         constraint_input_index: constraint_input_index.clone(),
                         constraint_sender,
                         planning_context,
@@ -1467,6 +1452,7 @@ mod input_tests {
     use std::cell::Cell;
 
     use super::*;
+    use crate::InputStream;
 
     async fn cooperative_worker(
         cancellation_token: CancellationToken,
@@ -1610,9 +1596,10 @@ mod input_tests {
         smol::block_on(async {
             let (constraint_sender, _constraint_receiver) = spsc::channel(1);
             let runtime = DirectSchedulerInputRuntime {
-                input_ticks: Box::pin(futures::stream::iter([Err(anyhow::anyhow!(
-                    "input failed"
-                ))])),
+                input: (Box::pin(futures::stream::iter([Err(crate::InputError::source(
+                    "input failed",
+                ))])) as InputStream<Value>)
+                    .into(),
                 constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
                 constraint_sender,
                 planning_context: None,
@@ -1620,7 +1607,7 @@ mod input_tests {
             };
 
             let error = runtime.run().await.unwrap_err();
-            assert_eq!(error.to_string(), "input failed");
+            assert_eq!(error.to_string(), "input source error: input failed");
         });
     }
 
@@ -1629,18 +1616,14 @@ mod input_tests {
         smol::block_on(async {
             let cancellation_token = CancellationToken::new();
             let cancellation_for_tick = cancellation_token.clone();
-            let input_ticks: input::InputTickStream<Value> =
-                Box::pin(futures::stream::once(async move {
-                    cancellation_for_tick.cancel();
-                    Ok::<_, anyhow::Error>(vec![crate::InputUpdate::new(
-                        VarName::new("x"),
-                        Value::Int(1),
-                    )])
-                }));
+            let input: InputStream<Value> = Box::pin(futures::stream::once(async move {
+                cancellation_for_tick.cancel();
+                Ok(crate::InputBatch::update(VarName::new("x"), Value::Int(1)))
+            }));
             let (constraint_sender, constraint_receiver) = spsc::channel(1);
             drop(constraint_receiver);
             let runtime = DirectSchedulerInputRuntime {
-                input_ticks,
+                input: input.into(),
                 constraint_input_index: ConstraintInputIndex::new([VarName::new("x")]),
                 constraint_sender,
                 planning_context: None,
@@ -1658,10 +1641,11 @@ mod input_tests {
             let planning_context = PlanningContext::new(false);
             let (constraint_sender, constraint_receiver) = spsc::channel(1);
             let runtime = DirectSchedulerInputRuntime {
-                input_ticks: Box::pin(futures::stream::iter([Ok(vec![crate::InputUpdate::new(
+                input: (Box::pin(futures::stream::iter([Ok(crate::InputBatch::update(
                     VarName::new("planning_only"),
                     Value::Int(1),
-                )])])),
+                ))])) as InputStream<Value>)
+                    .into(),
                 constraint_input_index: ConstraintInputIndex::new(std::iter::empty()),
                 constraint_sender,
                 planning_context: Some(planning_context.clone()),

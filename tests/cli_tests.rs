@@ -132,15 +132,7 @@ mod integration_tests {
 
     /// Helper function to get the path to the binary
     fn get_binary_path() -> String {
-        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not defined");
-        let path = Path::new(&out_dir);
-        let tc_dir_path = path
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .expect("OUT_DIR too shallow");
-        let tc_dir = tc_dir_path.to_str().expect("Invalid UTF-8 in path");
-        format!("{}/trustworthiness_checker", tc_dir)
+        env!("CARGO_BIN_EXE_trustworthiness_checker").to_owned()
     }
 
     /// Helper function to run the CLI with given arguments and return output
@@ -1797,7 +1789,6 @@ mod integration_tests {
         use async_compat::Compat as TokioCompat;
         use async_unsync::oneshot;
         use futures::{StreamExt, stream};
-        use paho_mqtt as mqtt;
         use std::collections::BTreeMap;
         use std::os::unix::process::ExitStatusExt;
         use tc_testutils::{
@@ -1807,6 +1798,7 @@ mod integration_tests {
         };
         use trustworthiness_checker::Value;
         use trustworthiness_checker::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
+        use trustworthiness_checker::io::mqtt::{self, MqttMessage};
 
         use super::*;
 
@@ -2224,66 +2216,39 @@ mod integration_tests {
                 .expect("Failed to get host port for MQTT server");
             let cli_timeout = Duration::from_secs(5);
 
-            // Create MQTT client for receiving
-            let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-                .server_uri(format!("tcp://{}:{}", MQTT_HOSTNAME, mqtt_port))
-                .client_id("test_receiver".to_string())
-                .finalize();
+            let pub_client = mqtt::connect(&format!("tcp://{}:{}", MQTT_HOSTNAME, mqtt_port))
+                .await
+                .expect("failed to connect MQTT publisher");
 
-            let subscriber_opts = mqtt::ConnectOptionsBuilder::new_v3()
-                .keep_alive_interval(Duration::from_secs(30))
-                .clean_session(true)
-                .automatic_reconnect(Duration::from_millis(100), Duration::from_secs(5))
-                .finalize();
+            let (client, mut stream) =
+                mqtt::connect_and_receive(&format!("tcp://{}:{}", MQTT_HOSTNAME, mqtt_port))
+                    .await
+                    .expect("failed to connect MQTT subscriber");
+            client.subscribe(&"z".to_owned(), 1).await.unwrap();
 
-            // Create separate client for publisher (will be used to verify connectivity)
-            // Create subscriber client options
-            // Create subscriber client options with reconnect capability
+            // Verify the subscriber by publishing and receiving a test message.
+            let conn_test_topic = "z_connection_test".to_owned();
+            client.subscribe(&conn_test_topic, 1).await.unwrap();
 
-            // Create separate client for publisher (will be used to verify connectivity)
-            let pub_create_opts = mqtt::CreateOptionsBuilder::new_v3()
-                .server_uri(format!("tcp://{}:{}", MQTT_HOSTNAME, mqtt_port))
-                .client_id("test_publisher".to_string())
-                .finalize();
-
-            let pub_connect_opts = mqtt::ConnectOptionsBuilder::new_v3()
-                .keep_alive_interval(Duration::from_secs(30))
-                .clean_session(true)
-                .finalize();
-
-            let pub_client = mqtt::AsyncClient::new(pub_create_opts).unwrap();
-            pub_client.connect(pub_connect_opts).await.unwrap();
-
-            // Create and connect the subscriber client
-            let mut client = mqtt::AsyncClient::new(create_opts).unwrap();
-            let mut stream = Box::pin(client.get_stream(10));
-
-            client.connect(subscriber_opts).await.unwrap();
-            client.subscribe("z", 1).await.unwrap();
-
-            // Give MQTT subscriber time to fully connect and subscribe
-            // Timer::after(Duration::from_millis(2000)).await;
-
-            // Verify connection by publishing and receiving a test message
-            let conn_test_topic = "z_connection_test";
-            client.subscribe(conn_test_topic, 1).await.unwrap();
-
-            let test_msg = mqtt::Message::new(conn_test_topic, "test_connection", 1);
+            let test_msg =
+                MqttMessage::new(conn_test_topic.clone(), "test_connection".to_owned(), 1);
             pub_client.publish(test_msg).await.unwrap();
+            pub_client
+                .disconnect()
+                .await
+                .expect("failed to disconnect MQTT publisher");
 
             // Wait for the test message to confirm connection is working
             let timeout = Timer::after(Duration::from_millis(50));
             let mut connection_verified = false;
 
-            let mut pinned_stream = stream.as_mut();
-            let mut next_msg = pinned_stream.next().fuse();
+            let mut next_msg = stream.next().fuse();
             futures::select! {
                 msg_opt = next_msg => {
-                    if let Some(opt_msg) = msg_opt {
-                        if let Some(msg) = opt_msg {
-                            if msg.topic() == conn_test_topic {
-                                connection_verified = true;
-                            }
+                    if let Some(msg) = msg_opt {
+                        let msg = msg.expect("MQTT subscriber stream failed");
+                        if msg.topic == conn_test_topic {
+                            connection_verified = true;
                         }
                     }
                 }
@@ -2334,36 +2299,30 @@ mod integration_tests {
 
             while !collection_done && retry_count < MAX_RETRIES {
                 let timeout = Timer::after(Duration::from_secs(15));
-                let mut pinned_stream = stream.as_mut();
-                let mut next_msg = pinned_stream.next().fuse();
+                let mut next_msg = stream.next().fuse();
                 futures::select! {
                     msg_opt = next_msg => {
-                        if let Some(opt_msg) = msg_opt {
-                            if let Some(msg) = opt_msg {
-                                if msg.topic() == "z" {  // Only process messages from our expected topic
-                                    let payload = msg.payload_str();
+                        if let Some(msg) = msg_opt {
+                            let msg = msg.expect("MQTT subscriber stream failed");
+                            if msg.topic == "z" {  // Only process messages from our expected topic
+                                let payload = msg.payload;
 
-                                    // Try to deserialize the JSON
-                                    match serde_json::from_str::<Value>(&payload) {
-                                        Ok(val) => {
-                                            println!("Received MQTT message: {}", payload);
-                                            results.push(val);
+                                // Try to deserialize the JSON
+                                match serde_json::from_str::<Value>(&payload) {
+                                    Ok(val) => {
+                                        println!("Received MQTT message: {}", payload);
+                                        results.push(val);
 
-                                            // Check if we've received all expected messages
-                                            if results.len() >= 3 {
-                                                collection_done = true;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            println!("Error parsing MQTT message: {}, payload: {}", e, payload);
-                                            // Skip malformed messages
+                                        // Check if we've received all expected messages
+                                        if results.len() >= 3 {
+                                            collection_done = true;
                                         }
                                     }
+                                    Err(e) => {
+                                        println!("Error parsing MQTT message: {}, payload: {}", e, payload);
+                                        // Skip malformed messages
+                                    }
                                 }
-                            } else {
-                                println!("Received None from MQTT message");
-                                retry_count += 1;
-                                Timer::after(Duration::from_millis(500)).await; // Brief delay before retry
                             }
                         } else {
                             println!("MQTT stream ended");

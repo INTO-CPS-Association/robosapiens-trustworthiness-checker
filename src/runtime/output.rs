@@ -1,17 +1,42 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, pin::Pin};
 
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{Sink, StreamExt, stream::FuturesUnordered};
 
-use crate::{LocalStream, OutputBatch, OutputUpdate, OutputWriter, VarName};
+use crate::{LocalStream, OutputBatch, OutputUpdate, OutputWriter, VarName, io::ShutdownDeadline};
 
 pub(crate) type NamedOutputStreams<V> = BTreeMap<VarName, LocalStream<V>>;
+
+/// Admit one batch and drive direct sinks before waiting for more input.
+/// Worker-backed sinks advance their capacity without forcing a delivery flush.
+pub(crate) async fn submit_batch<V: 'static>(
+    writer: &mut OutputWriter<V>,
+    batch: OutputBatch<V>,
+) -> Result<(), crate::OutputError> {
+    writer.feed(batch).await?;
+    match futures::future::poll_fn(|cx| Pin::new(&mut *writer).poll_ready(cx)).await {
+        Err(error) if error.is_closed() => Ok(()),
+        result => result,
+    }
+}
 
 /// Drive independent named streams as singleton logical output ticks.
 ///
 /// This is the native representation for asynchronous and distributed
 /// monitors: whichever producer yields next becomes one width-one tick. The
 /// sink remains the only output boundary.
+#[cfg(test)]
 pub(crate) async fn drive_singleton_streams<V: 'static>(
+    streams: NamedOutputStreams<V>,
+    writer: &mut OutputWriter<V>,
+) -> anyhow::Result<()> {
+    let result = consume_singleton_streams(streams, writer).await;
+    match result {
+        Ok(()) => finish_writer(writer).await,
+        Err(primary) => finish_writer_with_primary(writer, primary).await,
+    }
+}
+
+pub(crate) async fn consume_singleton_streams<V: 'static>(
     streams: NamedOutputStreams<V>,
     writer: &mut OutputWriter<V>,
 ) -> anyhow::Result<()> {
@@ -27,7 +52,7 @@ pub(crate) async fn drive_singleton_streams<V: 'static>(
     let mut streams = futures::stream::select_all(streams);
 
     while let Some(batch) = streams.next().await {
-        match writer.send(batch).await {
+        match submit_batch(writer, batch).await {
             Ok(()) => {
                 // Independent streams can be permanently ready. Yield so one
                 // constant stream cannot starve input driving or sibling outputs.
@@ -43,7 +68,10 @@ pub(crate) async fn drive_singleton_streams<V: 'static>(
         }
     }
 
-    finish_writer(writer).await
+    match writer.error().cloned() {
+        Some(error) if !error.is_closed() => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Drive one value from every named stream as one simultaneous logical tick.
@@ -51,13 +79,25 @@ pub(crate) async fn drive_singleton_streams<V: 'static>(
 /// Semi-sync output subscriptions advance together, so the driver preserves
 /// that row boundary with `OutputBatch::tick` rather than flattening values
 /// into independent updates.
+#[cfg(test)]
 pub(crate) async fn drive_row_streams<V: 'static>(
+    streams: NamedOutputStreams<V>,
+    writer: &mut OutputWriter<V>,
+) -> anyhow::Result<()> {
+    let result = consume_row_streams(streams, writer).await;
+    match result {
+        Ok(()) => finish_writer(writer).await,
+        Err(primary) => finish_writer_with_primary(writer, primary).await,
+    }
+}
+
+pub(crate) async fn consume_row_streams<V: 'static>(
     streams: NamedOutputStreams<V>,
     writer: &mut OutputWriter<V>,
 ) -> anyhow::Result<()> {
     let (variables, mut streams): (Vec<_>, Vec<_>) = streams.into_iter().unzip();
     if streams.is_empty() {
-        return finish_writer(writer).await;
+        return Ok(());
     }
 
     loop {
@@ -102,9 +142,9 @@ pub(crate) async fn drive_row_streams<V: 'static>(
             .collect();
         let batch = match OutputBatch::tick(updates) {
             Ok(batch) => batch,
-            Err(error) => return finish_writer_with_primary(writer, error.into()).await,
+            Err(error) => return Err(error.into()),
         };
-        match writer.send(batch).await {
+        match submit_batch(writer, batch).await {
             Ok(()) => {}
             Err(error) if error.is_closed() => break,
             Err(_error) => {
@@ -116,26 +156,40 @@ pub(crate) async fn drive_row_streams<V: 'static>(
         }
     }
 
-    finish_writer(writer).await
+    match writer.error().cloned() {
+        Some(error) if !error.is_closed() => Err(error.into()),
+        _ => Ok(()),
+    }
 }
 
 pub(crate) async fn finish_writer<V: 'static>(writer: &mut OutputWriter<V>) -> anyhow::Result<()> {
-    let flush_result = writer.flush().await;
-    let close_result = writer.close().await;
-
-    // OutputWriter's close result includes any retained operation error and a
-    // distinct close error. Prefer it over the flush result, while still
-    // falling back to a non-closed flush failure if close was already closed.
-    let error = match close_result {
-        Err(error) if !error.is_closed() => Some(error),
-        _ => match flush_result {
-            Err(error) if !error.is_closed() => Some(error),
-            _ => None,
-        },
-    };
-    error.map_or(Ok(()), |error| Err(error.into()))
+    let deadline = writer.shutdown_deadline();
+    finish_writer_with_deadline(writer, deadline).await
 }
 
+pub(crate) async fn finish_writer_with_deadline<V: 'static>(
+    writer: &mut OutputWriter<V>,
+    deadline: ShutdownDeadline,
+) -> anyhow::Result<()> {
+    let flush = match deadline.timeout(writer.flush()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) if error.is_closed() => Ok(()),
+        Ok(Err(error)) => Err(anyhow::Error::new(error)),
+        Err(timeout) => Err(anyhow::Error::new(timeout)),
+    };
+    let close = match writer.close_with_deadline(deadline).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.is_closed() => Ok(()),
+        Err(error) => Err(anyhow::Error::new(error)),
+    };
+    match (flush, close) {
+        (Ok(()), close) => close,
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
+    }
+}
+
+#[cfg(test)]
 async fn finish_writer_with_primary<V: 'static>(
     writer: &mut OutputWriter<V>,
     primary: anyhow::Error,
@@ -193,7 +247,7 @@ mod tests {
         ) -> Poll<Result<(), Self::Error>> {
             let this = self.get_mut();
             if this.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             if let Some(error) = this.ready_error.take() {
                 return Poll::Ready(Err(error));
@@ -205,7 +259,7 @@ mod tests {
         fn start_send(self: Pin<&mut Self>, batch: OutputBatch<i32>) -> Result<(), Self::Error> {
             let this = self.get_mut();
             if this.closed {
-                return Err(OutputError::Closed);
+                return Err(OutputError::closed());
             }
             if !this.ready {
                 return Err(OutputError::backend("recording sink was not ready"));
@@ -225,7 +279,7 @@ mod tests {
             let this = self.get_mut();
             this.flushes.set(this.flushes.get() + 1);
             if this.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             match this.flush_error.take() {
                 Some(error) => Poll::Ready(Err(error)),
@@ -243,7 +297,7 @@ mod tests {
             let this = self.get_mut();
             this.closes.set(this.closes.get() + 1);
             if this.closed {
-                return Poll::Ready(Err(OutputError::Closed));
+                return Poll::Ready(Err(OutputError::closed()));
             }
             this.closed = true;
             Poll::Ready(match this.close_error.take() {
@@ -328,7 +382,7 @@ mod tests {
     #[test]
     fn singleton_driver_closes_after_early_downstream_closure() {
         let (mut writer, _, flushes, closes) =
-            recording_writer(None, Some(OutputError::Closed), None, None);
+            recording_writer(None, Some(OutputError::closed()), None, None);
 
         let result = smol::block_on(drive_singleton_streams(singleton_streams([1]), &mut writer));
 

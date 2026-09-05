@@ -1,6 +1,6 @@
 # Root cutover
 
-A `DataflowRuntime` configured by `ReconfigurableDataflowRuntimeBuilder` handles one control request at a time in the same owner loop that drives data ticks. It first constructs a complete resource-free candidate, then applies input, output, and monitor changes in a fixed order. Application has no rollback.
+A `DataflowRuntime` configured by `ReconfigurableDataflowRuntimeBuilder` handles one control request at a time in the same owner loop that drives data ticks. It first constructs a complete resource-free candidate, then rebinds the persistent input and output sessions and applies the monitor change in a fixed order. Application has no rollback.
 
 ## Planning
 
@@ -25,21 +25,19 @@ The monitor plan is one of three forms:
 
 | # | Application phase | Responsible entity | Applied effect |
 |---:|---|---|---|
-| 1 | Detach removed or changed input owners | `InputPipelineSession` | Stop new ingress while retaining already-admitted items for draining. |
-| 2 | Drain admitted old input | `DataflowRuntime` and old `DataflowMonitor` | Evaluate retained items under the old definition and interface. |
-| 3 | Flush pending engine rows | `DirectDataflowEngine` and `OutputWriter` | Submit output produced by the old side of the barrier. |
-| 4 | Open additions and commit input | `InputPipelineSession` | Install added source owners and activate the candidate `ResolvedInput`. |
-| 5 | Flush affected output ownership | `OutputPipelineSession` | Establish the required destination-local or shared-stage barrier. |
-| 6 | Update output interfaces and selection | `OutputPipelineSession` | Apply supported interfaces, routes, codecs, and router variable sets sequentially. |
-| 7 | Apply monitor replacement | `DataflowMonitor` | Retain, cold-install, or transfer semantic state according to the plan. |
-| 8 | Rebuild transient row layouts | `DirectDataflowEngine` | Recreate reusable input/output rows and cached slot mappings around the active monitor. |
-| 9 | Send acknowledgement | `DataflowRuntime` | Publish revision and change flags after all local application phases complete. |
+| 1 | Rebind input session | `InputPipelineSession` | Establish the local boundary, evaluate already-admitted old batches through the callback, rebind retained sources, remove or open owners, resume ingress, and mark the input revision pending. |
+| 2 | Flush pending engine rows | `DirectDataflowEngine` and `OutputWriter` | Submit output produced by old-side batches before the candidate monitor and interfaces become active. |
+| 3 | Rebind output session | `OutputPipelineSession` | Flush each affected destination writer, apply supported interfaces, and update router selection; mark the output revision pending. |
+| 4 | Apply monitor replacement | `DataflowMonitor` | Retain, cold-install, or transfer semantic state according to the plan. |
+| 5 | Commit session revisions | `InputPipelineSession` and `OutputPipelineSession` | Advance both session revisions after input, output, and monitor application succeeds. |
+| 6 | Rebuild transient row layouts | `DirectDataflowEngine` | Recreate reusable input/output rows and cached slot mappings around the active monitor. |
+| 7 | Send acknowledgement | `DataflowRuntime` | Publish revision and change flags after all local application phases complete. |
 
-Mutation begins at phase 1. Every later phase can fail after earlier effects have occurred, and acknowledgement is emitted only after phase 9 is reached.
+Mutation begins at phase 1. Every later phase can fail after earlier effects have occurred, and acknowledgement is emitted only after phase 7 is reached.
 
 {{#include ../../assets/dataflow/root-cutover-ticks.svg}}
 
-**Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before applying candidate input, output, and monitor state. The second dashed line marks local candidate activation after the serial input commit, output flush/update, monitor application, row rebuild, and acknowledgement; neither line is a rollback boundary.
+**Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before the candidate monitor and output interfaces become active. The second dashed line marks local candidate activation after the serial input rebind, output rebind, monitor application, session revision commits, row rebuild, and acknowledgement; neither line is a rollback boundary.
 
 The old monitor evaluates every row drained from removed sources. Its resulting pending output rows cross the writer boundary before the candidate input and output interfaces become active.
 

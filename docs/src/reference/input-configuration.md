@@ -7,7 +7,7 @@ Use the CLI input group to select one finite file, one generic live source, one 
 | Selector | Configuration | Notes |
 |---|---|---|
 | `--input-file PATH` | Timestamped text rows | Finite; incompatible with reconfigurable runtimes. |
-| `--mqtt-input` | Model variable names become MQTT topics | Live; default input backend is rumqttc. |
+| `--mqtt-input` | Model variable names become MQTT topics | Live; uses rumqttc without an extra Cargo feature. |
 | `--input-mqtt-file PATH` | Compact `{ variable: route }` JSON5 object | Live MQTT route catalog. |
 | `--redis-input` | Model variable names become Redis Pub/Sub channels | Live; requires Redis support. |
 | `--input-redis-file PATH` | Compact route catalog | Live Redis route catalog. |
@@ -28,7 +28,7 @@ A route catalog is a JSON5 object keyed by checker variable:
 }
 ```
 
-A string is the normal route form for MQTT and Redis; those input adapters always decode JSON/JSON5 and do not apply a codec supplied in `[route, codec]`. The two-element `[route, codec]` form is meaningful for ROS mappings, where the codec identifies the message type. Route values must be non-empty. Input and output route-file options share this compact representation, but output codecs have separate transport-specific behavior.
+A string is the normal route form for MQTT and Redis. Their optional format in `[route, format]` must be `json` or `json5`; both accept JSON5 input values. ROS requires the two-element form, with its message type as the format. Route values must be non-empty. Input and output route-file options share this representation; each transport validates its supported formats before opening resources.
 
 ## Named source configuration
 
@@ -78,7 +78,9 @@ A string is the normal route form for MQTT and Redis; those input adapters alway
 | `database` | `redis-knowledge` | Redis database; default `2`. |
 | `publish_initial` | `redis-knowledge` | Emit the selected-key startup snapshot into the checker input stream; default `true`. This is not a Redis Pub/Sub publication. |
 | `keys` | `redis-knowledge` | Required variable-to-key map. Key names are explicit and unique. |
-| `retry` | `redis-knowledge` | Optional retry object: `max_attempts` (`null` means forever), `initial_delay_ms` (default `250`), and `max_delay_ms` (default `5000`). |
+| `retry` | MQTT/Redis sources | Optional retry object: `max_attempts` (`null` means forever), `initial_delay_ms` (default `250`), and `max_delay_ms` (default `5000`). |
+
+MQTT and plain Redis input retry transient transport failures indefinitely by default. An explicit retry policy can bound the total attempts, including the initial attempt. Redis knowledge uses its selected-key recovery policy; see its linked guide for snapshot behavior. Retry limits are separate from `--io-shutdown-timeout-ms`, whose omitted value permits unlimited graceful shutdown.
 
 Unknown fields are rejected. A named source is structurally validated before it is opened; variable ownership, route codecs, feature availability, and external connection are later boundaries.
 
