@@ -37,7 +37,7 @@ The monitor plan is one of three forms:
 
 Mutation begins at phase 1. Every later phase can fail after earlier effects have occurred, and acknowledgement is emitted only after phase 9 is reached.
 
-![The delivered control barrier is followed by old-side input drain and output flush before candidate interfaces and monitor state become active](../../assets/dataflow/root-cutover-ticks.svg)
+{{#include ../../assets/dataflow/root-cutover-ticks.svg}}
 
 **Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before applying candidate input, output, and monitor state. The second dashed line marks local candidate activation after the serial input commit, output flush/update, monitor application, row rebuild, and acknowledgement; neither line is a rollback boundary.
 

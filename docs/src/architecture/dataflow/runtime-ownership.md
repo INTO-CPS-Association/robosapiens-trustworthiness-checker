@@ -2,7 +2,7 @@
 
 `DataflowMonitor` separates immutable meaning, persistent language state, mutable scheduling, and replaceable execution routing. State remains attached to semantic identities when order or physical execution changes.
 
-![Stable environment slots remain fixed while output order projects selected slots](../../assets/dataflow/environment-layout.svg)
+{{#include ../../assets/dataflow/environment-layout.svg}}
 
 **Reading rule.** `EnvironmentSlot` identifies a current-row location. Output order and scheduler order are projections over stable identities; neither is the storage identity of evaluator state.
 
@@ -12,7 +12,9 @@
 
 ## Persistent state
 
-`MonitorExecution` owns one long-lived evaluator per logical computed stream. Each evaluator owns canonical node values and state, plus optional quickening and native-tier state associated with the same semantic owner.
+`MonitorExecution` owns one long-lived evaluator per logical computed stream. Each evaluator owns canonical node values and operator state, and nothing else: an `Evaluator` is an `Rc<StreamProgram>` and a `Box<EvaluatorState>`.
+
+Accelerator state is deliberately not here. Quickened registers and native artifacts belong to the active `ExecutionPlan`'s regions, held beside the arena in `EvaluatorArena.region_states` with a parallel `authority` array. That separation is what makes a route replaceable: a plan can be built, cached, or evicted without touching language state, because it never held any.
 
 State includes delay rings, lifting state, branch evaluators, persistent calls, recursive frame pools, and active nested evaluators. The stable coordinate of top-level operation state is a stream identity plus graph-local `NodeId`, not a schedule index.
 
@@ -26,13 +28,13 @@ For reconfigurable monitors, source-prerequisite streams form one range and the 
 
 ## Replaceable routing
 
-`ScheduledExecutionPlan` maps a valid schedule to physical steps, while `ExecutionEngine` retains the active `PlanBundle` for canonical graph evaluation, scalar runs, or native artifacts.
+`ScheduledExecutionPlan` records the semantic order; `ExecutionPlan` partitions it into physical steps, and `ExecutionEngine` retains the active one for canonical graph evaluation, scalar regions, or native artifacts.
 
-![A replaceable execution layout addresses a fixed evaluator arena](../../assets/dataflow/execution-layout.svg)
+{{#include ../../assets/dataflow/execution-layout.svg}}
 
 **Reading rule.** The scheduler and execution layout can be replaced or cached. Every step addresses stable evaluator owners in the fixed arena; histories and dynamic evaluators do not move into the route.
 
-A `PlanId` identifies one schedule-specific route. It is not a state identity. Falling back from native or quickened work must materialize or preserve canonical state before another route continues.
+A `PlanId` identifies one schedule-specific route. It is not a state identity. Handing a region back to canonical execution must materialize its state first — whether the quickened region declined the row or a native artifact missed a guard.
 
 ## Ownership table
 
@@ -43,7 +45,7 @@ A `PlanId` identifies one schedule-specific route. It is not a state identity. F
 | active dependency order | `Scheduler` | active monitor; repairable |
 | per-stream language state | `EvaluatorArena` in `MonitorExecution` | active monitor or compatible transfer |
 | nested expression body state | active `Evaluator` | activation |
-| physical route and artifacts | `ExecutionEngine`, `ScheduledExecutionPlan`, and `PlanBundle` | schedule-specific and replaceable |
+| physical route and artifacts | `ExecutionEngine`, `ScheduledExecutionPlan`, and `ExecutionPlan` | schedule-specific and replaceable |
 | asynchronous batches and output writer | `DataflowRuntime` and `DirectDataflowEngine` | runtime run |
 
 ## Replacement consequence

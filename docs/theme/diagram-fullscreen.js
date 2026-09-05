@@ -1,4 +1,8 @@
 (() => {
+    // Two kinds of figure get the same controls: Mermaid, which renders an <svg> inside a
+    // <pre class="mermaid">, and a committed figure inlined by {{#include}}, which *is* the
+    // <svg>. Both expose a viewBox, so pan and zoom work identically on either.
+    const diagramSelector = 'pre.mermaid, svg.tc-figure';
     const frameSelector = '.mermaid-fullscreen-frame';
     const fallbackClass = 'mermaid-fullscreen-fallback';
     const minScale = 0.5;
@@ -31,8 +35,20 @@
         return view;
     }
 
+    function diagramIn(frame) {
+        return frame.querySelector(diagramSelector);
+    }
+
+    function svgIn(frame) {
+        const diagram = diagramIn(frame);
+        if (!diagram) {
+            return null;
+        }
+        return diagram.tagName.toLowerCase() === 'svg' ? diagram : diagram.querySelector('svg');
+    }
+
     function ensureSvgView(frame) {
-        const svg = frame.querySelector('pre.mermaid svg');
+        const svg = svgIn(frame);
         if (!svg) {
             return null;
         }
@@ -101,7 +117,7 @@
         if (!isFullscreen(frame)) {
             return;
         }
-        const viewport = frame.querySelector('pre.mermaid');
+        const viewport = diagramIn(frame);
         const current = ensureSvgView(frame);
         if (!viewport || !current) {
             return;
@@ -255,7 +271,8 @@
             return;
         }
         if (!diagram.id) {
-            diagram.id = `mermaid-diagram-${index + 1}`;
+            const kind = diagram.tagName.toLowerCase() === 'svg' ? 'figure' : 'mermaid-diagram';
+            diagram.id = `${kind}-${index + 1}`;
         }
 
         const frame = document.createElement('div');
@@ -306,10 +323,16 @@
     }
 
     function enhanceAllDiagrams() {
-        document.querySelectorAll('pre.mermaid').forEach(enhanceDiagram);
+        document.querySelectorAll(diagramSelector).forEach(enhanceDiagram);
     }
 
     document.addEventListener('DOMContentLoaded', enhanceAllDiagrams);
+    // Re-theming a Mermaid diagram replaces its <svg>, so the cached original viewBox
+    // that pan and zoom restore to no longer refers to a live element.
+    document.addEventListener('dsrv:diagrams-rendered', () => {
+        document.querySelectorAll(frameSelector).forEach((frame) => views.delete(frame));
+        enhanceAllDiagrams();
+    });
     document.addEventListener('fullscreenchange', () => {
         document.querySelectorAll(frameSelector).forEach((frame) => {
             const expanded = document.fullscreenElement === frame;

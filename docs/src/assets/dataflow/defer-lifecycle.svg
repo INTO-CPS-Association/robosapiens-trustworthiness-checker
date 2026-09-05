@@ -1,36 +1,71 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" role="img" aria-labelledby="defer-arrow-title defer-arrow-desc" style="width:100%;max-width:960px;height:auto;background:var(--fig-bg);border:1px solid var(--fig-edge);border-radius:6px">
 <title id="defer-arrow-title">Defer keeps the first active evaluator</title>
 <desc id="defer-arrow-desc">No evaluator is active before the first definition. The first string activates evaluator A and starts its delay rings. Later strings, NoVal, and Deferred all advance A without replacing its program or state. On NoVal or Deferred ticks, defer retains its last non-NoVal published result while the sealed evaluator continues to advance.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
 <defs>
   <marker id="defer-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
   </marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">defer keeps its first evaluator</text>
-<text x="135" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 10</text>
-<rect x="35" y="75" width="200" height="54" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="135" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">NoVal</text>
-<text x="365" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 11</text>
-<rect x="265" y="75" width="200" height="54" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="365" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x + 1&quot;</text>
-<text x="595" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 12</text>
-<rect x="495" y="75" width="200" height="54" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="595" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">&quot;x * 2&quot;</text>
-<text x="825" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">tick 13</text>
-<rect x="725" y="75" width="200" height="54" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="825" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Deferred</text>
-<line x1="235" y1="102" x2="265" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="465" y1="102" x2="495" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="695" y1="102" x2="725" y2="102" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="25" y1="160" x2="935" y2="160" stroke="#a8b3bf" stroke-width="1"/>
-<text x="35" y="192" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">active evaluator</text>
-<rect x="265" y="218" width="660" height="70" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="595" y="251" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">evaluator A: &quot;x + 1&quot;</text>
-<text x="595" y="269" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">state remains continuous; last published value is retained</text>
-<line x1="365" y1="129" x2="365" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="595" y1="129" x2="595" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<line x1="825" y1="129" x2="825" y2="218" stroke="#65758b" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
-<text x="375" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">activate</text>
-<text x="605" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance</text>
-<text x="835" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">advance + retain result</text>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">defer keeps its first evaluator</text>
+<text x="135" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">tick 10</text>
+<rect x="35" y="75" width="200" height="54" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="135" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">NoVal</text>
+<text x="365" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">tick 11</text>
+<rect x="265" y="75" width="200" height="54" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="365" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">&quot;x + 1&quot;</text>
+<text x="595" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">tick 12</text>
+<rect x="495" y="75" width="200" height="54" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+<text x="595" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">&quot;x * 2&quot;</text>
+<text x="825" y="62" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">tick 13</text>
+<rect x="725" y="75" width="200" height="54" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="825" y="107" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">Deferred</text>
+<line x1="235" y1="102" x2="265" y2="102" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="465" y1="102" x2="495" y2="102" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="695" y1="102" x2="725" y2="102" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="25" y1="160" x2="935" y2="160" stroke="var(--fig-panel-line)" stroke-width="1"/>
+<text x="35" y="192" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">active evaluator</text>
+<rect x="265" y="218" width="660" height="70" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="595" y="251" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">evaluator A: &quot;x + 1&quot;</text>
+<text x="595" y="269" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">state remains continuous; last published value is retained</text>
+<line x1="365" y1="129" x2="365" y2="218" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="595" y1="129" x2="595" y2="218" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<line x1="825" y1="129" x2="825" y2="218" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#defer-arrow)"/>
+<text x="375" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">activate</text>
+<text x="605" y="180" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">advance</text>
+<text x="815" y="180" text-anchor="end" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">advance + retain result</text>
 </svg>

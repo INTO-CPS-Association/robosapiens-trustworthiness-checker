@@ -1,0 +1,40 @@
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 378" role="img" aria-labelledby="t4 d4" style="width:100%; max-width:960px; height:auto; background:var(--fig-bg);">
+<title id="t4">Islands inside one graph step</title>
+<desc id="d4">The four nodes of the blended stream in graph order. Nodes 0 and 1 form one island, node 2 is a canonical run because a conditional is not an island operation, and node 3 forms a second island. Node 3 reads node 1 from a register, because a value consumed only by another island of the same region never reaches the canonical arena, and reads node 2 back from the arena because a canonical node produced it. Only node 3, the stream result, is exported.</desc>
+<style>.tc-figure{--fig-bg:#ffffff;--fig-edge:#d0d7de;--fig-ink:#17212b;--fig-ink-2:#52606d;--fig-line:#65758b;--fig-panel:#f7f9fb;--fig-panel-line:#a8b3bf;--fig-blue:#e8f1fb;--fig-blue-line:#2563a6;--fig-green:#e6f5f0;--fig-green-line:#147d64;--fig-orange:#fff1e6;--fig-orange-line:#b54708;--fig-purple:#f3ebf8;--fig-purple-line:#8055a3}@media (prefers-color-scheme:dark){.tc-figure{--fig-bg:#171b26;--fig-edge:#333a4d;--fig-ink:#e6e9f0;--fig-ink-2:#a2acbd;--fig-line:#8492a6;--fig-panel:#1e2432;--fig-panel-line:#3d465c;--fig-blue:#16283d;--fig-blue-line:#6aa9e0;--fig-green:#123029;--fig-green-line:#4fbfa0;--fig-orange:#33240f;--fig-orange-line:#e0a44e;--fig-purple:#241c33;--fig-purple-line:#b18fd4}}</style>
+<defs><marker id="a4" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/></marker><marker id="a4b" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-blue-line)"/></marker></defs>
+<rect x="0.75" y="0.75" width="958.5" height="376.5" rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.4" />
+<text x="26" y="30" text-anchor="start" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="15" font-weight="700">Islands inside one graph step</text>
+<text x="26" y="50" text-anchor="start" fill="var(--fig-ink-2)" font-family="ui-monospace, monospace" font-size="11.5" font-weight="400">blended = default(blended[1], 0) + (if flag then merged else scaled)</text>
+<rect x="50" y="106.0" width="360" height="86" rx="8" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="2" fill-opacity="0.45" />
+<text x="230.0" y="122.0" text-anchor="middle" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700">island</text>
+<rect x="430" y="106.0" width="270" height="86" rx="8" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="2" fill-opacity="0.45" />
+<text x="565.0" y="122.0" text-anchor="middle" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700">canonical run</text>
+<rect x="720" y="106.0" width="210" height="86" rx="8" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="2" fill-opacity="0.45" />
+<text x="825.0" y="122.0" text-anchor="middle" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="10.5" font-weight="700">island</text>
+<rect x="60" y="132.0" width="150" height="46" rx="4" fill="var(--fig-bg)" stroke="var(--fig-panel-line)" stroke-width="1.3" />
+<text x="135.0" y="151.0" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="10" font-weight="600">node 0</text>
+<text x="135.0" y="168.0" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="9.5" font-weight="600">RecursiveDelay { 1 }</text>
+<rect x="250" y="132.0" width="150" height="46" rx="4" fill="var(--fig-bg)" stroke="var(--fig-panel-line)" stroke-width="1.3" />
+<text x="325.0" y="151.0" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="10" font-weight="600">node 1</text>
+<text x="325.0" y="168.0" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="9.5" font-weight="600">Default(node 0, 0)</text>
+<rect x="440" y="132.0" width="250" height="46" rx="4" fill="var(--fig-bg)" stroke="var(--fig-panel-line)" stroke-width="1.3" />
+<text x="565.0" y="151.0" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="10" font-weight="600">node 2</text>
+<text x="565.0" y="168.0" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="9.5" font-weight="600">if flag then merged else scaled</text>
+<rect x="730" y="132.0" width="190" height="46" rx="4" fill="var(--fig-bg)" stroke="var(--fig-panel-line)" stroke-width="1.3" />
+<text x="825.0" y="151.0" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="10" font-weight="600">node 3</text>
+<text x="825.0" y="168.0" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="9.5" font-weight="600">node 1 + node 2</text>
+<path d="M 210 141.0 H 248" fill="none" stroke="var(--fig-line)" stroke-width="1.5" marker-end="url(#a4)"/>
+<path d="M 325 106 C 325 84, 825 84, 825 104" fill="none" stroke="var(--fig-blue-line)" stroke-width="1.8" marker-end="url(#a4b)"/>
+<text x="575" y="70" text-anchor="middle" fill="var(--fig-blue-line)" font-family="system-ui, sans-serif" font-size="10" font-weight="600">node 1 reaches node 3 in a register — it never becomes a canonical value</text>
+<rect x="50" y="286.0" width="880" height="50" rx="6" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" stroke-dasharray="6 4" />
+<text x="490" y="307.0" text-anchor="middle" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="11" font-weight="700">canonical arena</text>
+<text x="490" y="324.0" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="10" font-weight="400">node values and the recursive delay ring</text>
+<path d="M 565 178 V 284" fill="none" stroke="var(--fig-line)" stroke-width="1.5" marker-end="url(#a4)"/>
+<text x="528" y="272.0" text-anchor="start" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="9.5" font-weight="400">the conditional writes its result</text>
+<path d="M 760 272 V 180" fill="none" stroke="var(--fig-line)" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#a4)"/>
+<text x="768" y="254.0" text-anchor="start" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="9.5" font-weight="400">island 1 reads it back</text>
+<path d="M 895 164 V 284" fill="none" stroke="var(--fig-line)" stroke-width="1.5" marker-end="url(#a4)"/>
+<text x="903" y="272.0" text-anchor="end" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="9.5" font-weight="400">exported</text>
+<text x="26" y="356.0" text-anchor="start" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11" font-weight="400">A conditional is not an island operation, so it splits the graph. Only the nodes canonical execution still reads are exported; the rest stay in registers.</text>
+</svg>

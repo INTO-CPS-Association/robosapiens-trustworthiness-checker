@@ -29,7 +29,7 @@ total  = default(total[1], 0) + scaled
 scaled = x * 2
 ```
 
-![The running example has current edges from x through scaled, total, and alert, plus a historical self-edge on total](../../assets/dataflow/example-streams.svg)
+{{#include ../../assets/dataflow/example-streams.svg}}
 
 **Reading rule.** Solid arrows are same-tick dependencies. The dashed loop reads the previous committed value of `total`; it does not create a same-tick cycle.
 
@@ -38,41 +38,14 @@ The declaration order is deliberately the reverse of the required evaluation ord
 The central public operation is direct row evaluation. The caller allocates one output row using `output_vars()` and reuses the same `DataflowMonitor` so temporal state survives between calls:
 
 ```rust
-use trustworthiness_checker::{DsrvSpecification, Value, VarName};
-use trustworthiness_checker::dataflow::DataflowMonitor;
-
-let source = "in x: Int\n\
-    out alert: Bool\n\
-    out total: Int\n\
-    out scaled: Int\n\
-    alert = total > 20\n\
-    total = default(total[1], 0) + scaled\n\
-    scaled = x * 2";
-let spec = source.parse::<DsrvSpecification>()?;
-let mut monitor = DataflowMonitor::compile_untyped(spec)?;
-let outputs = monitor.output_vars().to_vec();
-let output_index = |name: &str| {
-    outputs
-        .iter()
-        .position(|variable| variable == &VarName::new(name))
-        .expect("declared output")
-};
-let mut row = vec![Value::NoVal; outputs.len()];
-
-monitor.evaluate(&[Value::Int(4)], &mut row)?;
-assert_eq!(row[output_index("total")], Value::Int(8));
-assert_eq!(row[output_index("alert")], Value::Bool(false));
-
-monitor.evaluate(&[Value::Int(8)], &mut row)?;
-assert_eq!(row[output_index("total")], Value::Int(24));
-assert_eq!(row[output_index("alert")], Value::Bool(true));
+{{#include ../../../../tests/docs_examples.rs:monitor_evaluate}}
 ```
 
 Each `evaluate` call is one logical tick, not one stream evaluation. The monitor schedules all computed streams, fills the complete output row, and commits successful temporal writes before the next call can observe them.
 
 ## Two ticks
 
-![Two logical tick positions align every stream value around the post-row temporal commit](../../assets/dataflow/two-tick-evaluation.svg)
+{{#include ../../assets/dataflow/two-tick-evaluation.svg}}
 
 **Reading rule.** Every value cell in the `t1` column belongs to one logical tick, as does every cell in `t2`; vertical position names the stream rather than an execution substep. The compact commit cell lies between those tick positions. Its dashed arrow shows that tick 1's `total = 8` becomes historical only at tick 2; `total[1]` is a historical read and does not add a current scheduling edge. Tick 2's `total = 24` is committed for tick 3, which lies beyond the figure.
 
@@ -84,7 +57,9 @@ During tick 1, `total[1]` produces `Value::Deferred` because it has no committed
 
 `Value::Deferred` means that an expression cannot yet produce a value, for example while a positive delay is filling. It is a real language value with lifting rules, not transport absence.
 
-These values can propagate differently through operators and state. Their meaning is established by the evaluator, not by input batching.
+Strict unary and binary operators retain each operand before applying the operation. An incoming `NoVal` reuses that operand's last non-absent value, including a retained `Deferred`. If there is no retained value, absence remains. After retention, a strict binary operation produces `NoVal` if either operand is absent; otherwise it produces `Deferred` if either operand is deferred. This policy is shared across `Value`, typed partial values, and quickened scalar values.
+
+Selection and temporal operators have their own propagation rules. Input batching does not choose those rules.
 
 ## Current and historical dependencies
 
@@ -98,7 +73,7 @@ The monitor keeps one fixed environment layout for the compiled definition. Inpu
 
 A schedule can change without moving row locations or evaluator state. This distinction becomes essential when active `dynamic` expressions reveal different current dependencies.
 
-## One success boundary
+## Tick success and failure
 
 A successful tick has four visible consequences:
 

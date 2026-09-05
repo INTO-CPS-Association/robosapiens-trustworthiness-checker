@@ -15,7 +15,7 @@ rereads each selected key and emits the decoded value only when it differs from
 the last value it emitted. It does not infer a key by changing a variable name;
 every knowledge key must be mapped explicitly.
 
-![MAPLE-K phase events and current Knowledge state entering the Trustworthiness Checker through Redis](assets/redis-knowledge-overview.svg)
+{{#include assets/redis-knowledge-overview.svg}}
 
 ## Quickstart: monitor one key
 
@@ -141,6 +141,8 @@ The one-key run tests current state. A MAPLE-K flow commonly combines that state
 with transient phase events: in this representative layout, Analyse and
 Legitimate completion use Pub/Sub, while the selected plan uses a database-2
 knowledge key. The names are deployment choices, not canonical Redis names.
+
+{{#include assets/redis-knowledge-maple-example.svg}}
 
 | MAPLE-K information | Redis kind | Representative name | Checker input |
 |---|---|---|---|

@@ -1,12 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 900 385"
-     width="100%"
-     role="img"
-     aria-labelledby="output-routing-ticks-title output-routing-ticks-desc"
-     style="width:100%; max-width:900px; height:auto;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 385" width="100%" role="img" aria-labelledby="output-routing-ticks-title output-routing-ticks-desc" style="width:100%; max-width:900px; height:auto;">
   <title id="output-routing-ticks-title">Output routing preserves original tick positions</title>
   <desc id="output-routing-ticks-desc">Read left to right along one shared baseline. OutputBatch has original tick 1 with simultaneous a equals 1 and b equals 10, tick 2 with a equals 2, and tick 3 with b equals 30. Destination A selects a, so its compact cells remain at original positions 1 and 2 and position 3 is an empty gap. Destination B selects b, so its cells remain at positions 1 and 3 and position 2 is an empty gap. The gap markers are not output ticks. No arrow skips a gap: horizontal alignment is the mapping claim, and separate original ticks never merge. Destination A and destination B are independent delivery sequences, not an atomic cross-destination commit.</desc>
-
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="output-routing-ticks-arrow"
             markerWidth="7"
@@ -16,28 +45,24 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="898.5" height="383.5" rx="6"
-        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="31"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700"
-        fill="#17212b">Output routing keeps original ticks aligned</text>
-
+        fill="var(--fig-ink)">Output routing keeps original ticks aligned</text>
   <line x1="190" y1="90" x2="815" y2="90"
-        stroke="#65758b" stroke-width="1.5"
+        stroke="var(--fig-line)" stroke-width="1.5"
         marker-end="url(#output-routing-ticks-arrow)" />
   <text x="823" y="94"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">logical order</text>
-
-  <g fill="none" stroke="#65758b" stroke-width="1.5">
+        fill="var(--fig-ink-2)">logical order</text>
+  <g fill="none" stroke="var(--fig-line)" stroke-width="1.5">
     <line x1="280" y1="82" x2="280" y2="98" />
     <line x1="480" y1="82" x2="480" y2="98" />
     <line x1="680" y1="82" x2="680" y2="98" />
@@ -45,76 +70,70 @@
   <g text-anchor="middle"
      font-family="system-ui, sans-serif"
      font-size="11"
-     fill="#52606d">
+     fill="var(--fig-ink-2)">
     <text x="280" y="74">tick 1</text>
     <text x="480" y="74">tick 2</text>
     <text x="680" y="74">tick 3</text>
   </g>
-
   <text x="24" y="149"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600"
-        fill="#17212b">OutputBatch</text>
+        fill="var(--fig-ink)">OutputBatch</text>
   <text x="24" y="230"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600"
-        fill="#17212b">destination A</text>
+        fill="var(--fig-ink)">destination A</text>
   <text x="24" y="247"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">selects a</text>
+        fill="var(--fig-ink-2)">selects a</text>
   <text x="24" y="311"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600"
-        fill="#17212b">destination B</text>
+        fill="var(--fig-ink)">destination B</text>
   <text x="24" y="328"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">selects b</text>
-
+        fill="var(--fig-ink-2)">selects b</text>
   <g text-anchor="middle"
      font-family="ui-monospace, monospace"
      font-size="11.5"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="195" y="126" width="170" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="280" y="152">{ a = 1, b = 10 }</text>
     <rect x="435" y="126" width="90" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="480" y="152">{ a = 2 }</text>
     <rect x="630" y="126" width="100" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="680" y="152">{ b = 30 }</text>
-
     <rect x="230" y="207" width="100" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="280" y="233">{ a = 1 }</text>
     <rect x="430" y="207" width="100" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="480" y="233">{ a = 2 }</text>
-
     <rect x="230" y="288" width="100" height="42" rx="5"
-          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+          fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5" />
     <text x="280" y="314">{ b = 10 }</text>
     <rect x="630" y="288" width="100" height="42" rx="5"
-          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+          fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5" />
     <text x="680" y="314">{ b = 30 }</text>
   </g>
-
-  <g text-anchor="middle" fill="#a8b3bf">
+  <g text-anchor="middle" fill="var(--fig-panel-line)">
     <text x="680" y="233" font-family="system-ui, sans-serif" font-size="17">∅</text>
     <text x="680" y="255" font-family="system-ui, sans-serif" font-size="10.5">gap</text>
     <text x="480" y="314" font-family="system-ui, sans-serif" font-size="17">∅</text>
     <text x="480" y="336" font-family="system-ui, sans-serif" font-size="10.5">gap</text>
   </g>
-
   <text x="500" y="373"
         text-anchor="middle"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">A and B are independent deliveries; no atomic cross-destination commit.</text>
+        fill="var(--fig-ink-2)">A and B are independent deliveries; no atomic cross-destination commit.</text>
 </svg>

@@ -1,6 +1,6 @@
 # Failure and termination
 
-Failures are contained at different scopes. Recoverable execution-tier failures fall back within one tick; a canonical failure makes the `DataflowMonitor` terminal; input, output, cutover, or acknowledgement failures terminate the `DataflowRuntime` owner loop.
+Failures are contained at different scopes. Recoverable execution-tier failures are absorbed within one tick — a quickened region declines the row before executing it, a native artifact misses a guard — and canonical evaluation produces the row instead; a canonical failure makes the `DataflowMonitor` terminal; input, output, cutover, or acknowledgement failures terminate the `DataflowRuntime` owner loop.
 
 ```mermaid
 flowchart TB

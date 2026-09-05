@@ -8,7 +8,7 @@ The **tick barrier** is the logical end of scheduled evaluator execution. At thi
 
 The **source barrier** is an internal boundary used only by ticks containing `dynamic` or unsealed `defer`. `MonitorExecution` first evaluates the source range. The monitor then resolves nested bodies, collects their exact active dependencies, and asks `Scheduler` to retain or repair the order before the disjoint main range runs. This boundary changes the active body and execution order, not logical time.
 
-![A static tick and a split reconfiguration tick distinguish the source barrier from the temporal-commit tick barrier](../../assets/dataflow/tick-barriers.svg)
+{{#include ../../assets/dataflow/tick-barriers.svg}}
 
 **Reading rule.** Time runs left to right. Work on both sides of the source barrier belongs to one logical tick: no new tick begins and no temporal write commits there. Source and main ranges are disjoint and together evaluate every computed stream exactly once; current values published in the source range remain visible to the main range. Temporal writes may be staged in either range, but only the later tick barrier commits them. Root reconfiguration control barriers, input-window boundaries, and output delivery boundaries are separate concepts.
 
@@ -77,7 +77,7 @@ sequenceDiagram
         scheduler-->>monitor: retained or repaired order
         opt source or main order changed
             monitor->>execution: select_schedule_ranges()
-            execution-->>monitor: active PlanBundle selected
+            execution-->>monitor: active ExecutionPlan selected
         end
         monitor->>execution: evaluate_main_and_commit_with_history()
         loop Main-range StreamId values
@@ -121,6 +121,6 @@ A newly sealed `defer` body no longer needs its source prerequisites on later ti
 
 ## Execution routes
 
-Canonical, quickened, and native routes all enter the same tick phases and must preserve publication, temporal commit, output projection, and failure boundaries. Route-specific guards and fallback cannot create a second logical evaluation of a stream.
+Canonical, quickened, and native routes all enter the same tick phases and must preserve publication, temporal commit, output projection, and failure boundaries. A declined region and a missed native guard both hand work to canonical evaluation; neither creates a second logical evaluation of a stream.
 
 Continue with [scheduling](scheduling.md) for dependency order and source/main range construction, [temporal state](temporal-state.md), [dynamic properties](dynamic-properties.md), or [execution tiers](execution-tiers.md).

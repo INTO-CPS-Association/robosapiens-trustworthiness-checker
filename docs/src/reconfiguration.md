@@ -51,19 +51,7 @@ These are separate runtime implementations, not execution tiers of one evaluator
 `ReconfigurationRequest` is the public transport-independent envelope delivered at the control barrier. Its constructor starts with unchanged default input and output configurations, so a request can replace only the monitor specification:
 
 ```rust
-use trustworthiness_checker::io::ReconfigurationRequest;
-
-let replacement = "in x: Int\n\
-    out alert: Bool\n\
-    out total: Int\n\
-    out scaled: Int\n\
-    alert = total > 40\n\
-    total = default(total[1], 0) + scaled\n\
-    scaled = x * 2";
-
-let request = ReconfigurationRequest::new(replacement);
-request.validate()?;
-assert_eq!(request.specification, replacement);
+{{#include ../../tests/docs_examples.rs:reconfiguration_request}}
 ```
 
 `validate` checks the request's transport-independent structure: the specification is nonempty and the nested input/output descriptions are structurally valid. It does not parse or compile the replacement, resolve it against the runtime's durable I/O registries, acquire resources, or apply a cutover. Those operations begin when the owner loop plans the delivered request.
@@ -157,19 +145,17 @@ A failure in this phase leaves active owners structurally unchanged. The `Datafl
 
 ## Application is ordered, not transactional
 
-The in-place cutover order is:
+Mutation begins at phase 3 of the sequence above, and each mutating phase completes before the next begins. What that costs is stated per phase: the effect below survives the failure of any later phase.
 
-```text
-detach removed input owners
-→ drain already-admitted old input through the old monitor
-→ flush pending engine output rows
-→ open additions and commit the input resolution
-→ flush affected output owners or the shared stage
-→ update output interfaces and routing
-→ apply the monitor replacement plan
-→ rebuild transient input/output row layouts
-→ acknowledge
-```
+| Mutating phase | Effect retained when a later phase fails |
+|---|---|
+| 3 Detach and drain old input | The removed sources stay detached, and every drained tick has been evaluated with its temporal state committed. |
+| 4 Flush old output rows | Those rows have already been submitted downstream. |
+| 5 Apply input and output changes | The added sources are open, the previous input resolution is gone, buffered output is written, and the switched destination interfaces address their new targets. |
+| 6 Apply monitor replacement | Compatible donor state has been moved destructively; the donor cannot supply it again. |
+| 7 Rebuild transient layouts | Rows and slot mappings describe the candidate monitor rather than the donor. |
+
+Phase 8 is last, so nothing later can fail; a failed acknowledgement still leaves phases 3 to 7 applied.
 
 There is no rollback across these owners. A source can already be detached, or one destination interface already updated, when a later operation fails. The architecture guarantees serial ownership and an explicit ordering boundary, not all-or-nothing replacement across transports, monitor state, and remote systems.
 
@@ -201,9 +187,7 @@ The complete containment ladder is in [failure and termination](architecture/dat
 
 ## Reading route
 
-- [Dataflow architecture](architecture/dataflow/index.md) establishes the synchronous machine and its boundaries.
-- [Input and output sessions](architecture/dataflow/runtime-io.md) explains persistent transport ownership.
-- [Root cutover](architecture/dataflow/reconfigurable-runtime.md) gives the exact planning and application phases.
-- [Replacement identity](architecture/dataflow/replacement-contract.md) defines keys, mappings, and revisions.
-- [Context transfer](architecture/dataflow/context-transfer.md) identifies state that survives.
-- [Failure and termination](architecture/dataflow/failure-model.md) states partial-application and cleanup consequences.
+This page compares the two runtime models. The mechanism lives in the dataflow area, whose
+*Replacement and containment* group covers root cutover, replacement identity, context transfer,
+and failure containment in order — start from [dataflow architecture](architecture/dataflow/index.md),
+which owns the reading route for all of them.

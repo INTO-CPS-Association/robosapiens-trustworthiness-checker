@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="tc-figure" viewBox="0 0 960 300" role="img" aria-labelledby="typed-row-path-title typed-row-path-desc" style="width:100%; max-width:960px; height:auto;">
+  <title id="typed-row-path-title">The typed row path before and after promotion</title>
+  <desc id="typed-row-path-desc">Two lanes with the same endpoints. The upper lane is a warming typed monitor: the input tuple is encoded through the bound layout into a reusable Value row, DataflowMonitor evaluates the ordinary tick, and the output Value row is decoded back into the output tuple. The lower lane is the same monitor after its hotness policy has selected a whole-schedule native artifact: the input tuple is passed to PreparedDirectJit as raw row pointers and the output tuple is written directly, so no Value is constructed or decoded anywhere in the tick. The endpoints are identical in both lanes and the values produced are the same; only the middle changes. Promotion is one-way and requires JitPlan::WholeSchedule, because a partially compiled monitor still runs the ordinary tick.</desc>
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff; --fig-edge: #d0d7de;
+      --fig-ink: #17212b; --fig-ink-2: #52606d; --fig-line: #65758b;
+      --fig-panel: #f7f9fb; --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb; --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0; --fig-green-line: #147d64;
+      --fig-orange: #fff1e6; --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8; --fig-purple-line: #8055a3;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="typed-row-path-arrow" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
+    </marker>
+    <marker id="typed-row-path-arrow-acc" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-purple-line)" />
+    </marker>
+  </defs>
+  <rect x="0.75" y="0.75" width="958.5" height="298.5" rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
+  <text x="40" y="34" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="13" font-weight="600">While warming</text>
+  <text x="168" y="34" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="12">every language feature available; the typed layer is an encoder and a decoder</text>
+  <rect x="40" y="52" width="90" height="52" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" />
+  <text x="85" y="83" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="13" font-weight="600">I</text>
+  <rect x="152" y="52" width="176" height="52" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+  <text x="240" y="76" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="11" font-weight="600">TypedIoLayout</text>
+  <text x="240" y="93" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11">encode into a Value row</text>
+  <rect x="350" y="52" width="250" height="52" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="2" />
+  <text x="475" y="76" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="11" font-weight="600">DataflowMonitor::evaluate</text>
+  <text x="475" y="93" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11">the ordinary tick, unchanged</text>
+  <rect x="622" y="52" width="176" height="52" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+  <text x="710" y="76" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="11" font-weight="600">TypedIoLayout</text>
+  <text x="710" y="93" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11">decode from a Value row</text>
+  <rect x="820" y="52" width="90" height="52" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" />
+  <text x="865" y="83" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="13" font-weight="600">O</text>
+  <g fill="none" stroke="var(--fig-line)" stroke-width="1.6" marker-end="url(#typed-row-path-arrow)">
+    <path d="M 132 78 H 148" /><path d="M 330 78 H 346" /><path d="M 602 78 H 618" /><path d="M 800 78 H 816" />
+  </g>
+  <path d="M 475 112 V 150" fill="none" stroke="var(--fig-purple-line)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#typed-row-path-arrow-acc)" />
+  <text x="492" y="136" fill="var(--fig-purple-line)" font-family="system-ui, sans-serif" font-size="11">promotes on <tspan font-family="ui-monospace, monospace">JitPlan::WholeSchedule</tspan></text>
+  <text x="40" y="182" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="13" font-weight="600">After promotion</text>
+  <text x="176" y="182" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="12">same endpoints, same values; no <tspan font-family="ui-monospace, monospace">Value</tspan> is constructed or decoded</text>
+  <rect x="40" y="200" width="90" height="52" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" />
+  <text x="85" y="231" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="13" font-weight="600">I</text>
+  <rect x="152" y="200" width="646" height="52" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="2" />
+  <text x="475" y="224" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="11" font-weight="600">PreparedDirectJit::evaluate(input: *const u8, output: *mut u8)</text>
+  <text x="475" y="241" text-anchor="middle" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11">one native call writes the output row through the bound offsets</text>
+  <rect x="820" y="200" width="90" height="52" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" />
+  <text x="865" y="231" text-anchor="middle" fill="var(--fig-ink)" font-family="ui-monospace, monospace" font-size="13" font-weight="600">O</text>
+  <g fill="none" stroke="var(--fig-line)" stroke-width="1.6" marker-end="url(#typed-row-path-arrow)">
+    <path d="M 132 226 H 148" /><path d="M 800 226 H 816" />
+  </g>
+  <text x="40" y="282" fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11">Under <tspan font-family="ui-monospace, monospace">JitPlan::Regions</tspan> the monitor stays in the upper lane: a partially compiled schedule still runs the ordinary tick.</text>
+</svg>

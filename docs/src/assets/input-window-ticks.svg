@@ -1,12 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 900 390"
-     width="100%"
-     role="img"
-     aria-labelledby="input-window-ticks-title input-window-ticks-desc"
-     style="width:100%; max-width:900px; height:auto;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 390" width="100%" role="img" aria-labelledby="input-window-ticks-title input-window-ticks-desc" style="width:100%; max-width:900px; height:auto;">
   <title id="input-window-ticks-title">Input ticks stay aligned until reduction emits at a physical flush</title>
   <desc id="input-window-ticks-desc">Read left to right along one shared baseline. The incoming window has logical tick 1 with simultaneous x equals 1 and y equals 2, then logical tick 2 with x equals 3. The incoming-tick marks stop there. A dashed vertical rule at the next position is labeled physical flush and is a physical boundary, not a third incoming tick. InputStage::Batch emits the same two logical ticks at the same positions inside one physical batch. WindowToStep with LastUpdateWins emits one resulting simultaneous logical tick at the flush containing y equals 2 and x equals 3. No arrow between rows represents an additional ordering claim.</desc>
-
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="input-window-ticks-arrow"
             markerWidth="7"
@@ -16,114 +45,102 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="898.5" height="388.5" rx="6"
-        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="31"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700"
-        fill="#17212b">Input ticks stay aligned; reduction happens at flush</text>
-
+        fill="var(--fig-ink)">Input ticks stay aligned; reduction happens at flush</text>
   <!-- This boundary is deliberately not a regular tick mark. -->
   <line x1="700" y1="48" x2="700" y2="356"
-        stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4" />
+        stroke="var(--fig-purple-line)" stroke-width="1.3" stroke-dasharray="6 4" />
   <text x="700" y="49"
         text-anchor="middle"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600"
-        fill="#8055a3">physical flush</text>
+        fill="var(--fig-purple-line)">physical flush</text>
   <text x="700" y="64"
         text-anchor="middle"
         font-family="system-ui, sans-serif"
         font-size="10.5"
-        fill="#52606d">not an incoming tick</text>
-
+        fill="var(--fig-ink-2)">not an incoming tick</text>
   <line x1="190" y1="92" x2="815" y2="92"
-        stroke="#65758b" stroke-width="1.5"
+        stroke="var(--fig-line)" stroke-width="1.5"
         marker-end="url(#input-window-ticks-arrow)" />
   <text x="823" y="96"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">logical order</text>
-
-  <g fill="none" stroke="#65758b" stroke-width="1.5">
+        fill="var(--fig-ink-2)">logical order</text>
+  <g fill="none" stroke="var(--fig-line)" stroke-width="1.5">
     <line x1="300" y1="84" x2="300" y2="100" />
     <line x1="500" y1="84" x2="500" y2="100" />
   </g>
   <g text-anchor="middle"
      font-family="system-ui, sans-serif"
      font-size="11"
-     fill="#52606d">
+     fill="var(--fig-ink-2)">
     <text x="300" y="76">tick 1</text>
     <text x="500" y="76">tick 2</text>
   </g>
-
   <text x="24" y="149"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600"
-        fill="#17212b">incoming window</text>
+        fill="var(--fig-ink)">incoming window</text>
   <text x="24" y="229"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600"
-        fill="#17212b">InputStage::Batch</text>
+        fill="var(--fig-ink)">InputStage::Batch</text>
   <text x="24" y="326"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600"
-        fill="#17212b">WindowToStep</text>
+        fill="var(--fig-ink)">WindowToStep</text>
   <text x="24" y="344"
         font-family="ui-monospace, monospace"
         font-size="11"
-        fill="#52606d">LastUpdateWins</text>
-
+        fill="var(--fig-ink-2)">LastUpdateWins</text>
   <g text-anchor="middle"
      font-family="ui-monospace, monospace"
      font-size="11.5"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="215" y="126" width="170" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="300" y="152">{ x = 1, y = 2 }</text>
     <rect x="455" y="126" width="90" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="500" y="152">{ x = 3 }</text>
-
     <rect x="215" y="207" width="170" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="300" y="233">{ x = 1, y = 2 }</text>
     <rect x="455" y="207" width="90" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="500" y="233">{ x = 3 }</text>
-
     <rect x="605" y="307" width="190" height="42" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="700" y="333">{ y = 2, x = 3 }</text>
   </g>
-
   <path d="M 205 258 V 266 H 595 V 258"
-        fill="none" stroke="#65758b" stroke-width="1.3" />
+        fill="none" stroke="var(--fig-line)" stroke-width="1.3" />
   <text x="400" y="283"
         text-anchor="middle"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">one physical batch · two logical ticks</text>
-
+        fill="var(--fig-ink-2)">one physical batch · two logical ticks</text>
   <text x="700" y="298"
         text-anchor="middle"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#b54708">one resulting logical tick at flush</text>
-
+        fill="var(--fig-orange-line)">one resulting logical tick at flush</text>
   <text x="190" y="375"
         font-family="system-ui, sans-serif"
         font-size="11"
-        fill="#52606d">One cell groups simultaneous values; the dashed line is not another incoming tick.</text>
+        fill="var(--fig-ink-2)">One cell groups simultaneous values; the dashed line is not another incoming tick.</text>
 </svg>

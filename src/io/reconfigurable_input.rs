@@ -22,10 +22,12 @@ use crate::io::config::{
 /// streams contain only `InputBatch` values; reconfigurable streams also carry
 /// reusable `Reconfigure(ReconfigurationRequest)` control barriers.
 #[derive(Debug)]
+// ANCHOR: reconfigurable_input_item
 pub(crate) enum ReconfigurableInputItem<V> {
     Data(InputBatch<V>),
     Reconfigure(ReconfigurationRequest),
 }
+// ANCHOR_END: reconfigurable_input_item
 
 pub(crate) type ReconfigurableInputStream<V> =
     crate::OutputStream<anyhow::Result<ReconfigurableInputItem<V>>>;

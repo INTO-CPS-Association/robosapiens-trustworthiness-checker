@@ -1,91 +1,126 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" role="img" aria-labelledby="dynamic-dependencies-arrow-title dynamic-dependencies-arrow-desc" style="width:100%;max-width:1000px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" role="img" aria-labelledby="dynamic-dependencies-arrow-title dynamic-dependencies-arrow-desc" style="width:100%;max-width:1000px;height:auto;background:var(--fig-bg);border:1px solid var(--fig-edge);border-radius:6px">
 <title id="dynamic-dependencies-arrow-title">Potential dependency graph, scope matrix, and runtime schedule repair</title>
 <desc id="dynamic-dependencies-arrow-desc">The dashed automatic-scope graph and compile-time matrix show that dynamic stream a may read preloaded input x or stream b and dynamic stream b may read preloaded input x or stream a. Automatic top-level scope excludes the containing stream itself; restricted or explicit scopes retain their declared permitted names after environment restriction. Dependency arrows point from each producer to its same-tick consumer. At runtime tick n, source values activate x to b to a and repair cached order a then b to b then a. At the next runtime tick, new source values activate x to a to b and repair the cached order back to a then b. The ticks are consecutive logical input rows, not stages of one evaluation.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
 <defs>
   <marker id="dynamic-dependencies-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
   </marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Scope permissions, active dependencies, and schedule repair</text>
-<text x="960" y="27" text-anchor="end" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">A → B means B reads A; x is a preloaded input</text>
-<rect x="25" y="48" width="950" height="180" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
-<text x="45" y="76" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Compile-time automatic-scope permissions</text>
-<rect x="120" y="94" width="120" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="180" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">input x</text>
-<rect x="60" y="170" width="100" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="110" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
-<rect x="200" y="170" width="100" height="38" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="250" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
-<line x1="155" y1="132" x2="110" y2="170" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
-<line x1="205" y1="132" x2="250" y2="170" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
-<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
-<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" stroke="#65758b" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
-<rect x="390" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="455" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">stream</text>
-<rect x="520" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="585" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">x</text>
-<rect x="650" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="715" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
-<rect x="780" y="94" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="845" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
-<rect x="390" y="132" width="130" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="455" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
-<rect x="520" y="132" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="585" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
-<rect x="650" y="132" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="715" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">—</text>
-<rect x="780" y="132" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="845" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
-<rect x="390" y="170" width="130" height="38" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="455" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
-<rect x="520" y="170" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="585" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
-<rect x="650" y="170" width="130" height="38" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="715" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">✓</text>
-<rect x="780" y="170" width="130" height="38" rx="5" fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5"/>
-<text x="845" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">—</text>
-<rect x="25" y="248" width="950" height="155" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
-<text x="45" y="276" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Runtime tick n</text>
-<text x="165" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">source values</text>
-<text x="535" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active dependencies</text>
-<text x="857" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">schedule</text>
-<rect x="45" y="314" width="245" height="36" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="167" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a_source = &quot;b + 1&quot;</text>
-<rect x="45" y="357" width="245" height="36" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="167" y="380" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b_source = &quot;x&quot;</text>
-<rect x="350" y="330" width="90" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="395" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
-<rect x="490" y="330" width="90" height="44" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="535" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
-<rect x="630" y="330" width="90" height="44" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="675" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">input x</text>
-<line x1="490" y1="352" x2="440" y2="352" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="630" y1="352" x2="580" y2="352" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<rect x="775" y="310" width="165" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="857" y="334" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">cached [a, b]</text>
-<rect x="775" y="360" width="165" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="857" y="384" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">repaired [b, a]</text>
-<line x1="857" y1="348" x2="857" y2="360" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<rect x="25" y="423" width="950" height="155" rx="7" fill="#f7f9fb" stroke="#a8b3bf"/>
-<text x="45" y="451" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Runtime tick n + 1</text>
-<text x="165" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">source values</text>
-<text x="535" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">active dependencies</text>
-<text x="857" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">schedule</text>
-<rect x="45" y="489" width="245" height="36" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="167" y="512" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a_source = &quot;x&quot;</text>
-<rect x="45" y="532" width="245" height="36" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="167" y="555" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b_source = &quot;a + 1&quot;</text>
-<rect x="350" y="505" width="90" height="44" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="395" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">b</text>
-<rect x="490" y="505" width="90" height="44" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="535" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">a</text>
-<rect x="630" y="505" width="90" height="44" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="675" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">input x</text>
-<line x1="490" y1="527" x2="440" y2="527" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<line x1="630" y1="527" x2="580" y2="527" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
-<rect x="775" y="485" width="165" height="38" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="857" y="509" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">cached [b, a]</text>
-<rect x="775" y="535" width="165" height="38" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="857" y="559" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">repaired [a, b]</text>
-<line x1="857" y1="523" x2="857" y2="535" stroke="#65758b" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">Scope permissions, active dependencies, and schedule repair</text>
+<text x="960" y="27" text-anchor="end" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">A → B means B reads A; x is a preloaded input</text>
+<rect x="25" y="48" width="950" height="180" rx="7" fill="var(--fig-panel)" stroke="var(--fig-panel-line)"/>
+<text x="45" y="76" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Compile-time automatic-scope permissions</text>
+<rect x="120" y="94" width="120" height="38" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="180" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">input x</text>
+<rect x="60" y="170" width="100" height="38" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="110" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a</text>
+<rect x="200" y="170" width="100" height="38" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="250" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b</text>
+<line x1="155" y1="132" x2="110" y2="170" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
+<line x1="205" y1="132" x2="250" y2="170" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)" stroke-dasharray="5 4"/>
+<path d="M 160 181 C 177 151, 183 151, 200 181" fill="none" stroke="var(--fig-line)" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
+<path d="M 200 199 C 183 225, 177 225, 160 199" fill="none" stroke="var(--fig-line)" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="390" y="94" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="455" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">stream</text>
+<rect x="520" y="94" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="585" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">x</text>
+<rect x="650" y="94" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="715" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a</text>
+<rect x="780" y="94" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="845" y="118" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b</text>
+<rect x="390" y="132" width="130" height="38" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="455" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a</text>
+<rect x="520" y="132" width="130" height="38" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="585" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">✓</text>
+<rect x="650" y="132" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="715" y="156" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">—</text>
+<rect x="780" y="132" width="130" height="38" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="845" y="159" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">✓</text>
+<rect x="390" y="170" width="130" height="38" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="455" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b</text>
+<rect x="520" y="170" width="130" height="38" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="585" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">✓</text>
+<rect x="650" y="170" width="130" height="38" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="715" y="197" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">✓</text>
+<rect x="780" y="170" width="130" height="38" rx="5" fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5"/>
+<text x="845" y="194" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">—</text>
+<rect x="25" y="248" width="950" height="155" rx="7" fill="var(--fig-panel)" stroke="var(--fig-panel-line)"/>
+<text x="45" y="276" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Runtime tick n</text>
+<text x="165" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">source values</text>
+<text x="535" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">active dependencies</text>
+<text x="857" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">schedule</text>
+<rect x="45" y="314" width="245" height="36" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="167" y="337" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a_source = &quot;b + 1&quot;</text>
+<rect x="45" y="357" width="245" height="36" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="167" y="380" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b_source = &quot;x&quot;</text>
+<rect x="350" y="330" width="90" height="44" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="395" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a</text>
+<rect x="490" y="330" width="90" height="44" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="535" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b</text>
+<rect x="630" y="330" width="90" height="44" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="675" y="357" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="var(--fig-ink)">input x</text>
+<line x1="490" y1="352" x2="440" y2="352" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<line x1="630" y1="352" x2="580" y2="352" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="775" y="310" width="165" height="38" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+<text x="857" y="334" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">cached [a, b]</text>
+<rect x="775" y="360" width="165" height="38" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="857" y="384" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">repaired [b, a]</text>
+<line x1="857" y1="348" x2="857" y2="360" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="25" y="423" width="950" height="155" rx="7" fill="var(--fig-panel)" stroke="var(--fig-panel-line)"/>
+<text x="45" y="451" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Runtime tick n + 1</text>
+<text x="165" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">source values</text>
+<text x="535" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">active dependencies</text>
+<text x="857" y="475" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">schedule</text>
+<rect x="45" y="489" width="245" height="36" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="167" y="512" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a_source = &quot;x&quot;</text>
+<rect x="45" y="532" width="245" height="36" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="167" y="555" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b_source = &quot;a + 1&quot;</text>
+<rect x="350" y="505" width="90" height="44" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="395" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">b</text>
+<rect x="490" y="505" width="90" height="44" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="535" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">a</text>
+<rect x="630" y="505" width="90" height="44" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="675" y="532" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="var(--fig-ink)">input x</text>
+<line x1="490" y1="527" x2="440" y2="527" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<line x1="630" y1="527" x2="580" y2="527" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
+<rect x="775" y="485" width="165" height="38" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+<text x="857" y="509" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">cached [b, a]</text>
+<rect x="775" y="535" width="165" height="38" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="857" y="559" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">repaired [a, b]</text>
+<line x1="857" y1="523" x2="857" y2="535" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#dynamic-dependencies-arrow)"/>
 </svg>

@@ -25,11 +25,11 @@ A preparation failure leaves the donor's semantic owners intact. In the root run
 
 ## Application
 
-Application materializes optimized/native state where necessary, moves exact evaluator owners, resets unmapped target evaluators, transfers compatible retained-environment values, recomputes history requirements, transfers matching variable histories, installs prepared scheduling and nested-reconfiguration state, clears the target current row, and selects its execution route.
+Application materializes optimized/native state in both source and target where necessary, moves exact evaluator owners, resets unmapped target evaluators, transfers compatible retained-environment values, recomputes history requirements, transfers matching variable histories, installs prepared scheduling and nested-reconfiguration state, clears the target current row, and selects its execution route.
 
 With `ContextTransferPolicy::None`, the target uses initialized evaluator state and empty target histories.
 
-![Old and target tick positions surround destructive evaluator and history transfer across a non-tick replacement interval](../../assets/dataflow/context-transfer-ticks.svg)
+{{#include ../../assets/dataflow/context-transfer-ticks.svg}}
 
 **Reading rule.** The shared time axis contains two old logical ticks and the first target tick; the dashed replacement interval is physical application work, not another tick. The compact mapping rows show a compatible `Evaluator` moving with its `DelayState` and monitor history being restricted to the target-required suffix. An unmapped target owner starts cold. The completed old current row does not cross the interval—the target row is cleared before its first evaluation.
 
@@ -43,18 +43,18 @@ With `ContextTransferPolicy::None`, the target uses initialized evaluator state 
 | retained sparse environment | transferred through compatible environment mapping |
 | current row | not transferred; target row is cleared |
 | scheduler and nested control | prepared for the target definition |
-| quickened/native representation | materialized or transferred with its semantic owner |
+| quickened/native representation | materialized back to canonical before transfer; never moved |
 | schedule route/cache entry | selected or rebuilt; not semantic context |
 
 The retained sparse environment is not temporal history and does not seed a newly created delay ring.
 
 ## Nested transfer
 
-A changed `dynamic` body can transfer compatible state only from the immediately previous active evaluator. Unchanged source text keeps the evaluator directly. Returning to an older body does not revive its former state. The first `defer` activation has no donor; after sealing, its evaluator remains active.
+Nested activation follows its own rules, described under [dynamic properties](dynamic-properties.md#dynamic-activation-lifetime); the part that matters at a root transfer is that a nested body is a state owner like any other. The first `defer` activation has no donor, and after sealing its evaluator remains active across the replacement if the enclosing stream maps.
 
-![A replacement nested evaluator receives compatible local delay state from its immediate predecessor or starts cold while enclosing monitor history persists](../../assets/dataflow/dynamic-history.svg)
+{{#include ../../assets/dataflow/dynamic-history.svg}}
 
-**Reading rule.** The local `DelayState` ring belongs to the nested activation and can transfer only from the immediately previous compatible evaluator; otherwise it starts cold and yields `Value::Deferred` while filling. The direct downstream `z[1]` read uses monitor `HistoryStore`, which survives because the enclosing monitor owner did not change.
+**Reading rule.** [Dynamic properties](dynamic-properties.md#history-starts-when-the-body-activates) reads this figure for the nested activation; read it here for the two different owners it puts side by side. The local `DelayState` ring belongs to the nested body, so it is subject to that body's lifetime. The downstream `z[1]` read uses monitor `HistoryStore`, which belongs to the enclosing monitor and survives anything that happens to the body. A root transfer moves the second by variable identity and leaves the first to the activation rules — which is why the same figure answers two questions.
 
 ## Semisynchronous transfer
 

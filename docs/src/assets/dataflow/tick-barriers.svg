@@ -1,78 +1,105 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 610" role="img" aria-labelledby="tick-barriers-title tick-barriers-desc" style="width:100%;max-width:1000px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 610" role="img" aria-labelledby="tick-barriers-title tick-barriers-desc" style="width:100%;max-width:1000px;height:auto;background:var(--fig-bg);border:1px solid var(--fig-edge);border-radius:6px">
   <title id="tick-barriers-title">Tick barrier and source barrier within logical ticks</title>
   <desc id="tick-barriers-desc">Two sparse timelines run left to right. In the static tick, all scheduled computed streams evaluate between tick n input and the tick barrier. Temporal writes are staged during evaluation and commit together at the tick barrier, becoming readable only by a later tick. In the split tick, a source range ends at the source barrier. Nested bodies are resolved, exact dependencies are collected, and the schedule is repaired there; no temporal state commits and no new logical tick begins. A disjoint main range then evaluates before the same end-of-tick barrier commits temporal state. Source and main ranges together evaluate every computed stream once.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="tick-barriers-arrow" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
     </marker>
   </defs>
-  <rect x="0.75" y="0.75" width="998.5" height="608.5" rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
-  <text x="24" y="31" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Two barriers, one logical-tick contract</text>
-
-  <text x="24" y="73" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Static tick: the tick barrier commits staged temporal state</text>
-  <line x1="205" y1="125" x2="930" y2="125" stroke="#65758b" stroke-width="1.5" marker-end="url(#tick-barriers-arrow)"/>
-  <text x="975" y="145" text-anchor="end" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">logical time</text>
-  <g stroke="#65758b" stroke-width="1.4">
+  <rect x="0.75" y="0.75" width="998.5" height="608.5" rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5"/>
+  <text x="24" y="31" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">Two barriers, one logical-tick contract</text>
+  <text x="24" y="73" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Static tick: the tick barrier commits staged temporal state</text>
+  <line x1="205" y1="125" x2="930" y2="125" stroke="var(--fig-line)" stroke-width="1.5" marker-end="url(#tick-barriers-arrow)"/>
+  <text x="975" y="145" text-anchor="end" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink-2)">logical time</text>
+  <g stroke="var(--fig-line)" stroke-width="1.4">
     <line x1="300" y1="118" x2="300" y2="132"/>
     <line x1="650" y1="118" x2="650" y2="132"/>
     <line x1="850" y1="118" x2="850" y2="132"/>
   </g>
-  <g text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">
+  <g text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink-2)">
     <text x="300" y="108">tick n input</text>
     <text x="650" y="108">tick barrier</text>
     <text x="850" y="108">later tick</text>
   </g>
-  <line x1="650" y1="112" x2="650" y2="292" stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4"/>
-
-  <text x="25" y="184" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#17212b">computed streams</text>
-  <line x1="300" y1="177" x2="650" y2="177" stroke="#147d64" stroke-width="3"/>
-  <text x="475" y="165" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#17212b">dependency-valid evaluation · each stream once</text>
-
-  <text x="25" y="245" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#17212b">temporal state</text>
-  <line x1="300" y1="238" x2="610" y2="238" stroke="#b54708" stroke-width="3"/>
-  <text x="455" y="226" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">writes staged; old history still readable</text>
-  <rect x="610" y="215" width="80" height="46" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-  <text x="650" y="242" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">commit</text>
-  <line x1="690" y1="238" x2="850" y2="238" stroke="#8055a3" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#tick-barriers-arrow)"/>
-  <text x="770" y="226" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="#52606d">new history visible later</text>
-  <text x="650" y="281" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#8055a3">end of scheduled evaluation</text>
-
-  <line x1="24" y1="318" x2="976" y2="318" stroke="#d0d7de" stroke-width="1"/>
-
-  <text x="24" y="354" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#17212b">Split tick: the source barrier changes the active body and order, not time</text>
-  <line x1="205" y1="406" x2="930" y2="406" stroke="#65758b" stroke-width="1.5" marker-end="url(#tick-barriers-arrow)"/>
-  <text x="975" y="426" text-anchor="end" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">same logical tick</text>
-  <g stroke="#65758b" stroke-width="1.4">
+  <line x1="650" y1="112" x2="650" y2="268" stroke="var(--fig-purple-line)" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="25" y="184" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="var(--fig-ink)">computed streams</text>
+  <line x1="300" y1="177" x2="650" y2="177" stroke="var(--fig-green-line)" stroke-width="3"/>
+  <text x="475" y="165" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink)">dependency-valid evaluation · each stream once</text>
+  <text x="25" y="245" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="var(--fig-ink)">temporal state</text>
+  <line x1="300" y1="238" x2="610" y2="238" stroke="var(--fig-orange-line)" stroke-width="3"/>
+  <text x="455" y="226" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink-2)">writes staged; old history still readable</text>
+  <rect x="610" y="215" width="80" height="46" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+  <text x="650" y="242" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="var(--fig-ink)">commit</text>
+  <line x1="690" y1="238" x2="850" y2="238" stroke="var(--fig-purple-line)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#tick-barriers-arrow)"/>
+  <text x="770" y="226" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="var(--fig-ink-2)">new history visible later</text>
+  <text x="650" y="281" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="var(--fig-purple-line)">end of scheduled evaluation</text>
+  <line x1="24" y1="318" x2="976" y2="318" stroke="var(--fig-edge)" stroke-width="1"/>
+  <text x="24" y="354" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Split tick: the source barrier changes the active body and order, not time</text>
+  <line x1="205" y1="406" x2="930" y2="406" stroke="var(--fig-line)" stroke-width="1.5" marker-end="url(#tick-barriers-arrow)"/>
+  <text x="975" y="426" text-anchor="end" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink-2)">same logical tick</text>
+  <g stroke="var(--fig-line)" stroke-width="1.4">
     <line x1="300" y1="399" x2="300" y2="413"/>
     <line x1="520" y1="399" x2="520" y2="413"/>
     <line x1="780" y1="399" x2="780" y2="413"/>
     <line x1="900" y1="399" x2="900" y2="413"/>
   </g>
-  <g text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#52606d">
+  <g text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="var(--fig-ink-2)">
     <text x="300" y="389">tick n input</text>
     <text x="520" y="389">source barrier</text>
     <text x="780" y="389">tick barrier</text>
     <text x="900" y="389">later tick</text>
   </g>
-  <line x1="520" y1="393" x2="520" y2="580" stroke="#b54708" stroke-width="1.3" stroke-dasharray="6 4"/>
-  <line x1="780" y1="393" x2="780" y2="580" stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4"/>
-
-  <text x="25" y="464" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#17212b">execution range</text>
-  <line x1="300" y1="457" x2="520" y2="457" stroke="#2563a6" stroke-width="3"/>
-  <line x1="520" y1="457" x2="780" y2="457" stroke="#147d64" stroke-width="3"/>
-  <text x="410" y="445" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="600" fill="#17212b">source range</text>
-  <text x="650" y="445" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="600" fill="#17212b">disjoint main range</text>
-
-  <text x="25" y="523" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#17212b">barrier effect</text>
-  <rect x="445" y="492" width="150" height="52" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-  <text x="520" y="513" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#17212b">resolve nested bodies</text>
-  <text x="520" y="531" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="#52606d">collect edges · repair order</text>
-  <rect x="730" y="492" width="100" height="52" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-  <text x="780" y="522" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="#17212b">commit</text>
-
-  <text x="25" y="575" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#17212b">temporal writes</text>
-  <line x1="300" y1="568" x2="740" y2="568" stroke="#b54708" stroke-width="3"/>
-  <text x="520" y="561" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="#52606d">staged across both ranges · no commit at source barrier</text>
-  <line x1="830" y1="518" x2="900" y2="518" stroke="#8055a3" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#tick-barriers-arrow)"/>
-  <text x="865" y="505" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="#52606d">visible later</text>
+  <line x1="520" y1="393" x2="520" y2="580" stroke="var(--fig-orange-line)" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <line x1="780" y1="393" x2="780" y2="580" stroke="var(--fig-purple-line)" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="25" y="464" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="var(--fig-ink)">execution range</text>
+  <line x1="300" y1="457" x2="520" y2="457" stroke="var(--fig-blue-line)" stroke-width="3"/>
+  <line x1="520" y1="457" x2="780" y2="457" stroke="var(--fig-green-line)" stroke-width="3"/>
+  <text x="410" y="445" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="600" fill="var(--fig-ink)">source range</text>
+  <text x="650" y="445" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="600" fill="var(--fig-ink)">disjoint main range</text>
+  <text x="25" y="523" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="var(--fig-ink)">barrier effect</text>
+  <rect x="445" y="492" width="150" height="52" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+  <text x="520" y="513" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="var(--fig-ink)">resolve nested bodies</text>
+  <text x="520" y="531" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="var(--fig-ink-2)">collect edges · repair order</text>
+  <rect x="730" y="492" width="100" height="52" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+  <text x="780" y="522" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" font-weight="600" fill="var(--fig-ink)">commit</text>
+  <text x="25" y="575" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="var(--fig-ink)">temporal writes</text>
+  <line x1="300" y1="568" x2="740" y2="568" stroke="var(--fig-orange-line)" stroke-width="3"/>
+  <text x="520" y="592" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10.5" fill="var(--fig-ink-2)">staged across both ranges · no commit at source barrier</text>
+  <line x1="830" y1="518" x2="900" y2="518" stroke="var(--fig-purple-line)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#tick-barriers-arrow)"/>
+  <text x="865" y="505" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" fill="var(--fig-ink-2)">visible later</text>
 </svg>

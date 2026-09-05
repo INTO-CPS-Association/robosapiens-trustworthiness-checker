@@ -1,11 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 1040 350"
-     role="img"
-     aria-labelledby="root-cutover-ticks-title root-cutover-ticks-desc"
-     style="width:100%;max-width:1040px;height:auto;background:#ffffff;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 350" role="img" aria-labelledby="root-cutover-ticks-title root-cutover-ticks-desc" style="width:100%;max-width:1040px;height:auto;background:var(--fig-bg);">
   <title id="root-cutover-ticks-title">Root cutover: old drain precedes candidate activation</title>
   <desc id="root-cutover-ticks-desc">Read left to right on the single shared time baseline. Ordinary old data ticks d0 and d1 precede the delivered control request and barrier. The admitted old ticks d2 and d3 follow the barrier but are drained and evaluated under the OLD configuration. The thin OLD configuration span therefore crosses the barrier and ends only at the candidate activation position. Candidate activation begins only after serial local input, output, monitor, row-rebuild, and acknowledgement work; the first candidate tick d4 follows it. The barrier and candidate activation are distinct positions. Dashed vertical guides mark those positions, while the solid horizontal arrow marks time. The sequence is ordered and non-transactional: earlier effects are not rolled back. The compact cells show temporal data and control facts only; phase internals are intentionally omitted.</desc>
-
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="root-cutover-ticks-arrow"
             markerWidth="7"
@@ -15,84 +45,78 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="1038.5" height="348.5"
-        rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="30"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700">Root cutover: old drain precedes candidate activation</text>
-
   <g fill="none" stroke-linecap="round">
     <line x1="180" y1="65" x2="710" y2="65"
-          stroke="#2563a6" stroke-width="3" />
+          stroke="var(--fig-blue-line)" stroke-width="3" />
     <line x1="710" y1="65" x2="940" y2="65"
-          stroke="#147d64" stroke-width="3" />
+          stroke="var(--fig-green-line)" stroke-width="3" />
   </g>
-  <text x="445" y="53" text-anchor="middle"
-        fill="#2563a6"
+  <text x="300" y="53" text-anchor="middle"
+        fill="var(--fig-blue-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">OLD configuration</text>
   <text x="825" y="53" text-anchor="middle"
-        fill="#147d64"
+        fill="var(--fig-green-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">CANDIDATE configuration</text>
-
   <g fill="none" stroke-width="1.3" stroke-dasharray="6 4">
-    <line x1="420" y1="42" x2="420" y2="323" stroke="#b54708" />
-    <line x1="710" y1="42" x2="710" y2="323" stroke="#147d64" />
+    <line x1="420" y1="42" x2="420" y2="70" stroke="var(--fig-orange-line)" />
+    <line x1="420" y1="88" x2="420" y2="323" stroke="var(--fig-orange-line)" />
+    <line x1="710" y1="42" x2="710" y2="70" stroke="var(--fig-green-line)" />
+    <line x1="710" y1="88" x2="710" y2="323" stroke="var(--fig-green-line)" />
   </g>
   <text x="420" y="83" text-anchor="middle"
-        fill="#b54708"
+        fill="var(--fig-orange-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">delivered control barrier</text>
   <text x="710" y="83" text-anchor="middle"
-        fill="#147d64"
+        fill="var(--fig-green-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">candidate activation position</text>
-
   <rect x="355" y="94" width="130" height="48" rx="5"
-        fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+        fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
   <text x="420" y="114" text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="12"
         font-weight="600">control request</text>
   <text x="420" y="131" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">delivered</text>
-
   <rect x="645" y="94" width="130" height="48" rx="5"
-        fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+        fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
   <text x="710" y="114" text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="12"
         font-weight="600">candidate activation</text>
   <text x="710" y="131" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">after local application</text>
-
   <line x1="155" y1="165" x2="950" y2="165"
-        stroke="#65758b" stroke-width="1.5"
+        stroke="var(--fig-line)" stroke-width="1.5"
         marker-end="url(#root-cutover-ticks-arrow)" />
   <text x="960" y="170"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">time</text>
-
-  <g stroke="#65758b" stroke-width="1.2">
+  <g stroke="var(--fig-line)" stroke-width="1.2">
     <line x1="210" y1="159" x2="210" y2="171" />
     <line x1="310" y1="159" x2="310" y2="171" />
     <line x1="420" y1="159" x2="420" y2="171" />
@@ -102,83 +126,76 @@
     <line x1="810" y1="159" x2="810" y2="171" />
     <line x1="910" y1="159" x2="910" y2="171" />
   </g>
-
   <text x="25" y="217"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">data / evaluation</text>
-
   <g text-anchor="middle">
     <rect x="164" y="188" width="92" height="52" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="210" y="210"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">d0</text>
     <text x="210" y="228"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10.5">ordinary · OLD</text>
-
     <rect x="264" y="188" width="92" height="52" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="310" y="210"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">d1</text>
     <text x="310" y="228"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10.5">ordinary · OLD</text>
-
     <rect x="474" y="188" width="92" height="52" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="520" y="210"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">d2</text>
     <text x="520" y="228"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10.5">drain · OLD eval</text>
-
     <rect x="574" y="188" width="92" height="52" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="620" y="210"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">d3</text>
     <text x="620" y="228"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10.5">drain · OLD eval</text>
-
     <rect x="764" y="188" width="92" height="52" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="810" y="210"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">d4</text>
     <text x="810" y="228"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10.5">first · CANDIDATE</text>
   </g>
-
   <path d="M 420 282 V 290 H 710 V 282"
-        fill="none" stroke="#a8b3bf" stroke-width="1.2" />
+        fill="none" stroke="var(--fig-panel-line)" stroke-width="1.2" />
   <text x="565" y="272" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">ordered cutover; acknowledgement last</text>
   <text x="565" y="326" text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">non-transactional · no rollback</text>

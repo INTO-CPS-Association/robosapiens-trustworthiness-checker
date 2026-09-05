@@ -1,35 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 345" role="img" aria-labelledby="graph-arrow-title graph-arrow-desc" style="width:100%;max-width:960px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 345" role="img" aria-labelledby="graph-arrow-title graph-arrow-desc" style="width:100%;max-width:960px;height:auto;background:var(--fig-bg);border:1px solid var(--fig-edge);border-radius:6px">
 <title id="graph-arrow-title">Bound evaluation graph with recursive fallback</title>
 <desc id="graph-arrow-desc">The total EvaluationGraph reads a RecursiveDelay and uses Const zero as Default's fallback, adds scaled from an EnvironmentSlot, and returns the Add node. The completed output is staged for the recursive delay and committed after the row.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
 <defs>
   <marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-    <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b"/>
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/>
   </marker>
 </defs>
-<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#17212b">Bound EvaluationGraph for total</text>
-<rect x="45" y="65" width="210" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="150" y="94" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">RecursiveDelay { 1 }</text>
-<text x="150" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">retained previous total</text>
-<rect x="45" y="145" width="210" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="150" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Const(0)</text>
-<text x="150" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">fallback before history exists</text>
-<rect x="325" y="105" width="170" height="62" rx="5" fill="#fff1e6" stroke="#b54708" stroke-width="1.5"/>
-<text x="410" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Default</text>
-<text x="410" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">node 0 or Const(0)</text>
-<rect x="325" y="205" width="170" height="62" rx="5" fill="#e6f5f0" stroke="#147d64" stroke-width="1.5"/>
-<text x="410" y="234" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">External(slot 1)</text>
-<text x="410" y="252" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">scaled from EnvironmentSlot</text>
-<rect x="565" y="155" width="135" height="62" rx="5" fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5"/>
-<text x="632" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">Add</text>
-<text x="632" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">node 2</text>
-<rect x="770" y="155" width="135" height="62" rx="5" fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5"/>
-<text x="837" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="#17212b">output</text>
-<text x="837" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">DataRef::Node</text>
-<line x1="255" y1="96" x2="325" y2="126" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
-<line x1="255" y1="176" x2="325" y2="146" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
-<line x1="495" y1="136" x2="565" y2="176" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
-<line x1="495" y1="236" x2="565" y2="196" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
-<line x1="700" y1="186" x2="770" y2="186" stroke="#65758b" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
-<path d="M 837 155 L 837 48 L 150 48 L 150 65" fill="none" stroke="#b54708" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#graph-arrow)"/>
-<text x="500" y="322" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="#52606d">post-output: stage RecursiveDelay, then commit after the completed row</text>
+<text x="24" y="27" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="var(--fig-ink)">Bound EvaluationGraph for total</text>
+<rect x="45" y="65" width="210" height="62" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+<text x="150" y="94" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">RecursiveDelay { 1 }</text>
+<text x="150" y="112" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">retained previous total</text>
+<rect x="45" y="145" width="210" height="62" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="150" y="174" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">Const(0)</text>
+<text x="150" y="192" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">fallback before history exists</text>
+<rect x="325" y="105" width="170" height="62" rx="5" fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5"/>
+<text x="410" y="134" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">Default</text>
+<text x="410" y="152" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">node 0 or Const(0)</text>
+<rect x="325" y="205" width="170" height="62" rx="5" fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5"/>
+<text x="410" y="234" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">External(slot 1)</text>
+<text x="410" y="252" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">scaled from EnvironmentSlot</text>
+<rect x="565" y="155" width="135" height="62" rx="5" fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5"/>
+<text x="632" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">Add</text>
+<text x="632" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">node 2</text>
+<rect x="770" y="155" width="135" height="62" rx="5" fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5"/>
+<text x="837" y="184" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="600" fill="var(--fig-ink)">output</text>
+<text x="837" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">DataRef::Node</text>
+<line x1="255" y1="96" x2="325" y2="126" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="255" y1="176" x2="325" y2="146" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="495" y1="136" x2="565" y2="176" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="495" y1="236" x2="565" y2="196" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<line x1="700" y1="186" x2="770" y2="186" stroke="var(--fig-line)" stroke-width="1.8" marker-end="url(#graph-arrow)"/>
+<path d="M 837 155 L 837 48 L 150 48 L 150 65" fill="none" stroke="var(--fig-orange-line)" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#graph-arrow)"/>
+<text x="500" y="322" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="400" fill="var(--fig-ink-2)">post-output: stage RecursiveDelay, then commit after the completed row</text>
 </svg>

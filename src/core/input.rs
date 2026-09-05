@@ -831,7 +831,9 @@ impl<V> ExactSizeIterator for OwnedInputTicks<V> {}
 
 /// Ordinary runtimes receive data only. Reconfiguration is available through
 /// the private `io::reconfigurable_input` adapter instead.
+// ANCHOR: input_stream_alias
 pub type InputStream<V> = OutputStream<anyhow::Result<InputBatch<V>>>;
+// ANCHOR_END: input_stream_alias
 pub(crate) type InputTickStream<V> = OutputStream<anyhow::Result<Vec<InputUpdate<V>>>>;
 
 pub fn empty_input_stream<V: 'static>() -> InputStream<V> {

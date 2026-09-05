@@ -62,11 +62,19 @@ jobs:
           cargo install mdbook --version 0.4.52 --locked
           cargo install mdbook-mermaid --version 0.16.2 --locked
           mdbook-mermaid install docs
+          # The installer writes a stock initialiser that themes diagrams with Mermaid's
+          # own light/dark palettes and reloads the page on a theme switch. Replace it
+          # with the tracked one, which reads the figure palette instead.
+          cp docs/theme/mermaid-theme.js docs/mermaid-init.js
 
       - name: Build documentation
         run: |
           cd docs
           mdbook build
+
+      # A mis-embedded figure still builds a page, so gate the deployment on it.
+      - name: Validate documentation figures
+        run: python3 scripts/validate_docs.py --book
 
       - name: Prepare GitHub Pages site
         run: |

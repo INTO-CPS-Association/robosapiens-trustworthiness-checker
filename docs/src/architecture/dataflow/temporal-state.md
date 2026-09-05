@@ -2,7 +2,7 @@
 
 Historical reads observe samples committed by earlier successful ticks. Current computation and historical visibility are separated by staging and one post-row temporal commit, but the storage owner depends on where the delay was bound.
 
-![Top-level external delays use monitor history while internal and recursive delays retain evaluator-local rings](../../assets/dataflow/history-retention.svg)
+{{#include ../../assets/dataflow/history-retention.svg}}
 
 **Reading rule.** Each panel reads state committed through tick `n-1`. A direct top-level delay of an external environment variable reads the monitor's `HistoryStore`; internal, runtime-defined, and recursive delays read evaluator-local `DelayState` rings. Dashed paths stage or record successful row-`n` samples at the common commit, making them visible at tick `n+1`. An unfilled positive delay yields `Value::Deferred`.
 
@@ -20,7 +20,9 @@ For `total = default(total[1], 0) + scaled`, `total[1]` is a `RecursiveDelay` be
 
 The bound graph makes the recursive representation and its post-output staging path explicit:
 
-![The recursive delay participates in the forward graph while its new sample follows a post-output staging path](../../assets/dataflow/evaluation-graph.svg)
+{{#include ../../assets/dataflow/evaluation-graph.svg}}
+
+**Reading rule.** [Compilation](compilation.md) reads this figure for how binding places operations; read it here for the dashed path only. The recursive delay is consumed during the forward pass, but the value it will return next tick is not written when its node runs — it is staged, and becomes historical at the commit after the whole row. That gap between the solid and dashed paths is the temporal boundary this page is about.
 
 ## Delay state ownership
 
@@ -28,11 +30,17 @@ Monitor history is bounded per outer environment variable according to effective
 
 Local `DelayState` belongs to the evaluator occurrence that implements the delay. Function call sites, recursive frames, and nested dynamic evaluators therefore have distinct temporal lifetimes even when they share immutable `StreamProgram` text. Positive offset determines local ring capacity.
 
-New local state starts without samples unless compatible evaluator state is explicitly transferred. It returns `Value::Deferred` until enough successful activation-local samples have committed. A changed `dynamic` body can receive compatible state only from the immediately previous active evaluator; returning to an older source string does not revive archived state.
+New local state starts without samples unless compatible evaluator state is explicitly transferred, and returns `Value::Deferred` until enough activation-local samples have committed. Which replacements can donate that state is a property of the activation, not of history: see [dynamic properties](dynamic-properties.md#dynamic-activation-lifetime).
 
 ## Retained environment is not history
 
 Reconfigurable evaluation also carries a retained sparse environment used to lift outer values needed by nested expressions. That row may retain `Value::Deferred` or the last available outer value, but it is neither `HistoryStore` nor a `DelayState` ring and does not backfill newly activated temporal operators.
+
+## Which tier executes a delay
+
+Everything above is canonical semantics, and it holds whichever tier runs the row. A delay is an ordinary scalar instruction, so a quickened region executes it over registers while its ring stays here, in the canonical arena. A native whole-schedule kernel can go further and commit the plan's temporal state itself, which makes it the one case where retention is owned outside this page's model until it is materialized back.
+
+Neither changes when a value becomes historical: the commit is still the post-row barrier described above. [Fusion and the scalar IR](fusion.md) motivates the second representation, [fusion and regions](fusion.md#which-tier-can-run-a-fused-temporal-operation) says which tier can run a fused temporal operation, and [execution tiers](execution-tiers.md#whole-schedule-kernels) covers the kernels and how their state comes back.
 
 ## Failure and replacement
 

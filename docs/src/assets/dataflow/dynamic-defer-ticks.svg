@@ -1,11 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 920 380"
-     role="img"
-     aria-labelledby="dynamic-defer-ticks-title dynamic-defer-ticks-desc"
-     style="width:100%; max-width:920px; height:auto; background:#ffffff;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 380" role="img" aria-labelledby="dynamic-defer-ticks-title dynamic-defer-ticks-desc" style="width:100%; max-width:920px; height:auto; background:var(--fig-bg);">
   <title id="dynamic-defer-ticks-title">Dynamic replaces bodies; defer retains the first</title>
   <desc id="dynamic-defer-ticks-desc">Read left to right at logical ticks 10 through 13. The source row is x plus 1 at ticks 10 and 11, x times 2 at tick 12, and x plus 1 again at tick 13. In the dynamic row, evaluator A is active for ticks 10 and 11, evaluator B begins exactly at tick 12, and new evaluator C begins exactly at tick 13; returning to x plus 1 creates C and never revives A. In the defer row, evaluator A begins at tick 10 and spans all later ticks while later source values are ignored for replacement. Thin spans show activation lifetimes and compact cells show source updates. A replacement can transfer compatible state only from its immediate predecessor; otherwise it starts cold.</desc>
-
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="dynamic-defer-ticks-arrow"
             markerWidth="7"
@@ -15,31 +45,27 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
-  <rect x="0" y="0" width="920" height="380" fill="#ffffff" />
+  <rect x="0" y="0" width="920" height="380" fill="var(--fig-bg)" />
   <rect x="0.75" y="0.75" width="918.5" height="378.5" rx="6"
-        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="28" y="32"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700">Dynamic replaces bodies; defer retains the first</text>
-
   <line x1="220" y1="300" x2="830" y2="300"
         fill="none"
-        stroke="#65758b"
+        stroke="var(--fig-line)"
         stroke-width="1.5"
         marker-end="url(#dynamic-defer-ticks-arrow)" />
   <text x="842" y="305"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">logical time</text>
-
-  <g fill="#52606d"
+  <g fill="var(--fig-ink-2)"
      font-family="system-ui, sans-serif"
      font-size="11"
      text-anchor="middle">
@@ -48,54 +74,46 @@
     <text x="540" y="58">tick 12</text>
     <text x="670" y="58">tick 13</text>
   </g>
-
-  <g stroke="#65758b" stroke-width="1.5">
+  <g stroke="var(--fig-line)" stroke-width="1.5">
     <line x1="280" y1="294" x2="280" y2="306" />
     <line x1="410" y1="294" x2="410" y2="306" />
     <line x1="540" y1="294" x2="540" y2="306" />
     <line x1="670" y1="294" x2="670" y2="306" />
   </g>
-
   <text x="28" y="105"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">source p</text>
-
   <g font-family="ui-monospace, monospace"
      font-size="12"
      font-weight="600"
-     fill="#17212b"
+     fill="var(--fig-ink)"
      text-anchor="middle">
     <rect x="232" y="78" width="96" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="280" y="105">&quot;x + 1&quot;</text>
-
     <rect x="362" y="78" width="96" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="410" y="105">&quot;x + 1&quot;</text>
-
     <rect x="492" y="78" width="96" height="44" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="540" y="105">&quot;x * 2&quot;</text>
-
     <rect x="622" y="78" width="96" height="44" rx="5"
-          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+          fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5" />
     <text x="670" y="105">&quot;x + 1&quot;</text>
   </g>
-
   <text x="28" y="190"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600">dynamic(p)</text>
-
   <g fill="none" stroke-width="3">
-    <line x1="280" y1="183" x2="540" y2="183" stroke="#147d64" />
-    <line x1="540" y1="183" x2="670" y2="183" stroke="#b54708" />
-    <line x1="670" y1="183" x2="790" y2="183" stroke="#8055a3" />
+    <line x1="280" y1="183" x2="540" y2="183" stroke="var(--fig-green-line)" />
+    <line x1="540" y1="183" x2="670" y2="183" stroke="var(--fig-orange-line)" />
+    <line x1="670" y1="183" x2="790" y2="183" stroke="var(--fig-purple-line)" />
   </g>
-  <g fill="#17212b"
+  <g fill="var(--fig-ink)"
      font-family="ui-monospace, monospace"
      font-size="11"
      font-weight="600"
@@ -105,29 +123,27 @@
     <text x="730" y="171">C · t13</text>
   </g>
   <text x="535" y="209"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5"
         text-anchor="middle">returning source text creates C; A is not revived</text>
-
   <text x="28" y="246"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600">defer(p)</text>
-
   <line x1="280" y1="238" x2="790" y2="238"
         fill="none"
-        stroke="#147d64"
+        stroke="var(--fig-green-line)"
         stroke-width="3" />
   <text x="535" y="227"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="11"
         font-weight="600"
         text-anchor="middle">A · sealed at t10</text>
   <text x="535" y="263"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5"
         text-anchor="middle">later source values ignored</text>

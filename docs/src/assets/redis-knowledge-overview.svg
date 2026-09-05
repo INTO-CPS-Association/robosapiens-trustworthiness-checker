@@ -1,18 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 280" role="img" aria-labelledby="title desc">
-  <title id="title">Redis event and knowledge inputs</title>
-  <desc id="desc">A MAPLE-K phase event enters the Trustworthiness Checker through a Redis Pub/Sub channel, while current Knowledge state enters through a selected Redis key.</desc>
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 280" role="img" aria-labelledby="redis-overview-title redis-overview-desc">
+  <title id="redis-overview-title">Redis event and knowledge inputs</title>
+  <desc id="redis-overview-desc">A MAPLE-K phase event enters the Trustworthiness Checker through a Redis Pub/Sub channel, while current Knowledge state enters through a selected Redis key.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#4b5563"/>
+    <marker id="redis-overview-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--fig-ink-2)"/>
     </marker>
     <style>
-      .source { fill: #eef6ff; stroke: #3478b8; }
-      .redis { fill: #fff5e8; stroke: #bc6b16; }
-      .checker { fill: #f1ecff; stroke: #7254b3; }
+      .source { fill: var(--fig-source); stroke: var(--fig-source-line); }
+      .redis { fill: var(--fig-redis); stroke: var(--fig-redis-line); }
+      .checker { fill: var(--fig-checker); stroke: var(--fig-checker-line); }
       .box { stroke-width: 2; rx: 10; }
-      .line { fill: none; stroke: #4b5563; stroke-width: 2.5; marker-end: url(#arrow); }
-      .label { fill: #1f2937; font: 17px sans-serif; text-anchor: middle; dominant-baseline: middle; }
-      .small { fill: #374151; font: 14px sans-serif; text-anchor: middle; }
+      .line { fill: none; stroke: var(--fig-ink-2); stroke-width: 2.5; marker-end: url(#redis-overview-arrow); }
+      .label { fill: var(--fig-ink); font: 17px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .small { fill: var(--fig-ink); font: 14px sans-serif; text-anchor: middle; }
     </style>
   </defs>
   <rect class="box source" x="30" y="35" width="230" height="72"/>

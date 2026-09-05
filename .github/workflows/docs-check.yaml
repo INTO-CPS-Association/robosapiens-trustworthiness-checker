@@ -1,0 +1,60 @@
+name: Documentation checks
+
+# The figure embedding rules this validates are invisible to `mdbook build`: a
+# broken figure still produces a page, so only an explicit check catches it
+# before it reaches Pages.
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "scripts/validate_docs.py"
+      - "scripts/test_validate_docs.py"
+      - ".github/workflows/docs-check.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/**"
+      - "scripts/validate_docs.py"
+      - "scripts/test_validate_docs.py"
+      - ".github/workflows/docs-check.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  figures:
+    name: figure embedding
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The source checks need no toolchain, so run them before paying for one.
+      - name: Validate figure sources
+        run: |
+          python3 scripts/test_validate_docs.py
+          python3 scripts/validate_docs.py
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install mdBook tooling
+        run: |
+          cargo install mdbook --version 0.4.52 --locked
+          cargo install mdbook-mermaid --version 0.16.2 --locked
+          mdbook-mermaid install docs
+          # The installer writes a stock initialiser that themes diagrams with Mermaid's
+          # own light/dark palettes and reloads the page on a theme switch. Replace it
+          # with the tracked one, which reads the figure palette instead.
+          cp docs/theme/mermaid-theme.js docs/mermaid-init.js
+
+      - name: Build documentation
+        run: cd docs && mdbook build
+
+      - name: Validate rendered figures
+        run: python3 scripts/validate_docs.py --book

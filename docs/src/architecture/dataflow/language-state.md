@@ -8,17 +8,19 @@ Ordinary operators lift over `NoVal` and `Deferred` according to their semantics
 
 ## Conditional timelines
 
-![Ordinary and recursive conditionals advance branch state under different evaluation rules](../../assets/dataflow/lazy-if.svg)
+{{#include ../../assets/dataflow/lazy-if.svg}}
 
 **Reading rule.** Ordinary conditionals advance both persistent branch evaluators before selecting a result. In recursive call context, the condition first applies retained lifting state: a `Value::NoVal` after an earlier Boolean can reuse that Boolean and advance only its selected branch. `Value::Deferred`, or an effective `Value::NoVal` with no retained Boolean, advances neither branch. Runtime-defined expressions are rejected inside lazy recursive branches.
 
 This difference is part of language semantics, not an optimization. Branch-local delays and calls therefore have timelines determined by the applicable conditional form.
 
+For `if condition then x + 1 else y + 2`, both sums advance even when only one is selected. After retention, an uninitialized `NoVal` branch makes the result `NoVal`; an unselected `Deferred` branch does not make the selected concrete result deferred. Recursive conditionals retain their lazy canonical execution policy. These rules are distinct from strict binary propagation, where `NoVal` takes precedence over `Deferred` after retaining each operand.
+
 ## Function binding
 
 A function definition separates immutable body meaning from invocation state. Binding resolves captures to outer environment slots, places captures before parameters in a local layout, and packages the bound body as a shared `StreamProgram`.
 
-![Function binding maps outer captures into a function-local environment before packaging the body](../../assets/dataflow/function-binding.svg)
+{{#include ../../assets/dataflow/function-binding.svg}}
 
 **Reading rule.** Capture mapping and local slot order are immutable. Mutable body state is created by the evaluator that invokes the shared program.
 
@@ -28,7 +30,7 @@ A persistent call site retains one callable evaluator while the active function 
 
 Recursive calls cannot share one mutable evaluator across active depths. They use a frame pool: each active depth acquires a frame with its own local row and evaluator state, resets it for that invocation, evaluates, and returns the frame to the pool as recursion unwinds.
 
-![Persistent calls retain call-site state while recursive calls allocate separate active frames](../../assets/dataflow/function-call.svg)
+{{#include ../../assets/dataflow/function-call.svg}}
 
 **Reading rule.** The upper timeline follows one persistent call site across ticks. The lower layout separates simultaneously active recursion depths; returning a frame makes it reusable but does not merge states between depths.
 
@@ -44,4 +46,4 @@ Nested expression replacement applies the same principle within an active dynami
 
 ## Implementation mapping
 
-The implementation mapping is concentrated in `src/dataflow/execution/evaluator_state.rs`, `src/dataflow/execution/functions.rs`, `src/dataflow/execution/interpreter.rs`, and evaluator tests.
+The implementation mapping is concentrated in `src/dataflow/execution/evaluator_state.rs`, `src/dataflow/execution/functions.rs`, `src/dataflow/execution/node_evaluation.rs`, and evaluator tests.

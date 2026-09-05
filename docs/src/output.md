@@ -121,34 +121,7 @@ Resolution opens no backend. Opening validates the resolved structure again, the
 This example makes the planning, ownership, and completion boundaries explicit with a local null destination:
 
 ```rust
-use trustworthiness_checker::{OutputBatch, Value, VarName};
-use trustworthiness_checker::io::output::{
-    OutputBackendConfig, OutputDestination, OutputPipeline,
-};
-
-fn main() -> anyhow::Result<()> {
-    smol::block_on(async {
-        let destination = OutputDestination::<Value>::new(
-            "local-null",
-            OutputBackendConfig::null(),
-        );
-        let pipeline = OutputPipeline::from_destination(destination)?;
-
-        let resolved = pipeline.resolve(
-            [VarName::new("alert"), VarName::new("total"), VarName::new("scaled")],
-            std::iter::empty::<VarName>(),
-            None,
-        )?;
-        let mut writer = pipeline.open(resolved).await?;
-
-        writer
-            .send(OutputBatch::update("total", Value::Int(8)))
-            .await?;
-        writer.flush().await?;
-        writer.close().await?;
-        Ok(())
-    })
-}
+{{#include ../../tests/docs_examples.rs:output_pipeline_open}}
 ```
 
 `resolve` is resource-free; `open` creates the destination owner. `send` admits the complete batch under the writer's readiness contract, while `flush` is the downstream completion barrier. Even that barrier states completion only at the opened backend's contract and does not imply remote persistence for a transport-backed destination.
@@ -180,7 +153,7 @@ flowchart TB
 
 Selection preserves logical tick boundaries; ticks containing no selected values disappear from that destination's batch:
 
-![Destination selection projects one output tick sequence without merging surviving ticks](assets/output-routing-ticks.svg)
+{{#include assets/output-routing-ticks.svg}}
 
 **Reading rule.** Columns retain the original `OutputBatch` tick positions. A destination receives only nonempty projections, so its local sequence can omit an original tick, but values from separate original ticks never become simultaneous. The two destination lanes are independent delivery sequences, not an atomic cross-destination commit.
 
@@ -258,7 +231,7 @@ A reconfigurable `DataflowRuntime` keeps a fixed registry of opened destination 
 
 Application first flushes affected owners, or the shared writer when shared stages require a global barrier. It then updates supported `OutputInterface` handles and the router's selected variables. There is no hidden close-and-reopen fallback for a backend that cannot update its interface.
 
-Updates are sequential rather than transactional. If a later destination fails, an earlier destination update can remain applied. This partial-application boundary is part of the [root reconfiguration lifecycle](architecture/dataflow/reconfigurable-runtime.md).
+Updates are sequential rather than transactional. If a later destination fails, an earlier destination update can remain applied. This partial-application boundary is part of the [root cutover](architecture/dataflow/reconfigurable-runtime.md).
 
 ## Implementation mapping
 

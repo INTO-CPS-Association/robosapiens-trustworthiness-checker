@@ -92,7 +92,9 @@ body.mermaid-fullscreen-open {
 }
 
 .mermaid-fullscreen-frame:fullscreen pre.mermaid,
-.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid {
+.mermaid-fullscreen-frame:fullscreen svg.tc-figure,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback svg.tc-figure {
     display: flex;
     flex: 1 1 auto;
     align-items: center;
@@ -106,12 +108,17 @@ body.mermaid-fullscreen-open {
     user-select: none;
 }
 
-.mermaid-fullscreen-frame.mermaid-is-panning pre.mermaid {
+.mermaid-fullscreen-frame.mermaid-is-panning pre.mermaid,
+.mermaid-fullscreen-frame.mermaid-is-panning svg.tc-figure {
     cursor: grabbing;
 }
 
+/* An inlined figure is itself the <svg>, so it is sized by the rule above; only the Mermaid
+ * case needs its child targeted. Both need max-width cleared, which the figure sets inline. */
 .mermaid-fullscreen-frame:fullscreen pre.mermaid svg,
-.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid svg {
+.mermaid-fullscreen-frame:fullscreen svg.tc-figure,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback pre.mermaid svg,
+.mermaid-fullscreen-frame.mermaid-fullscreen-fallback svg.tc-figure {
     width: 100% !important;
     height: 100% !important;
     max-width: none !important;

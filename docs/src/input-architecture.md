@@ -98,13 +98,7 @@ An `InputUpdate<V>` is one variable/value pair. A logical tick is one or more up
 For example, one batch can carry two model steps without making the second step part of the first:
 
 ```rust
-let batch = InputBatch::from_ticks(vec![
-    vec![InputUpdate::new("x".into(), 1)],
-    vec![
-        InputUpdate::new("x".into(), 2),
-        InputUpdate::new("y".into(), 3),
-    ],
-])?;
+{{#include ../../tests/docs_examples.rs:input_batch_from_ticks}}
 ```
 
 | Logical unit | Updates | Runtime meaning |
@@ -116,7 +110,7 @@ let batch = InputBatch::from_ticks(vec![
 The public stream is data-only:
 
 ```rust
-pub type InputStream<V> = OutputStream<anyhow::Result<InputBatch<V>>>;
+{{#include ../../src/core/input.rs:input_stream_alias}}
 ```
 
 A batch boundary is therefore a delivery boundary, not an additional synchronization event. Consumers may expand a batch through `ticks()` or `into_ticks()`, but they must preserve the distinction between the two ticks in the example.
@@ -145,30 +139,7 @@ Resolution does not parse a file, create a subscription, connect a socket, or sp
 The following example uses the in-memory tick adapter to exercise that complete public boundary without an external transport:
 
 ```rust
-use std::collections::BTreeSet;
-
-use futures::StreamExt;
-use trustworthiness_checker::{InputBatch, Value, VarName};
-use trustworthiness_checker::io::{InputPipeline, InputSource};
-
-fn main() -> anyhow::Result<()> {
-    smol::block_on(async {
-        let source = InputSource::in_memory_ticks([
-            InputBatch::update("x", Value::Int(4)),
-            InputBatch::update("x", Value::Int(8)),
-        ]);
-        let pipeline = InputPipeline::new(source);
-        let mut input = pipeline
-            .build(BTreeSet::from([VarName::new("x")]))
-            .await?;
-
-        let first = input.next().await.expect("first configured batch")?;
-        let second = input.next().await.expect("second configured batch")?;
-        assert_eq!((first.tick_count(), second.tick_count()), (1, 1));
-        assert!(input.next().await.is_none());
-        Ok(())
-    })
-}
+{{#include ../../tests/docs_examples.rs:input_pipeline_build}}
 ```
 
 `InputSource` remains reusable and unopened until `build`; the returned `InputStream` contains the two original logical ticks. Internally, `build` performs resource-free resolution before opening, but `InputPipeline::resolve` and `InputPipeline::open` are crate-private phases rather than separate public calls.
@@ -192,10 +163,7 @@ A source can be selected for a multi-source resolution without implying a global
 The ordinary type cannot carry a control frame. Reconfigurable runtimes instead consume this crate-private boundary:
 
 ```rust
-pub(crate) enum ReconfigurableInputItem<V> {
-    Data(InputBatch<V>),
-    Reconfigure(ReconfigurationRequest),
-}
+{{#include ../../src/io/reconfigurable_input.rs:reconfigurable_input_item}}
 ```
 
 `ReconfigurableInput::new` validates the selected control source and stores a `ReconfigurationControl` containing its source ID and route. MQTT, Redis, ROS, and a manual source with a control fanout are control-capable. File, in-memory row/tick, and Redis knowledge sources are not. With multiple configured sources, the control source is the one source that declares `reconfiguration_route`; with one configured source, that source must support control. A control-only source can therefore be separate from the sources that own model variables.
@@ -259,7 +227,7 @@ sequenceDiagram
 
 **Reading rule.** Solid arrows are pull calls or local state changes; dashed arrows are yielded stream items or terminal outcomes. The optional second pull shows that pending data and the following control, error, or EOF are separate downstream items. A maximum-delay expiry can produce the same pending-data yield without a source item. Lifeline order does not establish an order between independent backend producers.
 
-![The same incoming input window is either physically batched without changing its ticks or explicitly reduced to one simultaneous tick](assets/input-window-ticks.svg)
+{{#include assets/input-window-ticks.svg}}
 
 **Reading rule.** Left-to-right position is logical tick order, while values aligned inside one box are simultaneous. `InputStage::Batch` changes the physical delivery unit but preserves both incoming ticks. `WindowToStep` with `LastUpdateWins` deliberately creates one new simultaneous tick, retaining `y = 2` and replacing the earlier `x = 1` with `x = 3`.
 
@@ -302,7 +270,7 @@ A failure while resolving bindings occurs before source acquisition. A failure w
 
 The input relay's local prefetch is bounded by one queued item plus one item held by its relay task. An update limit can be exceeded by one indivisible logical tick, and neither bound implies a distributed ordering guarantee. Dropping a live session cancels its source tasks. Already admitted items are drained only when the explicit removal path retains their relays as a `RemovedInputDrain`.
 
-The input/output session and cutover details continue in [persistent I/O sessions](architecture/dataflow/runtime-io.md) and [root cutover](architecture/dataflow/reconfigurable-runtime.md). The downstream logical consumer is described in the [dataflow execution model](architecture/dataflow/model.md), and the broader replacement distinction is in [reconfiguration architecture](reconfiguration.md).
+The input/output session and cutover details continue in [input and output sessions](architecture/dataflow/runtime-io.md) and [root cutover](architecture/dataflow/reconfigurable-runtime.md). The downstream logical consumer is described in the [dataflow execution model](architecture/dataflow/model.md), and the broader replacement distinction is in [reconfiguration architecture](reconfiguration.md).
 
 ## Implementation mapping
 

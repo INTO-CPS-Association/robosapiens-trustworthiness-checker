@@ -1,11 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 1040 420"
-     role="img"
-     aria-labelledby="context-transfer-ticks-title context-transfer-ticks-desc"
-     style="width:100%;max-width:1040px;height:auto;background:#ffffff;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 420" role="img" aria-labelledby="context-transfer-ticks-title context-transfer-ticks-desc" style="width:100%;max-width:1040px;height:auto;background:var(--fig-bg);">
   <title id="context-transfer-ticks-title">Context transfer moves compatible state, not the current row</title>
   <desc id="context-transfer-ticks-desc">Read left to right on one shared time baseline. Old ticks n−1 and n precede a physical replacement interval with no ordinary logical tick, followed by the first target tick n+1. A compatible Evaluator(total) plus DelayState moves destructively to the target. The donor history cells older, 8, and 24 yield only the target-required suffix 8 and 24; the older value is not taken. An unmapped target owner starts cold. The completed old current row is not transferred, and the target row is cleared before its first evaluation. Dashed vertical guides bound the replacement interval and do not denote logical ticks; the single solid arrow marks destructive owner movement.</desc>
-
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: var(--fig-bg); --fig-edge: var(--fig-edge);
+      --fig-ink: var(--fig-ink); --fig-ink-2: var(--fig-ink-2); --fig-line: var(--fig-line);
+      --fig-panel: var(--fig-panel); --fig-panel-line: var(--fig-panel-line);
+      --fig-blue: var(--fig-blue); --fig-blue-line: var(--fig-blue-line);
+      --fig-green: var(--fig-green); --fig-green-line: var(--fig-green-line);
+      --fig-orange: var(--fig-orange); --fig-orange-line: var(--fig-orange-line);
+      --fig-purple: var(--fig-purple); --fig-purple-line: var(--fig-purple-line);
+      --fig-source: var(--fig-source); --fig-source-line: var(--fig-source-line);
+      --fig-redis: var(--fig-redis); --fig-redis-line: var(--fig-redis-line);
+      --fig-checker: var(--fig-checker); --fig-checker-line: var(--fig-checker-line);
+      --fig-knowledge: var(--fig-knowledge); --fig-knowledge-line: var(--fig-knowledge-line);
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26; --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0; --fig-ink-2: #a2acbd; --fig-line: #8492a6;
+        --fig-panel: #1e2432; --fig-panel-line: #3d465c;
+        --fig-blue: #16283d; --fig-blue-line: #6aa9e0;
+        --fig-green: #123029; --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f; --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33; --fig-purple-line: #b18fd4;
+        --fig-source: #14283c; --fig-source-line: #6fa8db;
+        --fig-redis: #33260f; --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34; --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c; --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="context-transfer-ticks-arrow"
             markerWidth="7"
@@ -15,242 +45,221 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="1038.5" height="418.5"
-        rx="6" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="30"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700">Context transfer moves compatible state, not the current row</text>
-
   <g fill="none" stroke-linecap="round">
     <line x1="205" y1="63" x2="455" y2="63"
-          stroke="#2563a6" stroke-width="3" />
+          stroke="var(--fig-blue-line)" stroke-width="3" />
     <line x1="725" y1="63" x2="920" y2="63"
-          stroke="#147d64" stroke-width="3" />
+          stroke="var(--fig-green-line)" stroke-width="3" />
   </g>
   <text x="330" y="52" text-anchor="middle"
-        fill="#2563a6"
+        fill="var(--fig-blue-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">OLD monitor state</text>
   <text x="590" y="52" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">replacement interval</text>
   <text x="590" y="69" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">no ordinary logical tick</text>
   <text x="822" y="52" text-anchor="middle"
-        fill="#147d64"
+        fill="var(--fig-green-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">TARGET monitor state</text>
-
-  <g fill="none" stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4">
+  <g fill="none" stroke="var(--fig-purple-line)" stroke-width="1.3" stroke-dasharray="6 4">
     <line x1="520" y1="40" x2="520" y2="397" />
     <line x1="660" y1="40" x2="660" y2="397" />
   </g>
-
-  <g fill="#52606d" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle">
+  <g fill="var(--fig-ink-2)" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle">
     <text x="260" y="84">old tick n−1</text>
     <text x="390" y="84">old tick n</text>
     <text x="850" y="84">first target tick n+1</text>
   </g>
-
   <line x1="175" y1="96" x2="940" y2="96"
-        stroke="#65758b" stroke-width="1.5"
+        stroke="var(--fig-line)" stroke-width="1.5"
         marker-end="url(#context-transfer-ticks-arrow)" />
   <text x="950" y="101"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">time</text>
-
-  <g stroke="#65758b" stroke-width="1.2">
+  <g stroke="var(--fig-line)" stroke-width="1.2">
     <line x1="260" y1="90" x2="260" y2="102" />
     <line x1="390" y1="90" x2="390" y2="102" />
     <line x1="850" y1="90" x2="850" y2="102" />
   </g>
-
   <text x="25" y="139"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">logical tick</text>
   <g text-anchor="middle">
     <rect x="215" y="112" width="90" height="46" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="260" y="132"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="12"
           font-weight="600">old</text>
     <text x="260" y="149"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="ui-monospace, monospace"
           font-size="11">n−1</text>
-
     <rect x="345" y="112" width="90" height="46" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="390" y="132"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="12"
           font-weight="600">old</text>
     <text x="390" y="149"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="ui-monospace, monospace"
           font-size="11">n</text>
-
     <rect x="805" y="112" width="90" height="46" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="850" y="132"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="12"
           font-weight="600">target</text>
     <text x="850" y="149"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="ui-monospace, monospace"
           font-size="11">n+1</text>
   </g>
-
   <text x="25" y="211"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">mapped owner</text>
   <rect x="255" y="176" width="270" height="58" rx="5"
-        fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+        fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
   <text x="390" y="201" text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="12.5"
         font-weight="600">Evaluator(total) + DelayState</text>
   <text x="390" y="220" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">compatible donor</text>
-
   <path d="M 525 211 H 750"
-        fill="none" stroke="#65758b" stroke-width="1.8"
+        fill="none" stroke="var(--fig-line)" stroke-width="1.8"
         marker-end="url(#context-transfer-ticks-arrow)" />
   <text x="637" y="194" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">destructive move</text>
-
   <rect x="750" y="176" width="200" height="58" rx="5"
-        fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+        fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
   <text x="850" y="201" text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="12"
         font-weight="600">same mapped owner</text>
   <text x="850" y="220" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">in target</text>
-
   <text x="25" y="291"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">monitor history</text>
   <text x="390" y="250" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">donor history</text>
   <text x="850" y="250" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">target-required suffix</text>
-
   <g text-anchor="middle">
     <rect x="288" y="257" width="68" height="54" rx="4"
-          fill="#f7f9fb" stroke="#a8b3bf" stroke-width="1.5" />
+          fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.5" />
     <text x="322" y="280"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="11.5"
           font-weight="600">older</text>
     <text x="322" y="298"
-          fill="#52606d"
+          fill="var(--fig-ink-2)"
           font-family="system-ui, sans-serif"
           font-size="10">not taken</text>
-
     <rect x="356" y="257" width="68" height="54" rx="4"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="390" y="290"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">8</text>
-
     <rect x="424" y="257" width="68" height="54" rx="4"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="458" y="290"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">24</text>
-
     <rect x="786" y="257" width="64" height="54" rx="4"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="818" y="290"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">8</text>
-
     <rect x="850" y="257" width="64" height="54" rx="4"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="882" y="290"
-          fill="#17212b"
+          fill="var(--fig-ink)"
           font-family="ui-monospace, monospace"
           font-size="13"
           font-weight="600">24</text>
   </g>
   <text x="637" y="275" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">destructive take</text>
   <text x="637" y="293" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="10.5">suffix only</text>
-
   <text x="25" y="351"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">unmapped owner</text>
   <text x="850" y="351" text-anchor="middle"
-        fill="#b54708"
+        fill="var(--fig-orange-line)"
         font-family="ui-monospace, monospace"
         font-size="12"
         font-weight="600">target owner: cold</text>
-
   <text x="25" y="394"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="13"
         font-weight="600">current row</text>
   <text x="390" y="394" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">old current row × not transferred</text>
   <text x="850" y="394" text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">target row: cleared before first eval</text>
 </svg>
