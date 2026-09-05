@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788133496374,
+  "lastUpdate": 1788624674717,
   "repoUrl": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker",
   "entries": {
     "RoboSAPIENS Criterion benchmarks": [
@@ -70077,6 +70077,804 @@ window.BENCHMARK_DATA = {
             "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
             "value": 3591083,
             "range": "± 12647",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "committer": {
+            "email": "tom.tdw@gmail.com",
+            "name": "Thomas Wright",
+            "username": "twright"
+          },
+          "distinct": false,
+          "id": "c413a5f3900064aaad9a7ff40af1a6d1c74c4bd9",
+          "message": "Update benchmark dashboard routes and direct monitor coverage",
+          "timestamp": "2026-09-05T16:32:05+02:00",
+          "tree_id": "d1a30b56f7a8f70889d1e11f0946290c741a520a",
+          "url": "https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker/commit/c413a5f3900064aaad9a7ff40af1a6d1c74c4bd9"
+        },
+        "date": 1788624674177,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "maple_sequence/maple_sequence_untyped_async/25000",
+            "value": 456725086,
+            "range": "± 2506820",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_untyped_semisync/25000",
+            "value": 157259382,
+            "range": "± 2242279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_untyped/25000",
+            "value": 32214495,
+            "range": "± 308721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow/25000",
+            "value": 32945252,
+            "range": "± 49368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_quickened/25000",
+            "value": 20830122,
+            "range": "± 19936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "maple_sequence/maple_sequence_dataflow_jit/25000",
+            "value": 20223502,
+            "range": "± 20139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50/100000",
+            "value": 595238521,
+            "range": "± 5592301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_semisync/100000",
+            "value": 219616835,
+            "range": "± 1866697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_untyped/100000",
+            "value": 48444106,
+            "range": "± 32165",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow/100000",
+            "value": 48494023,
+            "range": "± 398035",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_quickened/100000",
+            "value": 48503150,
+            "range": "± 124724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dyn_paper/dyn_paper_50_dataflow_jit/100000",
+            "value": 48488215,
+            "range": "± 99963",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_async/25000",
+            "value": 146999524,
+            "range": "± 936268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_untyped/25000",
+            "value": 7130392,
+            "range": "± 8551",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow/25000",
+            "value": 7117578,
+            "range": "± 13736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_quickened/25000",
+            "value": 7135874,
+            "range": "± 129396",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_dataflow_jit/25000",
+            "value": 7118682,
+            "range": "± 13896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dup_defer/dup_defer_untyped_semisync/25000",
+            "value": 51484474,
+            "range": "± 930017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_untyped/1024",
+            "value": 22256873,
+            "range": "± 109716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow/1024",
+            "value": 22352522,
+            "range": "± 105592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_quickened/1024",
+            "value": 22339371,
+            "range": "± 75930",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_dataflow_jit/1024",
+            "value": 22360579,
+            "range": "± 104039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/automatic_scope_semisync/1024",
+            "value": 1553061245,
+            "range": "± 10313865",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_untyped/1024",
+            "value": 29810484,
+            "range": "± 123890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow/1024",
+            "value": 29930062,
+            "range": "± 137950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_quickened/1024",
+            "value": 28549382,
+            "range": "± 90274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_dataflow_jit/1024",
+            "value": 28572378,
+            "range": "± 155048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "hard_dynamic_defer/explicit_components_semisync/1024",
+            "value": 182169355,
+            "range": "± 968005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_untyped/25000",
+            "value": 98941171,
+            "range": "± 499738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow/25000",
+            "value": 103182026,
+            "range": "± 1336775",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_quickened/25000",
+            "value": 38961959,
+            "range": "± 133945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/dataflow_jit/25000",
+            "value": 14974462,
+            "range": "± 84239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_untyped/25000",
+            "value": 1566060205,
+            "range": "± 14103412",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "arithmetic_heavy/semisync_typed/25000",
+            "value": 1523675097,
+            "range": "± 3355088",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_1/1000",
+            "value": 9393619,
+            "range": "± 1115907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_1/1000",
+            "value": 10113723,
+            "range": "± 967496",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_10/1000",
+            "value": 14922986,
+            "range": "± 1441675",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_10/1000",
+            "value": 14693517,
+            "range": "± 2829004",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_50/1000",
+            "value": 49670364,
+            "range": "± 4492044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_50/1000",
+            "value": 44824495,
+            "range": "± 5063487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_100/1000",
+            "value": 78403854,
+            "range": "± 897378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_off_percent_100/1000",
+            "value": 78274184,
+            "range": "± 5180395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_1/1000",
+            "value": 4534399,
+            "range": "± 121980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_1/1000",
+            "value": 4529808,
+            "range": "± 147919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_10/1000",
+            "value": 8316361,
+            "range": "± 26099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_10/1000",
+            "value": 8601105,
+            "range": "± 298795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_50/1000",
+            "value": 19654088,
+            "range": "± 176186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_50/1000",
+            "value": 19451464,
+            "range": "± 246478",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_100/1000",
+            "value": 26774057,
+            "range": "± 46244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_off_percent_100/1000",
+            "value": 26450934,
+            "range": "± 33569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_1/1000",
+            "value": 5524449,
+            "range": "± 644583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_1/1000",
+            "value": 4896490,
+            "range": "± 313590",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_10/1000",
+            "value": 9037353,
+            "range": "± 261610",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_10/1000",
+            "value": 8765340,
+            "range": "± 196986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_50/1000",
+            "value": 20999942,
+            "range": "± 113613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_50/1000",
+            "value": 20701749,
+            "range": "± 112879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_100/1000",
+            "value": 28569580,
+            "range": "± 101729",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_off_percent_100/1000",
+            "value": 28238462,
+            "range": "± 375500",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_1/1000",
+            "value": 4450996,
+            "range": "± 298481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_1/1000",
+            "value": 4488498,
+            "range": "± 285490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_10/1000",
+            "value": 8761745,
+            "range": "± 358620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_10/1000",
+            "value": 8609503,
+            "range": "± 355531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_50/1000",
+            "value": 20818505,
+            "range": "± 330201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_50/1000",
+            "value": 20473557,
+            "range": "± 153816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_100/1000",
+            "value": 28321384,
+            "range": "± 516942",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_off_percent_100/1000",
+            "value": 27892642,
+            "range": "± 1107570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/semisync_reconf_ct_on_percent_0/1000",
+            "value": 8220209,
+            "range": "± 1030292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_untyped_reconf_ct_on_percent_0/1000",
+            "value": 5039730,
+            "range": "± 328534",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_reconf_ct_on_percent_0/1000",
+            "value": 4987444,
+            "range": "± 146096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_quickened_reconf_ct_on_percent_0/1000",
+            "value": 4350740,
+            "range": "± 269782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rec_moving_average/dataflow_jit_reconf_ct_on_percent_0/1000",
+            "value": 4700373,
+            "range": "± 67963",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/dynamic_transitions/schedule_repair",
+            "value": 1077591,
+            "range": "± 6532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/runtime_reconfiguration/candidate_compile_and_transfer/16",
+            "value": 48837,
+            "range": "± 549",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "dataflow/runtime_reconfiguration/state_transfer_only/16",
+            "value": 2594,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parse_small_varied_inputs/parsing_lalrpop/10000",
+            "value": 11009269,
+            "range": "± 49162",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_and_validate_specification/1024",
+            "value": 2054184,
+            "range": "± 10768",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/strict_type_check/1024",
+            "value": 547058,
+            "range": "± 4903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/typed_dependency_graph/1024",
+            "value": 214615,
+            "range": "± 1122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compilation_phases/parse_typecheck_dependency_compile_typed/1024",
+            "value": 9385179,
+            "range": "± 107686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_semisync/10000",
+            "value": 14304356,
+            "range": "± 385205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_untyped/10000",
+            "value": 1152303,
+            "range": "± 4355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow/10000",
+            "value": 1238317,
+            "range": "± 1232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_quickened/10000",
+            "value": 853687,
+            "range": "± 17839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/dsrv_dataflow_jit/10000",
+            "value": 703968,
+            "range": "± 1725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_runtime_qual/10000",
+            "value": 2188816,
+            "range": "± 20659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "threshold_property/mstlo_direct_qual/10000",
+            "value": 1447994,
+            "range": "± 18890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_semisync/10000",
+            "value": 20321361,
+            "range": "± 105424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_untyped/10000",
+            "value": 3706112,
+            "range": "± 3696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow/10000",
+            "value": 3789009,
+            "range": "± 4533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_quickened/10000",
+            "value": 1838907,
+            "range": "± 2042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/dsrv_default_window_dataflow_jit/10000",
+            "value": 1131264,
+            "range": "± 19901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_globally_window_qual/10000",
+            "value": 3150122,
+            "range": "± 21881",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "time_dependent_property/mstlo_direct_globally_window_qual/10000",
+            "value": 2351423,
+            "range": "± 39975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/untyped_value",
+            "value": 20720648,
+            "range": "± 623973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/checked_canonical_value",
+            "value": 21263633,
+            "range": "± 235001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/checked_quickened_value",
+            "value": 8415859,
+            "range": "± 24673",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/native_value_eager",
+            "value": 3639094,
+            "range": "± 7350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/native_direct_eager",
+            "value": 224284,
+            "range": "± 1146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/arithmetic/native_direct_warmed",
+            "value": 255721,
+            "range": "± 3140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/untyped_value",
+            "value": 129020873,
+            "range": "± 2841509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/checked_canonical_value",
+            "value": 128699836,
+            "range": "± 741791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/checked_quickened_value",
+            "value": 31460101,
+            "range": "± 1249692",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/native_value_eager",
+            "value": 2942864,
+            "range": "± 28369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/native_direct_eager",
+            "value": 199096,
+            "range": "± 6662",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/chain32/native_direct_warmed",
+            "value": 226148,
+            "range": "± 1970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/untyped_value",
+            "value": 27759530,
+            "range": "± 76537",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/checked_canonical_value",
+            "value": 27876929,
+            "range": "± 26304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/checked_quickened_value",
+            "value": 10046628,
+            "range": "± 13982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/native_value_eager",
+            "value": 3640165,
+            "range": "± 17686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/native_direct_eager",
+            "value": 223523,
+            "range": "± 2457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/conditional/native_direct_warmed",
+            "value": 253354,
+            "range": "± 1257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/untyped_value",
+            "value": 8416539,
+            "range": "± 4408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/checked_canonical_value",
+            "value": 9278054,
+            "range": "± 15805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/checked_quickened_value",
+            "value": 5381388,
+            "range": "± 26520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/native_value_eager",
+            "value": 3058184,
+            "range": "± 37805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/native_direct_eager",
+            "value": 170162,
+            "range": "± 6058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/threshold/native_direct_warmed",
+            "value": 226373,
+            "range": "± 1691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/untyped_value",
+            "value": 39507753,
+            "range": "± 132037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/checked_canonical_value",
+            "value": 39516769,
+            "range": "± 115763",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/checked_quickened_value",
+            "value": 14875909,
+            "range": "± 42146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/native_value_eager",
+            "value": 3773535,
+            "range": "± 19011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/native_direct_eager",
+            "value": 432478,
+            "range": "± 2193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/window3/native_direct_warmed",
+            "value": 454964,
+            "range": "± 24777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/untyped_value",
+            "value": 13321140,
+            "range": "± 474852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/checked_canonical_value",
+            "value": 13963279,
+            "range": "± 66211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/checked_quickened_value",
+            "value": 8210105,
+            "range": "± 40063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/native_value_eager",
+            "value": 3563066,
+            "range": "± 22081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/native_direct_eager",
+            "value": 240344,
+            "range": "± 849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "jit/sustained/accumulator/native_direct_warmed",
+            "value": 228403,
+            "range": "± 7790",
             "unit": "ns/iter"
           }
         ]
