@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use tracing::debug;
 
 #[cfg(test)]
-use crate::lang::dsrv::ast::DynamicExprScope;
+use crate::lang::dsrv::ast::ReconfigurableExprScope;
 
 pub use super::dynamic::{defer, dynamic};
 
@@ -633,7 +633,7 @@ mod combinator_tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -647,7 +647,7 @@ mod combinator_tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -664,7 +664,7 @@ mod combinator_tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-deferred value
@@ -682,7 +682,7 @@ mod combinator_tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 10);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Evaluates to Deferred when we get Deferred
@@ -713,7 +713,7 @@ mod combinator_tests {
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1670,7 +1670,7 @@ mod noval_tests {
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -1684,7 +1684,7 @@ mod noval_tests {
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1 until we get a non-deferred value
@@ -1713,7 +1713,7 @@ mod noval_tests {
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1755,7 +1755,7 @@ mod noval_tests {
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
         let res_stream =
-            dynamic::<TestConfig>(&ctx, e, DynamicExprScope::Automatic, None, 1);
+            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

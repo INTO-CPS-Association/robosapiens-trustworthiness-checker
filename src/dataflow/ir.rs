@@ -2,7 +2,7 @@ use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
-use crate::lang::dsrv::ast::DynamicExprScope;
+use crate::lang::dsrv::ast::ReconfigurableExprScope;
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -59,12 +59,14 @@ pub(super) enum ReconfigurableExpressionScope {
 }
 
 impl ReconfigurableExpressionScope {
-    pub(super) fn from_ast(scope: DynamicExprScope) -> Self {
+    pub(super) fn from_ast(scope: ReconfigurableExprScope) -> Self {
         match scope {
-            DynamicExprScope::Automatic => Self::Automatic {
+            ReconfigurableExprScope::Automatic => Self::Automatic {
                 allowed_variables: EcoVec::new(),
             },
-            DynamicExprScope::Explicit(allowed_variables) => Self::Restricted { allowed_variables },
+            ReconfigurableExprScope::Explicit(allowed_variables) => {
+                Self::Restricted { allowed_variables }
+            }
         }
     }
 
@@ -158,14 +160,17 @@ impl<E: GraphReference> EvaluationGraph<E> {
         }
     }
 
-    pub(super) fn is_fallible(&self) -> bool {
+    pub(super) fn contains_reconfigurable_expression(&self) -> bool {
         self.nodes.iter().any(|op| match op {
-            StreamOp::Dynamic(_) => true,
+            StreamOp::Reconfigurable(_) => true,
             StreamOp::If {
                 then_branch,
                 else_branch,
                 ..
-            } => then_branch.is_fallible() || else_branch.is_fallible(),
+            } => {
+                then_branch.contains_reconfigurable_expression()
+                    || else_branch.contains_reconfigurable_expression()
+            }
             _ => false,
         })
     }
@@ -258,8 +263,8 @@ impl PartialEq for StreamProgram {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EvaluationMode {
-    Infallible,
-    Fallible,
+    Static,
+    Reconfigurable,
 }
 
 impl StreamProgram {
@@ -267,10 +272,10 @@ impl StreamProgram {
         graph: BoundEvaluationGraph,
         environment_layout: Rc<EnvironmentLayout>,
     ) -> Self {
-        let evaluation_mode = if graph.is_fallible() {
-            EvaluationMode::Fallible
+        let evaluation_mode = if graph.contains_reconfigurable_expression() {
+            EvaluationMode::Reconfigurable
         } else {
-            EvaluationMode::Infallible
+            EvaluationMode::Static
         };
         let requires_temporal_commit = graph_requires_temporal_commit(&graph);
         let descriptor = canonical_graph_descriptor(&graph, environment_layout.as_ref());
@@ -301,7 +306,7 @@ impl StreamProgram {
             .iter()
             .enumerate()
             .filter_map(|(index, op)| match op {
-                BoundOp::Dynamic(spec) => Some((NodeId::new(index), &spec.input, spec.kind)),
+                BoundOp::Reconfigurable(spec) => Some((NodeId::new(index), &spec.input, spec.kind)),
                 _ => None,
             })
     }
@@ -318,14 +323,14 @@ impl StreamProgram {
     }
 
     #[inline]
-    pub(super) fn is_infallible(&self) -> bool {
-        self.evaluation_mode == EvaluationMode::Infallible
+    pub(super) fn uses_static_evaluation(&self) -> bool {
+        self.evaluation_mode == EvaluationMode::Static
     }
 }
 
 fn graph_has_reconfigurable_expressions(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
-        BoundOp::Dynamic(_) => true,
+        BoundOp::Reconfigurable(_) => true,
         BoundOp::If {
             then_branch,
             else_branch,
@@ -343,12 +348,15 @@ fn graph_supports_early_dependency_resolution(
     source_is_available: impl Copy + Fn(&BoundRef) -> bool,
 ) -> bool {
     graph.nodes.iter().all(|op| match op {
-        BoundOp::Dynamic(spec) => source_is_available(&spec.input),
+        BoundOp::Reconfigurable(spec) => source_is_available(&spec.input),
         BoundOp::If {
             then_branch,
             else_branch,
             ..
-        } => !then_branch.is_fallible() && !else_branch.is_fallible(),
+        } => {
+            !then_branch.contains_reconfigurable_expression()
+                && !else_branch.contains_reconfigurable_expression()
+        }
         _ => true,
     })
 }
@@ -356,7 +364,9 @@ fn graph_supports_early_dependency_resolution(
 fn graph_requires_temporal_commit(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
         BoundOp::Delay { offset, .. } => *offset > 0,
-        BoundOp::RecursiveDelay { .. } | BoundOp::DirectApply { .. } | BoundOp::Dynamic(_) => true,
+        BoundOp::RecursiveDelay { .. }
+        | BoundOp::DirectApply { .. }
+        | BoundOp::Reconfigurable(_) => true,
         BoundOp::If {
             then_branch,
             else_branch,
@@ -382,13 +392,20 @@ pub(super) type UnboundEvaluationGraph = EvaluationGraph<VarName>;
 pub(super) type BoundEvaluationGraph = EvaluationGraph<EnvironmentSlot>;
 pub(super) type UnboundOp = StreamOp<VarName>;
 pub(super) type BoundOp = StreamOp<EnvironmentSlot>;
-pub(super) type UnboundDynamicExpressionSpec = DynamicExpressionSpec<VarName>;
-pub(super) type BoundDynamicExpressionSpec = DynamicExpressionSpec<EnvironmentSlot>;
+pub(super) type UnboundReconfigurableExpressionSpec = ReconfigurableExpressionSpec<VarName>;
+pub(super) type BoundReconfigurableExpressionSpec = ReconfigurableExpressionSpec<EnvironmentSlot>;
 
 /// Build a deterministic semantic descriptor for a bound graph.  References to runtime slots are
 /// rewritten to variable names; node numbers are only structural edges inside this descriptor and
 /// are never exposed as portable state identities.  The descriptor intentionally excludes schedule,
 /// plan, quickening, and native-tier data.
+///
+/// **The literal strings written below are part of the fingerprint, not just debug text.** This
+/// descriptor is hashed into [`StreamStateKey`] and [`DefinitionKey`], which decide whether a
+/// stream's state may be carried across a root reconfiguration. Editing an operator's spelling —
+/// including the `"dynamic("` and `"dynamic"`/`"defer"` mode strings — silently changes those keys,
+/// so previously matching streams stop matching and transfer cold. Rename Rust identifiers freely;
+/// leave these strings alone.
 pub(super) fn canonical_graph_descriptor(
     graph: &BoundEvaluationGraph,
     layout: &EnvironmentLayout,
@@ -622,7 +639,7 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, tuple, layout);
             descriptor.push(')');
         }
-        StreamOp::Dynamic(spec) => {
+        StreamOp::Reconfigurable(spec) => {
             descriptor.push_str("dynamic(");
             append_ref_descriptor(descriptor, &spec.input, layout);
             descriptor.push_str(",mode=");
@@ -948,7 +965,7 @@ pub(super) struct ReconfigurableExpressionTyping {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct DynamicExpressionSpec<E> {
+pub(super) struct ReconfigurableExpressionSpec<E> {
     pub(super) input: DataRef<E>,
     pub(super) scope: ReconfigurableExpressionScope,
     /// The explicit `dynamic` or `defer` occurrence that owns this nested body.
@@ -1047,7 +1064,7 @@ pub(super) enum StreamOp<E: GraphReference> {
         tuple: DataRef<E>,
         index: usize,
     },
-    Dynamic(DynamicExpressionSpec<E>),
+    Reconfigurable(ReconfigurableExpressionSpec<E>),
     Function {
         func: E::Function,
     },
@@ -1137,7 +1154,7 @@ impl<E: GraphReference> StreamOp<E> {
             | StreamOp::MHasKey { map: input, .. }
             | StreamOp::TGet { tuple: input, .. }
             | StreamOp::Fix { func: input, .. } => visit(input),
-            StreamOp::Dynamic(DynamicExpressionSpec { input, .. }) => visit(input),
+            StreamOp::Reconfigurable(ReconfigurableExpressionSpec { input, .. }) => visit(input),
             StreamOp::List(items) | StreamOp::Tuple(items) => {
                 items.into_iter().for_each(&mut visit)
             }
@@ -1181,7 +1198,7 @@ impl<E: GraphReference> StreamOp<E> {
             Self::When { .. } => Some("when"),
             Self::Update { .. } => Some("update"),
             Self::Latch { .. } => Some("latch"),
-            Self::Dynamic(_) => Some("dynamic/defer"),
+            Self::Reconfigurable(_) => Some("dynamic/defer"),
             _ => None,
         }
     }

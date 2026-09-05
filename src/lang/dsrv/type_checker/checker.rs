@@ -16,8 +16,8 @@ use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
 use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription, Value};
 use crate::lang::dsrv::ast::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr,
-    ExprFieldRefs, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView,
+    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs, ExprRef,
+    ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
 };
 
 struct TypeContext<'types> {
@@ -968,10 +968,10 @@ fn resolve_binary(
 
 fn validate_runtime_scope(
     expr: ExprRef<'_>,
-    scope: &DynamicExprScope,
+    scope: &ReconfigurableExprScope,
     context: &TypeContext<'_>,
 ) -> Result<(), SemanticError> {
-    let DynamicExprScope::Explicit(vars) = scope else {
+    let ReconfigurableExprScope::Explicit(vars) = scope else {
         return Ok(());
     };
     let mut seen = BTreeSet::new();

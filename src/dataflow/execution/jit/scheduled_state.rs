@@ -6,10 +6,8 @@
 //! steps; a schedule-wide native artifact may use a packed state layout mapped to the same stable
 //! plan slots.
 
-use crate::dataflow::execution::evaluator::EvaluationEnvironment;
 use crate::dataflow::execution::evaluator_state::{EvaluatorState, NodeState};
-use crate::dataflow::execution::quickening::ScalarValue;
-use crate::dataflow::execution::scheduled_plan::{TemporalCommit, TemporalOperation, TemporalPlan};
+use crate::dataflow::execution::scheduled_plan::{TemporalOperation, TemporalPlan};
 use crate::dataflow::history::HistoryAccess;
 use crate::dataflow::ir::{BoundRef, NodeId};
 
@@ -41,229 +39,44 @@ impl ScheduledTemporalPlan {
         state: &mut EvaluatorState,
         history_access: Option<HistoryAccess<'_>>,
     ) -> bool {
-        if let Some(history_access) = history_access {
-            for step in self.plan.operations.iter() {
-                let TemporalOperation::Delay {
-                    state: slot,
-                    input: BoundRef::External(input),
-                    offset,
-                } = step
-                else {
-                    continue;
-                };
-                let Ok(depth) = usize::try_from(*offset) else {
-                    return false;
-                };
-                let NodeState::Delay(delay) = &mut state.node_states[slot.node.index()] else {
-                    continue;
-                };
-                delay.hydrate_shared_history(depth, history_access.recent_values(*input, depth));
+        // Promotion is the representation half of activation and the quick tier performs the same
+        // one; hydration below is the storage half, which only a native kernel needs. Promoting
+        // first leaves hydration a single typed implementation instead of one per representation.
+        for step in self.plan.operations.iter() {
+            if !state.node_states[step.node().index()].promote_scalar_temporal() {
+                self.deopt(state);
+                return false;
             }
         }
+        let Some(history_access) = history_access else {
+            return true;
+        };
         for step in self.plan.operations.iter() {
-            let node = step.node();
-            let replacement = match &state.node_states[node.index()] {
-                NodeState::Delay(history) => match history.to_scalar() {
-                    Some(history) => Some(NodeState::ScalarDelay(history)),
-                    None => {
-                        self.deopt(state);
-                        return false;
-                    }
-                },
-                NodeState::Default { last_input } => {
-                    let last_input = match last_input {
-                        Some(value) => match ScalarValue::from_untyped_value(value) {
-                            Some(value) => Some(value),
-                            None => {
-                                self.deopt(state);
-                                return false;
-                            }
-                        },
-                        None => None,
-                    };
-                    Some(NodeState::ScalarDefault { last_input })
-                }
-                NodeState::ScalarDelay(_) | NodeState::ScalarDefault { .. } => None,
-                _ => {
-                    self.deopt(state);
-                    return false;
-                }
+            let TemporalOperation::Delay {
+                state: slot,
+                input: BoundRef::External(input),
+                offset,
+            } = step
+            else {
+                continue;
             };
-            if let Some(replacement) = replacement {
-                state.node_states[node.index()] = replacement;
-            }
-        }
-        true
-    }
-
-    #[inline]
-    pub(super) fn evaluate(
-        &self,
-        state: &mut EvaluatorState,
-        context: EvaluationEnvironment<'_>,
-        scalar_values: &mut [Option<ScalarValue>],
-    ) -> bool {
-        for step in self.plan.operations.iter() {
-            let (node, value) = match step {
-                TemporalOperation::Delay {
-                    state: slot,
-                    input,
-                    offset,
-                } => {
-                    let node = slot.node;
-                    let value = if *offset == 0 {
-                        let Some(input) = read_scalar(input, state, context, scalar_values) else {
-                            return false;
-                        };
-                        let NodeState::ScalarDelay(history) = &mut state.node_states[node.index()]
-                        else {
-                            unreachable!("scheduled delay has incompatible state")
-                        };
-                        history.retain_current_value(input)
-                    } else {
-                        let NodeState::ScalarDelay(history) = &mut state.node_states[node.index()]
-                        else {
-                            unreachable!("scheduled delay has incompatible state")
-                        };
-                        history.read_and_stage_write()
-                    };
-                    (node, value)
-                }
-                TemporalOperation::RecursiveDelay { state: slot, .. } => {
-                    let node = slot.node;
-                    let NodeState::ScalarDelay(history) = &mut state.node_states[node.index()]
-                    else {
-                        unreachable!("scheduled recursive delay has incompatible state")
-                    };
-                    (node, history.read_delayed_value())
-                }
-                TemporalOperation::Default {
-                    state: slot,
-                    input,
-                    fallback,
-                } => {
-                    let node = slot.node;
-                    let Some(input) = read_scalar(input, state, context, scalar_values) else {
-                        return false;
-                    };
-                    let NodeState::ScalarDefault { last_input } =
-                        &mut state.node_states[node.index()]
-                    else {
-                        unreachable!("scheduled default has incompatible state")
-                    };
-                    let input = match input {
-                        ScalarValue::NoVal => last_input.unwrap_or(ScalarValue::NoVal),
-                        input => {
-                            *last_input = Some(input);
-                            input
-                        }
-                    };
-                    let value = if input == ScalarValue::Deferred {
-                        let Some(fallback) = read_scalar(fallback, state, context, scalar_values)
-                        else {
-                            return false;
-                        };
-                        fallback
-                    } else {
-                        input
-                    };
-                    (node, value)
-                }
+            let NodeState::ScalarDelay(delay) = &mut state.node_states[slot.node.index()] else {
+                unreachable!("a promoted delay is a scalar delay");
             };
-            scalar_values[node.index()] = Some(value);
-        }
-        true
-    }
-
-    #[inline]
-    pub(super) fn commit(
-        &self,
-        state: &mut EvaluatorState,
-        context: EvaluationEnvironment<'_>,
-        scalar_values: &[Option<ScalarValue>],
-    ) -> bool {
-        for step in self.plan.commits.iter() {
-            match step {
-                TemporalCommit::Delay { state: slot, input } => {
-                    let node = slot.node;
-                    let Some(value) = read_scalar(input, state, context, scalar_values) else {
-                        self.deopt(state);
-                        return false;
-                    };
-                    let NodeState::ScalarDelay(history) = &mut state.node_states[node.index()]
-                    else {
-                        unreachable!("scheduled delay commit has incompatible state")
-                    };
-                    history.commit_staged_write(value);
-                }
-                TemporalCommit::RecursiveDelay { state: slot } => {
-                    let node = slot.node;
-                    let NodeState::ScalarDelay(history) = &mut state.node_states[node.index()]
-                    else {
-                        unreachable!("scheduled recursive commit has incompatible state")
-                    };
-                    history.commit_recursive_value();
-                }
+            let hydrated = usize::try_from(*offset).is_ok_and(|depth| {
+                delay.hydrate_shared_history(depth, history_access.recent_values(*input, depth))
+            });
+            if !hydrated {
+                self.deopt(state);
+                return false;
             }
         }
         true
-    }
-
-    pub(super) fn has_commit_steps(&self) -> bool {
-        !self.plan.commits.is_empty()
-    }
-
-    pub(super) fn has_evaluation_steps(&self) -> bool {
-        !self.plan.operations.is_empty()
-    }
-
-    pub(super) fn materialize(
-        &self,
-        state: &mut EvaluatorState,
-        scalar_values: &[Option<ScalarValue>],
-    ) {
-        for step in self.plan.operations.iter() {
-            let node = step.node();
-            if let Some(value) = scalar_values[node.index()] {
-                state.node_values[node.index()] = value.into_value();
-            }
-        }
     }
 
     pub(super) fn deopt(&self, state: &mut EvaluatorState) {
         for step in self.plan.operations.iter() {
-            let node = step.node();
-            let replacement = match &state.node_states[node.index()] {
-                NodeState::ScalarDelay(history) => Some(NodeState::Delay(history.to_canonical())),
-                NodeState::ScalarDefault { last_input } => Some(NodeState::Default {
-                    last_input: last_input.map(ScalarValue::into_value),
-                }),
-                _ => None,
-            };
-            if let Some(replacement) = replacement {
-                state.node_states[node.index()] = replacement;
-            }
+            state.node_states[step.node().index()].demote_scalar_temporal();
         }
-    }
-}
-
-#[inline]
-fn read_scalar(
-    reference: &BoundRef,
-    state: &EvaluatorState,
-    context: EvaluationEnvironment<'_>,
-    scalar_values: &[Option<ScalarValue>],
-) -> Option<ScalarValue> {
-    if let BoundRef::Node(node) = reference
-        && let Some(value) = scalar_values[node.index()]
-    {
-        return Some(value);
-    }
-    match reference {
-        BoundRef::Const(value) => ScalarValue::from_untyped_value(value),
-        BoundRef::External(slot) => {
-            ScalarValue::from_untyped_value(&context.environment_values[slot.index()])
-        }
-        BoundRef::Node(node) => ScalarValue::from_untyped_value(&state.node_values[node.index()]),
     }
 }

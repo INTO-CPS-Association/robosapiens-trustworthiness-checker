@@ -283,7 +283,7 @@ fn analyse_operation(
         | BoundOp::ListFilter { .. }
         | BoundOp::ListFold { .. } => (bounds, None),
         BoundOp::RecursiveCall { .. } => (bounds, None),
-        BoundOp::Dynamic(_) => (bounds, None),
+        BoundOp::Reconfigurable(_) => (bounds, None),
         BoundOp::Unary { .. }
         | BoundOp::Binary { .. }
         | BoundOp::Default { .. }

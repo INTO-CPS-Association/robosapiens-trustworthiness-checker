@@ -3,7 +3,7 @@ use futures::StreamExt;
 
 use crate::causal::{CausalDomain, CausalRole, CausalValue};
 use crate::lang::core::DependencyGraphExpr;
-use crate::lang::dsrv::ast::{CheckedExpr, DynamicExprScope, Expr};
+use crate::lang::dsrv::ast::{CheckedExpr, Expr, ReconfigurableExprScope};
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{OutputStream, Value, VarName};
@@ -23,7 +23,11 @@ enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
     },
 }
 
-fn subcontext<AC, D>(ctx: &AC::Ctx, scope: DynamicExprScope, owner: Option<&VarName>) -> AC::Ctx
+fn subcontext<AC, D>(
+    ctx: &AC::Ctx,
+    scope: ReconfigurableExprScope,
+    owner: Option<&VarName>,
+) -> AC::Ctx
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -31,8 +35,8 @@ where
     AC::Ctx: StreamContext<AC = AC>,
 {
     match scope {
-        DynamicExprScope::Explicit(vars) => ctx.restricted_subcontext(vars, 1),
-        DynamicExprScope::Automatic => match owner {
+        ReconfigurableExprScope::Explicit(vars) => ctx.restricted_subcontext(vars, 1),
+        ReconfigurableExprScope::Automatic => match owner {
             Some(owner) => ctx.subcontext_excluding(owner, 1),
             None => ctx.subcontext(1),
         },
@@ -68,7 +72,7 @@ fn lift_property_stream<D: CausalDomain>(
 pub fn dynamic<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: Evaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>
@@ -90,7 +94,7 @@ where
 pub fn dynamic_checked<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     expected: TCType,
     environment: std::rc::Rc<StreamTypeEnvironment>,
@@ -118,7 +122,7 @@ where
 fn dynamic_inner<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>
@@ -222,7 +226,7 @@ where
 pub fn defer<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: Evaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>
@@ -244,7 +248,7 @@ where
 pub fn defer_checked<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     expected: TCType,
     environment: std::rc::Rc<StreamTypeEnvironment>,
@@ -272,7 +276,7 @@ where
 fn defer_inner<AC, D>(
     ctx: &AC::Ctx,
     source: OutputStream<CausalValue<D>>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> OutputStream<CausalValue<D>>

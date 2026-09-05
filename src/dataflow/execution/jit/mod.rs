@@ -8,6 +8,11 @@ mod runtime;
 mod scheduled_state;
 
 pub(in crate::dataflow) use coordinator::Jit;
-pub(in crate::dataflow) use outcomes::{FusedTickOutcome, GraphTickOutcome};
+pub(in crate::dataflow) use outcomes::{NativeRegionOutcome, WholeTickOutcome};
+
+#[cfg(all(test, feature = "jit"))]
+pub(crate) use backend::{compile_count, reset_compile_count};
 #[cfg(feature = "jit")]
-pub(in crate::dataflow) use runtime::JittedGraphEvaluator;
+pub(in crate::dataflow) use runtime::{
+    NativeScalarRegion, NativeTemporalMonitor, PreparedDirectJit,
+};

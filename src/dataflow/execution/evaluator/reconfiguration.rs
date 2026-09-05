@@ -1,10 +1,10 @@
 use super::super::super::ir::{NodeId, ReconfigurableExpressionKind, StreamOp};
 use super::super::super::{ContextTransferPolicy, StreamMapping};
-use super::super::dynamic_expressions::{
-    DynamicExpressionActivation, SharedDynamicExpressionCache,
+use super::super::evaluator_state::{ActiveExpression, ReconfigurableExpressionState};
+use super::super::reconfigurable_expressions::{
+    ReconfigurableExpressionActivation, SharedReconfigurableExpressionCache,
     prepare_active_expression_with_change,
 };
-use super::super::evaluator_state::{ActiveExpression, DynamicExpressionState};
 use super::Evaluator;
 use crate::core::Value;
 use crate::dataflow::DataflowEvaluationError;
@@ -17,14 +17,14 @@ struct DynamicBodyDonor {
 }
 
 impl DynamicBodyDonor {
-    fn take_from(dynamic: &mut DynamicExpressionState) -> Self {
+    fn take_from(expression: &mut ReconfigurableExpressionState) -> Self {
         Self {
-            active_expression: dynamic
+            active_expression: expression
                 .active_expression
                 .take()
                 .expect("an active dynamic body must have a donor"),
-            environment_values: std::mem::take(&mut dynamic.environment_values),
-            last_source_value: dynamic.last_source_value.take(),
+            environment_values: std::mem::take(&mut expression.environment_values),
+            last_source_value: expression.last_source_value.take(),
         }
     }
 }
@@ -63,8 +63,8 @@ impl PreparedNestedBodyTransfer {
 impl Evaluator {
     fn validate_exact_nested_transfer(&self, source: &Self) -> bool {
         self.program.state_key() == source.program.state_key()
-            && self.tier_states.canonical.validate_exact_rewrite(
-                source.tier_states.canonical.as_ref(),
+            && self.canonical.validate_exact_rewrite(
+                source.canonical.as_ref(),
                 &self.program.graph,
                 &source.program.graph,
                 &self.program.environment_layout,
@@ -77,7 +77,13 @@ impl Evaluator {
             self.validate_exact_nested_transfer(source),
             "exact nested context transfer requires a prepared mapping"
         );
-        self.tier_states.move_exact_from(&mut source.tier_states);
+        self.move_exact_state(source);
+    }
+
+    /// Moves the canonical arena without cloning it, then clears the per-tick node values.
+    fn move_exact_state(&mut self, source: &mut Self) {
+        std::mem::swap(&mut self.canonical, &mut source.canonical);
+        self.canonical.node_values.fill(Value::NoVal);
     }
 
     /// Validate the structural part of an exact context transfer without changing either evaluator.
@@ -89,16 +95,12 @@ impl Evaluator {
         match mapping {
             StreamMapping::Exact(_) => {
                 self.program.state_key() == source.program.state_key()
-                    && self
-                        .tier_states
-                        .canonical
-                        .as_ref()
-                        .validate_context_mapping(
-                            source.tier_states.canonical.as_ref(),
-                            &self.program.graph,
-                            &source.program.graph,
-                            mapping,
-                        )
+                    && self.canonical.as_ref().validate_context_mapping(
+                        source.canonical.as_ref(),
+                        &self.program.graph,
+                        &source.program.graph,
+                        mapping,
+                    )
             }
             StreamMapping::Unmapped => true,
         }
@@ -113,18 +115,14 @@ impl Evaluator {
         match mapping {
             StreamMapping::Exact(_) => {
                 self.program.state_key() == source.program.state_key()
-                    && self
-                        .tier_states
-                        .canonical
-                        .as_ref()
-                        .validate_context_rewrite(
-                            source.tier_states.canonical.as_ref(),
-                            &self.program.graph,
-                            &source.program.graph,
-                            &self.program.environment_layout,
-                            &source.program.environment_layout,
-                            mapping,
-                        )
+                    && self.canonical.as_ref().validate_context_rewrite(
+                        source.canonical.as_ref(),
+                        &self.program.graph,
+                        &source.program.graph,
+                        &self.program.environment_layout,
+                        &source.program.environment_layout,
+                        mapping,
+                    )
             }
             StreamMapping::Unmapped => true,
         }
@@ -158,7 +156,7 @@ impl Evaluator {
     }
 
     fn move_exact_context(&mut self, source: &mut Self) {
-        self.tier_states.move_exact_from(&mut source.tier_states);
+        self.move_exact_state(source);
     }
 
     /// Reconfigure one nested expression atomically at its source barrier.
@@ -168,16 +166,16 @@ impl Evaluator {
         node: NodeId,
         source_value: Value,
         transfer: ContextTransferPolicy,
-        shared_template_cache: &mut SharedDynamicExpressionCache,
-    ) -> Result<(DynamicExpressionActivation, bool), DataflowEvaluationError> {
+        shared_template_cache: &mut SharedReconfigurableExpressionCache,
+    ) -> Result<(ReconfigurableExpressionActivation, bool), DataflowEvaluationError> {
         let program = &self.program;
-        let StreamOp::Dynamic(spec) = &program.graph.nodes[node.index()] else {
-            unreachable!("reconfigurable expression referenced a non-dynamic node")
+        let StreamOp::Reconfigurable(spec) = &program.graph.nodes[node.index()] else {
+            unreachable!("reconfigurable expression referenced a non-reconfigurable node")
         };
         let source_text = match source_value {
             Value::Str(source_text) => source_text,
             Value::Deferred | Value::NoVal => {
-                return Ok((DynamicExpressionActivation::Unchanged, false));
+                return Ok((ReconfigurableExpressionActivation::Unchanged, false));
             }
             other => {
                 return Err(DataflowEvaluationError::InvalidExpressionSource(
@@ -187,13 +185,12 @@ impl Evaluator {
         };
 
         let (had_active_expression, prepared) = {
-            let dynamic = self
-                .tier_states
+            let expression = self
                 .canonical
                 .as_mut()
-                .dynamic_expression_state_mut(node);
-            let had_active_expression = dynamic.active_expression.is_some();
-            let previous_dependency_slots = dynamic
+                .reconfigurable_expression_state_mut(node);
+            let had_active_expression = expression.active_expression.is_some();
+            let previous_dependency_slots = expression
                 .active_expression
                 .as_ref()
                 .map_or(&[][..], |active| {
@@ -202,7 +199,7 @@ impl Evaluator {
             let prepared = prepare_active_expression_with_change(
                 source_text,
                 spec,
-                &dynamic.template_cache,
+                &expression.template_cache,
                 Some(&*shared_template_cache),
                 &program.environment_layout,
                 had_active_expression,
@@ -221,10 +218,9 @@ impl Evaluator {
         let has_donor = spec.kind == ReconfigurableExpressionKind::Dynamic && had_active_expression;
         let prepared_transfer = if has_donor && transfer != ContextTransferPolicy::None {
             let source = self
-                .tier_states
                 .canonical
                 .as_ref()
-                .dynamic_expression_state(node)
+                .reconfigurable_expression_state(node)
                 .active_expression
                 .as_ref()
                 .expect("an active dynamic body must have a donor");
@@ -234,20 +230,19 @@ impl Evaluator {
         };
 
         let (mut donor, last_defer_result) = {
-            let dynamic = self
-                .tier_states
+            let expression = self
                 .canonical
                 .as_mut()
-                .dynamic_expression_state_mut(node);
+                .reconfigurable_expression_state_mut(node);
             let donor = if has_donor {
-                Some(DynamicBodyDonor::take_from(dynamic))
+                Some(DynamicBodyDonor::take_from(expression))
             } else {
-                dynamic.active_expression = None;
-                dynamic.environment_values.clear();
-                dynamic.last_source_value = None;
+                expression.active_expression = None;
+                expression.environment_values.clear();
+                expression.last_source_value = None;
                 None
             };
-            (donor, dynamic.last_defer_result.take())
+            (donor, expression.last_defer_result.take())
         };
 
         // The shadow allocation is reusable storage, not context. Every target-used slot is refreshed
@@ -263,26 +258,25 @@ impl Evaluator {
             _ => false,
         };
         let last_source_value = donor.and_then(|donor| donor.last_source_value);
-        let dynamic = self
-            .tier_states
+        let expression = self
             .canonical
             .as_mut()
-            .dynamic_expression_state_mut(node);
+            .reconfigurable_expression_state_mut(node);
         shared_template_cache.insert(
             spec,
             &program.environment_layout,
             Rc::clone(&active_expression.template),
         );
-        dynamic.cache_template(Rc::clone(&active_expression.template));
-        dynamic.active_expression = Some(active_expression);
-        dynamic.last_source_value = last_source_value;
-        dynamic.last_defer_result =
+        expression.cache_template(Rc::clone(&active_expression.template));
+        expression.active_expression = Some(active_expression);
+        expression.last_source_value = last_source_value;
+        expression.last_defer_result =
             if spec.kind == ReconfigurableExpressionKind::Deferred && !had_active_expression {
                 None
             } else {
                 last_defer_result
             };
-        dynamic.environment_values = environment_values;
+        expression.environment_values = environment_values;
         Ok((activation, state_preserved))
     }
 }

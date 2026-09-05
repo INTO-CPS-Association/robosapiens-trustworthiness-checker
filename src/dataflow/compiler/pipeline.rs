@@ -1,7 +1,8 @@
-use super::super::execution_plan::{MonitorPlan, StreamSlots};
 use super::super::ir::*;
 use super::super::monitor::DataflowMonitor;
+use super::super::monitor_plan::MonitorPlan;
 use super::super::program::DataflowProgram;
+use super::super::stream_id::StreamSlots;
 use super::super::*;
 use super::lower::*;
 use crate::lang::core::DepGraph as NamedDependencyGraph;

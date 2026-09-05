@@ -3,7 +3,7 @@ use std::rc::Rc;
 use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
 use crate::core::Value;
-use crate::lang::dsrv::ast::DynamicExprScope;
+use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{OutputStream, VarName};
@@ -14,7 +14,7 @@ use tracing::{debug, info};
 pub fn dynamic<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
@@ -27,7 +27,7 @@ where
 pub(crate) fn dynamic_checked<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
     checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
@@ -41,8 +41,8 @@ where
 
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
-        DynamicExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        DynamicExprScope::Automatic => match owner.as_ref() {
+        ReconfigurableExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
+        ReconfigurableExprScope::Automatic => match owner.as_ref() {
             Some(owner) => ctx.subcontext_excluding(&owner, history_length),
             None => ctx.subcontext(history_length),
         },
@@ -147,7 +147,7 @@ where
 pub fn defer<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
 ) -> OutputStream<AC::Val>
@@ -160,7 +160,7 @@ where
 pub(crate) fn defer_checked<AC>(
     ctx: &AC::Ctx,
     eval_stream: OutputStream<AC::Val>,
-    scope: DynamicExprScope,
+    scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
     checked: Option<(Rc<StreamTypeEnvironment>, TCType)>,
@@ -170,8 +170,8 @@ where
 {
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
-        DynamicExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        DynamicExprScope::Automatic => match owner.as_ref() {
+        ReconfigurableExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
+        ReconfigurableExprScope::Automatic => match owner.as_ref() {
             Some(owner) => ctx.subcontext_excluding(&owner, history_length),
             None => ctx.subcontext(history_length),
         },

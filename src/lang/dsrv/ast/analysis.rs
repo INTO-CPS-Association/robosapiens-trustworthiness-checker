@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contiguous_tree::TreeCursorExt;
 
-use super::{DynamicExprScope, ExprRef, ExprView};
+use super::{ExprRef, ExprView, ReconfigurableExprScope};
 use crate::core::{StreamType, VarName};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +61,7 @@ impl<'arena> ExprRef<'arena> {
                         visit(DependencyKind::Placement, var);
                     }
                     Dynamic(source, _, scope) | Defer(source, _, scope) => {
-                        if let DynamicExprScope::Explicit(vars) = scope {
+                        if let ReconfigurableExprScope::Explicit(vars) = scope {
                             for var in vars.iter().filter(|var| !binding_depths.contains_key(*var))
                             {
                                 visit(DependencyKind::Stream, var);

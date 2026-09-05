@@ -1,9 +1,19 @@
+//! Dependency-valid ordering over computed streams.
+//!
+//! The [`Scheduler`] holds one order and keeps it valid. Fixed edges come from the compiled
+//! [`DependencyGraph`]; a reconfigurable expression contributes the edges its *current* body
+//! actually reads, collected through a [`DynamicDependencyCollector`]. Most ticks change nothing,
+//! so the scheduler checks its cached order first and runs its allocation-reusing iterative DFS
+//! only when an added edge genuinely violates it.
+//!
+//! Order is all this module owns. It holds no evaluator state and no execution plan: moving a
+//! stream within the order never moves the language state attached to that stream's identity.
+
 use super::VarName;
 use super::environment::EnvironmentSlot;
 use super::error::DataflowEvaluationError;
-use super::execution_plan::{
-    DependencyGraph, ReconfigurableExpressionPlan, StreamId, StreamSet, StreamSlots,
-};
+use super::monitor_plan::{DependencyGraph, ReconfigurableExpressionPlan};
+use super::stream_id::{StreamId, StreamSet, StreamSlots};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -330,7 +340,7 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataflow::execution_plan::test_support::{
+    use crate::dataflow::monitor_plan::test_support::{
         dependency_graph_without_static_dependencies, empty_reconfigurable_expression_plan,
     };
 

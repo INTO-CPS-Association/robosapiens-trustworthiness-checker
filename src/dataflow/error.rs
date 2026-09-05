@@ -18,17 +18,17 @@ pub enum DataflowEvaluationError {
     #[error("dataflow output contains {actual} values, expected {expected}")]
     OutputCountMismatch { expected: usize, actual: usize },
     #[error("invalid dynamic expression `{expression}`: {message}")]
-    DynamicExpressionParse {
+    ReconfigurableExpressionParse {
         expression: EcoString,
         message: String,
     },
     #[error("dynamic expression `{expression}` failed runtime type checking: {message}")]
-    DynamicExpressionType {
+    ReconfigurableExpressionType {
         expression: EcoString,
         message: String,
     },
     #[error("dynamic expression references variables outside its allowed context: {0:?}")]
-    DynamicExpressionContext(Vec<VarName>),
+    ReconfigurableExpressionContext(Vec<VarName>),
     #[error("dynamic/defer expected a string property, got {0}")]
     InvalidExpressionSource(String),
 

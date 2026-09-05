@@ -1,11 +1,12 @@
 use super::super::super::environment::{EnvironmentLayout, EnvironmentSlot};
-use super::super::super::execution_plan::{ReconfigurableExpressionId, StreamId};
 use super::super::super::history_requirements::VariableHistoryRequirement;
 use super::super::super::ir::NodeId;
+use super::super::super::monitor_plan::ReconfigurableExpressionId;
+use super::super::super::stream_id::StreamId;
 
 use super::super::super::{ContextTransferPolicy, ReconfigurationMapping};
-use super::super::dynamic_expressions::DynamicExpressionActivation;
 use super::super::environment_projection::EnvironmentProjection;
+use super::super::reconfigurable_expressions::ReconfigurableExpressionActivation;
 use super::MonitorExecution;
 use crate::VarName;
 use crate::core::Value;
@@ -82,10 +83,10 @@ impl MonitorExecution {
             .iter()
             .any(|mapping| mapping.source().is_some())
         {
-            source.engine.jit.materialize_into(
-                &mut source.evaluators.evaluators,
-                &source.engine.active_plan.semantic,
-            );
+            // Both arenas must use semantic state before validating and moving it. Fresh
+            // target regions can already have promoted their temporal nodes.
+            self.materialize_authoritative_state();
+            source.materialize_authoritative_state();
             debug_assert!(
                 self.validate_materialized_context_transfer(source, mapping),
                 "materialized context transfer requires a prepared and validated mapping"
@@ -196,20 +197,20 @@ impl MonitorExecution {
         node: NodeId,
         source_value: Value,
         transfer: ContextTransferPolicy,
-    ) -> Result<(DynamicExpressionActivation, bool), DataflowEvaluationError> {
+    ) -> Result<(ReconfigurableExpressionActivation, bool), DataflowEvaluationError> {
         debug_assert!(
             self.validate_expression_location(expression_id, stream, node),
             "reconfigurable expression {expression_id:?} does not match planned stream {stream:?} and node {node:?}"
         );
-        let (evaluators, shared_dynamic_expression_cache) = (
+        let (evaluators, shared_reconfigurable_expression_cache) = (
             &mut self.evaluators.evaluators,
-            &mut self.shared_dynamic_expression_cache,
+            &mut self.shared_reconfigurable_expression_cache,
         );
         evaluators[stream.index()].reconfigure_expression(
             node,
             source_value,
             transfer,
-            shared_dynamic_expression_cache,
+            shared_reconfigurable_expression_cache,
         )
     }
 

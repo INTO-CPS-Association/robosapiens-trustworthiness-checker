@@ -1,10 +1,16 @@
 use super::ContextTransferPolicy;
+#[cfg(feature = "jit")]
+use super::execution::jit::PreparedDirectJit;
 use super::execution::monitor_execution::MonitorExecution;
-use super::execution_plan::ReconfigurableExpressionState;
+use super::expression_activation::ExpressionActivationState;
+#[cfg(feature = "jit")]
+use super::history::HistoryAccess;
 use super::history::{HistoryId, HistoryStore};
 use super::program::DataflowProgram;
 use super::reconfiguration::{DefinitionKey, InterfaceRevision, MonitorRevision};
 use super::scheduler::Scheduler;
+#[cfg(feature = "jit")]
+use super::typed::TypedIoLayout;
 use crate::VarName;
 use crate::core::Value;
 
@@ -26,7 +32,7 @@ pub(in crate::dataflow) use tests::test_support;
 pub struct DataflowMonitor {
     program: DataflowProgram,
     execution: MonitorExecution,
-    reconfiguration_state: ReconfigurableExpressionState,
+    reconfiguration_state: ExpressionActivationState,
     scheduler: Scheduler,
     environment_values: Vec<Value>,
     history_store: HistoryStore,
@@ -48,7 +54,7 @@ impl DataflowMonitor {
     pub fn from_program(program: DataflowProgram) -> Self {
         let environment_size = program.environment_size();
         let monitor_plan = program.monitor_plan();
-        let reconfiguration_state = ReconfigurableExpressionState::new(
+        let reconfiguration_state = ExpressionActivationState::new(
             &monitor_plan.reconfigurable_expressions,
             monitor_plan.dependencies.stream_count(),
         );
@@ -126,5 +132,48 @@ impl DataflowMonitor {
 
     pub fn definition_key(&self) -> &DefinitionKey {
         self.program.definition_key()
+    }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn into_direct_jit(
+        self,
+        layout: TypedIoLayout,
+    ) -> Result<PreparedDirectJit, ()> {
+        if self.failed || self.revision != MonitorRevision::INITIAL {
+            return Err(());
+        }
+        let Self {
+            execution,
+            history_store,
+            history_bindings,
+            ..
+        } = self;
+        let history_access = (!history_store.is_empty())
+            .then(|| HistoryAccess::new(&history_store, &history_bindings));
+        execution.into_direct_jit(layout, history_access)
+    }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn direct_entry_ready(&self) -> bool {
+        !self.failed
+            && self.revision == MonitorRevision::INITIAL
+            && self.execution.direct_entry_ready()
+    }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn take_prepared_direct(
+        &mut self,
+    ) -> Result<Option<PreparedDirectJit>, ()> {
+        if self.failed || self.revision != MonitorRevision::INITIAL {
+            return Err(());
+        }
+        let history_access = (!self.history_store.is_empty())
+            .then(|| HistoryAccess::new(&self.history_store, &self.history_bindings));
+        self.execution.take_prepared_direct(history_access)
+    }
+
+    #[cfg(all(test, feature = "jit"))]
+    pub(in crate::dataflow) fn fail_next_direct_extraction(&mut self) {
+        self.execution.fail_next_direct_extraction();
     }
 }

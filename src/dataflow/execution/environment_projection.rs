@@ -1,6 +1,6 @@
 use super::super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::super::history_requirements::VariableHistoryRequirement;
-use super::evaluator_state::DynamicExpressionTemplate;
+use super::evaluator_state::ReconfigurableExpressionTemplate;
 use crate::VarName;
 
 #[derive(Clone, Copy)]
@@ -21,7 +21,7 @@ impl EnvironmentProjection {
     #[cold]
     #[inline(never)]
     pub(in crate::dataflow) fn for_template(
-        template: &DynamicExpressionTemplate,
+        template: &ReconfigurableExpressionTemplate,
         outer_layout: &EnvironmentLayout,
     ) -> Result<Self, VarName> {
         let nested_layout = template.program.environment_layout.as_ref();

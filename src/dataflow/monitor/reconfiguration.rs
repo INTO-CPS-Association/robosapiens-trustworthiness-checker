@@ -1,15 +1,16 @@
 use super::super::environment::EnvironmentSlot;
 use super::super::error::{DataflowEvaluationError, DataflowStateError};
-use super::super::execution::dynamic_expressions::DynamicExpressionActivation;
 use super::super::execution::environment_projection::EnvironmentProjection;
+use super::super::execution::reconfigurable_expressions::ReconfigurableExpressionActivation;
 
-use super::super::execution_plan::{ReconfigurableExpressionState, StreamId};
+use super::super::expression_activation::ExpressionActivationState;
 use super::super::ir::{NodeId, ReconfigurableExpressionKind, StreamOp};
 use super::super::program::DataflowProgram;
 use super::super::reconfiguration::{
     InterfaceRevision, MonitorRevision, StreamStateTransfer, StreamStateTransferOutcome,
 };
 use super::super::scheduler::{DynamicDependencyCollector, Scheduler};
+use super::super::stream_id::StreamId;
 use super::super::{
     ContextTransferPolicy, ContextTransferReport, ReconfigurationMapping, ReconfigurationReport,
     StreamMapping,
@@ -36,7 +37,7 @@ struct PreparedContextTransfer {
     mapping: ReconfigurationMapping,
     policy: ContextTransferPolicy,
     report: ContextTransferReport,
-    prepared_reconfiguration_state: ReconfigurableExpressionState,
+    prepared_reconfiguration_state: ExpressionActivationState,
     prepared_scheduler: Scheduler,
     prepared_environment_projections: Option<Box<[PreparedEnvironmentProjection]>>,
     candidate_retained_environment_values: Option<Vec<Value>>,
@@ -139,7 +140,7 @@ impl DataflowMonitor {
             })
             .collect::<Vec<_>>();
 
-        let mut candidate_reconfiguration_state = ReconfigurableExpressionState::new(
+        let mut candidate_reconfiguration_state = ExpressionActivationState::new(
             &target_plan.reconfigurable_expressions,
             target_plan.dependencies.stream_count(),
         );
@@ -254,11 +255,13 @@ impl DataflowMonitor {
                         target_expression.address(),
                     )));
                 };
-                let StreamOp::Dynamic(target_spec) = &self.program.stream_programs()
+                let StreamOp::Reconfigurable(target_spec) = &self.program.stream_programs()
                     [target_stream.index()]
                 .graph
                 .nodes[target_expression.node.index()] else {
-                    unreachable!("reconfigurable expression plan referenced a non-dynamic node")
+                    unreachable!(
+                        "reconfigurable expression plan referenced a non-reconfigurable node"
+                    )
                 };
                 let allowed_variables = target_spec.scope.allowed_variables();
                 let projection = source
@@ -431,7 +434,7 @@ impl DataflowMonitor {
                 )?;
 
                 resolution.semantic_reconfiguration |=
-                    !matches!(activation, DynamicExpressionActivation::Unchanged);
+                    !matches!(activation, ReconfigurableExpressionActivation::Unchanged);
                 if expression.kind == ReconfigurableExpressionKind::Deferred
                     && activation.activated()
                 {

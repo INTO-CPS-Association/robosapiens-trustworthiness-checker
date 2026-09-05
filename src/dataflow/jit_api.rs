@@ -37,9 +37,9 @@ pub enum JitPlan {
     /// The monitor is still below its configured hotness threshold.
     Pending,
     /// One native artifact evaluates the complete static schedule.
-    Fused,
-    /// Eligible streams have individual native artifacts; other streams remain interpreted.
-    PerStream,
+    WholeSchedule,
+    /// Eligible scalar regions have native artifacts; other steps remain interpreted.
+    Regions,
     /// Native compilation produced no usable artifact.
     Unavailable,
 }

@@ -1,10 +1,19 @@
-mod canonical;
-mod expressions;
+//! One stream's program paired with its canonical state.
+//!
+//! [`Evaluator`] is deliberately thin: an `Rc<StreamProgram>` (immutable, shared with call sites and
+//! runtime-compiled bodies) and a `Box<EvaluatorState>` (mutable, this stream's alone). It holds no
+//! accelerator state — quickened registers and native artifacts belong to the execution plan's
+//! regions, not here, which is what lets a tier change without disturbing language state.
+//!
+//! [`EvaluationEnvironment`] is the per-call context threaded alongside it: the environment row, its
+//! layout, retained values where a reconfigurable body needs them, and the recursive-call closure
+//! when one is in scope.
+
+mod expression_state;
+mod lifecycle;
 mod reconfiguration;
 #[cfg(test)]
 mod tests;
-mod tier_states;
-mod tiered;
 
 use super::super::environment::EnvironmentLayout;
 use super::super::history::HistoryId;
@@ -13,7 +22,6 @@ use super::evaluator_state::EvaluatorState;
 use crate::core::Value;
 use ecow::EcoVec;
 use std::rc::Rc;
-use tier_states::EvaluatorTierStates;
 
 #[derive(Clone, Copy)]
 pub(in crate::dataflow) struct EvaluationEnvironment<'a> {
@@ -41,12 +49,15 @@ impl EvaluationEnvironment<'_> {
     }
 }
 
-/// Owns one stream program and its persistent evaluator tier states.
+/// Owns one stream program and its canonical evaluator state.
+///
+/// The canonical arena is the semantic authority for every node the active execution plan does not
+/// cover with a region; region state owns the rest until it is materialized back here.
 #[derive(Clone)]
 #[repr(C)]
 pub(in crate::dataflow) struct Evaluator {
     pub(in crate::dataflow) program: Rc<StreamProgram>,
-    pub(in crate::dataflow) tier_states: EvaluatorTierStates,
+    pub(in crate::dataflow) canonical: Box<EvaluatorState>,
 }
 
 impl Evaluator {
@@ -61,16 +72,17 @@ impl Evaluator {
         program
             .graph
             .debug_assert_valid(program.environment_layout.len());
-        let tier_states = EvaluatorTierStates::new(&program, history_bindings);
-        Self {
-            program,
-            tier_states,
-        }
+        let canonical = Box::new(EvaluatorState::new_with_history(
+            &program.graph,
+            history_bindings,
+        ));
+        debug_assert_eq!(canonical.node_values.len(), program.graph.nodes.len());
+        debug_assert_eq!(canonical.node_states.len(), program.graph.nodes.len());
+        Self { program, canonical }
     }
 
-    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     #[inline]
     pub(in crate::dataflow) fn state_mut(&mut self) -> &mut EvaluatorState {
-        self.tier_states.canonical.as_mut()
+        self.canonical.as_mut()
     }
 }

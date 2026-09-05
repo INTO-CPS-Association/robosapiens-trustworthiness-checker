@@ -4,13 +4,39 @@ use super::super::lifting::expect_value;
 use crate::core::values::operations as value_operations;
 use crate::core::{BinaryOperator, UnaryOperator};
 
+// A 64-bit tag avoids partial-word packing when retained scalar values are copied.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u64)]
 pub(in crate::dataflow) enum ScalarValue {
     NoVal,
     Deferred,
     Int(i64),
     Float(f64),
     Bool(bool),
+}
+
+impl crate::core::StreamData for ScalarValue {
+    #[inline]
+    fn is_no_val(&self) -> bool {
+        matches!(self, Self::NoVal)
+    }
+}
+
+impl crate::core::DeferrableStreamData for ScalarValue {
+    #[inline]
+    fn is_deferred(&self) -> bool {
+        matches!(self, Self::Deferred)
+    }
+
+    #[inline]
+    fn deferred_value() -> Self {
+        Self::Deferred
+    }
+
+    #[inline]
+    fn no_val_value() -> Self {
+        Self::NoVal
+    }
 }
 
 impl ScalarValue {
@@ -76,16 +102,7 @@ impl ScalarValue {
     }
 }
 
-#[inline]
-pub(super) fn retain_last(value: ScalarValue, last: &mut Option<ScalarValue>) -> ScalarValue {
-    match value {
-        ScalarValue::NoVal => last.unwrap_or(ScalarValue::NoVal),
-        value => {
-            *last = Some(value);
-            value
-        }
-    }
-}
+pub(in crate::dataflow) use crate::core::retain_last;
 
 pub(super) fn supports_unary(op: UnaryOperator, input: ScalarKind, output: ScalarKind) -> bool {
     use ScalarKind as Kind;
@@ -144,18 +161,12 @@ pub(super) fn apply_unary(op: UnaryOperator, input: ScalarValue) -> ScalarValue 
 
     match (op, input) {
         (Op::Not, Scalar::Bool(value)) => Scalar::Bool(!value),
-        (Op::Negate, Scalar::Int(value)) => value
-            .checked_neg()
-            .map(Scalar::Int)
-            .unwrap_or_else(|| generic_unary(op, input)),
+        (Op::Negate, Scalar::Int(value)) => Scalar::Int(value.wrapping_neg()),
         (Op::Negate, Scalar::Float(value)) => Scalar::Float(-value),
         (Op::Sin, Scalar::Float(value)) => Scalar::Float(value.sin()),
         (Op::Cos, Scalar::Float(value)) => Scalar::Float(value.cos()),
         (Op::Tan, Scalar::Float(value)) => Scalar::Float(value.tan()),
-        (Op::Absolute, Scalar::Int(value)) => value
-            .checked_abs()
-            .map(Scalar::Int)
-            .unwrap_or_else(|| generic_unary(op, input)),
+        (Op::Absolute, Scalar::Int(value)) => Scalar::Int(value.wrapping_abs()),
         (Op::Absolute, Scalar::Float(value)) => Scalar::Float(value.abs()),
         _ => generic_unary(op, input),
     }
@@ -178,11 +189,11 @@ pub(super) fn apply_binary(
             ) =>
         {
             let result = match op {
-                Op::Add => left.checked_add(right),
-                Op::Subtract => left.checked_sub(right),
-                Op::Multiply => left.checked_mul(right),
-                Op::Divide if right != 0 => left.checked_div(right),
-                Op::Modulo if right != 0 => left.checked_rem(right),
+                Op::Add => Some(left.wrapping_add(right)),
+                Op::Subtract => Some(left.wrapping_sub(right)),
+                Op::Multiply => Some(left.wrapping_mul(right)),
+                Op::Divide if right != 0 => Some(left.wrapping_div(right)),
+                Op::Modulo if right != 0 => Some(left.wrapping_rem(right)),
                 Op::Divide | Op::Modulo => None,
                 _ => unreachable!(),
             };
@@ -271,4 +282,63 @@ fn generic_binary(op: BinaryOperator, left: ScalarValue, right: ScalarValue) -> 
         left.into_value(),
         right.into_value(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_value_and_optional_scalar_value_stay_sixteen_bytes() {
+        assert_eq!(std::mem::size_of::<ScalarValue>(), 16);
+        assert_eq!(std::mem::size_of::<Option<ScalarValue>>(), 16);
+    }
+
+    #[test]
+    fn integer_unary_overflow_wraps() {
+        assert_eq!(
+            apply_unary(UnaryOperator::Negate, ScalarValue::Int(i64::MIN)),
+            ScalarValue::Int(i64::MIN),
+        );
+        assert_eq!(
+            apply_unary(UnaryOperator::Absolute, ScalarValue::Int(i64::MIN)),
+            ScalarValue::Int(i64::MIN),
+        );
+    }
+
+    #[test]
+    fn integer_binary_overflow_wraps() {
+        for (op, left, right, expected) in [
+            (BinaryOperator::Add, i64::MAX, 1, i64::MIN),
+            (BinaryOperator::Subtract, i64::MIN, 1, i64::MAX),
+            (BinaryOperator::Multiply, i64::MAX, 2, -2),
+            (BinaryOperator::Divide, i64::MIN, -1, i64::MIN),
+            (BinaryOperator::Modulo, i64::MIN, -1, 0),
+        ] {
+            assert_eq!(
+                apply_binary(op, ScalarValue::Int(left), ScalarValue::Int(right),),
+                ScalarValue::Int(expected),
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "integer division by zero during division")]
+    fn integer_division_by_zero_uses_generic_fallback() {
+        apply_binary(
+            BinaryOperator::Divide,
+            ScalarValue::Int(1),
+            ScalarValue::Int(0),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "integer division by zero during modulo")]
+    fn integer_modulo_by_zero_uses_generic_fallback() {
+        apply_binary(
+            BinaryOperator::Modulo,
+            ScalarValue::Int(1),
+            ScalarValue::Int(0),
+        );
+    }
 }

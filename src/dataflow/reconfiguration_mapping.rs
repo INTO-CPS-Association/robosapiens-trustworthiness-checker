@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::environment::EnvironmentSlot;
-use super::execution_plan::StreamId;
+use super::stream_id::StreamId;
 
 use super::program::DataflowProgram;
 use super::reconfiguration::DefinitionKey;

@@ -1170,28 +1170,40 @@ mod compiler;
 mod environment;
 mod error;
 mod execution;
-mod execution_plan;
+mod expression_activation;
 mod history;
 mod history_requirements;
 mod ir;
 #[cfg(feature = "jit")]
 mod jit_api;
 mod monitor;
+mod monitor_plan;
 mod program;
 mod reconfiguration;
 mod reconfiguration_mapping;
 mod scheduler;
+mod stream_id;
 #[cfg(test)]
 mod tests;
+pub mod typed;
 
+pub use typed::{
+    TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,
+    TypedInterface, TypedKind, TypedMonitor, TypedOutput, TypedScalar,
+};
+// Only the always-native monitor needs the feature; `TypedDataflowMonitor` warms on the
+// canonical tier and is available either way.
 pub use error::{
     DataflowCompilationError, DataflowEvaluationError, DataflowStateError, StreamProgramError,
 };
-pub use execution_plan::ReconfigurableExpressionId;
+#[cfg(feature = "jit")]
+pub use typed::TypedJitMonitor;
+
 #[cfg(feature = "jit")]
 pub use jit_api::{JitConfig, JitPlan, JitReport};
 pub use monitor::DataflowMonitor;
 pub(crate) use monitor::MonitorReconfigurationPlan;
+pub use monitor_plan::ReconfigurableExpressionId;
 pub use program::DataflowProgram;
 pub use reconfiguration::{
     ContextTransferPolicy, ContextTransferReport, DefinitionKey, InterfaceRevision,

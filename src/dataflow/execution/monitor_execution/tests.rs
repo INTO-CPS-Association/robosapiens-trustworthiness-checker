@@ -1,11 +1,17 @@
 use super::MonitorExecution;
-use super::plan::{GraphStep, QuickStep};
+use super::plan::{ExecutableSegment, ExecutionPlan, ExecutionStep};
+#[cfg(feature = "jit")]
+use crate::dataflow::StreamStateTransferOutcome;
 use crate::dataflow::execution::evaluator::Evaluator;
-use crate::dataflow::execution::evaluator_state::{reset_state_clone_count, state_clone_count};
+use crate::dataflow::execution::evaluator_state::{
+    NodeState, reset_state_clone_count, state_clone_count,
+};
+#[cfg(feature = "jit")]
 use crate::dataflow::execution::quickening::ScalarValue;
-use crate::dataflow::execution_plan::{ReconfigurableExpressionId, StreamId};
 use crate::dataflow::ir::{NodeId, ReconfigurableExpressionKind, StreamOp};
 use crate::dataflow::monitor::test_support::execution;
+use crate::dataflow::monitor_plan::ReconfigurableExpressionId;
+use crate::dataflow::stream_id::StreamId;
 use crate::dataflow::{ContextTransferPolicy, DataflowMonitor, StreamMapping};
 use crate::dataflow::{DataflowProgram, ReconfigurationMapping};
 #[cfg(feature = "jit")]
@@ -20,20 +26,48 @@ enum LayoutSnapshot {
     Graph(usize),
 }
 
-fn layout_snapshot(monitor: &DataflowMonitor) -> Vec<LayoutSnapshot> {
+#[derive(Debug, PartialEq, Eq)]
+enum SegmentSnapshot {
+    Island(Vec<usize>),
+    Canonical(Vec<usize>),
+}
+
+fn segments_snapshot(monitor: &DataflowMonitor, stream: usize) -> Vec<SegmentSnapshot> {
     execution(monitor)
         .engine
         .active_plan
-        .quick
         .main_steps
         .iter()
-        .map(|step| match step {
-            QuickStep::ScalarRun(run) => {
-                LayoutSnapshot::ScalarRun(run.iter().map(|step| step.stream.index()).collect())
-            }
-            QuickStep::Graph(step) => LayoutSnapshot::Graph(step.stream.index()),
+        .find_map(|step| match step {
+            ExecutionStep::Graph(step) if step.stream.index() == stream => Some(
+                step.segments
+                    .iter()
+                    .map(|segment| match segment {
+                        ExecutableSegment::Island { nodes, .. } => {
+                            SegmentSnapshot::Island(nodes.clone().collect())
+                        }
+                        ExecutableSegment::Canonical(nodes) => {
+                            SegmentSnapshot::Canonical(nodes.clone().collect())
+                        }
+                    })
+                    .collect(),
+            ),
+            _ => None,
         })
-        .collect()
+        .expect("the stream should be evaluated as a graph step")
+}
+
+fn node_count(monitor: &DataflowMonitor, stream: usize) -> usize {
+    execution(monitor).evaluators.evaluators[stream]
+        .program
+        .graph
+        .nodes
+        .len()
+}
+
+fn layout_snapshot(monitor: &DataflowMonitor) -> Vec<LayoutSnapshot> {
+    let plan = &execution(monitor).engine.active_plan;
+    steps_snapshot(plan, &plan.main_steps)
 }
 
 fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
@@ -64,14 +98,17 @@ fn execution_with_ranges(
     )
 }
 
-fn steps_snapshot(steps: &[QuickStep]) -> Vec<LayoutSnapshot> {
+fn steps_snapshot(plan: &ExecutionPlan, steps: &[ExecutionStep]) -> Vec<LayoutSnapshot> {
     steps
         .iter()
         .map(|step| match step {
-            QuickStep::ScalarRun(run) => {
-                LayoutSnapshot::ScalarRun(run.iter().map(|step| step.stream.index()).collect())
-            }
-            QuickStep::Graph(step) => LayoutSnapshot::Graph(step.stream.index()),
+            ExecutionStep::ScalarRegion(region) => LayoutSnapshot::ScalarRun(
+                plan.regions[*region]
+                    .outputs()
+                    .map(|(stream, _, _)| stream.index())
+                    .collect(),
+            ),
+            ExecutionStep::Graph(step) => LayoutSnapshot::Graph(step.stream.index()),
         })
         .collect()
 }
@@ -99,7 +136,6 @@ fn compile_program(source: &str) -> DataflowProgram {
 fn assert_all_node_values(evaluator: &Evaluator, expected: Value) {
     assert!(
         evaluator
-            .tier_states
             .canonical
             .node_values
             .iter()
@@ -133,62 +169,6 @@ fn destructive_exact_transfer_moves_state_without_cloning_and_clears_scratch() {
     );
     assert_eq!(state_clone_count(), 0);
     assert_all_node_values(&target.evaluators.evaluators[0], Value::NoVal);
-}
-
-#[cfg(feature = "jit")]
-#[test]
-fn exact_transfer_keeps_native_artifacts_bound_to_their_compiled_programs() {
-    let specification = "in x: Int\naux a: Int\nout y: Int\na = x + 1\ny = a * 2";
-    let source_program = DataflowProgram::compile_checked(
-        specification.parse::<CheckedDsrvSpecification>().unwrap(),
-    )
-    .unwrap();
-    let target_program = DataflowProgram::compile_checked(
-        specification.parse::<CheckedDsrvSpecification>().unwrap(),
-    )
-    .unwrap();
-    let mapping = ReconfigurationMapping::between(&source_program, &target_program);
-    let source_order = [StreamId::new(0)];
-    let main_order = [StreamId::new(1)];
-    let mut source = MonitorExecution::new_with_source_prelude(
-        source_program.stream_programs().to_vec(),
-        source_program.monitor_plan().stream_slots,
-        &source_order,
-        &main_order,
-        &[],
-    );
-    let mut target = MonitorExecution::new_with_source_prelude(
-        target_program.stream_programs().to_vec(),
-        target_program.monitor_plan().stream_slots,
-        &source_order,
-        &main_order,
-        &[],
-    );
-    source.enable_jit(JitConfig::eager());
-    target.enable_jit(JitConfig::eager());
-
-    let source_artifact = source.evaluators.evaluators[0]
-        .native_artifact_identity()
-        .expect("source stream should have a per-stream native artifact");
-    let target_artifact = target.evaluators.evaluators[0]
-        .native_artifact_identity()
-        .expect("target stream should have a per-stream native artifact");
-    assert_ne!(source_artifact, target_artifact);
-
-    target.context_transfer_from(
-        &mut source,
-        &mapping,
-        ContextTransferPolicy::MatchingStreamState,
-    );
-
-    assert_eq!(
-        target.evaluators.evaluators[0].native_artifact_identity(),
-        Some(target_artifact)
-    );
-    assert_eq!(
-        source.evaluators.evaluators[0].native_artifact_identity(),
-        Some(source_artifact)
-    );
 }
 
 #[test]
@@ -249,8 +229,181 @@ fn matching_validation_allows_changed_and_new_streams_to_initialize() {
     );
 }
 
+/// Pins the scalar program the scalar-IR page lists in full.
+///
+/// `docs/src/architecture/dataflow/scalar-ir.md` prints the island for
+/// `total = default(total[1], 0) + merged` value by value. The listing claims a specific shape, so
+/// the counts and the value origins are checked rather than left to drift.
 #[test]
-fn disabling_quickening_uses_only_canonical_graph_steps() {
+fn documented_scalar_program_has_the_listed_shape() {
+    use crate::dataflow::execution::scalar_ir::ScalarValueDefinition;
+    use crate::dataflow::execution::scalar_region::ScalarRegion;
+
+    let specification = "in x: Int\nin y: Int\n\
+        out scaled: Int\nout offset: Int\nout merged: Int\nout total: Int\n\
+        scaled = x * 2\n\
+        offset = y + 5\n\
+        merged = scaled + offset\n\
+        total = default(total[1], 0) + merged"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let execution = execution(&monitor);
+
+    let island = execution
+        .engine
+        .active_plan
+        .regions
+        .iter()
+        .find_map(|region| match region {
+            ScalarRegion::Graph(graph) => graph.islands.first(),
+            ScalarRegion::Streams(_) => None,
+        })
+        .expect("total lowers to one graph island");
+
+    // Five values, three instructions, one output, as the listing prints them.
+    assert_eq!(island.program.values.len(), 5);
+    assert_eq!(island.program.instructions.len(), 3);
+    assert_eq!(island.program.output.index(), 4);
+    assert_eq!(&*island.exports, &[NodeId::new(2)]);
+
+    // One constant, one external read, and three instruction results: no island boundary input,
+    // because this island covers the whole graph.
+    let origins = island
+        .program
+        .values
+        .iter()
+        .map(|value| match value.definition {
+            ScalarValueDefinition::Constant(_) => "constant",
+            ScalarValueDefinition::External(_) => "external",
+            ScalarValueDefinition::CanonicalNode(_) => "canonical",
+            ScalarValueDefinition::Instruction(_) => "instruction",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        origins,
+        [
+            "instruction",
+            "constant",
+            "instruction",
+            "external",
+            "instruction"
+        ],
+    );
+}
+
+/// Pins the partition the fusion page documents for its larger companion specification.
+///
+/// `docs/src/architecture/dataflow/fusion.md` shows this specification partitioned into six steps
+/// and says that `blended` splits into island, canonical run, island. Both claims are drawn in
+/// figures, so they are checked here rather than left to drift.
+#[test]
+fn documented_fusion_example_partitions_into_six_steps() {
+    let specification = "in x: Int\nin y: Int\nin flag: Bool\nin lbl: Str\n\
+        out scaled: Int\nout offset: Int\nout merged: Int\nout blended: Int\n\
+        out delta: Int\nout ratio: Int\nout total: Int\nout echoed: Str\n\
+        out level: Int\nout alert: Bool\n\
+        scaled = x * 2\n\
+        offset = y + 5\n\
+        merged = scaled + offset\n\
+        blended = default(blended[1], 0) + (if flag then merged else scaled)\n\
+        delta = blended - merged\n\
+        ratio = delta * 3\n\
+        total = default(total[1], 0) + ratio\n\
+        echoed = lbl\n\
+        level = total + ratio\n\
+        alert = level > 20"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let execution = execution(&monitor);
+    let plan = &execution.engine.active_plan;
+
+    // Three stream regions, each a maximal contiguous run, separated by the three streams that
+    // cannot join one: two temporal and one Str.
+    assert_eq!(
+        steps_snapshot(plan, &plan.main_steps),
+        [
+            LayoutSnapshot::ScalarRun(vec![0, 1, 2]),
+            LayoutSnapshot::Graph(3),
+            LayoutSnapshot::ScalarRun(vec![4, 5]),
+            LayoutSnapshot::Graph(6),
+            LayoutSnapshot::Graph(7),
+            LayoutSnapshot::ScalarRun(vec![8, 9]),
+        ],
+    );
+
+    // The figure shows blended as island, canonical run, island; total as a single island; and
+    // echoed with no island at all.
+    let segments = |stream: usize| {
+        plan.main_steps
+            .iter()
+            .find_map(|step| match step {
+                ExecutionStep::Graph(graph) if graph.stream.index() == stream => {
+                    Some(graph.segments.len())
+                }
+                _ => None,
+            })
+            .expect("graph step")
+    };
+    assert_eq!(
+        segments(3),
+        3,
+        "blended alternates island, canonical, island"
+    );
+    assert_eq!(
+        segments(6),
+        1,
+        "total is one island covering its whole graph"
+    );
+    assert_eq!(segments(7), 0, "echoed has no scalar form, so no island");
+}
+
+/// Pins the partition the dataflow architecture guide documents for its running example.
+///
+/// The guide carries this specification from the execution model through to tier selection and
+/// states that `scaled` and `alert` occupy two *separate* stream regions because the temporal
+/// `total` sits between them in scheduler order. That claim spans several pages, so it is checked
+/// here rather than left to drift.
+#[test]
+fn documented_running_example_partitions_into_two_stream_regions_around_a_graph_step() {
+    let specification = "in x: Int\n\
+        out alert: Bool\n\
+        out total: Int\n\
+        out scaled: Int\n\
+        alert = total > 20\n\
+        total = default(total[1], 0) + scaled\n\
+        scaled = x * 2"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let execution = execution(&monitor);
+
+    // Scheduler order is scaled -> total -> alert. Only `total` is temporal, so it is the graph
+    // step, and it separates the two static scalar streams into regions of their own.
+    assert_eq!(
+        steps_snapshot(
+            &execution.engine.active_plan,
+            &execution.engine.active_plan.main_steps,
+        ),
+        [
+            LayoutSnapshot::ScalarRun(vec![0]),
+            LayoutSnapshot::Graph(1),
+            LayoutSnapshot::ScalarRun(vec![2]),
+        ],
+        "a stream region is a maximal contiguous run, so the graph step splits scaled from alert",
+    );
+    assert_eq!(execution.engine.active_plan.regions.len(), 3);
+
+    // Every member is scalar, so quickening owns the row rather than canonical evaluation.
+    assert!(matches!(
+        execution.authoritative_tier,
+        super::AuthoritativeTier::Regions(_)
+    ));
+}
+
+#[test]
+fn disabling_quickening_keeps_regions_but_selects_canonical_execution() {
     let specification = "in x: Int\n\
         aux a: Int\n\
         out b: Int\n\
@@ -263,22 +416,17 @@ fn disabling_quickening_uses_only_canonical_graph_steps() {
     let execution = execution(&monitor);
 
     assert!(!execution.engine.quickening);
-    for step in execution
-        .engine
-        .active_plan
-        .quick
-        .source_steps
-        .iter()
-        .chain(execution.engine.active_plan.quick.main_steps.iter())
-    {
-        assert!(matches!(
-            step,
-            QuickStep::Graph(GraphStep {
-                schedule_plan: None,
-                ..
-            })
-        ));
-    }
+    assert_eq!(
+        steps_snapshot(
+            &execution.engine.active_plan,
+            &execution.engine.active_plan.main_steps,
+        ),
+        [LayoutSnapshot::ScalarRun(vec![0, 1])]
+    );
+    assert!(matches!(
+        execution.authoritative_tier,
+        super::AuthoritativeTier::Canonical
+    ));
 }
 
 #[test]
@@ -306,139 +454,165 @@ fn toggling_quickening_preserves_lift_state() {
 }
 
 #[test]
-fn unchecked_multi_node_graph_is_not_an_adaptive_candidate() {
-    let specification = "in x: Int\nout y: Int\ny = (x + 1) * 2"
-        .parse::<DsrvSpecification>()
+fn a_temporal_stream_quickens_as_one_region() {
+    let specification = "in x: Int\n\
+        out result: Bool\n\
+        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
+        .parse::<CheckedDsrvSpecification>()
         .unwrap();
-    let monitor = DataflowMonitor::compile_untyped(specification).unwrap();
-    let [QuickStep::Graph(step)] = execution(&monitor)
-        .engine
-        .active_plan
-        .quick
-        .main_steps
-        .as_ref()
-    else {
-        panic!("unchecked multi-node stream did not produce one graph step")
-    };
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
-    assert!(!step.adaptive_candidate);
+    assert_eq!(layout_snapshot(&monitor), [LayoutSnapshot::Graph(0)]);
+    let segments = segments_snapshot(&monitor, 0);
+    // Delays and defaults belong to the quickened instruction set, so nothing splits this graph.
+    assert_eq!(
+        segments,
+        [SegmentSnapshot::Island(
+            (0..node_count(&monitor, 0)).collect()
+        )]
+    );
 }
 
 #[test]
-fn unchecked_scalar_graph_adapts_after_observing_concrete_values() {
+fn scalar_islands_match_canonical_results_across_special_rows() {
+    let source = "in x: Int\n\
+        out result: Bool\n\
+        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3";
+    let mut quickened =
+        DataflowMonitor::compile_checked(source.parse::<CheckedDsrvSpecification>().unwrap())
+            .unwrap();
+    let mut canonical =
+        DataflowMonitor::compile_checked(source.parse::<CheckedDsrvSpecification>().unwrap())
+            .unwrap();
+    canonical.set_quickening(false);
+
+    let mut quickened_output = [Value::NoVal];
+    let mut canonical_output = [Value::NoVal];
+    for value in [
+        Value::Int(5),
+        Value::Int(2),
+        Value::NoVal,
+        Value::Int(9),
+        Value::NoVal,
+        Value::Int(1),
+    ] {
+        quickened
+            .evaluate(&[value.clone()], &mut quickened_output)
+            .unwrap();
+        canonical.evaluate(&[value], &mut canonical_output).unwrap();
+        assert_eq!(quickened_output, canonical_output);
+    }
+}
+
+#[test]
+fn island_lifting_state_materializes_into_the_canonical_arena_on_transition() {
+    let specification = "in x: Int\n\
+        out result: Int\n\
+        result = default(x[1], 0) + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(7)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+
+    // The addition is the graph output, so its value is published; its lifting state is not,
+    // because the region owns it until a transition materializes it.
+    let addition = node_count(&monitor, 0) - 1;
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_values[addition],
+        Value::Int(5)
+    );
+    assert!(matches!(
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_states[addition],
+        NodeState::BinaryLift {
+            last_left: None,
+            last_right: None,
+        }
+    ));
+
+    monitor.set_quickening(false);
+    assert!(matches!(
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_states[addition],
+        NodeState::BinaryLift {
+            last_left: Some(Value::Int(4)),
+            last_right: Some(Value::Int(1)),
+        }
+    ));
+    assert!(
+        segments_snapshot(&monitor, 0)
+            .iter()
+            .all(|segment| matches!(segment, SegmentSnapshot::Canonical(_)))
+    );
+
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(8)]);
+    monitor.set_quickening(true);
+    monitor.evaluate(&[Value::Int(0)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(2)]);
+}
+
+#[test]
+fn an_incompatible_row_returns_one_island_to_canonical_evaluation() {
+    let specification = "in x: Int\nout result: Int\nresult = default(x[1], 0) + 1"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let program = DataflowProgram::compile_untyped(specification).unwrap();
+    // The untyped program has no scalar signatures, so its graph stays wholly canonical.
+    let execution = standalone_execution(&program);
+    assert!(execution.engine.active_plan.regions.is_empty());
+}
+
+#[test]
+fn unchecked_graphs_have_no_scalar_regions() {
     let specification = "in x: Int\nout y: Int\ny = x + 1"
         .parse::<DsrvSpecification>()
         .unwrap();
     let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
-    let [QuickStep::Graph(step)] = execution(&monitor)
-        .engine
-        .active_plan
-        .quick
-        .main_steps
-        .as_ref()
-    else {
-        panic!("unchecked scalar stream did not produce one graph step")
-    };
-    assert!(step.adaptive_candidate);
+
+    assert!(execution(&monitor).engine.active_plan.regions.is_empty());
+    assert_eq!(layout_snapshot(&monitor), [LayoutSnapshot::Graph(0)]);
 
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
     assert_eq!(output, [Value::Int(2)]);
-    assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        None,
-    );
-
     monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
     assert_eq!(output, [Value::Int(2)]);
-    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
-    assert_eq!(output, [Value::Int(3)]);
-    assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        Some(ScalarValue::Int(3)),
-    );
-
     monitor.evaluate(&[Value::Float(2.5)], &mut output).unwrap();
-    assert_eq!(output, [Value::Float(3.5)]);
-    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
     assert_eq!(output, [Value::Float(3.5)]);
 }
 
 #[test]
-fn exact_transfer_moves_adaptive_lift_state() {
-    let source = "in x: Int\nout y: Int\ny = x + 1"
-        .parse::<DsrvSpecification>()
+fn exact_transfer_moves_island_lift_state() {
+    let source = "in x: Int\nout y: Int\ny = default(x[1], 0) + 1"
+        .parse::<CheckedDsrvSpecification>()
         .unwrap();
-    let target = "in x: Int\nout y: Int\nout z: Int\ny = x + 1\nz = x * 2"
-        .parse::<DsrvSpecification>()
+    let target = "in x: Int\nout y: Int\nout z: Int\ny = default(x[1], 0) + 1\nz = x * 2"
+        .parse::<CheckedDsrvSpecification>()
         .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(source).unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(source).unwrap();
     let mut output = [Value::NoVal];
 
-    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
-    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
-    assert_eq!(output, [Value::Int(3)]);
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(7)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
 
-    let target = DataflowProgram::compile_untyped(target).unwrap();
+    let target = DataflowProgram::compile_checked(target).unwrap();
     monitor
         .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
         .unwrap();
-    assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        Some(ScalarValue::Int(3)),
-    );
 
     let mut output = [Value::NoVal, Value::NoVal];
     monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
-    assert_eq!(output, [Value::Int(3), Value::NoVal]);
-}
-
-#[test]
-fn history_aware_execution_does_not_adapt_unchecked_graphs() {
-    let specification = "in x: Int\nin delayed_input: Int\nout y: Int\nout delayed: Int\ny = x + 1\ndelayed = delayed_input[1]"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
-    let mut output = [Value::NoVal, Value::NoVal];
-
-    monitor
-        .evaluate(&[Value::Int(1), Value::Int(10)], &mut output)
-        .unwrap();
-    monitor
-        .evaluate(&[Value::Int(2), Value::Int(11)], &mut output)
-        .unwrap();
-    assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        None,
-    );
-}
-
-#[test]
-fn disabling_quickening_disables_unchecked_adaptation() {
-    let specification = "in x: Int\nout y: Int\ny = x + 1"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
-    monitor.set_quickening(false);
-    let [QuickStep::Graph(step)] = execution(&monitor)
-        .engine
-        .active_plan
-        .quick
-        .main_steps
-        .as_ref()
-    else {
-        panic!("disabled quickening did not produce one graph step")
-    };
-    assert!(!step.adaptive_candidate);
-
-    let mut output = [Value::NoVal];
-    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
-    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
-    assert_eq!(output, [Value::Int(3)]);
-    assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        None,
-    );
+    assert_eq!(output, [Value::Int(8), Value::NoVal]);
 }
 
 #[test]
@@ -532,17 +706,18 @@ fn shared_history_does_not_disable_separate_scalar_quickening() {
         )
         .unwrap();
     assert_eq!(output, [Value::Deferred, Value::Int(6)]);
-    {
-        let execution = execution(&monitor);
-        assert_eq!(
-            execution.evaluators.evaluators[1].quickening_node_value(NodeId::new(0)),
-            Some(ScalarValue::Int(3))
-        );
-        assert_eq!(
-            execution.evaluators.evaluators[2].quickening_node_value(NodeId::new(0)),
-            Some(ScalarValue::Int(6))
-        );
-    }
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[1]
+            .canonical
+            .node_values[0],
+        Value::NoVal
+    );
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[2]
+            .canonical
+            .node_values[0],
+        Value::NoVal
+    );
 
     monitor
         .evaluate(
@@ -557,14 +732,30 @@ fn shared_history_does_not_disable_separate_scalar_quickening() {
         )
         .unwrap();
     assert_eq!(output, [Value::Int(11), Value::Int(8)]);
+
+    monitor.set_quickening(false);
     assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(1)),
-        Some(ScalarValue::Int(11))
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_values[1],
+        Value::Int(11)
+    );
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[1]
+            .canonical
+            .node_values[0],
+        Value::Int(4)
+    );
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[2]
+            .canonical
+            .node_values[0],
+        Value::Int(8)
     );
 }
 
 #[test]
-fn no_history_scalar_runs_still_publish_quickened_values() {
+fn fused_scalar_runs_materialize_authoritative_arena_state_on_transition() {
     let specification = "in x: Int\nout result: Int\nresult = x + 1"
         .parse::<CheckedDsrvSpecification>()
         .unwrap();
@@ -575,8 +766,19 @@ fn no_history_scalar_runs_still_publish_quickened_values() {
 
     assert_eq!(output, [Value::Int(5)]);
     assert_eq!(
-        execution(&monitor).evaluators.evaluators[0].quickening_node_value(NodeId::new(0)),
-        Some(ScalarValue::Int(5))
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_values[0],
+        Value::NoVal
+    );
+
+    monitor.set_quickening(false);
+
+    assert_eq!(
+        execution(&monitor).evaluators.evaluators[0]
+            .canonical
+            .node_values[0],
+        Value::Int(5)
     );
 }
 
@@ -726,11 +928,17 @@ fn source_and_main_have_separate_scalar_runs() {
     );
 
     assert_eq!(
-        steps_snapshot(&execution.engine.active_plan.quick.source_steps),
+        steps_snapshot(
+            &execution.engine.active_plan,
+            &execution.engine.active_plan.source_steps,
+        ),
         [LayoutSnapshot::ScalarRun(vec![0])]
     );
     assert_eq!(
-        steps_snapshot(&execution.engine.active_plan.quick.main_steps),
+        steps_snapshot(
+            &execution.engine.active_plan,
+            &execution.engine.active_plan.main_steps,
+        ),
         [LayoutSnapshot::ScalarRun(vec![1, 2])]
     );
 }
@@ -808,7 +1016,7 @@ fn temporal_source_moved_to_main_is_evaluated_once_per_tick() {
 
 #[cfg(feature = "jit")]
 #[test]
-fn temporal_source_barrier_prohibits_fused_kernel() {
+fn partial_temporal_region_is_not_compiled() {
     let specification = "in x: Int\n\
         out result: Bool\n\
         result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
@@ -819,13 +1027,14 @@ fn temporal_source_barrier_prohibits_fused_kernel() {
     execution.enable_jit(JitConfig::eager());
 
     let report = execution.jit_report().unwrap();
-    assert_eq!(report.plan(), JitPlan::PerStream);
-    assert_eq!(report.compiled_artifacts(), 1);
+    assert_eq!(report.plan(), JitPlan::Unavailable);
+    assert_eq!(report.compiled_artifacts(), 0);
+    assert_eq!(report.unsupported_streams(), [0]);
 }
 
 #[cfg(feature = "jit")]
 #[test]
-fn source_barrier_uses_and_retains_evaluator_local_native_tiers() {
+fn source_barrier_uses_schedule_owned_native_regions() {
     let specification = "in x: Int\n\
         aux source: Int\n\
         out result: Int\n\
@@ -838,7 +1047,7 @@ fn source_barrier_uses_and_retains_evaluator_local_native_tiers() {
     execution.enable_jit(JitConfig::eager());
 
     let report = execution.jit_report().unwrap();
-    assert_eq!(report.plan(), JitPlan::PerStream);
+    assert_eq!(report.plan(), JitPlan::Regions);
     assert_eq!(report.compiled_artifacts(), 2);
     assert!(report.unsupported_streams().is_empty());
     let artifacts = execution.jit_artifact_count();
@@ -848,8 +1057,12 @@ fn source_barrier_uses_and_retains_evaluator_local_native_tiers() {
         &[StreamId::new(0), StreamId::new(1)],
         execution.stream_slots,
     );
-    assert_eq!(execution.jit_artifact_count(), artifacts);
-    assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::PerStream);
+    assert_eq!(artifacts, 2);
+    assert_eq!(execution.jit_artifact_count(), 1);
+    assert_eq!(
+        execution.jit_report().unwrap().plan(),
+        JitPlan::WholeSchedule
+    );
 }
 
 #[cfg(feature = "jit")]
@@ -880,7 +1093,7 @@ fn hotness_advances_once_across_both_ranges() {
     execution
         .evaluate_source_prelude(&mut environment, None)
         .unwrap();
-    assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::PerStream);
+    assert_eq!(execution.jit_report().unwrap().plan(), JitPlan::Regions);
     execution
         .evaluate_main_and_commit(&mut environment, None)
         .unwrap();
@@ -959,30 +1172,128 @@ fn dynamic_and_defer_owners_share_templates_but_not_state() {
     let execution = execution(&monitor);
     let mut active = Vec::new();
     for evaluator in &execution.evaluators.evaluators {
-        let StreamOp::Dynamic(spec) = &evaluator.program.graph.nodes[0] else {
+        let StreamOp::Reconfigurable(spec) = &evaluator.program.graph.nodes[0] else {
             panic!("test stream must start with a dynamic expression");
         };
-        let dynamic = evaluator
-            .tier_states
+        let expression = evaluator
             .canonical
-            .dynamic_expression_state(NodeId::new(0));
-        let active_expression = dynamic
+            .reconfigurable_expression_state(NodeId::new(0));
+        let active_expression = expression
             .active_expression
             .as_ref()
             .expect("the source barrier must activate the body");
         if spec.kind == ReconfigurableExpressionKind::Deferred {
-            assert_eq!(dynamic.last_defer_result, Some(Value::Int(10)));
+            assert_eq!(expression.last_defer_result, Some(Value::Int(10)));
         } else {
-            assert_eq!(dynamic.last_defer_result, None);
+            assert_eq!(expression.last_defer_result, None);
         }
         active.push(active_expression);
     }
     assert_eq!(active.len(), 2);
     assert!(Rc::ptr_eq(&active[0].template, &active[1].template));
     assert!(!std::ptr::eq(
-        active[0].evaluator.tier_states.canonical.as_ref(),
-        active[1].evaluator.tier_states.canonical.as_ref(),
+        active[0].evaluator.canonical.as_ref(),
+        active[1].evaluator.canonical.as_ref(),
     ));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn special_row_falls_back_and_dense_row_resumes_whole_native_execution() {
+    let specification = "in x: Int\nout result: Int\nresult = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(3)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(4)]);
+    assert_eq!(
+        execution(&monitor).evaluators.published_scalars.as_ref(),
+        &[None]
+    );
+
+    // Special values are outside the concrete native contract and trigger a cold transition.
+    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(4)]);
+    assert_eq!(
+        execution(&monitor).evaluators.published_scalars.as_ref(),
+        &[Some(ScalarValue::Int(4))]
+    );
+
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    assert_eq!(
+        execution(&monitor).evaluators.published_scalars.as_ref(),
+        &[Some(ScalarValue::Int(4))]
+    );
+    assert!(matches!(
+        execution(&monitor).authoritative_tier,
+        super::AuthoritativeTier::WholeNative
+    ));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn consecutive_sparse_rows_keep_canonical_retention_until_native_resumes() {
+    let specification = "in x: Int\nin y: Int\nout result: Int\nresult = x + y"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+    let mut output = [Value::NoVal];
+    for (row, expected) in [
+        ([Value::Int(1), Value::Int(10)], Value::Int(11)),
+        ([Value::Int(2), Value::NoVal], Value::Int(12)),
+        ([Value::NoVal, Value::Int(20)], Value::Int(22)),
+        ([Value::Deferred, Value::NoVal], Value::Deferred),
+        ([Value::NoVal, Value::NoVal], Value::Deferred),
+        ([Value::Int(3), Value::Int(4)], Value::Int(7)),
+    ] {
+        monitor.evaluate(&row, &mut output).unwrap();
+        assert_eq!(output, [expected]);
+    }
+    assert!(matches!(
+        execution(&monitor).authoritative_tier,
+        super::AuthoritativeTier::WholeNative
+    ));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn fused_temporal_state_materializes_before_context_transfer() {
+    let old_specification = "in x: Int\nout result: Int\nresult = default(result[1], 0) + x"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(old_specification, JitConfig::eager()).unwrap();
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(3)]);
+    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
+
+    let new_specification =
+        "in added: Int\nin x: Int\nout result: Int\nresult = default(result[1], 0) + x"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+    let candidate = DataflowProgram::compile_checked(new_specification).unwrap();
+    let report = monitor
+        .reconfigure(candidate, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert_eq!(
+        report.context_transfer.streams.as_slice()[0].outcome,
+        StreamStateTransferOutcome::Transferred
+    );
+
+    let input = input_row(
+        &monitor,
+        &[("added", Value::Int(100)), ("x", Value::Int(3))],
+    );
+    monitor.evaluate(&input, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(6)]);
 }
 
 #[test]
@@ -1040,4 +1351,311 @@ fn dynamic_schedule_reuses_cached_plan_identity() {
 
     monitor.evaluate(&forward, &mut output).unwrap();
     assert_eq!(execution(&monitor).engine.cached_plans.len(), 1);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn late_eager_jit_activation_preserves_fused_lift_state() {
+    let specification = "in x: Int\nout result: Int\nresult = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+
+    monitor.enable_jit(JitConfig::eager());
+    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn hot_jit_activation_preserves_fused_lift_state() {
+    let specification = "in x: Int\nout result: Int\nresult = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    monitor.enable_jit(JitConfig::after_events(1));
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn schedule_change_after_native_tick_materializes_native_before_fused_state() {
+    let specification = "in x: Int\n\
+        aux first: Int\n\
+        aux second: Int\n\
+        out result: Int\n\
+        first = (x + 1) * 2\n\
+        second = x * 3\n\
+        result = first + second"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let mut execution = execution_with_ranges(
+        &monitor,
+        &[],
+        &[StreamId::new(0), StreamId::new(1), StreamId::new(2)],
+    );
+    execution.enable_jit(JitConfig::eager());
+    let mut environment = vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
+    environment[0] = Value::Int(1);
+    execution
+        .evaluate_with_history(&mut environment, None, None)
+        .unwrap();
+    assert_eq!(
+        environment[execution.stream_slots.slot(StreamId::new(2)).index()],
+        Value::Int(7)
+    );
+
+    execution.select_schedule_ranges(
+        &[],
+        &[StreamId::new(1), StreamId::new(0), StreamId::new(2)],
+        execution.stream_slots,
+    );
+    environment[0] = Value::NoVal;
+    execution
+        .evaluate_with_history(&mut environment, None, None)
+        .unwrap();
+    assert_eq!(
+        environment[execution.stream_slots.slot(StreamId::new(2)).index()],
+        Value::Int(7)
+    );
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn scalar_native_context_transfer_preserves_canonical_lift_state() {
+    let specification = "in x: Int\n\
+        aux first: Int\n\
+        out result: Int\n\
+        first = (x + 1) * 2\n\
+        result = first + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let source_program = DataflowProgram::compile_checked(specification.clone()).unwrap();
+    let target_program = DataflowProgram::compile_checked(specification).unwrap();
+    let mapping = ReconfigurationMapping::between(&source_program, &target_program);
+    let source_order = [StreamId::new(0)];
+    let main_order = [StreamId::new(1)];
+    let mut source = MonitorExecution::new_with_source_prelude(
+        source_program.stream_programs().to_vec(),
+        source_program.monitor_plan().stream_slots,
+        &source_order,
+        &main_order,
+        &[],
+    );
+    let mut target = MonitorExecution::new_with_source_prelude(
+        target_program.stream_programs().to_vec(),
+        target_program.monitor_plan().stream_slots,
+        &source_order,
+        &main_order,
+        &[],
+    );
+    source.enable_jit(JitConfig::eager());
+    target.enable_jit(JitConfig::eager());
+
+    let mut source_environment =
+        vec![Value::NoVal; source.engine.active_plan.semantic.environment_len];
+    source_environment[0] = Value::Int(3);
+    source
+        .evaluate_source_prelude(&mut source_environment, None)
+        .unwrap();
+
+    source
+        .evaluate_main_and_commit(&mut source_environment, None)
+        .unwrap();
+    assert!(matches!(
+        source.authoritative_tier,
+        super::AuthoritativeTier::Regions(_)
+    ));
+
+    let result_slot = source.stream_slots.slot(StreamId::new(1)).index();
+    assert_eq!(source_environment[result_slot], Value::Int(9));
+
+    let mut target_environment =
+        vec![Value::NoVal; target.engine.active_plan.semantic.environment_len];
+    target.context_transfer_from(
+        &mut source,
+        &mapping,
+        ContextTransferPolicy::MatchingStreamState,
+    );
+    target
+        .evaluate_source_prelude(&mut target_environment, None)
+        .unwrap();
+    target
+        .evaluate_main_and_commit(&mut target_environment, None)
+        .unwrap();
+    assert_eq!(target_environment[result_slot], Value::Int(9));
+}
+
+#[test]
+fn fused_plan_transition_restores_cached_plan_identity() {
+    let specification = "in left_input: Int\n\
+        in right_input: Int\n\
+        out left: Int\n\
+        out right: Int\n\
+        left = left_input + 1\n\
+        right = right_input * 2"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let monitor = DataflowMonitor::compile_checked(specification).unwrap();
+    let mut execution = execution_with_ranges(&monitor, &[], &[StreamId::new(0), StreamId::new(1)]);
+    assert_eq!(execution.engine.active_plan.regions.len(), 1);
+    let forward_identity = execution.engine.active_plan.identity;
+    let left_slot = execution.stream_slots.slot(StreamId::new(0)).index();
+    let right_slot = execution.stream_slots.slot(StreamId::new(1)).index();
+    let mut environment = vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
+    environment[0] = Value::Int(1);
+    environment[1] = Value::Int(2);
+
+    execution
+        .evaluate_with_history(&mut environment, None, None)
+        .unwrap();
+    assert_eq!(environment[left_slot], Value::Int(2));
+    assert_eq!(environment[right_slot], Value::Int(4));
+
+    execution.select_schedule_ranges(
+        &[],
+        &[StreamId::new(1), StreamId::new(0)],
+        execution.stream_slots,
+    );
+    let reverse_identity = execution.engine.active_plan.identity;
+    assert_ne!(reverse_identity, forward_identity);
+    assert_ne!(reverse_identity.generation, forward_identity.generation);
+    execution
+        .evaluate_with_history(&mut environment, None, None)
+        .unwrap();
+    assert_eq!(environment[left_slot], Value::Int(2));
+    assert_eq!(environment[right_slot], Value::Int(4));
+
+    execution.select_schedule_ranges(
+        &[],
+        &[StreamId::new(0), StreamId::new(1)],
+        execution.stream_slots,
+    );
+    assert_eq!(execution.engine.active_plan.identity, forward_identity);
+    execution
+        .evaluate_with_history(&mut environment, None, None)
+        .unwrap();
+    assert_eq!(environment[left_slot], Value::Int(2));
+    assert_eq!(environment[right_slot], Value::Int(4));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn eager_jit_retains_deferred_through_trailing_no_val() {
+    let specification = "in x: Int\nout result: Int\nresult = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+    let mut output = [Value::NoVal];
+
+    for (input, expected) in [
+        (Value::Int(1), Value::Int(2)),
+        (Value::NoVal, Value::Int(2)),
+        (Value::Deferred, Value::Deferred),
+        (Value::NoVal, Value::Deferred),
+    ] {
+        monitor.evaluate(&[input], &mut output).unwrap();
+        assert_eq!(output, [expected]);
+    }
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn eager_jit_conditional_retention_matches_checked_canonical() {
+    let specification = "in c: Bool\n\
+        in x: Int\n\
+        in y: Int\n\
+        out result: Int\n\
+        result = if c then x + 1 else y + 2"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut canonical = DataflowMonitor::compile_checked(specification.clone()).unwrap();
+    let mut eager =
+        DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+    let mut canonical_output = [Value::NoVal];
+    let mut eager_output = [Value::NoVal];
+
+    for (row, expected) in [
+        (
+            [Value::Bool(true), Value::Int(1), Value::Int(10)],
+            Value::Int(2),
+        ),
+        (
+            [Value::Bool(false), Value::Int(3), Value::Int(4)],
+            Value::Int(6),
+        ),
+        ([Value::NoVal, Value::NoVal, Value::NoVal], Value::Int(6)),
+        (
+            [Value::Deferred, Value::Deferred, Value::NoVal],
+            Value::Deferred,
+        ),
+        ([Value::NoVal, Value::NoVal, Value::NoVal], Value::Deferred),
+    ] {
+        canonical.evaluate(&row, &mut canonical_output).unwrap();
+        eager.evaluate(&row, &mut eager_output).unwrap();
+        assert_eq!(canonical_output, [expected]);
+        assert_eq!(eager_output, canonical_output);
+    }
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn eager_jit_materialization_preserves_deferred_after_no_val_replay() {
+    let specification = "in x: Int\nout result: Int\nresult = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
+    let mut output = [Value::NoVal];
+
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    monitor.evaluate(&[Value::Deferred], &mut output).unwrap();
+    assert_eq!(output, [Value::Deferred]);
+    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
+    assert_eq!(output, [Value::Deferred]);
+
+    let target = DataflowProgram::compile_checked(
+        "in added: Int\nin x: Int\nout result: Int\nresult = x + 1"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap(),
+    )
+    .unwrap();
+    monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    let input = input_row(&monitor, &[("added", Value::Int(0)), ("x", Value::NoVal)]);
+    monitor.evaluate(&input, &mut output).unwrap();
+    assert_eq!(output, [Value::Deferred]);
+}
+
+/// `out y = x` binds a stream to an external directly, so its graph has no nodes at all.
+#[test]
+fn a_pass_through_stream_still_forms_a_scalar_region() {
+    let specification = "in x: Int\nout y: Int\ny = x"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
+
+    assert_eq!(
+        layout_snapshot(&monitor),
+        [LayoutSnapshot::ScalarRun(vec![0])]
+    );
+
+    let mut output = [Value::NoVal];
+    monitor.evaluate(&[Value::Int(7)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(7)]);
+    monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
+    assert_eq!(output, [Value::NoVal]);
 }

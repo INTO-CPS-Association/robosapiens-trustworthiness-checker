@@ -11,8 +11,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::dataflow::environment::EnvironmentSlot;
-use crate::dataflow::execution_plan::{StreamId, StreamSlots};
 use crate::dataflow::ir::{BoundRef, NodeId, StreamOp, StreamProgram};
+use crate::dataflow::stream_id::{StreamId, StreamSlots};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::dataflow) struct PlanId(pub(in crate::dataflow) u64);
@@ -34,7 +34,7 @@ pub(in crate::dataflow) struct PlanStateSlot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::dataflow) struct PlanEffects {
-    pub(in crate::dataflow) may_fail: bool,
+    pub(in crate::dataflow) dynamic_evaluation: bool,
     pub(in crate::dataflow) reads_temporal_state: bool,
     pub(in crate::dataflow) writes_temporal_state: bool,
 }
@@ -102,13 +102,8 @@ pub(in crate::dataflow) enum TemporalOperation {
 
 #[derive(Clone)]
 pub(in crate::dataflow) enum TemporalCommit {
-    Delay {
-        state: PlanStateSlot,
-        input: BoundRef,
-    },
-    RecursiveDelay {
-        state: PlanStateSlot,
-    },
+    Delay,
+    RecursiveDelay,
 }
 
 impl PlanMetadata {
@@ -141,7 +136,7 @@ impl StreamMetadata {
     fn new(stream: StreamId, program: &Rc<StreamProgram>, output: EnvironmentSlot) -> Self {
         let temporal = TemporalPlan::new(stream, program);
         let effects = PlanEffects {
-            may_fail: !program.is_infallible(),
+            dynamic_evaluation: !program.uses_static_evaluation(),
             reads_temporal_state: !temporal.operations.is_empty(),
             writes_temporal_state: !temporal.commits.is_empty()
                 || temporal
@@ -249,8 +244,10 @@ impl ScheduledExecutionPlan {
         self.source_stream_count != 0
     }
 
-    pub(in crate::dataflow) fn is_infallible(&self) -> bool {
-        self.streams.iter().all(|stream| !stream.effects.may_fail)
+    pub(in crate::dataflow) fn uses_static_evaluation(&self) -> bool {
+        self.streams
+            .iter()
+            .all(|stream| !stream.effects.dynamic_evaluation)
     }
 
     pub(in crate::dataflow) fn has_temporal_state(&self) -> bool {
@@ -275,10 +272,7 @@ impl TemporalPlan {
                         offset: *offset,
                     });
                     if *offset > 0 {
-                        commits.push(TemporalCommit::Delay {
-                            state,
-                            input: input.clone(),
-                        });
+                        commits.push(TemporalCommit::Delay);
                     }
                 }
                 StreamOp::RecursiveDelay { offset } => {
@@ -286,7 +280,7 @@ impl TemporalPlan {
                         state,
                         offset: offset.get(),
                     });
-                    commits.push(TemporalCommit::RecursiveDelay { state });
+                    commits.push(TemporalCommit::RecursiveDelay);
                 }
                 StreamOp::Default { input, fallback } => {
                     operations.push(TemporalOperation::Default {

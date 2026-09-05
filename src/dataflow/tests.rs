@@ -216,11 +216,11 @@ fn arb_specialized_runtime_program_and_inputs()
         })
 }
 
-type DynamicInputRow = (Value, Value, Value);
+type ReconfigurableInputRow = (Value, Value, Value);
 
 fn arb_runtime_compiled_program(
     combinator: &'static str,
-) -> impl Strategy<Value = (DsrvSpecification, Vec<DynamicInputRow>)> {
+) -> impl Strategy<Value = (DsrvSpecification, Vec<ReconfigurableInputRow>)> {
     prop::collection::vec((sparse_int(), sparse_int(), any::<[u8; 2]>()), 1..40).prop_map(
         move |rows| {
             let property = if combinator == "dynamic" {
@@ -268,7 +268,7 @@ fn arb_runtime_compiled_program(
     )
 }
 
-fn evaluate_runtime_compiled_property(spec: DsrvSpecification, rows: &[DynamicInputRow]) {
+fn evaluate_runtime_compiled_property(spec: DsrvSpecification, rows: &[ReconfigurableInputRow]) {
     let typed_spec = spec
         .clone()
         .type_check(TypeCheckOptions::STRICT)
@@ -741,7 +741,7 @@ async fn assert_dataflow_semisync_runtime_parity(
     dataflow
 }
 
-fn dynamic_inputs(rows: &[DynamicInputRow]) -> BTreeMap<VarName, Vec<Value>> {
+fn dynamic_inputs(rows: &[ReconfigurableInputRow]) -> BTreeMap<VarName, Vec<Value>> {
     BTreeMap::from([
         (
             VarName::new("x"),
@@ -1730,7 +1730,7 @@ fn dataflow_evaluation_failures_poison_the_monitor() {
     let error = monitor.evaluate(&invalid, &mut output).unwrap_err();
     assert!(matches!(
         error,
-        crate::dataflow::DataflowEvaluationError::DynamicExpressionParse { .. }
+        crate::dataflow::DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
     assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
     assert!(matches!(
@@ -1752,7 +1752,7 @@ fn checked_dataflow_dynamic_type_failures_poison_the_monitor() {
         .unwrap_err();
     assert!(matches!(
         error,
-        crate::dataflow::DataflowEvaluationError::DynamicExpressionType { .. }
+        crate::dataflow::DataflowEvaluationError::ReconfigurableExpressionType { .. }
     ));
     assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
     assert!(matches!(
@@ -1904,7 +1904,7 @@ fn dataflow_lazy_if_reads_inputs_at_the_outer_tick() {
 }
 
 #[test]
-fn dataflow_rejects_reconfigurable_expressions_in_fallible_lazy_branches() {
+fn dataflow_rejects_reconfigurable_expressions_in_dynamic_lazy_branches() {
     let spec = "in flag: Bool\n\
                         in x: Int\n\
                         in s: Str\n\
@@ -2116,7 +2116,7 @@ fn typed_and_untyped_dataflow_defer_scope_failures_poison_the_monitor() {
         let error = monitor.evaluate(&input, &mut output).unwrap_err();
         assert!(matches!(
             error,
-            crate::dataflow::DataflowEvaluationError::DynamicExpressionContext(_)
+            crate::dataflow::DataflowEvaluationError::ReconfigurableExpressionContext(_)
         ));
         assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
         assert!(matches!(

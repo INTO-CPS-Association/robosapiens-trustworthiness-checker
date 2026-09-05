@@ -3,7 +3,8 @@ use std::fmt::{Debug, Display, Error};
 use crate::core::{BinaryOperator, StreamTypeAscription, VarName};
 
 use super::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, Expr, ExprRef,
+    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
+    ReconfigurableExprScope,
 };
 
 impl Debug for CheckedExpr {
@@ -49,7 +50,7 @@ impl Display for ExprRef<'_> {
                 if let StreamTypeAscription::Ascribed(typ) = result_type {
                     write!(f, ": {typ}")?;
                 }
-                if let DynamicExprScope::Explicit(vars) = scope {
+                if let ReconfigurableExprScope::Explicit(vars) = scope {
                     let vars = vars
                         .iter()
                         .map(ToString::to_string)
@@ -64,7 +65,7 @@ impl Display for ExprRef<'_> {
                 if let StreamTypeAscription::Ascribed(typ) = result_type {
                     write!(f, ": {typ}")?;
                 }
-                if let DynamicExprScope::Explicit(vars) = scope {
+                if let ReconfigurableExprScope::Explicit(vars) = scope {
                     let vars = vars
                         .iter()
                         .map(ToString::to_string)

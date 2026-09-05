@@ -2,10 +2,10 @@ use super::*;
 use crate::VarName;
 use crate::core::BinaryOperator;
 use crate::dataflow::ContextTransferPolicy;
-use crate::dataflow::execution::dynamic_expressions::{
-    DynamicExpressionActivation, SharedDynamicExpressionCache,
-};
 use crate::dataflow::execution::evaluator_state::*;
+use crate::dataflow::execution::reconfigurable_expressions::{
+    ReconfigurableExpressionActivation, SharedReconfigurableExpressionCache,
+};
 use crate::dataflow::ir::*;
 
 fn program(graph: BoundEvaluationGraph) -> Rc<StreamProgram> {
@@ -36,16 +36,16 @@ fn cloned_evaluator_has_independent_state() {
 
     assert_eq!(state_clone_count(), 1);
     assert!(Rc::ptr_eq(&source.program, &candidate.program));
-    assert_eq!(source.tier_states.canonical.node_values[0], Value::NoVal);
-    assert_eq!(candidate.tier_states.canonical.node_values[0], Value::NoVal);
+    assert_eq!(source.canonical.node_values[0], Value::NoVal);
+    assert_eq!(candidate.canonical.node_values[0], Value::NoVal);
 
-    assert_eq!(candidate.evaluate_canonical_infallible(&[]), Value::Int(3));
-
-    assert_eq!(source.tier_states.canonical.node_values[0], Value::NoVal);
     assert_eq!(
-        candidate.tier_states.canonical.node_values[0],
+        candidate.evaluate_static_and_stage(&[], None),
         Value::Int(3)
     );
+
+    assert_eq!(source.canonical.node_values[0], Value::NoVal);
+    assert_eq!(candidate.canonical.node_values[0], Value::Int(3));
     assert_eq!(state_clone_count(), 1);
 }
 
@@ -64,15 +64,17 @@ fn cloned_evaluator_has_independent_lazy_branch_state() {
     let source = Evaluator::new(Rc::clone(&program));
     let mut candidate = source.clone();
 
-    let branch_value = |evaluator: &Evaluator| match &evaluator.tier_states.canonical.node_states[0]
-    {
+    let branch_value = |evaluator: &Evaluator| match &evaluator.canonical.node_states[0] {
         NodeState::LazyIf(lazy) => lazy.then_state.node_values[0].clone(),
         _ => panic!("expected lazy branch state"),
     };
     assert_eq!(branch_value(&source), Value::NoVal);
     assert_eq!(branch_value(&candidate), Value::NoVal);
 
-    assert_eq!(candidate.evaluate_canonical_infallible(&[]), Value::Int(3));
+    assert_eq!(
+        candidate.evaluate_static_and_stage(&[], None),
+        Value::Int(3)
+    );
 
     assert_eq!(branch_value(&source), Value::NoVal);
     assert_eq!(branch_value(&candidate), Value::Int(3));
@@ -84,7 +86,10 @@ fn unique_repeated_evaluation_does_not_clone_canonical_state() {
     reset_state_clone_count();
 
     for _ in 0..16 {
-        assert_eq!(evaluator.evaluate_canonical_infallible(&[]), Value::Int(9));
+        assert_eq!(
+            evaluator.evaluate_static_and_stage(&[], None),
+            Value::Int(9)
+        );
     }
 
     assert_eq!(state_clone_count(), 0);
@@ -95,15 +100,12 @@ fn exact_nested_state_transfer_discards_target_scratch_values() {
     let program = program(add_graph(6, 7));
     let mut source = Evaluator::new(Rc::clone(&program));
     let mut target = Evaluator::new(Rc::clone(&program));
-    assert_eq!(source.evaluate_canonical_infallible(&[]), Value::Int(13));
+    assert_eq!(source.evaluate_static_and_stage(&[], None), Value::Int(13));
     target.state_mut().node_values[0] = Value::Bool(true);
 
     target.rewrite_exact_nested_from(&mut source);
-    assert_eq!(
-        source.tier_states.canonical.node_values[0],
-        Value::Bool(true)
-    );
-    assert_eq!(target.tier_states.canonical.node_values[0], Value::NoVal);
+    assert_eq!(source.canonical.node_values[0], Value::Bool(true));
+    assert_eq!(target.canonical.node_values[0], Value::NoVal);
 }
 
 fn dynamic_program(prefix_nodes: usize) -> Rc<StreamProgram> {
@@ -119,7 +121,7 @@ fn dynamic_program_with_variables(
         .map(|name| VarName::new(*name))
         .collect::<Vec<_>>();
     let environment = Rc::new(EnvironmentLayout::from_variables(variables.iter().cloned()));
-    let spec = BoundDynamicExpressionSpec {
+    let spec = BoundReconfigurableExpressionSpec {
         input: BoundRef::Const(Value::Str("x[1]".into())),
         scope: ReconfigurableExpressionScope::Restricted {
             allowed_variables: variables.into_iter().collect(),
@@ -135,7 +137,7 @@ fn dynamic_program_with_variables(
         })
         .collect::<Vec<_>>();
     let dynamic_node = NodeId::new(nodes.len());
-    nodes.push(BoundOp::Dynamic(spec));
+    nodes.push(BoundOp::Reconfigurable(spec));
     let graph = BoundEvaluationGraph::new(
         nodes,
         vec![None; prefix_nodes + 1],
@@ -148,9 +150,9 @@ fn reconfigure(
     evaluator: &mut Evaluator,
     source: &str,
     transfer: ContextTransferPolicy,
-) -> (DynamicExpressionActivation, bool) {
+) -> (ReconfigurableExpressionActivation, bool) {
     let node = NodeId::new(evaluator.program.graph.nodes.len() - 1);
-    let mut shared_template_cache = SharedDynamicExpressionCache::default();
+    let mut shared_template_cache = SharedReconfigurableExpressionCache::default();
     evaluator
         .reconfigure_expression(
             node,
@@ -173,17 +175,17 @@ fn seed_active_dynamic_body_with_environment(
     let node = NodeId::new(evaluator.program.graph.nodes.len() - 1);
     let environment_values = {
         let state = evaluator.state_mut();
-        let NodeState::Dynamic(dynamic) = &mut state.node_states[node.index()] else {
+        let NodeState::Reconfigurable(expression) = &mut state.node_states[node.index()] else {
             panic!("test program must end in a dynamic node");
         };
-        dynamic.update_environment(environment_values, retained_environment_values);
-        dynamic.environment_values.clone()
+        expression.update_environment(environment_values, retained_environment_values);
+        expression.environment_values.clone()
     };
     let state = evaluator.state_mut();
-    let NodeState::Dynamic(dynamic) = &mut state.node_states[node.index()] else {
+    let NodeState::Reconfigurable(expression) = &mut state.node_states[node.index()] else {
         panic!("test program must end in a dynamic node");
     };
-    dynamic
+    expression
         .active_expression
         .as_mut()
         .expect("test dynamic body must be active")
@@ -203,12 +205,12 @@ fn evaluate_active_dynamic_body_with_environment(
 ) -> Value {
     let node = NodeId::new(evaluator.program.graph.nodes.len() - 1);
     let state = evaluator.state_mut();
-    let NodeState::Dynamic(dynamic) = &mut state.node_states[node.index()] else {
+    let NodeState::Reconfigurable(expression) = &mut state.node_states[node.index()] else {
         panic!("test program must end in a dynamic node");
     };
-    dynamic.update_environment(environment_values, retained_environment_values);
-    let environment_values = dynamic.environment_values.clone();
-    dynamic
+    expression.update_environment(environment_values, retained_environment_values);
+    let environment_values = expression.environment_values.clone();
+    expression
         .active_expression
         .as_mut()
         .expect("test dynamic body must be active")
@@ -301,20 +303,18 @@ fn no_transfer_reuses_environment_storage_but_refreshes_target_slots() {
         None,
     );
     let storage = evaluator
-        .tier_states
         .canonical
-        .dynamic_expression_state(NodeId::new(1))
+        .reconfigurable_expression_state(NodeId::new(1))
         .environment_values
         .as_ptr();
 
     let (_, state_preserved) = reconfigure(&mut evaluator, "y", ContextTransferPolicy::None);
     assert!(!state_preserved);
-    let dynamic = evaluator
-        .tier_states
+    let expression = evaluator
         .canonical
-        .dynamic_expression_state(NodeId::new(1));
-    assert_eq!(dynamic.environment_values.as_ptr(), storage);
-    assert_eq!(dynamic.environment_values[1], Value::Int(99));
+        .reconfigurable_expression_state(NodeId::new(1));
+    assert_eq!(expression.environment_values.as_ptr(), storage);
+    assert_eq!(expression.environment_values[1], Value::Int(99));
 
     assert_eq!(
         evaluate_active_dynamic_body_with_environment(
@@ -337,7 +337,7 @@ fn nested_expression_reconfiguration_reports_only_actual_state_preservation() {
     );
     assert!(matches!(
         activation,
-        DynamicExpressionActivation::Activated { .. }
+        ReconfigurableExpressionActivation::Activated { .. }
     ));
     assert!(!state_preserved, "fresh activation has no donor state");
 
@@ -377,10 +377,7 @@ fn changed_nested_expression_reconfiguration_does_not_clone_evaluator_state() {
     );
     assert!(!state_preserved);
     assert_eq!(state_clone_count(), 0);
-    assert_eq!(
-        evaluator.tier_states.canonical.node_values[0],
-        Value::Int(99)
-    );
+    assert_eq!(evaluator.canonical.node_values[0], Value::Int(99));
 }
 
 #[test]
@@ -400,7 +397,7 @@ fn changed_nested_expression_publishes_a_cold_body() {
     );
     assert!(matches!(
         activation,
-        DynamicExpressionActivation::Replaced { .. }
+        ReconfigurableExpressionActivation::Replaced { .. }
     ));
     assert!(!state_preserved);
     assert_eq!(
@@ -417,19 +414,18 @@ fn invalid_nested_expression_reconfiguration_is_atomic_for_the_live_state() {
         "x[1]",
         ContextTransferPolicy::MatchingStreamState,
     );
-    let node_values_before = evaluator.tier_states.canonical.node_values.clone();
+    let node_values_before = evaluator.canonical.node_values.clone();
     let template_before = Rc::clone(
         &evaluator
-            .tier_states
             .canonical
-            .dynamic_expression_state(NodeId::new(1))
+            .reconfigurable_expression_state(NodeId::new(1))
             .active_expression
             .as_ref()
             .expect("test dynamic body must be active")
             .template,
     );
 
-    let mut shared_template_cache = SharedDynamicExpressionCache::default();
+    let mut shared_template_cache = SharedReconfigurableExpressionCache::default();
     assert!(
         evaluator
             .reconfigure_expression(
@@ -440,15 +436,11 @@ fn invalid_nested_expression_reconfiguration_is_atomic_for_the_live_state() {
             )
             .is_err()
     );
-    assert_eq!(
-        evaluator.tier_states.canonical.node_values,
-        node_values_before
-    );
+    assert_eq!(evaluator.canonical.node_values, node_values_before);
     assert!(Rc::ptr_eq(
         &evaluator
-            .tier_states
             .canonical
-            .dynamic_expression_state(NodeId::new(1))
+            .reconfigurable_expression_state(NodeId::new(1))
             .active_expression
             .as_ref()
             .unwrap()

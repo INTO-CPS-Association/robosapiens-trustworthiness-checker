@@ -94,7 +94,7 @@ mod tests {
         let res_stream = crate::semantics::untimed_dsrv::combinators::dynamic::<TestDistConfig>(
             &ctx,
             e,
-            crate::lang::dsrv::ast::DynamicExprScope::Automatic,
+            crate::lang::dsrv::ast::ReconfigurableExprScope::Automatic,
             None,
             10,
         );

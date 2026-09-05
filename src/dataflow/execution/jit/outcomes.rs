@@ -1,7 +1,5 @@
-use crate::dataflow::Value;
-
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(in crate::dataflow) enum FusedTickOutcome {
+pub(in crate::dataflow) enum WholeTickOutcome {
     NotAvailable,
     Completed,
     CompletedAndCommitted,
@@ -9,8 +7,8 @@ pub(in crate::dataflow) enum FusedTickOutcome {
 }
 
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(in crate::dataflow) enum GraphTickOutcome {
-    NotAvailable,
-    Value(Value),
-    CanonicalFallback,
+pub(in crate::dataflow) enum NativeRegionOutcome {
+    Unavailable,
+    Completed,
+    Deoptimized,
 }

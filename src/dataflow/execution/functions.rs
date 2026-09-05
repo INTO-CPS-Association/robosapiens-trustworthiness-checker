@@ -119,7 +119,7 @@ impl RecursiveCall {
         let value = frame
             .evaluator
             .evaluate_and_commit(&frame.environment_values, recursive_call)
-            .expect("function programs cannot contain fallible dynamic operators");
+            .expect("function programs cannot contain dynamic operators");
         self.available_frames.borrow_mut().push(frame);
         Ok(value)
     }
@@ -176,7 +176,7 @@ pub(in crate::dataflow) fn evaluate_direct_apply(
 
     evaluator
         .evaluate_and_stage(environment_values)
-        .expect("direct function programs cannot contain fallible dynamic operators")
+        .expect("direct function programs cannot contain dynamic operators")
 }
 
 pub(in crate::dataflow) fn evaluate_recursive_apply(

@@ -32,7 +32,7 @@ pub(in crate::dataflow) mod test_support {
 
 use super::*;
 use crate::dataflow::execution::evaluator_state::{reset_state_clone_count, state_clone_count};
-use crate::dataflow::execution_plan::StreamId;
+use crate::dataflow::stream_id::StreamId;
 use crate::dataflow::{
     ContextTransferReport, DataflowEvaluationError, ReconfigurationMapping, StreamMapping,
     StreamStateTransferOutcome,
@@ -1000,7 +1000,7 @@ fn invalid_dynamic_candidate_poisons_the_monitor() {
         .unwrap_err();
     assert!(matches!(
         error,
-        DataflowEvaluationError::DynamicExpressionParse { .. }
+        DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
     assert_eq!(output, previous_output);
     assert!(matches!(
@@ -1025,7 +1025,7 @@ fn failed_active_monitor_does_not_take_exact_root_retention() {
         .unwrap_err();
     assert!(matches!(
         error,
-        DataflowEvaluationError::DynamicExpressionParse { .. }
+        DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
 
     let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
@@ -1089,7 +1089,7 @@ fn invalid_dynamic_candidate_publishes_no_failed_tick_output() {
         .unwrap_err();
     assert!(matches!(
         error,
-        DataflowEvaluationError::DynamicExpressionParse { .. }
+        DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
     assert_eq!(output, previous_output);
     assert!(matches!(
@@ -1123,7 +1123,7 @@ fn invalid_dynamic_source_poisons_the_monitor() {
         .unwrap_err();
     assert!(matches!(
         error,
-        DataflowEvaluationError::DynamicExpressionParse { .. }
+        DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
     assert!(matches!(
         monitor.evaluate(&[Value::Int(3), Value::NoVal], &mut output,),
@@ -1147,7 +1147,7 @@ fn invalid_first_defer_source_poisons_the_monitor() {
         .unwrap_err();
     assert!(matches!(
         error,
-        DataflowEvaluationError::DynamicExpressionParse { .. }
+        DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
     assert!(matches!(
         monitor.evaluate(&[Value::Int(2), Value::NoVal], &mut output,),
@@ -1866,7 +1866,10 @@ result = if choose then x + 1 else x + 2"
     canonical.evaluate(&initial, &mut canonical_output).unwrap();
     assert_eq!(continued_output, [Value::Int(4)]);
     assert_eq!(continued_output, canonical_output);
-    assert_eq!(continued.jit_report().unwrap().plan(), JitPlan::Fused);
+    assert_eq!(
+        continued.jit_report().unwrap().plan(),
+        JitPlan::WholeSchedule
+    );
 
     let mut replacement =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
@@ -1908,7 +1911,7 @@ fn defer_sealing_preserves_per_stream_jit_artifacts() {
         .unwrap();
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
-    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::PerStream);
+    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::Regions);
     assert_eq!(monitor.jit_report().unwrap().compiled_artifacts(), 2);
     let artifacts = monitor.execution.jit_artifact_count();
 

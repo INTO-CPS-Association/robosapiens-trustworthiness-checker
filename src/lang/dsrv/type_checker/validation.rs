@@ -7,7 +7,7 @@ use contiguous_tree::TreeCursorExt;
 use super::{SemanticError, SemanticResult, TCType, TypeErrorKind};
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
-    DsrvSpecification, DynamicExprScope, ExprFieldRefs, ExprRef, ExprView,
+    DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope,
 };
 use crate::{Value, VarName};
 use ecow::EcoVec;
@@ -114,10 +114,10 @@ fn validate_children(
 
 fn validate_runtime_scope(
     expression: ExprRef<'_>,
-    scope: &DynamicExprScope,
+    scope: &ReconfigurableExprScope,
     context: &AstValidationContext<'_>,
 ) -> Result<(), SemanticError> {
-    let DynamicExprScope::Explicit(variables) = scope else {
+    let ReconfigurableExprScope::Explicit(variables) = scope else {
         return Ok(());
     };
     let mut seen = BTreeSet::new();

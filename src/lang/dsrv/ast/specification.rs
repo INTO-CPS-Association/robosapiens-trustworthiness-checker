@@ -342,8 +342,8 @@ mod tests {
         spec_simple_add_monitor_typed,
     };
     use crate::lang::dsrv::ast::{
-        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, DynamicExprScope, ExprBuilder,
-        ExprKind,
+        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, ExprBuilder, ExprKind,
+        ReconfigurableExprScope,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
@@ -513,7 +513,7 @@ mod tests {
         let ExprView::Dynamic(_, _, scope) = dynamic.view() else {
             panic!("expected dynamic expression");
         };
-        assert_eq!(scope, &DynamicExprScope::Automatic);
+        assert_eq!(scope, &ReconfigurableExprScope::Automatic);
 
         let ExprView::ObjectLiteral(fields) = second.view() else {
             panic!("expected object-literal container");
@@ -524,7 +524,7 @@ mod tests {
         };
         assert_eq!(
             scope,
-            &DynamicExprScope::Explicit(eco_vec!["source".into()])
+            &ReconfigurableExprScope::Explicit(eco_vec!["source".into()])
         );
     }
 

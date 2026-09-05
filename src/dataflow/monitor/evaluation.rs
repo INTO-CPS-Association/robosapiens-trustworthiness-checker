@@ -4,9 +4,15 @@ use super::super::{JitConfig, JitReport};
 use super::DataflowMonitor;
 use crate::core::Value;
 use crate::dataflow::DataflowEvaluationError;
+#[cfg(feature = "jit")]
+use crate::dataflow::typed::TypedIoLayout;
 
 impl DataflowMonitor {
-    pub(crate) fn set_quickening(&mut self, enabled: bool) {
+    /// Enables or disables scalar-region quickening without changing monitor semantics.
+    ///
+    /// Changing this policy materializes any optimized state before rebuilding the active
+    /// execution plan, so it can also be used to compare canonical and quickened execution.
+    pub fn set_quickening(&mut self, enabled: bool) {
         self.execution.set_quickening(enabled);
     }
 
@@ -19,12 +25,23 @@ impl DataflowMonitor {
     pub(crate) fn enable_jit(&mut self, config: JitConfig) {
         self.execution.enable_jit(config);
     }
+
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn enable_typed_jit(
+        &mut self,
+        config: JitConfig,
+        layout: TypedIoLayout,
+    ) {
+        self.execution.enable_typed_jit(config, layout);
+    }
+
     /// Reports which native plan was selected, including safe fallback and backend failures.
     #[cfg(feature = "jit")]
     pub fn jit_report(&self) -> Option<&JitReport> {
         self.execution.jit_report()
     }
 
+    #[inline]
     pub fn evaluate(
         &mut self,
         input: &[Value],
@@ -46,34 +63,74 @@ impl DataflowMonitor {
             });
         }
 
-        if let Err(error) = self.execute_tick(input) {
-            self.execution.abort_tick();
-            self.failed = true;
-            return Err(error);
-        }
-        self.write_outputs(output);
-        self.commit_histories();
-        Ok(())
-    }
-
-    fn execute_tick(&mut self, input: &[Value]) -> Result<(), DataflowEvaluationError> {
         if self
             .program
             .monitor_plan()
             .reconfigurable_expressions
             .is_empty()
         {
-            self.environment_values[..input.len()].clone_from_slice(input);
-            let history_access = (!self.history_store.is_empty())
-                .then(|| HistoryAccess::new(&self.history_store, &self.history_bindings));
-            self.execution.evaluate_with_history(
-                &mut self.environment_values,
-                None,
-                history_access,
-            )?;
-            return Ok(());
+            return self.evaluate_stable_static(input, output);
         }
+        self.evaluate_reconfigurable(input, output)
+    }
+
+    #[inline(always)]
+    fn evaluate_stable_static(
+        &mut self,
+        input: &[Value],
+        output: &mut [Value],
+    ) -> Result<(), DataflowEvaluationError> {
+        self.environment_values[..input.len()].clone_from_slice(input);
+        let history_access = (!self.history_store.is_empty())
+            .then(|| HistoryAccess::new(&self.history_store, &self.history_bindings));
+        if let Err(error) =
+            self.execution
+                .evaluate_with_history(&mut self.environment_values, None, history_access)
+        {
+            return self.fail_tick(error);
+        }
+        self.write_outputs(output);
+        self.commit_histories();
+        Ok(())
+    }
+
+    fn evaluate_reconfigurable(
+        &mut self,
+        input: &[Value],
+        output: &mut [Value],
+    ) -> Result<(), DataflowEvaluationError> {
+        if let Err(error) = self.execute_reconfigurable_tick(input) {
+            return self.fail_tick(error);
+        }
+        self.write_outputs(output);
+        self.commit_histories();
+        Ok(())
+    }
+
+    #[cold]
+    fn fail_tick(&mut self, error: DataflowEvaluationError) -> Result<(), DataflowEvaluationError> {
+        self.execution.abort_tick();
+        self.failed = true;
+        Err(error)
+    }
+
+    fn execute_reconfigurable_tick(
+        &mut self,
+        input: &[Value],
+    ) -> Result<(), DataflowEvaluationError> {
+        debug_assert!(
+            !self
+                .program
+                .monitor_plan()
+                .reconfigurable_expressions
+                .is_empty()
+        );
         self.load_reconfigurable_inputs(input);
+        // The source barrier. Every `dynamic`/`defer` source must be evaluated and every body
+        // installed *before* any stream advances, because installing a body can add or remove
+        // same-tick edges. Resolving first means the scheduler sees one coherent dependency graph
+        // for the tick rather than a sequence of intermediate ones, and no stream advances twice
+        // merely because the order changed under it.
         self.evaluate_expression_sources()?;
         let resolution = self.resolve_reconfigurable_expressions()?;
         #[cfg(test)]

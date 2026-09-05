@@ -18,7 +18,7 @@ pub(crate) use analysis::DependencyKind;
 pub use checked::{CheckedExpr, CheckedExprRef};
 pub(crate) use checked::{ExprCursor, ExprTypes, ExprTypesBuilder};
 
-pub use expression::{DynamicExprScope, Expr, ExprId, ExprRef, ExprView, VarOrNodeName};
+pub use expression::{Expr, ExprId, ExprRef, ExprView, ReconfigurableExprScope, VarOrNodeName};
 pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprRefs,
 };

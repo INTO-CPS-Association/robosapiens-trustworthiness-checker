@@ -22,7 +22,7 @@ use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::span::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub enum DynamicExprScope {
+pub enum ReconfigurableExprScope {
     Automatic,
     Explicit(EcoVec<VarName>),
 }
@@ -49,12 +49,12 @@ contiguous_tree::tree_schema! {
         Dynamic(
             source: child,
             result_type: data(StreamTypeAscription),
-            scope: data(DynamicExprScope) = DynamicExprScope::Automatic,
+            scope: data(ReconfigurableExprScope) = ReconfigurableExprScope::Automatic,
         ),
         Defer(
             source: child,
             result_type: data(StreamTypeAscription),
-            scope: into_data(DynamicExprScope),
+            scope: into_data(ReconfigurableExprScope),
         ),
         Update(value: child, update: child),
         Default(value: child, default: child),
@@ -145,7 +145,7 @@ impl From<VarOrNodeName> for String {
     }
 }
 
-impl From<EcoVec<VarName>> for DynamicExprScope {
+impl From<EcoVec<VarName>> for ReconfigurableExprScope {
     fn from(vars: EcoVec<VarName>) -> Self {
         Self::Explicit(vars)
     }
@@ -184,13 +184,13 @@ mod tests {
     use ecow::EcoVec;
 
     use crate::core::BinaryOperator;
-    use crate::lang::dsrv::ast::{DynamicExprScope, Expr};
+    use crate::lang::dsrv::ast::{Expr, ReconfigurableExprScope};
 
     #[test]
     fn empty_scope_conversion_remains_explicit() {
         assert_eq!(
-            DynamicExprScope::from(EcoVec::new()),
-            DynamicExprScope::Explicit(EcoVec::new())
+            ReconfigurableExprScope::from(EcoVec::new()),
+            ReconfigurableExprScope::Explicit(EcoVec::new())
         );
     }
 

@@ -359,12 +359,14 @@ fn lower_reconfigurable_expression(
     typing: Option<ReconfigurableExpressionTyping>,
 ) -> UnboundRef {
     let input = lower_expression(input, builder);
-    builder.push(UnboundOp::Dynamic(UnboundDynamicExpressionSpec {
-        input,
-        scope,
-        kind,
-        typing,
-    }))
+    builder.push(UnboundOp::Reconfigurable(
+        UnboundReconfigurableExpressionSpec {
+            input,
+            scope,
+            kind,
+            typing,
+        },
+    ))
 }
 
 fn lower_function(params: EcoVec<(VarName, StreamType)>, body: ExprCursor<'_>) -> UnboundFunction {

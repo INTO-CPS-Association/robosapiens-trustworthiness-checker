@@ -1,3 +1,14 @@
+//! Per-node canonical state — the semantic authority for one stream.
+//!
+//! [`EvaluatorState`] is two [`NodeId`]-indexed vectors with opposite lifetimes. `node_values` is
+//! scratch: a forward pass overwrites every entry, which is what lets a later node resolve
+//! `DataRef::Node` in constant time. `node_states` is retained across ticks, and [`NodeState`] has
+//! one variant per operator that needs to remember anything.
+//!
+//! Accelerator tiers may take temporary authority over a range of these nodes, but they always hand
+//! it back here. This module remains the single implementation of delay, recursion, and lifting
+//! semantics; no tier defines a second one.
+
 use super::super::history::HistoryId;
 use super::super::history_requirements::VariableHistoryRequirement;
 use super::super::ir::*;
@@ -6,7 +17,7 @@ use super::super::*;
 use super::environment_projection::EnvironmentProjection;
 use super::evaluator::Evaluator;
 use super::quickening::ScalarValue;
-use crate::core::{RuntimeFunction, RuntimeFunctionValueCallable};
+use crate::core::{DeferrableStreamData, RuntimeFunction, RuntimeFunctionValueCallable};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 
 #[cfg(test)]
@@ -98,7 +109,7 @@ pub(in crate::dataflow) enum NodeState {
         environment_values: Vec<Value>,
         last_arguments: Vec<Option<Value>>,
     },
-    Dynamic(Box<DynamicExpressionState>),
+    Reconfigurable(Box<ReconfigurableExpressionState>),
     LazyIf(LazyIfState),
 }
 
@@ -121,13 +132,13 @@ impl LazyIfState {
     }
 }
 
-pub(in crate::dataflow) const DYNAMIC_EXPRESSION_CACHE_CAPACITY: usize = 4;
+pub(in crate::dataflow) const RECONFIGURABLE_EXPRESSION_CACHE_CAPACITY: usize = 4;
 
 #[derive(Clone, Default)]
-pub(in crate::dataflow) struct DynamicExpressionState {
+pub(in crate::dataflow) struct ReconfigurableExpressionState {
     pub(in crate::dataflow) active_expression: Option<ActiveExpression>,
     /// Immutable program templates in least-recently-used order.
-    pub(in crate::dataflow) template_cache: Vec<Rc<DynamicExpressionTemplate>>,
+    pub(in crate::dataflow) template_cache: Vec<Rc<ReconfigurableExpressionTemplate>>,
     pub(in crate::dataflow) last_source_value: Option<Value>,
     /// `defer`'s retained published result: the last non-`NoVal` body result (`Deferred` counts as
     /// a value). This is independent of retained source input, outer-environment retention, and
@@ -136,8 +147,11 @@ pub(in crate::dataflow) struct DynamicExpressionState {
     pub(in crate::dataflow) environment_values: Vec<Value>,
 }
 
-impl DynamicExpressionState {
-    pub(in crate::dataflow) fn cache_template(&mut self, template: Rc<DynamicExpressionTemplate>) {
+impl ReconfigurableExpressionState {
+    pub(in crate::dataflow) fn cache_template(
+        &mut self,
+        template: Rc<ReconfigurableExpressionTemplate>,
+    ) {
         if let Some(index) = self
             .template_cache
             .iter()
@@ -152,7 +166,7 @@ impl DynamicExpressionState {
                 return;
             }
         }
-        if self.template_cache.len() == DYNAMIC_EXPRESSION_CACHE_CAPACITY {
+        if self.template_cache.len() == RECONFIGURABLE_EXPRESSION_CACHE_CAPACITY {
             self.template_cache.remove(0);
         }
         self.template_cache.push(template);
@@ -204,7 +218,7 @@ impl DynamicExpressionState {
 }
 
 #[derive(Clone)]
-pub(in crate::dataflow) struct DynamicExpressionTemplate {
+pub(in crate::dataflow) struct ReconfigurableExpressionTemplate {
     pub(in crate::dataflow) source_text: EcoString,
     pub(in crate::dataflow) program: Rc<StreamProgram>,
     pub(in crate::dataflow) nested_dependency_slots: Vec<EnvironmentSlot>,
@@ -215,7 +229,7 @@ pub(in crate::dataflow) struct DynamicExpressionTemplate {
 
 #[derive(Clone)]
 pub(in crate::dataflow) struct ActiveExpression {
-    pub(in crate::dataflow) template: Rc<DynamicExpressionTemplate>,
+    pub(in crate::dataflow) template: Rc<ReconfigurableExpressionTemplate>,
     pub(in crate::dataflow) evaluator: Evaluator,
     pub(in crate::dataflow) environment_projection: EnvironmentProjection,
 }
@@ -227,7 +241,7 @@ impl ActiveExpression {
 }
 
 impl Deref for ActiveExpression {
-    type Target = DynamicExpressionTemplate;
+    type Target = ReconfigurableExpressionTemplate;
 
     fn deref(&self) -> &Self::Target {
         &self.template
@@ -235,32 +249,23 @@ impl Deref for ActiveExpression {
 }
 
 #[derive(Clone)]
-pub(in crate::dataflow) struct DelayState {
-    values: Vec<Value>,
+pub(in crate::dataflow) struct DelayState<T = Value> {
+    values: Vec<T>,
     next_write: usize,
     filled_slots: usize,
-    last_output: Option<Value>,
+    last_output: Option<T>,
     write_pending: bool,
     shared_read_pending: bool,
-    staged_recursive_value: Option<Value>,
+    staged_recursive_value: Option<T>,
 }
 
-/// Compact evaluator-owned state used by scheduled scalar temporal operations.
-#[derive(Clone)]
-pub(in crate::dataflow) struct ScalarDelayState {
-    values: Vec<ScalarValue>,
-    next_write: usize,
-    filled_slots: usize,
-    last_output: Option<ScalarValue>,
-    write_pending: bool,
-    shared_read_pending: bool,
-    staged_recursive_value: Option<ScalarValue>,
-}
+/// Scalar representation of the same delay state and retention policy.
+pub(in crate::dataflow) type ScalarDelayState = DelayState<ScalarValue>;
 
-impl DelayState {
+impl<T: DeferrableStreamData> DelayState<T> {
     pub(in crate::dataflow) fn new(offset: usize) -> Self {
         Self {
-            values: vec![Value::NoVal; offset],
+            values: vec![T::no_val_value(); offset],
             next_write: 0,
             filled_slots: 0,
             last_output: None,
@@ -282,34 +287,28 @@ impl DelayState {
         }
     }
 
-    #[cfg(feature = "jit")]
-    pub(in crate::dataflow) fn hydrate_shared_history(
-        &mut self,
-        depth: usize,
-        values: impl IntoIterator<Item = Value>,
-    ) {
-        if !self.values.is_empty() {
-            return;
-        }
-        self.values = vec![Value::NoVal; depth];
-        self.next_write = 0;
-        self.filled_slots = 0;
-        for value in values {
-            self.push_value(value);
-        }
-        self.shared_read_pending = false;
+    /// Reports whether this delay reads through shared stream history instead of a private ring.
+    ///
+    /// The distinction is storage, not representation: an interpreting tier can serve either shape
+    /// because it holds a [`HistoryAccess`](crate::dataflow::history::HistoryAccess), while a native
+    /// kernel only ever sees the ring and so requires a hydrated one.
+    #[inline]
+    pub(in crate::dataflow) fn is_history_backed(&self) -> bool {
+        self.values.is_empty()
     }
 
-    pub(in crate::dataflow) fn read_delayed_value(&self) -> Value {
-        if self.values.is_empty() || self.filled_slots < self.values.len() {
-            Value::Deferred
+    #[inline]
+    pub(in crate::dataflow) fn read_delayed_value(&self) -> T {
+        if self.is_history_backed() || self.filled_slots < self.values.len() {
+            T::deferred_value()
         } else {
             self.values[self.next_write].clone()
         }
     }
 
-    pub(in crate::dataflow) fn push_value(&mut self, value: Value) {
-        if self.values.is_empty() {
+    #[inline]
+    pub(in crate::dataflow) fn push_value(&mut self, value: T) {
+        if self.is_history_backed() {
             return;
         }
         self.values[self.next_write] = value;
@@ -317,17 +316,19 @@ impl DelayState {
         self.filled_slots = self.filled_slots.saturating_add(1).min(self.values.len());
     }
 
-    pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> Value {
+    #[inline]
+    pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> T {
         debug_assert!(
             !self.write_pending && !self.shared_read_pending,
             "delay was evaluated more than once before commit"
         );
         self.write_pending = true;
         let previous = self.read_delayed_value();
-        super::lifting::retain_last_value(previous, &mut self.last_output)
+        crate::core::retain_last(previous, &mut self.last_output)
     }
 
-    pub(in crate::dataflow) fn read_shared_value(&mut self, value: Value) -> Value {
+    #[inline]
+    pub(in crate::dataflow) fn read_shared_value(&mut self, value: T) -> T {
         debug_assert!(
             !self.write_pending && !self.shared_read_pending,
             "delay was evaluated more than once before commit"
@@ -336,10 +337,11 @@ impl DelayState {
         self.values.clear();
         self.next_write = 0;
         self.filled_slots = 0;
-        super::lifting::retain_last_value(value, &mut self.last_output)
+        crate::core::retain_last(value, &mut self.last_output)
     }
 
-    pub(in crate::dataflow) fn commit_staged_write(&mut self, value: Value) {
+    #[inline]
+    pub(in crate::dataflow) fn commit_staged_write(&mut self, value: T) {
         if self.shared_read_pending {
             self.shared_read_pending = false;
             return;
@@ -355,7 +357,7 @@ impl DelayState {
         self.shared_read_pending = false;
     }
 
-    pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: Value) {
+    pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: T) {
         debug_assert!(
             self.staged_recursive_value.is_none(),
             "recursive delay was evaluated more than once before commit"
@@ -373,8 +375,9 @@ impl DelayState {
         self.staged_recursive_value = None;
     }
 
-    pub(in crate::dataflow) fn retain_current_value(&mut self, value: Value) -> Value {
-        super::lifting::retain_last_value(value, &mut self.last_output)
+    #[inline]
+    pub(in crate::dataflow) fn retain_current_value(&mut self, value: T) -> T {
+        crate::core::retain_last(value, &mut self.last_output)
     }
 
     pub(in crate::dataflow) fn reset(&mut self) {
@@ -385,8 +388,9 @@ impl DelayState {
         self.shared_read_pending = false;
         self.staged_recursive_value = None;
     }
+}
 
-    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+impl DelayState<Value> {
     pub(in crate::dataflow) fn to_scalar(&self) -> Option<ScalarDelayState> {
         let optional_scalar = |value: &Option<Value>| match value {
             Some(value) => ScalarValue::from_untyped_value(value).map(Some),
@@ -439,100 +443,34 @@ impl ScalarDelayState {
         self.staged_recursive_value = None;
     }
 
-    #[inline]
-    pub(in crate::dataflow) fn read_delayed_value(&self) -> ScalarValue {
-        if self.values.is_empty() || self.filled_slots < self.values.len() {
-            ScalarValue::Deferred
-        } else {
-            self.values[self.next_write]
+    /// Materializes a private window for a history-backed delay.
+    ///
+    /// A native kernel receives no history access, so a shared delay must own its window before the
+    /// kernel activates. Hydration is the storage half of the transition and is idempotent: a delay
+    /// that already owns a ring is left alone. Returns `false` when the recorded history holds a
+    /// value outside the scalar domain, which refuses the activation rather than truncating state.
+    #[cfg(feature = "jit")]
+    pub(in crate::dataflow) fn hydrate_shared_history(
+        &mut self,
+        depth: usize,
+        values: impl IntoIterator<Item = Value>,
+    ) -> bool {
+        if !self.is_history_backed() {
+            return true;
         }
-    }
-
-    #[inline]
-    pub(in crate::dataflow) fn read_and_stage_write(&mut self) -> ScalarValue {
-        debug_assert!(!self.write_pending && !self.shared_read_pending);
-        self.write_pending = true;
-        let previous = self.read_delayed_value();
-        match previous {
-            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
-            value => {
-                self.last_output = Some(value);
-                value
-            }
-        }
-    }
-
-    #[inline]
-    pub(in crate::dataflow) fn read_shared_value(&mut self, value: ScalarValue) -> ScalarValue {
-        debug_assert!(!self.write_pending && !self.shared_read_pending);
-        self.shared_read_pending = true;
-        self.values.clear();
+        self.values = vec![ScalarValue::NoVal; depth];
         self.next_write = 0;
         self.filled_slots = 0;
-        match value {
-            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
-            value => {
-                self.last_output = Some(value);
-                value
-            }
+        for value in values {
+            let Some(value) = ScalarValue::from_untyped_value(&value) else {
+                return false;
+            };
+            self.push_value(value);
         }
-    }
-
-    #[inline]
-    pub(in crate::dataflow) fn retain_current_value(&mut self, value: ScalarValue) -> ScalarValue {
-        match value {
-            ScalarValue::NoVal => self.last_output.unwrap_or(ScalarValue::NoVal),
-            value => {
-                self.last_output = Some(value);
-                value
-            }
-        }
-    }
-
-    #[inline]
-    pub(in crate::dataflow) fn commit_staged_write(&mut self, value: ScalarValue) {
-        if self.shared_read_pending {
-            self.shared_read_pending = false;
-            return;
-        }
-        if !self.write_pending {
-            return;
-        }
-        self.write_pending = false;
-        if self.values.is_empty() {
-            return;
-        }
-        self.values[self.next_write] = value;
-        self.next_write = (self.next_write + 1) % self.values.len();
-        self.filled_slots = self.filled_slots.saturating_add(1).min(self.values.len());
-    }
-
-    pub(in crate::dataflow) fn discard_staged_write(&mut self) {
-        self.write_pending = false;
         self.shared_read_pending = false;
+        true
     }
 
-    pub(in crate::dataflow) fn stage_recursive_value(&mut self, value: ScalarValue) {
-        debug_assert!(self.staged_recursive_value.is_none());
-        self.staged_recursive_value = Some(value);
-    }
-
-    pub(in crate::dataflow) fn commit_recursive_value(&mut self) {
-        if let Some(value) = self.staged_recursive_value.take() {
-            if self.values.is_empty() {
-                return;
-            }
-            self.values[self.next_write] = value;
-            self.next_write = (self.next_write + 1) % self.values.len();
-            self.filled_slots = self.filled_slots.saturating_add(1).min(self.values.len());
-        }
-    }
-
-    pub(in crate::dataflow) fn discard_recursive_value(&mut self) {
-        self.staged_recursive_value = None;
-    }
-
-    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(in crate::dataflow) fn to_canonical(&self) -> DelayState {
         DelayState {
             values: self
@@ -549,23 +487,53 @@ impl ScalarDelayState {
             staged_recursive_value: self.staged_recursive_value.map(ScalarValue::into_value),
         }
     }
+}
 
-    fn reset(&mut self) {
-        self.next_write = 0;
-        self.filled_slots = 0;
-        self.last_output = None;
-        self.write_pending = false;
-        self.shared_read_pending = false;
-        self.staged_recursive_value = None;
+impl NodeState {
+    /// Promotes one temporal node to the typed scalar representation of the same state.
+    ///
+    /// `ScalarDelay` and `ScalarDefault` hold exactly the semantics of `Delay` and `Default` over
+    /// `ScalarValue`. Canonical evaluation, the tick commit barrier, context transfer, and reset all
+    /// accept either form, so this is a representation choice rather than a tier boundary: the quick
+    /// tier and the native temporal tier both promote the nodes they execute, through this one
+    /// conversion. Returns whether the node is now in its typed form.
+    pub(in crate::dataflow) fn promote_scalar_temporal(&mut self) -> bool {
+        let promoted = match self {
+            Self::ScalarDelay(_) | Self::ScalarDefault { .. } => return true,
+            Self::Delay(history) => history.to_scalar().map(Self::ScalarDelay),
+            Self::Default { last_input } => match last_input {
+                Some(value) => {
+                    ScalarValue::from_untyped_value(value).map(|value| Self::ScalarDefault {
+                        last_input: Some(value),
+                    })
+                }
+                None => Some(Self::ScalarDefault { last_input: None }),
+            },
+            _ => None,
+        };
+        match promoted {
+            Some(promoted) => {
+                *self = promoted;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Returns one temporal node to the canonical `Value` representation.
+    pub(in crate::dataflow) fn demote_scalar_temporal(&mut self) {
+        let demoted = match self {
+            Self::ScalarDelay(history) => Self::Delay(history.to_canonical()),
+            Self::ScalarDefault { last_input } => Self::Default {
+                last_input: last_input.map(ScalarValue::into_value),
+            },
+            _ => return,
+        };
+        *self = demoted;
     }
 }
 
 impl EvaluatorState {
-    #[cfg(test)]
-    pub(in crate::dataflow) fn new(body: &BoundEvaluationGraph) -> Self {
-        Self::new_for_nodes(&body.nodes, &[])
-    }
-
     pub(in crate::dataflow) fn new_with_history(
         body: &BoundEvaluationGraph,
         history_bindings: &[Option<HistoryId>],
@@ -642,24 +610,24 @@ impl EvaluatorState {
         }
     }
 
-    pub(in crate::dataflow) fn dynamic_expression_state(
+    pub(in crate::dataflow) fn reconfigurable_expression_state(
         &self,
         node: NodeId,
-    ) -> &DynamicExpressionState {
-        let NodeState::Dynamic(dynamic) = &self.node_states[node.index()] else {
+    ) -> &ReconfigurableExpressionState {
+        let NodeState::Reconfigurable(expression) = &self.node_states[node.index()] else {
             unreachable!("reconfigurable expression referenced incompatible runtime state")
         };
-        dynamic
+        expression
     }
 
-    pub(in crate::dataflow) fn dynamic_expression_state_mut(
+    pub(in crate::dataflow) fn reconfigurable_expression_state_mut(
         &mut self,
         node: NodeId,
-    ) -> &mut DynamicExpressionState {
-        let NodeState::Dynamic(dynamic) = &mut self.node_states[node.index()] else {
+    ) -> &mut ReconfigurableExpressionState {
+        let NodeState::Reconfigurable(expression) = &mut self.node_states[node.index()] else {
             unreachable!("reconfigurable expression referenced incompatible runtime state")
         };
-        dynamic
+        expression
     }
 
     pub(in crate::dataflow) fn for_each_active_body_history_requirement(
@@ -668,8 +636,8 @@ impl EvaluatorState {
     ) {
         for state in &self.node_states {
             match state {
-                NodeState::Dynamic(dynamic) => {
-                    dynamic.for_each_active_body_history_requirement(&mut *visit);
+                NodeState::Reconfigurable(expression) => {
+                    expression.for_each_active_body_history_requirement(&mut *visit);
                 }
                 NodeState::PersistentCall { evaluator, .. } => {
                     evaluator.for_each_active_body_history_requirement(&mut *visit);
@@ -838,18 +806,18 @@ fn node_state_can_rewrite(
                 && target_arguments.len() == source_arguments.len()
                 && target_evaluator.program.state_key() == source_evaluator.program.state_key()
                 && state_shape_compatible(
-                    &target_evaluator.tier_states.canonical,
-                    &source_evaluator.tier_states.canonical,
+                    &target_evaluator.canonical,
+                    &source_evaluator.canonical,
                     &target_evaluator.program.graph,
                     &source_evaluator.program.graph,
                     &target_evaluator.program.environment_layout,
                     &source_evaluator.program.environment_layout,
                 )
         }
-        (NodeState::Dynamic(_), NodeState::Dynamic(_)) => {
+        (NodeState::Reconfigurable(_), NodeState::Reconfigurable(_)) => {
             matches!(
                 (target_op, source_op),
-                (StreamOp::Dynamic(_), StreamOp::Dynamic(_))
+                (StreamOp::Reconfigurable(_), StreamOp::Reconfigurable(_))
             )
         }
         (NodeState::LazyIf(target), NodeState::LazyIf(source)) => {
@@ -979,7 +947,7 @@ impl NodeState {
                     callable: None,
                 }
             }
-            StreamOp::Dynamic(_) => Self::Dynamic(Box::default()),
+            StreamOp::Reconfigurable(_) => Self::Reconfigurable(Box::default()),
             StreamOp::If {
                 then_branch,
                 else_branch,
@@ -1058,8 +1026,47 @@ impl NodeState {
                 environment_values.fill(Value::NoVal);
                 last_arguments.fill(None);
             }
-            Self::Dynamic(dynamic) => **dynamic = DynamicExpressionState::default(),
+            Self::Reconfigurable(expression) => {
+                **expression = ReconfigurableExpressionState::default()
+            }
             Self::LazyIf(lazy_if) => lazy_if.reset(),
         }
+    }
+}
+
+#[cfg(test)]
+mod delay_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_conversion_preserves_pending_delay_writes_and_retention() {
+        let mut delay = DelayState::new(1);
+        assert_eq!(delay.read_and_stage_write(), Value::Deferred);
+        delay.commit_staged_write(Value::Int(7));
+        assert_eq!(delay.read_and_stage_write(), Value::Int(7));
+        let mut scalar = delay.to_scalar().unwrap();
+        scalar.commit_staged_write(ScalarValue::NoVal);
+        // The absent ring cell reuses the last emitted value after a representation change.
+        assert_eq!(scalar.read_and_stage_write(), ScalarValue::Int(7));
+        scalar.commit_staged_write(ScalarValue::Deferred);
+        let mut delay = scalar.to_canonical();
+        assert_eq!(delay.read_and_stage_write(), Value::Deferred);
+        delay.discard_staged_write();
+        delay.reset();
+        assert_eq!(delay.read_and_stage_write(), Value::Deferred);
+    }
+
+    #[test]
+    fn recursive_staging_survives_scalar_conversion() {
+        let mut delay = DelayState::new(1);
+        delay.stage_recursive_value(Value::Int(9));
+        let mut scalar = delay.to_scalar().unwrap();
+        scalar.commit_recursive_value();
+        assert_eq!(scalar.read_delayed_value(), ScalarValue::Int(9));
+        scalar.stage_recursive_value(ScalarValue::Int(10));
+        let mut delay = scalar.to_canonical();
+        delay.discard_recursive_value();
+        delay.commit_recursive_value();
+        assert_eq!(delay.read_delayed_value(), Value::Int(9));
     }
 }

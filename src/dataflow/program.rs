@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use super::VarName;
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
-use super::execution_plan::MonitorPlan;
 use super::history_requirements::HistoryRequirements;
 use super::ir::StreamProgram;
+use super::monitor_plan::MonitorPlan;
 use super::reconfiguration::DefinitionKey;
 use crate::fingerprint::FingerprintBuilder;
 

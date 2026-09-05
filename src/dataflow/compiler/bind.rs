@@ -7,11 +7,11 @@ pub(in crate::dataflow) use super::super::error::StreamProgramError;
 impl UnboundEvaluationGraph {
     fn for_each_reconfigurable_expression(
         &mut self,
-        visit: &mut impl FnMut(&mut UnboundDynamicExpressionSpec),
+        visit: &mut impl FnMut(&mut UnboundReconfigurableExpressionSpec),
     ) {
         for op in &mut self.nodes {
             match op {
-                UnboundOp::Dynamic(spec) => visit(spec),
+                UnboundOp::Reconfigurable(spec) => visit(spec),
                 UnboundOp::If {
                     then_branch,
                     else_branch,
@@ -141,9 +141,8 @@ impl UnboundEvaluationGraph {
     fn validate_persistent_function(&self) -> Result<(), StreamProgramError> {
         for op in &self.nodes {
             match op {
-                // Runtime compilation has a fallible evaluation path which is not
-                // yet exposed through nested function execution.
-                UnboundOp::Dynamic(_) => {
+                // Nested function execution does not expose runtime-compiled dynamic evaluation.
+                UnboundOp::Reconfigurable(_) => {
                     return Err(StreamProgramError::TemporalFunctionBody {
                         operator: "dynamic/defer",
                     });
@@ -394,12 +393,14 @@ fn bind_op(
             tuple: r!(tuple),
             index,
         },
-        UnboundOp::Dynamic(spec) => BoundOp::Dynamic(BoundDynamicExpressionSpec {
-            input: r!(spec.input),
-            scope: spec.scope,
-            kind: spec.kind,
-            typing: spec.typing,
-        }),
+        UnboundOp::Reconfigurable(spec) => {
+            BoundOp::Reconfigurable(BoundReconfigurableExpressionSpec {
+                input: r!(spec.input),
+                scope: spec.scope,
+                kind: spec.kind,
+                typing: spec.typing,
+            })
+        }
         UnboundOp::Function { func } => BoundOp::Function {
             func: function!(func),
         },
