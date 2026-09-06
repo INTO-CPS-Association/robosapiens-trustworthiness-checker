@@ -7,6 +7,7 @@ use clap::{ArgAction, Args, Parser, ValueEnum, builder::OsStr};
 use strum_macros::Display;
 
 use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
+use crate::io::mqtt::MqttProtocol;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -412,6 +413,13 @@ pub struct Cli {
 
     #[arg(long, help = "Port number for MQTT broker connection")]
     pub mqtt_port: Option<u16>,
+
+    #[arg(
+        long,
+        default_value_t = MqttProtocol::default(),
+        help = "MQTT protocol version (3.1.1 or 5)"
+    )]
+    pub mqtt_protocol: MqttProtocol,
 
     #[arg(long, help = "Port number for Redis server connection")]
     pub redis_port: Option<u16>,

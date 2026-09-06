@@ -117,6 +117,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `mqtt_port` | `--mqtt-port <MQTT_PORT>` | MQTT_PORT | 1 value(s) | no | — | — | — | — | Port number for MQTT broker connection | — |
+| `mqtt_protocol` | `--mqtt-protocol <MQTT_PROTOCOL>` | MQTT_PROTOCOL | 1 value(s) | no | — | — | 3.1.1 | — | MQTT protocol version (3.1.1 or 5) | — |
 | `redis_knowledge_database` | `--redis-knowledge-database <REDIS_KNOWLEDGE_DATABASE>` | REDIS_KNOWLEDGE_DATABASE | 1 value(s) | no | — | — | — | — | Override the targeted Redis knowledge source database (default: 2) | Requires the Cargo feature `redis`. |
 | `redis_knowledge_keys` | `--redis-knowledge-key <INPUT=KEY>` | INPUT=KEY | 1 value(s); repeatable | no | — | — | — | — | Map a checker input variable to a Redis knowledge key; repeatable | Requires the Cargo feature `redis`. |
 | `redis_knowledge_no_initial` | `--redis-knowledge-no-initial` |  | flag (no value) | no | — | — | false | `redis_knowledge_publish_initial` | Disable the Redis knowledge initial snapshot | Requires the Cargo feature `redis`. |

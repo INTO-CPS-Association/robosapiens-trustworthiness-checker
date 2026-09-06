@@ -24,14 +24,54 @@ pub(crate) fn validate_input_format(format: &crate::core::FormatId) -> anyhow::R
     Ok(())
 }
 
-/// MQTT client implementation used for input subscriptions.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MqttInputBackend {
+/// MQTT wire protocol used for broker connections.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum MqttProtocol {
+    #[serde(rename = "3.1.1")]
     #[default]
-    Rumqttc,
+    V311,
+    #[serde(rename = "5")]
+    V5,
 }
 
-impl MqttInputBackend {
+impl std::fmt::Display for MqttProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::V311 => "3.1.1",
+            Self::V5 => "5",
+        })
+    }
+}
+
+impl std::str::FromStr for MqttProtocol {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "3.1.1" => Ok(Self::V311),
+            "5" => Ok(Self::V5),
+            _ => Err(format!(
+                "unsupported MQTT protocol `{value}`; expected `3.1.1` or `5`"
+            )),
+        }
+    }
+}
+
+impl MqttProtocol {
+    pub(crate) async fn open_owned_items<V: JsonStreamValue>(
+        self,
+        host: &str,
+        port: Option<u16>,
+        var_topics: VarTopicMap,
+        retry: RetryPolicy,
+    ) -> anyhow::Result<(
+        LocalStream<anyhow::Result<MqttInputItem<V>>>,
+        super::rumqttc_input_stream::RumqttcInputControl,
+    )> {
+        super::rumqttc_input_stream::owned_input_stream_items(self, host, port, var_topics, retry)
+            .await
+    }
+
     pub(crate) async fn open_owned_data<V: JsonStreamValue>(
         self,
         host: &str,
@@ -42,9 +82,10 @@ impl MqttInputBackend {
         InputStream<V>,
         super::rumqttc_input_stream::RumqttcInputControl,
     )> {
-        let (items, owner) =
-            super::rumqttc_input_stream::owned_input_stream_items(host, port, var_topics, retry)
-                .await?;
+        let (items, owner) = super::rumqttc_input_stream::owned_input_stream_items(
+            self, host, port, var_topics, retry,
+        )
+        .await?;
         let stream = Box::pin(
             async_stream::try_stream! { let mut items=items; while let Some(item)=futures::StreamExt::next(&mut items).await { match item? { MqttInputItem::Data(batch)=>yield batch, MqttInputItem::Control(_)=>unreachable!("data-only MQTT stream cannot receive control"), MqttInputItem::Boundary(_)=>unreachable!("data-only MQTT stream cannot receive boundary") } } },
         );
@@ -62,6 +103,7 @@ impl MqttInputBackend {
         super::rumqttc_input_stream::RumqttcInputControl,
     )> {
         super::rumqttc_input_stream::reconfigurable_input_stream_items(
+            self,
             host,
             port,
             var_topics,
@@ -78,9 +120,10 @@ impl MqttInputBackend {
         var_topics: VarTopicMap,
         retry: RetryPolicy,
     ) -> anyhow::Result<InputStream<V>> {
-        let (items, mut owner) =
-            super::rumqttc_input_stream::owned_input_stream_items(host, port, var_topics, retry)
-                .await?;
+        let (items, mut owner) = super::rumqttc_input_stream::owned_input_stream_items(
+            self, host, port, var_topics, retry,
+        )
+        .await?;
         Ok(Box::pin(async_stream::try_stream! {
             let mut items = items;
             while let Some(item) = futures::StreamExt::next(&mut items).await {
@@ -96,13 +139,13 @@ impl MqttInputBackend {
 }
 
 pub async fn input_stream<V: JsonStreamValue>(
-    backend: MqttInputBackend,
+    protocol: MqttProtocol,
     host: &str,
     port: Option<u16>,
     var_topics: VarTopicMap,
     retry: RetryPolicy,
 ) -> anyhow::Result<InputStream<V>> {
-    backend.open_data(host, port, var_topics, retry).await
+    protocol.open_data(host, port, var_topics, retry).await
 }
 
 pub(super) fn invert_topic_mapping(var_topics: &VarTopicMap) -> InverseVarTopicMap {
@@ -156,8 +199,25 @@ mod tests {
     use crate::Value;
 
     #[test]
-    fn rumqttc_is_the_default_input_backend() {
-        assert_eq!(MqttInputBackend::default(), MqttInputBackend::Rumqttc);
+    fn mqtt_311_is_the_default_protocol() {
+        assert_eq!(MqttProtocol::default(), MqttProtocol::V311);
+    }
+
+    #[test]
+    fn protocol_serde_uses_wire_version_spellings() {
+        assert_eq!(
+            serde_json::to_string(&MqttProtocol::V311).unwrap(),
+            "\"3.1.1\""
+        );
+        assert_eq!(serde_json::to_string(&MqttProtocol::V5).unwrap(), "\"5\"");
+        assert_eq!(
+            serde_json::from_str::<MqttProtocol>("\"3.1.1\"").unwrap(),
+            MqttProtocol::V311
+        );
+        assert_eq!(
+            serde_json::from_str::<MqttProtocol>("\"5\"").unwrap(),
+            MqttProtocol::V5
+        );
     }
 
     #[test]

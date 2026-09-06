@@ -17,6 +17,18 @@ impl<T: Image> ContainerAsync<T> {
     ) -> Result<u16, testcontainers_modules::testcontainers::TestcontainersError> {
         TokioCompat::new(self.inner.as_ref().unwrap().get_host_port_ipv4(port)).await
     }
+
+    pub async fn stop(
+        &self,
+    ) -> Result<(), testcontainers_modules::testcontainers::TestcontainersError> {
+        TokioCompat::new(self.inner.as_ref().unwrap().stop_with_timeout(Some(0))).await
+    }
+
+    pub async fn start(
+        &self,
+    ) -> Result<(), testcontainers_modules::testcontainers::TestcontainersError> {
+        TokioCompat::new(self.inner.as_ref().unwrap().start()).await
+    }
 }
 
 impl<T: Image> Drop for ContainerAsync<T> {

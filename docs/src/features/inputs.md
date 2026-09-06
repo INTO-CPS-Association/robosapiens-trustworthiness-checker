@@ -17,6 +17,8 @@ Select exactly one CLI input mode. A finite file provides timestamped rows and l
 
 `--input-config` is exclusive with the other input-selection flags. Generic MQTT and Redis routes default to the model variable names. Redis knowledge mappings are explicit: use `--redis-knowledge-key INPUT=KEY` or a `redis-knowledge` source's `keys` object; the checker never derives a key implicitly from a variable name.
 
+MQTT selectors use protocol `3.1.1` by default. Pass `--mqtt-protocol 5` to select MQTT 5; a named MQTT source can set its own `protocol` field, and inherits the CLI selection when that field is omitted.
+
 ## Route catalogs
 
 The compact route form is a JSON5 object. A string supplies a route. A two-element array supplies a route and codec for transports, such as ROS, whose mapping needs one:

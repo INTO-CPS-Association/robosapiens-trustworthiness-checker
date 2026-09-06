@@ -37,6 +37,8 @@ An output configuration names a default destination and a map of destinations. A
 
 Each destination has one delivery policy. Direct delivery is the default; a bounded queue enables background delivery, optionally with coalescing that preserves logical ticks. In the Rust API, `feed` admits output and `send` also flushes. MQTT flush waits for protocol acknowledgement. Neither flush nor close proves that a remote consumer has persisted or observed the message. Multi-destination output has no cross-transport transaction or rollback: one destination may observe a batch before another fails.
 
+Built-in MQTT output publishes each result at QoS 1 (at least once). A Rust `MqttClient::publish` request for QoS 2 is rejected before transport submission on MQTT 5 because rumqttc does not expose rejected `PubRec` acknowledgements; negative MQTT 5 protocol acknowledgements are terminal for the driver.
+
 ## Choose a task
 
 - [Add two input streams from a trace](../tutorials/finite-trace.md) — inspect exact stdout.

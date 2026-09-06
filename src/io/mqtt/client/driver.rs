@@ -20,8 +20,224 @@ use uuid::Uuid;
 use super::MqttMessage;
 use crate::{
     core::InputError,
+    io::mqtt::MqttProtocol,
     io::retry::{RetryPolicy, RetryTracker},
 };
+
+#[derive(Clone)]
+enum TransportClient {
+    V311(AsyncClient),
+    V5(rumqttc::v5::AsyncClient),
+}
+enum TransportLoop {
+    V311(EventLoop),
+    V5(rumqttc::v5::EventLoop),
+}
+
+#[derive(Debug)]
+struct ProtocolAckError(String);
+impl std::fmt::Display for ProtocolAckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for ProtocolAckError {}
+fn rejected(message: impl Into<String>) -> anyhow::Error {
+    ProtocolAckError(message.into()).into()
+}
+
+fn is_terminal_protocol_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ProtocolAckError>().is_some()
+}
+
+impl TransportClient {
+    fn rejects_outbound_qos2(&self) -> bool {
+        matches!(self, Self::V5(_))
+    }
+
+    async fn publish(
+        &self,
+        topic: String,
+        qos: QoS,
+        retain: bool,
+        payload: String,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::V311(c) => c.publish(topic, qos, retain, payload).await?,
+            Self::V5(c) => c.publish(topic, qos_v5(qos), retain, payload).await?,
+        }
+        Ok(())
+    }
+    async fn subscribe_many(&self, filters: Vec<(String, QoS)>) -> anyhow::Result<()> {
+        match self {
+            Self::V311(c) => {
+                c.subscribe_many(filters.into_iter().map(|(t, q)| SubscribeFilter::new(t, q)))
+                    .await?
+            }
+            Self::V5(c) => {
+                c.subscribe_many(filters.into_iter().map(|(path, qos)| {
+                    rumqttc::v5::mqttbytes::v5::Filter {
+                        path,
+                        qos: qos_v5(qos),
+                        nolocal: false,
+                        preserve_retain: false,
+                        retain_forward_rule:
+                            rumqttc::v5::mqttbytes::v5::RetainForwardRule::OnEverySubscribe,
+                    }
+                }))
+                .await?
+            }
+        }
+        Ok(())
+    }
+    async fn unsubscribe(&self, topic: String) -> anyhow::Result<()> {
+        match self {
+            Self::V311(c) => c.unsubscribe(topic).await?,
+            Self::V5(c) => c.unsubscribe(topic).await?,
+        };
+        Ok(())
+    }
+    async fn disconnect(&self) -> anyhow::Result<()> {
+        match self {
+            Self::V311(c) => c.disconnect().await?,
+            Self::V5(c) => c.disconnect().await?,
+        };
+        Ok(())
+    }
+}
+
+impl TransportLoop {
+    async fn poll(&mut self) -> anyhow::Result<Event> {
+        match self {
+            Self::V311(e) => Ok(TokioCompat::new(e.poll()).await?),
+            Self::V5(e) => loop {
+                let event = TokioCompat::new(e.poll())
+                    .await
+                    .map_err(|error| match error {
+                        rumqttc::v5::ConnectionError::ConnectionRefused(reason) => {
+                            rejected(format!("MQTT 5 connection rejected: {reason:?}"))
+                        }
+                        rumqttc::v5::ConnectionError::MqttState(
+                            rumqttc::v5::StateError::ConnFail { reason },
+                        ) => rejected(format!("MQTT 5 connection rejected: {reason:?}")),
+                        other => anyhow::Error::new(other),
+                    })?;
+                if let Some(event) = normalize_v5(event)? {
+                    break Ok(event);
+                }
+            },
+        }
+    }
+}
+
+fn normalize_v5(event: rumqttc::v5::Event) -> anyhow::Result<Option<Event>> {
+    use rumqttc::v5::mqttbytes::v5::{
+        Packet, PubAckReason, PubCompReason, SubscribeReasonCode as S, UnsubAckReason,
+    };
+    Ok(Some(match event {
+        rumqttc::v5::Event::Outgoing(out) => Event::Outgoing(out),
+        rumqttc::v5::Event::Incoming(packet) => Event::Incoming(match packet {
+            Packet::ConnAck(a) => {
+                if a.code != rumqttc::v5::mqttbytes::v5::ConnectReturnCode::Success {
+                    return Err(rejected(format!(
+                        "MQTT 5 connection rejected: {:?}",
+                        a.code
+                    )));
+                }
+                Incoming::ConnAck(rumqttc::ConnAck::new(
+                    rumqttc::ConnectReturnCode::Success,
+                    a.session_present,
+                ))
+            }
+            Packet::Publish(p) => {
+                let topic =
+                    String::from_utf8(p.topic.to_vec()).context("MQTT 5 topic is not UTF-8")?;
+                let mut out = rumqttc::Publish::new(topic, qos_v311(p.qos), p.payload.to_vec());
+                out.pkid = p.pkid;
+                out.retain = p.retain;
+                out.dup = p.dup;
+                Incoming::Publish(out)
+            }
+            Packet::PubAck(a) => {
+                if !matches!(
+                    a.reason,
+                    PubAckReason::Success | PubAckReason::NoMatchingSubscribers
+                ) {
+                    return Err(rejected(format!(
+                        "MQTT 5 PubAck rejected publish: {:?}",
+                        a.reason
+                    )));
+                }
+                Incoming::PubAck(rumqttc::PubAck::new(a.pkid))
+            }
+            Packet::PubRec(a) => {
+                use rumqttc::v5::mqttbytes::v5::PubRecReason;
+                if !matches!(
+                    a.reason,
+                    PubRecReason::Success | PubRecReason::NoMatchingSubscribers
+                ) {
+                    return Err(rejected(format!(
+                        "MQTT 5 PubRec rejected publish: {:?}",
+                        a.reason
+                    )));
+                }
+                return Ok(None);
+            }
+            Packet::PubComp(a) => {
+                if a.reason != PubCompReason::Success {
+                    return Err(rejected(format!(
+                        "MQTT 5 PubComp rejected publish: {:?}",
+                        a.reason
+                    )));
+                }
+                Incoming::PubComp(rumqttc::PubComp::new(a.pkid))
+            }
+            Packet::SubAck(a) => {
+                let codes = a
+                    .return_codes
+                    .into_iter()
+                    .map(|c| match c {
+                        S::Success(q) => Ok(SubscribeReasonCode::Success(qos_v311(q))),
+                        other => Err(rejected(format!(
+                            "MQTT 5 SubAck rejected subscription: {other:?}"
+                        ))),
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                Incoming::SubAck(rumqttc::SubAck::new(a.pkid, codes))
+            }
+            Packet::UnsubAck(a) => {
+                if !a.reasons.iter().all(|r| {
+                    matches!(
+                        r,
+                        UnsubAckReason::Success | UnsubAckReason::NoSubscriptionExisted
+                    )
+                }) {
+                    return Err(rejected(format!(
+                        "MQTT 5 UnsubAck rejected unsubscribe: {:?}",
+                        a.reasons
+                    )));
+                }
+                Incoming::UnsubAck(rumqttc::UnsubAck::new(a.pkid))
+            }
+            _ => return Ok(None),
+        }),
+    }))
+}
+
+fn qos_v5(qos: QoS) -> rumqttc::v5::mqttbytes::QoS {
+    match qos {
+        QoS::AtMostOnce => rumqttc::v5::mqttbytes::QoS::AtMostOnce,
+        QoS::AtLeastOnce => rumqttc::v5::mqttbytes::QoS::AtLeastOnce,
+        QoS::ExactlyOnce => rumqttc::v5::mqttbytes::QoS::ExactlyOnce,
+    }
+}
+fn qos_v311(qos: rumqttc::v5::mqttbytes::QoS) -> QoS {
+    match qos {
+        rumqttc::v5::mqttbytes::QoS::AtMostOnce => QoS::AtMostOnce,
+        rumqttc::v5::mqttbytes::QoS::AtLeastOnce => QoS::AtLeastOnce,
+        rumqttc::v5::mqttbytes::QoS::ExactlyOnce => QoS::ExactlyOnce,
+    }
+}
 
 const COMMAND_CAPACITY: usize = 64;
 const REQUEST_CAPACITY: usize = 128;
@@ -88,10 +304,10 @@ impl MqttClient {
             .commands
             .send(command(tx))
             .await
-            .map_err(|_| anyhow!("MQTT 3.1.1 driver has stopped"))?;
+            .map_err(|_| anyhow!("MQTT driver has stopped"))?;
         rx.recv()
             .await
-            .map_err(|_| anyhow!("MQTT 3.1.1 driver stopped before completing the operation"))?
+            .map_err(|_| anyhow!("MQTT driver stopped before completing the operation"))?
             .map_err(anyhow::Error::msg)
     }
 }
@@ -149,28 +365,33 @@ impl MqttClient {
             .commands
             .send(command)
             .await
-            .map_err(|_| anyhow!("MQTT 3.1.1 driver has stopped"))?;
+            .map_err(|_| anyhow!("MQTT driver has stopped"))?;
         result
             .recv()
             .await
-            .map_err(|_| anyhow!("MQTT 3.1.1 driver stopped during input rebind"))?
+            .map_err(|_| anyhow!("MQTT driver stopped during input rebind"))?
             .map_err(anyhow::Error::msg)
     }
 }
 
-pub(super) async fn connect(uri: &str, retry: RetryPolicy) -> anyhow::Result<MqttClient> {
-    let (client, _, worker) = open(uri, retry, false).await?;
+pub(super) async fn connect(
+    uri: &str,
+    protocol: MqttProtocol,
+    retry: RetryPolicy,
+) -> anyhow::Result<MqttClient> {
+    let (client, _, worker) = open(uri, protocol, retry, false).await?;
     worker.detach();
     Ok(client)
 }
 pub(super) async fn connect_and_receive(
     uri: &str,
+    protocol: MqttProtocol,
     retry: RetryPolicy,
 ) -> anyhow::Result<(
     MqttClient,
     BoxStream<'static, Result<MqttMessage, InputError>>,
 )> {
-    let (client, rx, worker) = open(uri, retry, true).await?;
+    let (client, rx, worker) = open(uri, protocol, retry, true).await?;
     worker.detach();
     let rx = rx.map(|item| {
         item.and_then(|message| {
@@ -185,19 +406,21 @@ pub(super) async fn connect_and_receive(
     ))
 }
 
-pub(crate) async fn connect_raw(
+pub(crate) async fn connect_raw_with_protocol(
     uri: &str,
+    protocol: MqttProtocol,
     retry: RetryPolicy,
 ) -> anyhow::Result<(
     MqttClient,
     async_channel::Receiver<Result<RawMqttMessage, InputError>>,
     smol::Task<()>,
 )> {
-    open(uri, retry, true).await
+    open(uri, protocol, retry, true).await
 }
 
 async fn open(
     uri: &str,
+    protocol: MqttProtocol,
     retry: RetryPolicy,
     receive: bool,
 ) -> anyhow::Result<(
@@ -211,7 +434,20 @@ async fn open(
         .set_clean_session(false)
         .set_request_channel_capacity(REQUEST_CAPACITY)
         .set_inflight(MAX_INFLIGHT);
-    let (network, eventloop) = AsyncClient::new(options, REQUEST_CAPACITY);
+    let (network, eventloop) = match protocol {
+        MqttProtocol::V311 => {
+            let (client, eventloop) = AsyncClient::new(options, REQUEST_CAPACITY);
+            (
+                TransportClient::V311(client),
+                TransportLoop::V311(eventloop),
+            )
+        }
+        MqttProtocol::V5 => {
+            let v5 = v5_options(&options);
+            let (client, eventloop) = rumqttc::v5::AsyncClient::new(v5, REQUEST_CAPACITY);
+            (TransportClient::V5(client), TransportLoop::V5(eventloop))
+        }
+    };
     let (command_tx, command_rx) = async_channel::bounded(COMMAND_CAPACITY);
     let (message_tx, message_rx) = async_channel::bounded(RECEIVE_CAPACITY);
     let (ready_tx, ready_rx) = async_channel::bounded(1);
@@ -224,15 +460,15 @@ async fn open(
     ready_rx
         .recv()
         .await
-        .map_err(|_| anyhow!("MQTT 3.1.1 driver stopped while connecting"))?
+        .map_err(|_| anyhow!("MQTT driver stopped while connecting"))?
         .map_err(anyhow::Error::msg)?;
     Ok((MqttClient { shared }, message_rx, worker))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_driver(
-    client: AsyncClient,
-    mut eventloop: EventLoop,
+    client: TransportClient,
+    mut eventloop: TransportLoop,
     commands: async_channel::Receiver<Command>,
     messages: async_channel::Sender<Result<RawMqttMessage, InputError>>,
     retry: RetryPolicy,
@@ -248,7 +484,7 @@ async fn run_driver(
     let mut generation = 0_u64;
     let mut subscriptions = HashMap::<String, QoS>::new();
     loop {
-        let event = TokioCompat::new(eventloop.poll()).fuse();
+        let event = eventloop.poll().fuse();
         let command = if !closing && submitted.len() + pending.len() < usize::from(MAX_INFLIGHT) {
             commands.recv().left_future()
         } else {
@@ -267,6 +503,12 @@ async fn run_driver(
                     }
                 },
                 Err(error) => {
+                    if is_terminal_protocol_error(&error) {
+                        let cause = error.to_string();
+                        fail_all(cause.clone(), &mut submitted, &mut pending, &mut ready).await;
+                        queue_terminal(&messages, None, cause);
+                        break;
+                    }
                     warn!(?error, "MQTT connection failed; rumqttc retains protocol retransmission state");
                     let Some(delay) = tracker.record_failure() else {
                         let cause = format!("MQTT retry limit exhausted: {error}");
@@ -301,7 +543,7 @@ async fn run_driver(
 }
 
 async fn submit(
-    client: &AsyncClient,
+    client: &TransportClient,
     command: Command,
     submitted: &mut VecDeque<Submitted>,
     disconnect_waiting: &mut Option<Option<Reply>>,
@@ -325,6 +567,13 @@ async fn submit(
     }
     match command {
         Command::Publish(m, r) => match parse_qos(m.qos) {
+            Ok(QoS::ExactlyOnce) if client.rejects_outbound_qos2() => {
+                respond(
+                    Some(r),
+                    Err("MQTT 5 QoS 2 publishing is unsupported because the transport cannot report rejected PubRec acknowledgements".into()),
+                )
+                .await;
+            }
             Ok(q) => match client.publish(m.topic, q, false, m.payload).await {
                 Ok(()) => submitted.push_back(Submitted::Publish(q, r)),
                 Err(e) => respond(Some(r), Err(e.to_string())).await,
@@ -333,10 +582,7 @@ async fn submit(
         },
         Command::Subscribe(fs, r) => {
             let count = fs.len();
-            match client
-                .subscribe_many(fs.iter().map(|(t, q)| SubscribeFilter::new(t.clone(), *q)))
-                .await
-            {
+            match client.subscribe_many(fs.clone()).await {
                 Ok(()) => {
                     subscriptions.extend(fs);
                     submitted.push_back(Submitted::Subscribe(count, r));
@@ -368,10 +614,7 @@ async fn submit(
         }
         Command::SubscribeBoundary(fs, r) => {
             let count = fs.len();
-            match client
-                .subscribe_many(fs.iter().map(|(t, q)| SubscribeFilter::new(t.clone(), *q)))
-                .await
-            {
+            match client.subscribe_many(fs.clone()).await {
                 Ok(()) => {
                     subscriptions.extend(fs);
                     submitted.push_back(Submitted::SubscribeBoundary(count, r));
@@ -395,7 +638,7 @@ async fn handle_event(
     messages: &async_channel::Sender<Result<RawMqttMessage, InputError>>,
     submitted: &mut VecDeque<Submitted>,
     pending: &mut HashMap<u16, Pending>,
-    client: &AsyncClient,
+    client: &TransportClient,
     ready: &mut Option<async_channel::Sender<Result<(), String>>>,
     tracker: &mut RetryTracker,
     receive: bool,
@@ -483,7 +726,8 @@ async fn handle_event(
             } else if !ack.session_present && !subscriptions.is_empty() {
                 let filters = subscriptions
                     .iter()
-                    .map(|(topic, qos)| SubscribeFilter::new(topic.clone(), *qos));
+                    .map(|(topic, qos)| (topic.clone(), *qos))
+                    .collect();
                 match client.subscribe_many(filters).await {
                     Ok(()) => submitted.push_back(Submitted::Restore(subscriptions.len())),
                     Err(error) => {
@@ -717,10 +961,107 @@ fn options_from_uri(uri: &str) -> anyhow::Result<MqttOptions> {
         .set_clean_session(false);
     Ok(options)
 }
+
+fn v5_options(options: &MqttOptions) -> rumqttc::v5::MqttOptions {
+    let (host, port) = options.broker_address();
+    let mut v5 = rumqttc::v5::MqttOptions::new(options.client_id(), host, port);
+    v5.set_keep_alive(Duration::from_secs(30))
+        .set_clean_start(false)
+        .set_session_expiry_interval(Some(u32::MAX))
+        .set_request_channel_capacity(REQUEST_CAPACITY)
+        .set_outgoing_inflight_upper_limit(MAX_INFLIGHT);
+    v5
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use rumqttc::PubAck;
+
+    #[test]
+    fn mqtt5_negative_acknowledgements_are_terminal_protocol_errors() {
+        use rumqttc::v5::mqttbytes::v5::{Packet, PubAck, PubAckReason, PubRec, PubRecReason};
+        let mut ack = PubAck::new(3, None);
+        ack.reason = PubAckReason::NotAuthorized;
+        let error = normalize_v5(rumqttc::v5::Event::Incoming(Packet::PubAck(ack))).unwrap_err();
+        assert!(error.downcast_ref::<ProtocolAckError>().is_some());
+
+        let mut rec = PubRec::new(4, None);
+        rec.reason = PubRecReason::QuotaExceeded;
+        let error = normalize_v5(rumqttc::v5::Event::Incoming(Packet::PubRec(rec))).unwrap_err();
+        assert!(error.downcast_ref::<ProtocolAckError>().is_some());
+    }
+
+    #[test]
+    fn mqtt5_no_matching_subscribers_completes_qos1_publish() {
+        use rumqttc::v5::mqttbytes::v5::{Packet, PubAck, PubAckReason};
+        let mut ack = PubAck::new(3, None);
+        ack.reason = PubAckReason::NoMatchingSubscribers;
+        assert!(
+            normalize_v5(rumqttc::v5::Event::Incoming(Packet::PubAck(ack)))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn mqtt5_negative_subscription_acknowledgements_are_terminal() {
+        use rumqttc::v5::mqttbytes::v5::{
+            Packet, SubAck, SubscribeReasonCode, UnsubAck, UnsubAckReason,
+        };
+        let suback = SubAck {
+            pkid: 8,
+            return_codes: vec![SubscribeReasonCode::NotAuthorized],
+            properties: None,
+        };
+        let error = normalize_v5(rumqttc::v5::Event::Incoming(Packet::SubAck(suback))).unwrap_err();
+        assert!(is_terminal_protocol_error(&error));
+
+        let unsuback = UnsubAck {
+            pkid: 9,
+            reasons: vec![UnsubAckReason::NotAuthorized],
+            properties: None,
+        };
+        let error =
+            normalize_v5(rumqttc::v5::Event::Incoming(Packet::UnsubAck(unsuback))).unwrap_err();
+        assert!(is_terminal_protocol_error(&error));
+    }
+
+    #[test]
+    fn mqtt5_session_options_preserve_broker_session() {
+        let base = options_from_uri("tcp://broker:2883").unwrap();
+        let options = v5_options(&base);
+        assert_eq!(options.broker_address(), ("broker".into(), 2883));
+        assert!(!options.clean_start());
+        assert_eq!(options.session_expiry_interval(), Some(u32::MAX));
+        assert_eq!(options.keep_alive(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn mqtt5_qos2_publish_is_rejected_before_transport_submission() {
+        smol::block_on(async {
+            let (network, _eventloop) = rumqttc::v5::AsyncClient::new(
+                rumqttc::v5::MqttOptions::new("qos2-test", "localhost", 1883),
+                2,
+            );
+            let (reply, result) = async_channel::bounded(1);
+            let mut submitted = VecDeque::new();
+            let mut disconnect = None;
+            submit(
+                &TransportClient::V5(network),
+                Command::Publish(MqttMessage::new("topic".into(), "value".into(), 2), reply),
+                &mut submitted,
+                &mut disconnect,
+                false,
+                &mut 0,
+                &mut HashMap::new(),
+            )
+            .await;
+
+            assert!(submitted.is_empty());
+            let error = result.recv().await.unwrap().unwrap_err();
+            assert!(error.contains("MQTT 5 QoS 2 publishing is unsupported"));
+        });
+    }
 
     fn raw(topic: &str, payload: &str) -> RawMqttMessage {
         RawMqttMessage {
@@ -745,7 +1086,9 @@ mod tests {
             &messages,
             submitted,
             pending,
-            &AsyncClient::new(MqttOptions::new("test-drive", "localhost", 1883), 2).0,
+            &TransportClient::V311(
+                AsyncClient::new(MqttOptions::new("test-drive", "localhost", 1883), 2).0,
+            ),
             &mut ready,
             tracker,
             false,
@@ -878,7 +1221,7 @@ mod tests {
                 VecDeque::from([Submitted::Publish(QoS::AtLeastOnce, publish_reply)]);
             let mut disconnect = None;
             submit(
-                &client,
+                &TransportClient::V311(client),
                 Command::Disconnect(Some(close_reply)),
                 &mut submitted,
                 &mut disconnect,
@@ -929,7 +1272,7 @@ mod tests {
                 &messages,
                 &mut submitted,
                 &mut pending,
-                &client,
+                &TransportClient::V311(client),
                 &mut ready,
                 &mut tracker,
                 false,

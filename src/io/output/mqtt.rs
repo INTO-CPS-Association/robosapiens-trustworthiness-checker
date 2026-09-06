@@ -8,7 +8,7 @@ use crate::{
     core::{JsonStreamValue, OutputBatch, OutputError, OutputInterface, OutputWriter, VarName},
     io::{
         RetryPolicy,
-        mqtt::{MqttClient, MqttMessage, connect_with_retry},
+        mqtt::{MqttClient, MqttMessage, MqttProtocol, connect_with_protocol_and_retry},
     },
 };
 
@@ -17,6 +17,7 @@ use super::sinks::InterfaceSink;
 pub(crate) async fn open<V: JsonStreamValue>(
     host: String,
     port: Option<u16>,
+    protocol: MqttProtocol,
     retry: RetryPolicy,
     interface: OutputInterface,
 ) -> Result<OutputWriter<V>, OutputError> {
@@ -24,7 +25,7 @@ pub(crate) async fn open<V: JsonStreamValue>(
         Some(port) => format!("tcp://{host}:{port}"),
         None => format!("tcp://{host}"),
     };
-    let client = connect_with_retry(&uri, retry)
+    let client = connect_with_protocol_and_retry(&uri, protocol, retry)
         .await
         .map_err(|error| OutputError::backend(format!("failed to connect to MQTT: {error}")))?;
     let batches_client = client.clone();

@@ -38,7 +38,10 @@ use crate::{
             sat_solver::SatMonitoredAtDistConstraintSolver,
         },
     },
-    io::mqtt::dist_graph_provider::{DistGraphProvider, StaticDistGraphProvider},
+    io::mqtt::{
+        MqttProtocol,
+        dist_graph_provider::{DistGraphProvider, StaticDistGraphProvider},
+    },
     runtime::RuntimeBuilder,
     semantics::{
         AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext,
@@ -175,11 +178,17 @@ pub struct DistAsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> 
     pub context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
     dist_graph_mode: Option<DistGraphMode>,
     scheduler_mode: Option<SchedulerCommunication>,
+    mqtt_protocol: MqttProtocol,
 }
 
 impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S> {
     pub fn static_dist_graph(mut self, graph: LabelledDistributionGraph) -> Self {
         self.dist_graph_mode = Some(DistGraphMode::Static(graph));
+        self
+    }
+
+    pub fn mqtt_protocol(mut self, protocol: MqttProtocol) -> Self {
+        self.mqtt_protocol = protocol;
         self
     }
 
@@ -324,6 +333,7 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> DistAsyncRuntimeBuilder<AC, S>
             var_msg_types: self.var_msg_types.as_ref().cloned(),
             topic_mapping: self.topic_mapping.as_ref().cloned(),
             input: None,
+            mqtt_protocol: self.mqtt_protocol,
         }
     }
 
@@ -512,6 +522,7 @@ where
             dist_graph_mode: None,
             input: None,
             scheduler_mode: None,
+            mqtt_protocol: MqttProtocol::default(),
         }
     }
 
@@ -647,6 +658,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -672,6 +684,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -695,6 +708,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -736,6 +750,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -763,6 +778,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -804,6 +820,7 @@ where
                             executor.clone(),
                             "central".to_string().into(),
                             locations,
+                            self.mqtt_protocol,
                         )
                         .expect("Failed to create MQTT dist graph provider"),
                     );
@@ -1453,6 +1470,17 @@ mod input_tests {
 
     use super::*;
     use crate::InputStream;
+
+    #[test]
+    fn distributed_builder_retains_selected_mqtt_protocol() {
+        let builder = DistAsyncRuntimeBuilder::<
+            crate::runtime::builder::DistValueConfig,
+            crate::semantics::DistributedSemantics,
+        >::new()
+        .mqtt_protocol(MqttProtocol::V5);
+        assert_eq!(builder.mqtt_protocol, MqttProtocol::V5);
+        assert_eq!(builder.partial_clone().mqtt_protocol, MqttProtocol::V5);
+    }
 
     async fn cooperative_worker(
         cancellation_token: CancellationToken,

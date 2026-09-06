@@ -12,7 +12,7 @@ Use a shortcut for one destination or `--output-config PATH` for explicit routin
 | `--output-ros-file PATH` | ROS 2 | Message type supplied by each route format; requires `--features ros` |
 | `--output-config PATH` | JSON5 destination registry | Supports local and transport destinations |
 
-`--output-config` is checked before the shortcut selections. MQTT uses rumqttc and is available without an additional Cargo feature.
+`--output-config` is checked before the shortcut selections. MQTT uses rumqttc and is available without an additional Cargo feature. MQTT output shortcuts use `--mqtt-protocol 3.1.1|5`, defaulting to `3.1.1`. Configured MQTT destinations use their own `protocol` field, defaulting to `3.1.1` when it is omitted.
 
 ## File shape
 
@@ -56,6 +56,7 @@ This example assigns otherwise-unassigned outputs to MQTT and mirrors them to Re
 |---|---|
 | `kind` | `stdout`, `null`, `limited-null`, `mqtt`, `redis`, or `ros`. |
 | `host`, `port` | Supported for MQTT and Redis. The `port` overrides the CLI port for that destination. |
+| `protocol` | MQTT wire protocol: `"3.1.1"` (default) or `"5"`. |
 | `retry` | MQTT/Redis retry policy described below. |
 | `limit` | Required and positive for `limited-null`; invalid for other kinds. |
 | `routes` | Variable-to-route catalog. MQTT/Redis formats, if present, must be `json` or `json5`; ROS routes require a message-type format. |
@@ -99,7 +100,7 @@ An explicit retry object has this shape:
 
 `max_attempts` includes the initial attempt. It must be positive; `null` or omission within a retry object means unlimited attempts. Delays double up to `max_delay_ms`, which must be at least the positive initial delay. Omitting the entire output `retry` object uses six attempts, starting at 250 ms and capped at 5 seconds.
 
-MQTT recovery belongs to the transport driver and retains protocol retransmission state. Redis output retries transient connection-establishment failures. A Redis publish error is terminal because retrying could repeat a value that already reached the server. Neither transport retries entire output batches at the session layer.
+MQTT recovery belongs to the transport driver and retains protocol retransmission state. Built-in MQTT output publishes each result at QoS 1 (at least once). A Rust `MqttClient::publish` request for QoS 2 is rejected before transport submission on MQTT 5 because rumqttc does not expose rejected `PubRec` acknowledgements; negative MQTT 5 protocol acknowledgements are terminal for the driver. Redis output retries transient connection-establishment failures. A Redis publish error is terminal because retrying could repeat a value that already reached the server. Neither transport retries entire output batches at the session layer.
 
 `--io-shutdown-timeout-ms` limits the whole graceful I/O shutdown, including input draining and output close. Omission means no time limit. Expiry reports incomplete shutdown and cancels remaining work; it does not extend the retry budget.
 

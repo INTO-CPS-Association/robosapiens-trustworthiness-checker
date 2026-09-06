@@ -111,6 +111,8 @@ pub struct DestinationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<crate::io::mqtt::MqttProtocol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<crate::io::RetryPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -152,6 +154,7 @@ impl DestinationConfig {
             kind,
             host: None,
             port: None,
+            protocol: None,
             retry: None,
             limit: None,
             routes: BTreeMap::new(),
@@ -166,6 +169,11 @@ impl DestinationConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.kind == DestinationKind::Mqtt || self.protocol.is_none(),
+            "output destination kind {:?} does not support `protocol`; `protocol` is only valid for `mqtt`",
+            self.kind
+        );
         match self.kind {
             DestinationKind::Mqtt | DestinationKind::Redis => {
                 if let Some(host) = &self.host {
@@ -660,6 +668,8 @@ pub enum SourceConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<crate::io::mqtt::MqttProtocol>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         retry: Option<crate::io::RetryPolicy>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         routes: BTreeMap<VarName, Route>,
@@ -1037,6 +1047,27 @@ mod tests {
                 "accepted {json}"
             );
         }
+    }
+
+    #[test]
+    fn output_protocol_is_only_valid_for_mqtt_destinations() {
+        let config = DestinationConfig {
+            protocol: Some(crate::io::mqtt::MqttProtocol::V5),
+            ..DestinationConfig::redis()
+        };
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("protocol")
+        );
+
+        let mqtt = DestinationConfig {
+            protocol: Some(crate::io::mqtt::MqttProtocol::V5),
+            ..DestinationConfig::mqtt()
+        };
+        mqtt.validate().unwrap();
     }
 
     #[test]

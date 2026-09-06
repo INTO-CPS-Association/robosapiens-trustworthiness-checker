@@ -94,7 +94,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.use_context_transfer(!cli.no_context_transfer);
 
-    let builder = builder.scheduler_mode(cli.scheduler_communication());
+    let builder = builder
+        .scheduler_mode(cli.scheduler_communication())
+        .mqtt_protocol(cli.mqtt_protocol());
 
     debug!("Choosing distribution mode");
     let dist_constraints = cli.distribution_constraints.clone();
@@ -162,7 +164,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         executor.clone(),
         mqtt_port,
         redis_port,
-        cli.mqtt_input_backend(),
+        cli.mqtt_protocol(),
         Some(InputSource::<Value>::redis_knowledge),
         &cli,
     )?;
@@ -185,6 +187,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         executor.clone(),
         mqtt_port,
         redis_port,
+        cli.mqtt_protocol(),
     )?;
     let output_pipeline = output_pipeline.with_executor(executor.clone());
     let builder = builder.output_pipeline(output_pipeline);
@@ -214,7 +217,7 @@ async fn run_mstlo(
         executor.clone(),
         cli.mqtt_port,
         cli.redis_port,
-        cli.mqtt_input_backend(),
+        cli.mqtt_protocol(),
         None,
         &cli,
     )?;
@@ -228,6 +231,7 @@ async fn run_mstlo(
         executor.clone(),
         cli.mqtt_port,
         cli.redis_port,
+        cli.mqtt_protocol(),
     )?;
     let output_pipeline = output_pipeline.with_executor(executor.clone());
 
@@ -255,7 +259,7 @@ fn configure_input_pipeline<V>(
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
-    mqtt_backend: trustworthiness_checker::io::mqtt::MqttInputBackend,
+    mqtt_protocol: trustworthiness_checker::io::mqtt::MqttProtocol,
     redis_knowledge_builder: Option<fn(RedisKnowledgeConfig) -> InputSource<V>>,
     cli: &Cli,
 ) -> anyhow::Result<InputPipeline<V>>
@@ -276,7 +280,7 @@ where
             executor.clone(),
             mqtt_port,
             redis_port,
-            mqtt_backend,
+            mqtt_protocol,
         )?;
         InputPipeline::from_sources(sources)
     } else if input_mode.redis_knowledge_input {
@@ -293,7 +297,7 @@ where
             executor.clone(),
             mqtt_port,
             redis_port,
-            mqtt_backend,
+            mqtt_protocol,
         )?)
     };
 

@@ -98,11 +98,12 @@ fn destination_from_config<V>(
                 )
             })?)
         }
-        DestinationKind::Mqtt => OutputBackendConfig::mqtt_with_retry(
+        DestinationKind::Mqtt => OutputBackendConfig::mqtt_with_protocol_and_retry(
             config
                 .host
                 .unwrap_or_else(|| crate::core::MQTT_HOSTNAME.to_owned()),
             config.port,
+            config.protocol.unwrap_or_default(),
             config
                 .retry
                 .unwrap_or_else(crate::io::RetryPolicy::output_default),

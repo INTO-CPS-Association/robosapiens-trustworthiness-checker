@@ -28,7 +28,7 @@ mod integration_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{RuntimeSpec, Semantics, Specification};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
-    use trustworthiness_checker::io::mqtt::{self, MqttInputBackend, MqttMessage};
+    use trustworthiness_checker::io::mqtt::{self, MqttMessage, MqttProtocol};
     use trustworthiness_checker::lang::mstlo::MstloSpecification;
 
     use trustworthiness_checker::runtime::mstlo::{
@@ -48,7 +48,7 @@ mod integration_tests {
         runtime::{RuntimeBuilder, builder::GeneralRuntimeBuilder},
     };
 
-    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Rumqttc;
+    const MQTT_PROTOCOL: MqttProtocol = MqttProtocol::V311;
 
     fn mqtt_output_pipeline<V>(port: u16, routes: BTreeMap<VarName, String>) -> OutputPipeline<V> {
         let routes = routes
@@ -247,7 +247,7 @@ mod integration_tests {
 
         let mut input_stream = with_timeout_res(
             mqtt::input_stream(
-                MQTT_INPUT_BACKEND,
+                MQTT_PROTOCOL,
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
@@ -287,7 +287,7 @@ mod integration_tests {
 
         let mut input_batches = with_timeout_res(
             mqtt::input_stream(
-                MqttInputBackend::Rumqttc,
+                MqttProtocol::V311,
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
@@ -316,6 +316,80 @@ mod integration_tests {
         Ok(())
     }
 
+    #[apply(async_test)]
+    async fn mqtt5_reconnects_to_fresh_session_and_restores_subscription(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        use std::{num::NonZeroU32, time::Duration};
+        use trustworthiness_checker::io::{RetryLimit, RetryPolicy};
+
+        const SUBSCRIBED_TOPIC: &str = "mqtt5/reconnect/subscribed";
+        const PENDING_TOPIC: &str = "mqtt5/reconnect/pending";
+
+        let mqtt_server = start_mqtt().await;
+        let mqtt_port = with_timeout_res(
+            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
+            5,
+            "MQTT 5 reconnect port",
+        )
+        .await?;
+        let retry = RetryPolicy::new(
+            RetryLimit::Attempts(NonZeroU32::new(40).unwrap()),
+            Duration::from_millis(50),
+            Duration::from_secs(10),
+        )?;
+        let (client, mut messages) = with_timeout_res(
+            mqtt::connect_and_receive_with_protocol_and_retry(
+                &format!("tcp://localhost:{mqtt_port}"),
+                MqttProtocol::V5,
+                retry,
+            ),
+            5,
+            "MQTT 5 reconnect client",
+        )
+        .await?;
+        client.subscribe(&SUBSCRIBED_TOPIC.to_owned(), 1).await?;
+
+        mqtt_server.stop().await?;
+        let pending_client = client.clone();
+        let pending_publish = executor.spawn(async move {
+            pending_client
+                .publish(MqttMessage::new(
+                    PENDING_TOPIC.to_owned(),
+                    "pending".to_owned(),
+                    1,
+                ))
+                .await
+        });
+        smol::Timer::after(Duration::from_millis(100)).await;
+
+        mqtt_server.start().await?;
+        let restarted_port = mqtt_server.get_host_port_ipv4(1883).await?;
+        assert_eq!(
+            restarted_port, mqtt_port,
+            "container restart changed the published MQTT port"
+        );
+        with_timeout_res(pending_publish, 10, "pending MQTT 5 PubAck after restart").await?;
+
+        let publisher = mqtt::connect(&format!("tcp://localhost:{mqtt_port}")).await?;
+        publisher
+            .publish(MqttMessage::new(
+                SUBSCRIBED_TOPIC.to_owned(),
+                "restored".to_owned(),
+                1,
+            ))
+            .await?;
+        let restored = with_timeout(messages.next(), 5, "restored MQTT 5 subscription")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("MQTT 5 receive stream ended after restart"))??;
+        assert_eq!(restored.topic, SUBSCRIBED_TOPIC);
+        assert_eq!(restored.payload, "restored");
+
+        publisher.disconnect().await?;
+        client.disconnect().await?;
+        Ok(())
+    }
+
     async fn publish_malformed_input(mqtt_port: u16, topic: &str) -> anyhow::Result<()> {
         let publisher = mqtt::connect(&format!("tcp://localhost:{mqtt_port}")).await?;
         publisher
@@ -334,7 +408,7 @@ mod integration_tests {
         let (_mqtt_server, mqtt_port) = start_mqtt_get_port().await;
         let mut batches = with_timeout_res(
             mqtt::input_stream::<Value>(
-                MqttInputBackend::Rumqttc,
+                MqttProtocol::V311,
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([(VarName::new("x"), X_TOPIC.to_owned())]),
@@ -372,7 +446,7 @@ mod integration_tests {
 
         let input_stream = with_timeout_res(
             mqtt::input_stream::<MstloTimedValue>(
-                MQTT_INPUT_BACKEND,
+                MQTT_PROTOCOL,
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([(VarName::new("x"), MSTLO_IN_TOPIC.to_string())]),
@@ -465,7 +539,7 @@ mod integration_tests {
 
         let input_stream = with_timeout_res(
             mqtt::input_stream::<MstloTimedValue>(
-                MQTT_INPUT_BACKEND,
+                MQTT_PROTOCOL,
                 "localhost",
                 Some(mqtt_port),
                 BTreeMap::from([
@@ -586,7 +660,7 @@ mod integration_tests {
         let var_topics = BTreeMap::from_iter([("payload".into(), "payload".to_string())]);
         let input_stream = with_timeout_res(
             mqtt::input_stream(
-                MQTT_INPUT_BACKEND,
+                MQTT_PROTOCOL,
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
@@ -758,7 +832,7 @@ echoed = payload
 
         let mut input_stream = with_timeout_res(
             mqtt::input_stream(
-                MQTT_INPUT_BACKEND,
+                MQTT_PROTOCOL,
                 "localhost",
                 Some(mqtt_port),
                 var_topics,
@@ -1312,7 +1386,7 @@ mod reconf_dataflow_mqtt_tests {
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{ExecutionPolicy, Runtime, RuntimeSpec, Semantics};
 
-    use trustworthiness_checker::io::mqtt::MqttInputBackend;
+    use trustworthiness_checker::io::mqtt::MqttProtocol;
     use trustworthiness_checker::io::{
         InputPipeline, InputSource, OutputBackendConfig, OutputDestination, OutputPipeline, Route,
     };
@@ -1332,17 +1406,19 @@ mod reconf_dataflow_mqtt_tests {
             .expect("test MQTT route should be non-empty")
     }
 
-    fn mqtt_output_pipeline(port: u16) -> OutputPipeline<Value> {
-        let destination =
-            OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
-                .with_route_catalog(BTreeMap::from([(VarName::new("z"), route(OUT_A))]));
+    fn mqtt_output_pipeline(port: u16, protocol: MqttProtocol) -> OutputPipeline<Value> {
+        let destination = OutputDestination::new(
+            "mqtt",
+            OutputBackendConfig::mqtt_with_protocol("localhost", Some(port), protocol),
+        )
+        .with_route_catalog(BTreeMap::from([(VarName::new("z"), route(OUT_A))]));
         OutputPipeline::from_destination(destination)
             .expect("test MQTT output destination should construct")
     }
 
     async fn exercise_reconf_dataflow_mqtt(
         executor: Rc<LocalExecutor<'static>>,
-        backend: MqttInputBackend,
+        protocol: MqttProtocol,
     ) -> anyhow::Result<()> {
         let mqtt_server = start_mqtt().await;
         let mqtt_port = with_timeout_res(
@@ -1377,7 +1453,7 @@ mod reconf_dataflow_mqtt_tests {
         let input_source = InputSource::mqtt_with_routes(
             Some(BTreeMap::from([(VarName::new("x"), route(INPUT_A))])),
             Some(mqtt_port),
-            backend,
+            protocol,
         )
         .with_reconfiguration_route(CONTROL_TOPIC)?;
         let (ack_tx, mut ack_rx) = bounded::channel::<ReconfigurationAck>(1).into_split();
@@ -1389,7 +1465,7 @@ mod reconf_dataflow_mqtt_tests {
             .executor(executor.clone())
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))?
-            .output_pipeline(mqtt_output_pipeline(mqtt_port))
+            .output_pipeline(mqtt_output_pipeline(mqtt_port, protocol))
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::Untimed)
             .reconf_topic(CONTROL_TOPIC.to_owned())
@@ -1497,6 +1573,13 @@ mod reconf_dataflow_mqtt_tests {
     async fn test_reconf_dataflow_mqtt_input(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
-        exercise_reconf_dataflow_mqtt(executor, MqttInputBackend::Rumqttc).await
+        exercise_reconf_dataflow_mqtt(executor, MqttProtocol::V311).await
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_dataflow_mqtt5_input(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        exercise_reconf_dataflow_mqtt(executor, MqttProtocol::V5).await
     }
 }

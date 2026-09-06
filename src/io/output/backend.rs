@@ -1,8 +1,8 @@
 use super::{open_limited_null, open_null, open_stdout};
 use crate::{
     core::{JsonStreamValue, OutputError, OutputInterface, OutputWriter, RosStreamValue},
-    io::RetryPolicy,
     io::channel::{ChannelOutputSender, open_output},
+    io::{RetryPolicy, mqtt::MqttProtocol},
 };
 #[cfg(any(test, feature = "test-support"))]
 use async_trait::async_trait;
@@ -39,6 +39,7 @@ pub enum OutputBackendConfig<V = crate::Value> {
     Mqtt {
         host: String,
         port: Option<u16>,
+        protocol: MqttProtocol,
         retry: RetryPolicy,
     },
     Redis {
@@ -65,10 +66,16 @@ impl<V> fmt::Debug for OutputBackendConfig<V> {
                 .field(n)
                 .finish(),
             Self::Channel(_) => f.write_str("OutputBackendConfig::Channel(..)"),
-            Self::Mqtt { host, port, retry } => f
+            Self::Mqtt {
+                host,
+                port,
+                protocol,
+                retry,
+            } => f
                 .debug_struct("OutputBackendConfig::Mqtt")
                 .field("host", host)
                 .field("port", port)
+                .field("protocol", protocol)
                 .field("retry", retry)
                 .finish(),
             Self::Redis { host, port, retry } => f
@@ -102,12 +109,28 @@ impl<V> OutputBackendConfig<V> {
         Self::Channel(sender)
     }
     pub fn mqtt(host: impl Into<String>, port: Option<u16>) -> Self {
-        Self::mqtt_with_retry(host, port, RetryPolicy::output_default())
+        Self::mqtt_with_protocol(host, port, MqttProtocol::default())
+    }
+    pub fn mqtt_with_protocol(
+        host: impl Into<String>,
+        port: Option<u16>,
+        protocol: MqttProtocol,
+    ) -> Self {
+        Self::mqtt_with_protocol_and_retry(host, port, protocol, RetryPolicy::output_default())
     }
     pub fn mqtt_with_retry(host: impl Into<String>, port: Option<u16>, retry: RetryPolicy) -> Self {
+        Self::mqtt_with_protocol_and_retry(host, port, MqttProtocol::default(), retry)
+    }
+    pub fn mqtt_with_protocol_and_retry(
+        host: impl Into<String>,
+        port: Option<u16>,
+        protocol: MqttProtocol,
+        retry: RetryPolicy,
+    ) -> Self {
         Self::Mqtt {
             host: host.into(),
             port,
+            protocol,
             retry,
         }
     }
@@ -194,9 +217,12 @@ impl<V: JsonStreamValue + RosStreamValue> OutputBackendConfig<V> {
             Self::Null => open_null(interface).await,
             Self::LimitedNull(n) => open_limited_null(*n, interface).await,
             Self::Channel(sender) => open_output(sender.clone(), interface).await,
-            Self::Mqtt { host, port, retry } => {
-                super::mqtt::open(host.clone(), *port, *retry, interface).await
-            }
+            Self::Mqtt {
+                host,
+                port,
+                protocol,
+                retry,
+            } => super::mqtt::open(host.clone(), *port, *protocol, *retry, interface).await,
             Self::Redis { host, port, retry } => {
                 #[cfg(feature = "redis")]
                 {

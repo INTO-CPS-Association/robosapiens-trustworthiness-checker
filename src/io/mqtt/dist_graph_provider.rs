@@ -90,6 +90,7 @@ impl MqttDistGraphProvider {
         executor: Rc<LocalExecutor<'static>>,
         central_node: NodeName,
         locations: BTreeMap<NodeName, String>,
+        protocol: mqtt::MqttProtocol,
     ) -> anyhow::Result<Self> {
         let topics = locations.values().cloned().collect::<Vec<_>>();
         let (location_txs, mut location_rxs): (Vec<_>, Vec<_>) = locations
@@ -118,9 +119,13 @@ impl MqttDistGraphProvider {
                 let _ = span.enter();
                 debug!("MQTTDistGraphProvider with ID {}", provider_id);
 
-                let (client, mut output) = mqtt::connect_and_receive("tcp://localhost")
-                    .await
-                    .unwrap();
+                let (client, mut output) = mqtt::connect_and_receive_with_protocol_and_retry(
+                    "tcp://localhost",
+                    protocol,
+                    crate::io::RetryPolicy::input_default(),
+                )
+                .await
+                .unwrap();
 
                 if let Err(error) = client.subscribe_many_same_qos(&topics, QOS).await {
                     warn!(?topics, ?error, "Failed to subscribe to MQTT graph topics");

@@ -24,7 +24,7 @@ mod integration_tests {
     use trustworthiness_checker::core::Runtime;
 
     use trustworthiness_checker::distributed::distribution_graphs::LabelledDistributionGraph;
-    use trustworthiness_checker::io::mqtt::MqttInputBackend;
+    use trustworthiness_checker::io::mqtt::MqttProtocol;
     use trustworthiness_checker::{LocalStream, dsrv_fixtures::*};
 
     use macro_rules_attribute::apply;
@@ -40,6 +40,7 @@ mod integration_tests {
 
     async fn open_mqtt_output(
         port: u16,
+        protocol: MqttProtocol,
         routes: BTreeMap<VarName, String>,
     ) -> anyhow::Result<OutputWriter<Value>> {
         let variables = routes
@@ -57,14 +58,17 @@ mod integration_tests {
             })
             .collect();
         OutputPipeline::from_destination(
-            OutputDestination::new("mqtt", OutputBackendConfig::mqtt("localhost", Some(port)))
-                .with_route_catalog(routes),
+            OutputDestination::new(
+                "mqtt",
+                OutputBackendConfig::mqtt_with_protocol("localhost", Some(port), protocol),
+            )
+            .with_route_catalog(routes),
         )?
         .build(variables, std::iter::empty::<VarName>(), None)
         .await
         .map_err(anyhow::Error::from)
     }
-    const MQTT_INPUT_BACKEND: MqttInputBackend = MqttInputBackend::Rumqttc;
+    const MQTT_PROTOCOL: MqttProtocol = MqttProtocol::V311;
 
     fn generate_test_publisher_tasks(
         executor: Rc<LocalExecutor<'static>>,
@@ -178,9 +182,9 @@ mod integration_tests {
         Ok(())
     }
 
-    #[apply(async_test)]
-    async fn manually_decomposed_monitor_test(
+    async fn exercise_manually_decomposed_monitor(
         executor: Rc<LocalExecutor<'static>>,
+        protocol: MqttProtocol,
     ) -> anyhow::Result<()> {
         let model1 = (spec_simple_add_decomposed_1())
             .parse::<DsrvSpecification>()
@@ -206,7 +210,7 @@ mod integration_tests {
         let mqtt_host = "localhost";
         let input_stream_1 = with_timeout_res(
             mqtt::input_stream(
-                MQTT_INPUT_BACKEND,
+                protocol,
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_1.iter().cloned().collect(),
@@ -218,13 +222,14 @@ mod integration_tests {
         .await
         .expect("Failed to connect MQTT input stream 1");
 
-        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1.into_iter().collect())
-            .await
-            .expect("Failed to open output writer 1");
+        let output_writer_1 =
+            open_mqtt_output(mqtt_port, protocol, var_out_topics_1.into_iter().collect())
+                .await
+                .expect("Failed to open output writer 1");
 
         let input_stream_2 = with_timeout_res(
             mqtt::input_stream(
-                MQTT_INPUT_BACKEND,
+                protocol,
                 mqtt_host,
                 Some(mqtt_port),
                 var_in_topics_2.iter().cloned().collect(),
@@ -236,9 +241,10 @@ mod integration_tests {
         .await
         .expect("Failed to connect MQTT input stream 2");
 
-        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2.into_iter().collect())
-            .await
-            .expect("Failed to open output writer 2");
+        let output_writer_2 =
+            open_mqtt_output(mqtt_port, protocol, var_out_topics_2.into_iter().collect())
+                .await
+                .expect("Failed to open output writer 2");
 
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
@@ -290,6 +296,20 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    async fn manually_decomposed_monitor_test(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        exercise_manually_decomposed_monitor(executor, MqttProtocol::V311).await
+    }
+
+    #[apply(async_test)]
+    async fn manually_decomposed_monitor_mqtt5_test(
+        executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        exercise_manually_decomposed_monitor(executor, MqttProtocol::V5).await
+    }
+
+    #[apply(async_test)]
     async fn test_localisation_distribution(
         executor: Rc<LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
@@ -322,7 +342,7 @@ mod integration_tests {
         warn!(?var_topics1, "Var topics 1");
 
         let input_stream_1 = mqtt::input_stream(
-            MQTT_INPUT_BACKEND,
+            MQTT_PROTOCOL,
             mqtt_host,
             Some(mqtt_port),
             var_topics1,
@@ -339,7 +359,7 @@ mod integration_tests {
         warn!(?var_topics_2, "Var topics 2");
 
         let input_stream_2 = mqtt::input_stream(
-            MQTT_INPUT_BACKEND,
+            MQTT_PROTOCOL,
             mqtt_host,
             Some(mqtt_port),
             var_topics_2,
@@ -355,7 +375,7 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_1, "Var out topics 1");
 
-        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1)
+        let output_writer_1 = open_mqtt_output(mqtt_port, MQTT_PROTOCOL, var_out_topics_1)
             .await
             .expect("Failed to open output writer 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
@@ -365,9 +385,13 @@ mod integration_tests {
             .collect();
         warn!(?var_out_topics_2, "Var out topics 2");
 
-        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2.into_iter().collect())
-            .await
-            .expect("Failed to open output writer 2");
+        let output_writer_2 = open_mqtt_output(
+            mqtt_port,
+            MQTT_PROTOCOL,
+            var_out_topics_2.into_iter().collect(),
+        )
+        .await
+        .expect("Failed to open output writer 2");
 
         let runner_1: TestRuntime = TestRuntime::new(
             executor.clone(),
@@ -451,7 +475,7 @@ mod integration_tests {
         let mqtt_host = "localhost";
 
         let input_stream_1 = mqtt::input_stream(
-            MQTT_INPUT_BACKEND,
+            MQTT_PROTOCOL,
             mqtt_host,
             Some(mqtt_port),
             local_spec1
@@ -465,7 +489,7 @@ mod integration_tests {
         .expect("Failed to connect MQTT input stream 1");
 
         let input_stream_2 = mqtt::input_stream(
-            MQTT_INPUT_BACKEND,
+            MQTT_PROTOCOL,
             mqtt_host,
             Some(mqtt_port),
             local_spec2
@@ -483,7 +507,7 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let output_writer_1 = open_mqtt_output(mqtt_port, var_out_topics_1)
+        let output_writer_1 = open_mqtt_output(mqtt_port, MQTT_PROTOCOL, var_out_topics_1)
             .await
             .expect("Failed to open output writer 1");
         let var_out_topics_2: BTreeMap<VarName, String> = local_spec2
@@ -491,7 +515,7 @@ mod integration_tests {
             .iter()
             .map(|v| (v.clone(), format!("{}", v)))
             .collect();
-        let output_writer_2 = open_mqtt_output(mqtt_port, var_out_topics_2)
+        let output_writer_2 = open_mqtt_output(mqtt_port, MQTT_PROTOCOL, var_out_topics_2)
             .await
             .expect("Failed to open output writer 2");
 

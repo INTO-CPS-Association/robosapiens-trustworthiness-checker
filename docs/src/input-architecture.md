@@ -181,7 +181,7 @@ The backend boundaries have different ordering and lifetime facts:
 
 | Adapter | Current boundary behavior |
 |---|---|
-| MQTT | The rumqttc MQTT 3.1.1 owner decodes data and control from one item stream. Pause establishes a generation boundary; an ordered marker follows admitted old-generation observations before bindings change. |
+| MQTT | The shared rumqttc MQTT 3.1.1/5 owner (default `3.1.1`) decodes data and control from one item stream, using QoS 1 subscriptions. Pause establishes a generation boundary; an ordered marker follows admitted old-generation observations before bindings change. Rejected MQTT 5 protocol acknowledgements are terminal for the driver. |
 | Redis Pub/Sub | Data and control are decoded from one Pub/Sub stream. Pause stops admission and queues a boundary marker behind admitted items; the same owner applies subscription and route changes before resuming. |
 | ROS | Data and control use independent subscriptions. The control subscription yields one request, while the data subscription remains separate; polling control first is a responsiveness choice, not a data-before-control ordering guarantee. |
 | channel | Data and control use independent fanouts. The adapter polls control first for responsiveness, but the fanouts provide no cross-stream ordering edge. |

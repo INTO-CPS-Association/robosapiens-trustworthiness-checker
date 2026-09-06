@@ -15,6 +15,8 @@ Use the CLI input group to select one finite file, one generic live source, one 
 | `--input-ros-file PATH` | Compact route/codec catalog | Requires `--features ros`. |
 | `--input-config PATH` | Named source registry below | Exclusive with the other selectors. |
 
+Use `--mqtt-protocol 3.1.1|5` to choose the wire protocol for MQTT input selectors; the default is `3.1.1`. A named MQTT source can override that choice with its own `protocol` field; when the field is omitted, the source uses the CLI selection.
+
 Exactly one selector is required. `--redis-port` and `--mqtt-port` apply to simple sources and to configured sources whose own port is omitted.
 
 ## Compact route catalog
@@ -73,6 +75,7 @@ A string is the normal route form for MQTT and Redis. Their optional format in `
 | `sources` | root | Non-empty map of unique source IDs. A model variable may be owned by only one configured source. |
 | `kind` | source | `mqtt`, `redis`, `redis-knowledge`, or `ros`. |
 | `host`, `port` | MQTT/Redis sources | Optional connection address; omitted values use the adapter's defaults/CLI port. |
+| `protocol` | MQTT | `"3.1.1"` (default) or `"5"`. |
 | `routes` | MQTT/Redis/ROS | Variable-to-route map. ROS routes normally include a codec. |
 | `reconfiguration_route` | MQTT/Redis/ROS | Optional control route; at most one configured source may declare it. Redis knowledge cannot be a control source. |
 | `database` | `redis-knowledge` | Redis database; default `2`. |
@@ -80,7 +83,7 @@ A string is the normal route form for MQTT and Redis. Their optional format in `
 | `keys` | `redis-knowledge` | Required variable-to-key map. Key names are explicit and unique. |
 | `retry` | MQTT/Redis sources | Optional retry object: `max_attempts` (`null` means forever), `initial_delay_ms` (default `250`), and `max_delay_ms` (default `5000`). |
 
-MQTT and plain Redis input retry transient transport failures indefinitely by default. An explicit retry policy can bound the total attempts, including the initial attempt. Redis knowledge uses its selected-key recovery policy; see its linked guide for snapshot behavior. Retry limits are separate from `--io-shutdown-timeout-ms`, whose omitted value permits unlimited graceful shutdown.
+MQTT and plain Redis input retry transient transport failures indefinitely by default. An explicit retry policy can bound the total attempts, including the initial attempt. A rejected MQTT 5 protocol acknowledgement is terminal for the shared driver and is not retried as a transient connection failure. Redis knowledge uses its selected-key recovery policy; see its linked guide for snapshot behavior. Retry limits are separate from `--io-shutdown-timeout-ms`, whose omitted value permits unlimited graceful shutdown.
 
 Unknown fields are rejected. A named source is structurally validated before it is opened; variable ownership, route codecs, feature availability, and external connection are later boundaries.
 

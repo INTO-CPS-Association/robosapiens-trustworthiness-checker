@@ -22,6 +22,9 @@ The generic `--mqtt-input` mode maps model input names to topics by name, and
 values; the output MQTT backend wraps a value in an object such as
 `{"value":3}`.
 
+These MQTT shortcuts use protocol `3.1.1` by default. Add
+`--mqtt-protocol 5` to Terminal 1 to select MQTT 5 for both shortcuts.
+
 ## Add two values received through MQTT
 
 The DSRV program declares the two topic-backed inputs and their sum:

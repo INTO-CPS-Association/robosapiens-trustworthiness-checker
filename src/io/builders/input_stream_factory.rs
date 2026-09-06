@@ -22,7 +22,7 @@ use crate::io::config::{
     FormatId, InputBinding, InputConfigFile, InputConfiguration, ResolvedInput, ResolvedSource,
     Route, SourceId,
 };
-use crate::io::mqtt::MqttInputBackend;
+use crate::io::mqtt::MqttProtocol;
 use crate::io::reconfigurable_input::{
     InputSourceControl, InputSourceSet, OpenedInputSource, ReconfigurableInputItem,
     ReconfigurableInputStream, ReconfigurationControl, SharedInputSourceSet,
@@ -185,7 +185,7 @@ enum InputSourceKind<V = Value> {
         host: String,
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
-        backend: MqttInputBackend,
+        protocol: MqttProtocol,
         retry: RetryPolicy,
     },
     Redis {
@@ -421,7 +421,7 @@ impl<V> InputSources<V> {
         executor: Rc<LocalExecutor<'static>>,
         mqtt_port: Option<u16>,
         redis_port: Option<u16>,
-        mqtt_backend: MqttInputBackend,
+        mqtt_protocol: MqttProtocol,
     ) -> anyhow::Result<InputSources<V>>
     where
         V: 'static,
@@ -436,6 +436,7 @@ impl<V> InputSources<V> {
                     routes,
                     reconfiguration_route,
                     retry,
+                    protocol,
                 } => {
                     let routes = routes;
                     (
@@ -447,7 +448,7 @@ impl<V> InputSources<V> {
                                 Some(routes)
                             },
                             port.or(mqtt_port),
-                            mqtt_backend,
+                            protocol.unwrap_or(mqtt_protocol),
                             retry.unwrap_or_else(RetryPolicy::input_default),
                         ),
                         reconfiguration_route,
@@ -756,7 +757,7 @@ impl<V> InputSource<V> {
         if let InputSourceKind::Mqtt {
             host,
             port,
-            backend,
+            protocol,
             retry,
             ..
         } = &self.kind
@@ -770,7 +771,7 @@ impl<V> InputSource<V> {
                     )
                 })
                 .collect();
-            let (stream, owner) = backend
+            let (stream, owner) = protocol
                 .open_owned_data::<V>(host, *port, topics, retry.clone())
                 .await?;
             return Ok((stream, Some(InputSourceControl::Rumqttc(owner))));
@@ -911,19 +912,19 @@ impl<V> InputSource<V> {
     }
 
     pub fn mqtt(routes: Option<BTreeMap<VarName, Route>>, port: Option<u16>) -> Self {
-        Self::mqtt_with_routes(routes, port, MqttInputBackend::default())
+        Self::mqtt_with_routes(routes, port, MqttProtocol::default())
     }
 
     pub fn mqtt_with_routes(
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
-        backend: MqttInputBackend,
+        protocol: MqttProtocol,
     ) -> Self {
         Self::mqtt_with_host_routes(
             MQTT_HOSTNAME,
             routes,
             port,
-            backend,
+            protocol,
             RetryPolicy::input_default(),
         )
     }
@@ -932,14 +933,14 @@ impl<V> InputSource<V> {
         host: impl Into<String>,
         routes: Option<BTreeMap<VarName, Route>>,
         port: Option<u16>,
-        backend: MqttInputBackend,
+        protocol: MqttProtocol,
         retry: RetryPolicy,
     ) -> Self {
         Self::new(InputSourceKind::Mqtt {
             host: host.into(),
             routes,
             port,
-            backend,
+            protocol,
             retry,
         })
     }
@@ -1233,7 +1234,7 @@ impl<V> InputSource<V> {
             InputSourceKind::Mqtt {
                 host,
                 port,
-                backend,
+                protocol,
                 retry,
                 ..
             } => {
@@ -1241,7 +1242,7 @@ impl<V> InputSource<V> {
                     .into_iter()
                     .map(|(variable, route)| (variable, route.address().to_string()))
                     .collect();
-                backend.open_data::<V>(&host, port, topics, retry).await
+                protocol.open_data::<V>(&host, port, topics, retry).await
             }
             InputSourceKind::Redis {
                 host, port, retry, ..
@@ -1331,7 +1332,7 @@ impl<V> InputSource<V> {
             InputSourceKind::Mqtt {
                 host,
                 port,
-                backend,
+                protocol,
                 retry,
                 ..
             } => {
@@ -1339,7 +1340,7 @@ impl<V> InputSource<V> {
                     .into_iter()
                     .map(|(variable, route)| (variable, route.address().to_string()))
                     .collect();
-                let (stream, owner) = backend
+                let (stream, owner) = protocol
                     .open_reconfigurable(&host, port, topics, retry, control_route.to_string())
                     .await?;
                 let stream: ReconfigurableInputStream<V> = Box::pin(stream.map(|item| {
@@ -1472,14 +1473,19 @@ impl<V> InputSource<V> {
             .collect::<BTreeMap<_, _>>();
         match self.kind {
             InputSourceKind::Mqtt {
-                host, port, retry, ..
+                host,
+                port,
+                protocol,
+                retry,
+                ..
             } => {
                 let topics = routes
                     .into_iter()
                     .map(|(variable, route)| (variable, route.address().to_owned()))
                     .collect();
-                let (stream, owner) =
-                    crate::io::mqtt::owned_input_stream_items(&host, port, topics, retry).await?;
+                let (stream, owner) = protocol
+                    .open_owned_items(&host, port, topics, retry)
+                    .await?;
                 let stream = Box::pin(stream.map(|item| {
                     item.map(|item| match item {
                         crate::io::mqtt::MqttInputItem::Data(batch) => {
@@ -2234,7 +2240,7 @@ mod resolution_tests {
             Rc::new(LocalExecutor::new()),
             None,
             None,
-            MqttInputBackend::default(),
+            MqttProtocol::default(),
         )
         .unwrap_err();
         assert!(
@@ -2275,7 +2281,7 @@ mod resolution_tests {
             Rc::new(LocalExecutor::new()),
             None,
             None,
-            MqttInputBackend::default(),
+            MqttProtocol::default(),
         )
         .unwrap();
 

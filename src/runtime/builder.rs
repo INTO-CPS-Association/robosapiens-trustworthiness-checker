@@ -25,7 +25,7 @@ use crate::{
         StreamType,
     },
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputPipeline, OpenedInput, OutputPipeline},
+    io::{InputPipeline, OpenedInput, OutputPipeline, mqtt::MqttProtocol},
     lang::dsrv::{
         DsrvPipelineError, TypeCheckOptions,
         ast::{CheckedDsrvSpecification, CheckedExpr, Expr},
@@ -812,6 +812,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub distribution_mode: DistributionMode,
     pub distribution_mode_builder: Option<DistributionModeBuilder>,
     pub scheduler_mode: SchedulerCommunication,
+    mqtt_protocol: MqttProtocol,
     pub reconf_topic: Option<String>,
     pub use_context_transfer: bool,
     pub var_msg_types: Option<BTreeMap<VarName, String>>,
@@ -842,6 +843,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             distribution_mode: DistributionMode::CentralMonitor,
             distribution_mode_builder: None,
             scheduler_mode: SchedulerCommunication::Null,
+            mqtt_protocol: MqttProtocol::default(),
             reconf_topic: None,
             use_context_transfer: true,
             var_msg_types: None,
@@ -959,6 +961,13 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
     pub fn scheduler_mode(self, scheduler_mode: impl Into<SchedulerCommunication>) -> Self {
         Self {
             scheduler_mode: scheduler_mode.into(),
+            ..self
+        }
+    }
+
+    pub fn mqtt_protocol(self, mqtt_protocol: MqttProtocol) -> Self {
+        Self {
+            mqtt_protocol,
             ..self
         }
     }
@@ -1100,6 +1109,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                 distribution_mode: self.distribution_mode,
                 distribution_mode_builder: self.distribution_mode_builder,
                 scheduler_mode: self.scheduler_mode,
+                mqtt_protocol: self.mqtt_protocol,
                 reconf_topic: self.reconf_topic,
                 use_context_transfer: self.use_context_transfer,
                 var_msg_types: self.var_msg_types,
@@ -1133,6 +1143,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     distribution_mode: DistributionMode::CentralMonitor,
                     distribution_mode_builder: None,
                     scheduler_mode: self.scheduler_mode,
+                    mqtt_protocol: self.mqtt_protocol,
                     reconf_topic: self.reconf_topic,
                     use_context_transfer: self.use_context_transfer,
                     var_msg_types: self.var_msg_types,
@@ -1236,6 +1247,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         model: Option<DsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
+        mqtt_protocol: MqttProtocol,
         input_pipeline: Option<InputPipeline>,
         output_pipeline: Option<OutputPipeline>,
         reconf_topic: Option<String>,
@@ -1434,7 +1446,8 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     );
 
                     let builder =
-                        DistAsyncRuntimeBuilder::<DistValueConfig, DistributedSemantics>::new();
+                        DistAsyncRuntimeBuilder::<DistValueConfig, DistributedSemantics>::new()
+                            .mqtt_protocol(mqtt_protocol);
 
                     let builder = builder.scheduler_mode(scheduler_mode);
                     let builder = match distribution_mode {
@@ -1685,6 +1698,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.model,
                 distribution_mode,
                 self.scheduler_mode,
+                self.mqtt_protocol,
                 input_pipeline,
                 if scheduler_only {
                     None

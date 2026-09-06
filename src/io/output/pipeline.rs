@@ -2248,6 +2248,7 @@ mod tests {
             OutputBackendConfig::Mqtt {
                 host: "broker".into(),
                 port: Some(1883),
+                protocol: crate::io::mqtt::MqttProtocol::default(),
                 retry: crate::io::RetryPolicy::output_default(),
             },
         )

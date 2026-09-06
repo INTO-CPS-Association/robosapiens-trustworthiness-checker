@@ -15,7 +15,7 @@ The default values are DSRV, `gradual-typed-untimed`, the `async` runtime, and b
 - `--reconf-topic` and `--no-context-transfer` require a reconfigurable runtime. The selected control route is the configured route, the CLI override, or `reconf` when no route is supplied.
 - `--input-window-mode` requires `--input-window-ms` or `--input-window-update-limit`. For file input, `atomic-step` also requires an update limit.
 - Redis knowledge options require `--redis-knowledge-input` or `--input-config`; `--redis-knowledge-source` requires `--input-config`. Redis knowledge input is not supported for MSTLO.
-- MQTT input and output use rumqttc. The former implementation-selector flags are no longer accepted.
+- MQTT input and output use rumqttc, with `--mqtt-protocol 3.1.1|5` selecting the protocol for shortcut inputs and outputs. Named MQTT sources and destinations use their own `protocol` field; an input source without the field inherits the CLI selection, while an output destination without it defaults to `3.1.1`. The former implementation-selector flags are no longer accepted.
 - `--distributed-work` is present in generated parser metadata and requires `--local-node`, but the current adapter/runtime construction does not consume it to establish the waiting behavior described by its Clap help. Do not use it as an operational contract.
 
 ## Features and resources

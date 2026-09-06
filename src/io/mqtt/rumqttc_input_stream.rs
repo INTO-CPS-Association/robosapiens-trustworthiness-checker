@@ -7,8 +7,9 @@ use tracing::debug;
 use crate::core::{InputBatch, JsonStreamValue, LocalStream, VarName};
 use crate::io::{ReconfigurationRequest, RetryPolicy};
 
-use super::client::mqtt311::{self, RawMqttMessage};
-use super::input_backend::{InverseVarTopicMap, MqttInputItem, VarTopicMap, invert_topic_mapping};
+use super::MqttProtocol;
+use super::client::driver::{self, RawMqttMessage};
+use super::protocol::{InverseVarTopicMap, MqttInputItem, VarTopicMap, invert_topic_mapping};
 
 const INPUT_CAPACITY: usize = 1024;
 
@@ -41,7 +42,7 @@ pub(crate) struct RumqttcInputControl {
 
 impl RumqttcInputControl {
     pub(crate) async fn rebind(&mut self, candidate: VarTopicMap) -> anyhow::Result<()> {
-        super::input_backend::validate_topic_mapping(&candidate, self.control_topic.as_deref())?;
+        super::protocol::validate_topic_mapping(&candidate, self.control_topic.as_deref())?;
         let additions = candidate
             .values()
             .filter(|topic| !self.active_topics.values().any(|old| old == *topic))
@@ -122,6 +123,7 @@ impl RumqttcInputControl {
 }
 
 pub(crate) async fn reconfigurable_input_stream_items<V: JsonStreamValue>(
+    protocol: MqttProtocol,
     host: &str,
     port: Option<u16>,
     topics: VarTopicMap,
@@ -131,10 +133,11 @@ pub(crate) async fn reconfigurable_input_stream_items<V: JsonStreamValue>(
     LocalStream<anyhow::Result<MqttInputItem<V>>>,
     RumqttcInputControl,
 )> {
-    open_items(host, port, topics, retry, Some(control)).await
+    open_items(protocol, host, port, topics, retry, Some(control)).await
 }
 
 pub(crate) async fn owned_input_stream_items<V: JsonStreamValue>(
+    protocol: MqttProtocol,
     host: &str,
     port: Option<u16>,
     topics: VarTopicMap,
@@ -143,10 +146,11 @@ pub(crate) async fn owned_input_stream_items<V: JsonStreamValue>(
     LocalStream<anyhow::Result<MqttInputItem<V>>>,
     RumqttcInputControl,
 )> {
-    open_items(host, port, topics, retry, None).await
+    open_items(protocol, host, port, topics, retry, None).await
 }
 
 async fn open_items<V: JsonStreamValue>(
+    protocol: MqttProtocol,
     host: &str,
     port: Option<u16>,
     topics: VarTopicMap,
@@ -156,9 +160,9 @@ async fn open_items<V: JsonStreamValue>(
     LocalStream<anyhow::Result<MqttInputItem<V>>>,
     RumqttcInputControl,
 )> {
-    super::input_backend::validate_topic_mapping(&topics, control.as_deref())?;
+    super::protocol::validate_topic_mapping(&topics, control.as_deref())?;
     let uri = format!("tcp://{host}:{}", port.unwrap_or(1883));
-    let (client, raw, driver) = mqtt311::connect_raw(&uri, retry).await?;
+    let (client, raw, driver) = driver::connect_raw_with_protocol(&uri, protocol, retry).await?;
     let mut subscriptions = topics.values().cloned().collect::<Vec<_>>();
     if let Some(topic) = &control {
         subscriptions.push(topic.clone());
@@ -478,7 +482,7 @@ fn map_items<V: JsonStreamValue + 'static>(
                 }
                 InputEvent::Publish(publish) => {
                     let Some(variable) = publish.variable else { continue };
-                    let value = super::input_backend::decode_payload::<V>(&publish.payload)
+                    let value = super::protocol::decode_payload::<V>(&publish.payload)
                         .with_context(|| format!("failed to parse value for MQTT variable `{variable}`"))?;
                     yield MqttInputItem::Data(InputBatch::update(variable, value));
                 }

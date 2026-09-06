@@ -14,7 +14,7 @@ use crate::{
     VarName,
     core::REDIS_HOSTNAME,
     distributed::distribution_graphs::LabelledDistributionGraph,
-    io::{InputSource, RedisKnowledgeConfig, RetryPolicy, mqtt::MqttInputBackend},
+    io::{InputSource, RedisKnowledgeConfig, RetryPolicy, mqtt::MqttProtocol},
     runtime::distributed::SchedulerCommunication,
 };
 use ::core::cfg_select;
@@ -217,7 +217,7 @@ pub fn input_source<V>(
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
-    mqtt_backend: MqttInputBackend,
+    mqtt_protocol: MqttProtocol,
 ) -> anyhow::Result<InputSource<V>>
 where
     V: FileInputValue + RosStreamValue,
@@ -248,7 +248,7 @@ where
             })?;
             let routes = json_to_routes(&json_string)
                 .context("Input MQTT route catalog could not be parsed")?;
-            InputSource::<V>::mqtt_with_routes(Some(routes), mqtt_port, mqtt_backend)
+            InputSource::<V>::mqtt_with_routes(Some(routes), mqtt_port, mqtt_protocol)
         }
         InputMode {
             input_redis_file: Some(input_redis_file),
@@ -263,7 +263,7 @@ where
         }
         InputMode {
             mqtt_input: true, ..
-        } => InputSource::<V>::mqtt_with_routes(None, mqtt_port, mqtt_backend),
+        } => InputSource::<V>::mqtt_with_routes(None, mqtt_port, mqtt_protocol),
         InputMode {
             redis_input: true, ..
         } => InputSource::<V>::redis(None, redis_port),
@@ -283,6 +283,7 @@ pub fn output_pipeline<V>(
     executor: Rc<LocalExecutor<'static>>,
     mqtt_port: Option<u16>,
     redis_port: Option<u16>,
+    mqtt_protocol: MqttProtocol,
 ) -> anyhow::Result<OutputPipeline<V>>
 where
     V: FileInputValue + RosStreamValue,
@@ -302,7 +303,11 @@ where
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("Output MQTT route catalog {path:?} could not be read"))?;
         (
-            OutputBackendConfig::mqtt(crate::core::MQTT_HOSTNAME, mqtt_port),
+            OutputBackendConfig::mqtt_with_protocol(
+                crate::core::MQTT_HOSTNAME,
+                mqtt_port,
+                mqtt_protocol,
+            ),
             Some(
                 json_to_routes(&contents)
                     .context("Output MQTT route catalog could not be parsed")?,
@@ -310,7 +315,11 @@ where
         )
     } else if selection.mqtt_output {
         (
-            OutputBackendConfig::mqtt(crate::core::MQTT_HOSTNAME, mqtt_port),
+            OutputBackendConfig::mqtt_with_protocol(
+                crate::core::MQTT_HOSTNAME,
+                mqtt_port,
+                mqtt_protocol,
+            ),
             None,
         )
     } else if let Some(path) = selection.output_redis_file {
@@ -355,8 +364,8 @@ where
 }
 
 impl Cli {
-    pub fn mqtt_input_backend(&self) -> MqttInputBackend {
-        MqttInputBackend::default()
+    pub fn mqtt_protocol(&self) -> MqttProtocol {
+        self.mqtt_protocol
     }
 
     pub fn scheduler_communication(&self) -> SchedulerCommunication {
@@ -781,14 +790,44 @@ mod tests {
     }
 
     #[test]
-    fn mqtt_input_backend_defaults_to_rumqttc() {
+    fn mqtt_protocol_defaults_to_311() {
         let cli = Cli::parse_from([
             "trustworthiness_checker",
             "model.dsrv",
             "--mqtt-input",
             "--output-stdout",
         ]);
-        assert_eq!(cli.mqtt_input_backend(), MqttInputBackend::Rumqttc);
+        assert_eq!(cli.mqtt_protocol(), MqttProtocol::V311);
+    }
+
+    #[test]
+    fn mqtt_protocol_accepts_only_canonical_wire_versions() {
+        for (spelling, expected) in [("3.1.1", MqttProtocol::V311), ("5", MqttProtocol::V5)] {
+            let cli = Cli::try_parse_from([
+                "trustworthiness_checker",
+                "model.dsrv",
+                "--mqtt-input",
+                "--output-stdout",
+                "--mqtt-protocol",
+                spelling,
+            ])
+            .unwrap();
+            assert_eq!(cli.mqtt_protocol(), expected);
+        }
+
+        for spelling in ["v5", "5.0", " 5", "3_1_1"] {
+            assert!(
+                Cli::try_parse_from([
+                    "trustworthiness_checker",
+                    "model.dsrv",
+                    "--mqtt-input",
+                    "--output-stdout",
+                    "--mqtt-protocol",
+                    spelling,
+                ])
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1211,11 +1250,13 @@ mod tests {
             path.to_str().unwrap(),
         ])
         .unwrap();
+        let dsrv_protocol = dsrv.mqtt_protocol();
         let dsrv_builder = output_pipeline::<crate::Value>(
             dsrv.output_selection,
             std::rc::Rc::new(smol::LocalExecutor::new()),
             None,
             None,
+            dsrv_protocol,
         )
         .unwrap();
         let dsrv_resolved = dsrv_builder
@@ -1239,11 +1280,13 @@ mod tests {
             path.to_str().unwrap(),
         ])
         .unwrap();
+        let mstlo_protocol = mstlo.mqtt_protocol();
         let mstlo_builder = output_pipeline::<crate::runtime::mstlo::MstloTimedValue>(
             mstlo.output_selection,
             std::rc::Rc::new(smol::LocalExecutor::new()),
             None,
             None,
+            mstlo_protocol,
         )
         .unwrap();
         let mstlo_resolved = mstlo_builder
@@ -1337,7 +1380,7 @@ mod tests {
             Rc::new(LocalExecutor::new()),
             None,
             Some(6381),
-            MqttInputBackend::default(),
+            MqttProtocol::default(),
         )
         .unwrap();
         let debug = format!("{:?}", sources.source("knowledge").unwrap());
@@ -1363,7 +1406,7 @@ mod tests {
             Rc::new(LocalExecutor::new()),
             None,
             Some(6381),
-            MqttInputBackend::default(),
+            MqttProtocol::default(),
         )
         .unwrap();
         let debug = format!("{:?}", sources.source("knowledge").unwrap());

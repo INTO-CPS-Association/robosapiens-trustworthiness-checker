@@ -191,6 +191,11 @@ const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
     ),
     ("mqtt_port", "MQTT, Redis, and ROS transport settings", None),
     (
+        "mqtt_protocol",
+        "MQTT, Redis, and ROS transport settings",
+        None,
+    ),
+    (
         "redis_port",
         "MQTT, Redis, and ROS transport settings",
         None,
