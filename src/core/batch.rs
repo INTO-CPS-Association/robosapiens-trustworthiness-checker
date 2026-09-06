@@ -106,14 +106,6 @@ impl<S> Storage<S> {
             Self::Segments(segments) => SegmentCursor::Slice(segments.iter()),
         }
     }
-
-    pub(crate) fn from_nonempty(mut segments: Vec<S>, empty: impl FnOnce() -> S) -> Self {
-        match segments.len() {
-            0 => Self::Single(empty()),
-            1 => Self::Single(segments.pop().expect("length checked")),
-            _ => Self::Segments(segments),
-        }
-    }
 }
 
 pub(crate) fn normalize<S, E>(
@@ -123,21 +115,31 @@ pub(crate) fn normalize<S, E>(
     mut is_empty: impl FnMut(&S) -> bool,
     mut merge: impl FnMut(&mut S, S) -> Result<Option<S>, E>,
 ) -> Result<Storage<S>, E> {
-    let mut normalized = Vec::new();
+    let mut first = None;
+    let mut multiple = Vec::new();
     for segment in segments {
         validate(&segment)?;
         if is_empty(&segment) {
             continue;
         }
-        if let Some(previous) = normalized.last_mut() {
+        if let Some(previous) = multiple.last_mut() {
             if let Some(segment) = merge(previous, segment)? {
-                normalized.push(segment);
+                multiple.push(segment);
+            }
+        } else if let Some(previous) = first.as_mut() {
+            if let Some(segment) = merge(previous, segment)? {
+                multiple.push(first.take().expect("first segment is present"));
+                multiple.push(segment);
             }
         } else {
-            normalized.push(segment);
+            first = Some(segment);
         }
     }
-    Ok(Storage::from_nonempty(normalized, empty))
+    Ok(if multiple.is_empty() {
+        Storage::Single(first.unwrap_or_else(empty))
+    } else {
+        Storage::Segments(multiple)
+    })
 }
 
 pub(crate) enum SegmentCursor<'a, S> {
@@ -437,3 +439,38 @@ impl<S: SegmentAccess<V>, V> Iterator for OwnedTicks<S, V> {
     }
 }
 impl<S: SegmentAccess<V>, V> ExactSizeIterator for OwnedTicks<S, V> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_merges_nonempty_segments_across_empty_segments() {
+        let storage = normalize(
+            [1, 0, 2],
+            || 0,
+            |_| Ok::<_, ()>(()),
+            |segment| *segment == 0,
+            |previous, segment| {
+                *previous += segment;
+                Ok(None)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(storage, Storage::Single(3));
+    }
+
+    #[test]
+    fn normalize_validates_later_segments_after_empty_segments() {
+        let result = normalize(
+            [1, 0, -1],
+            || 0,
+            |segment| (*segment >= 0).then_some(()).ok_or("negative segment"),
+            |segment| *segment == 0,
+            |_, segment| Ok(Some(segment)),
+        );
+
+        assert_eq!(result, Err("negative segment"));
+    }
+}

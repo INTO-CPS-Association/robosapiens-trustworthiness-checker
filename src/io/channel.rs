@@ -1,11 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    pin::Pin,
     rc::Rc,
-    task::Poll,
+    task::{Context, Poll},
 };
 
-use async_unsync::bounded;
-use futures::{FutureExt, StreamExt, future::join_all};
+use async_unsync::{bounded, oneshot};
+use futures::{Future, Stream, StreamExt, future::join_all};
 
 use crate::core::{OutputBatch, OutputError, OutputInterface, OutputWriter, StreamData};
 use crate::io::ReconfigurationRequest;
@@ -18,6 +19,29 @@ const CHANNEL_SIZE: usize = 10;
 
 pub struct ChannelInputController<V> {
     sender: bounded::Sender<InputBatch<V>>,
+}
+
+struct ChannelInputStream<V> {
+    receiver: bounded::Receiver<InputBatch<V>>,
+    stopped: oneshot::Receiver<()>,
+    draining: bool,
+}
+
+impl<V> Stream for ChannelInputStream<V> {
+    type Item = Result<InputBatch<V>, crate::InputError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if !self.draining {
+            match Pin::new(&mut self.stopped).poll(cx) {
+                Poll::Ready(_) => {
+                    self.receiver.close();
+                    self.draining = true;
+                }
+                Poll::Pending => {}
+            }
+        }
+        self.receiver.poll_recv(cx).map(|batch| batch.map(Ok))
+    }
 }
 
 impl<V> ChannelInputController<V> {
@@ -34,29 +58,15 @@ impl<V> ChannelInputController<V> {
 /// Create a channel driven input stream and its controller.
 pub fn channel<V: 'static>() -> (crate::io::OpenedInput<V>, ChannelInputController<V>) {
     let (sender, receiver) = bounded::channel(CHANNEL_SIZE).into_split();
-    let (stop, stopped) = async_channel::bounded::<()>(1);
-    let mut receiver = receiver;
-    let stream: InputStream<V> = Box::pin(async_stream::stream! {
-        loop {
-            futures::select_biased! {
-                _ = stopped.recv().fuse() => break,
-                batch = receiver.recv().fuse() => match batch {
-                    Some(batch) => yield Ok(batch),
-                    None => return,
-                },
-            }
-        }
-        receiver.close();
-        loop {
-            match receiver.recv().await {
-                Some(batch) => yield Ok(batch),
-                None => return,
-            }
-        }
+    let (stop, stopped) = oneshot::channel::<()>().into_split();
+    let stream: InputStream<V> = Box::pin(ChannelInputStream {
+        receiver,
+        stopped,
+        draining: false,
     });
     (
         crate::io::OpenedInput::with_stop(stream, move || {
-            let _ = stop.try_send(());
+            let _ = stop.send(());
         }),
         ChannelInputController { sender },
     )
@@ -300,6 +310,43 @@ mod tests {
             assert!(
                 controller
                     .send_tick(vec![InputUpdate::new("x".into(), 3)])
+                    .await
+                    .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn shutdown_wakes_an_idle_channel_stream() {
+        smol::block_on(async {
+            let (input, _controller) = channel::<i32>();
+            let drain = input.into_drain().collect::<Vec<_>>();
+            let timeout = smol::Timer::after(std::time::Duration::from_secs(1));
+            futures::pin_mut!(drain, timeout);
+            assert!(matches!(
+                futures::future::select(drain, timeout).await,
+                futures::future::Either::Left((items, _)) if items.is_empty()
+            ));
+        });
+    }
+
+    #[test]
+    fn dropping_controller_ends_channel_input() {
+        smol::block_on(async {
+            let (mut input, controller) = channel::<i32>();
+            drop(controller);
+            assert!(input.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn dropping_channel_input_closes_controller_admission() {
+        smol::block_on(async {
+            let (input, mut controller) = channel::<i32>();
+            drop(input);
+            assert!(
+                controller
+                    .send_tick(vec![InputUpdate::new("x".into(), 1)])
                     .await
                     .is_err()
             );

@@ -13,6 +13,8 @@ Root reconfiguration replaces a running monitor specification through a live con
 
 The selected source must support control. MQTT, Redis Pub/Sub, and ROS sources can be control-capable; file and Redis knowledge sources are not control sources. With several configured sources, exactly one source declares `reconfiguration_route`.
 
+For ROS, the control route is a persistent `std_msgs/String` subscription, while data routes use separate native subscriptions. Unchanged data subscriptions remain live, and changed ROS mappings are rebound in place at the control boundary.
+
 ## Wire envelope
 
 The control payload is JSON5 and has this shape:

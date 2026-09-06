@@ -11,6 +11,11 @@ pub enum IoErrorKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ErrorDetails {
     kind: IoErrorKind,
+    context: Option<Box<ErrorContext>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ErrorContext {
     message: Option<String>,
     causes: Vec<String>,
     cleanup: Vec<String>,
@@ -20,17 +25,17 @@ impl ErrorDetails {
     pub const fn closed() -> Self {
         Self {
             kind: IoErrorKind::Closed,
-            message: None,
-            causes: Vec::new(),
-            cleanup: Vec::new(),
+            context: None,
         }
     }
     pub fn new(kind: IoErrorKind, message: impl fmt::Display) -> Self {
         Self {
             kind,
-            message: Some(message.to_string()),
-            causes: Vec::new(),
-            cleanup: Vec::new(),
+            context: Some(Box::new(ErrorContext {
+                message: Some(message.to_string()),
+                causes: Vec::new(),
+                cleanup: Vec::new(),
+            })),
         }
     }
     pub fn from_anyhow(kind: IoErrorKind, error: anyhow::Error) -> Self {
@@ -39,30 +44,44 @@ impl ErrorDetails {
         let causes = chain.map(ToString::to_string).collect();
         Self {
             kind,
-            message,
-            causes,
-            cleanup: Vec::new(),
+            context: Some(Box::new(ErrorContext {
+                message,
+                causes,
+                cleanup: Vec::new(),
+            })),
         }
     }
     pub fn kind(&self) -> IoErrorKind {
         self.kind
     }
     pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+        self.context.as_ref()?.message.as_deref()
     }
     pub fn cleanup_causes(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.cleanup.iter().map(String::as_str)
+        let cleanup = self
+            .context
+            .as_deref()
+            .map_or(&[][..], |context| context.cleanup.as_slice());
+        cleanup.iter().map(String::as_str)
     }
     pub fn causes(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.causes.iter().map(String::as_str)
+        let causes = self
+            .context
+            .as_deref()
+            .map_or(&[][..], |context| context.causes.as_slice());
+        causes.iter().map(String::as_str)
     }
     pub fn with_cleanup(mut self, cleanup: impl fmt::Display) -> Self {
-        self.cleanup.push(cleanup.to_string());
+        self.context
+            .get_or_insert_with(Default::default)
+            .cleanup
+            .push(cleanup.to_string());
         self
     }
     pub fn context(mut self, context: impl fmt::Display) -> Self {
-        if let Some(message) = self.message.replace(context.to_string()) {
-            self.causes.insert(0, message);
+        let details = self.context.get_or_insert_with(Default::default);
+        if let Some(message) = details.message.replace(context.to_string()) {
+            details.causes.insert(0, message);
         }
         self
     }
@@ -78,7 +97,7 @@ impl ErrorDetails {
             (IoErrorKind::Invalid, Some(message)) => write!(f, "invalid {direction}: {message}")?,
             (_, None) => write!(f, "{direction} operation failed")?,
         }
-        for cleanup in &self.cleanup {
+        for cleanup in self.cleanup_causes() {
             write!(f, "; additionally: {cleanup}")?;
         }
         Ok(())
@@ -220,5 +239,43 @@ impl From<String> for OutputError {
 impl From<&str> for OutputError {
     fn from(error: &str) -> Self {
         Self::invalid(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_error_lazily_retains_cleanup_and_context() {
+        let error = InputError::closed()
+            .with_cleanup("subscriber shutdown failed")
+            .context("input session stopped");
+
+        assert!(error.is_closed());
+        assert_eq!(error.message(), Some("input session stopped"));
+        assert_eq!(error.causes().collect::<Vec<_>>(), Vec::<&str>::new());
+        assert_eq!(
+            error.cleanup_causes().collect::<Vec<_>>(),
+            ["subscriber shutdown failed"]
+        );
+        assert_eq!(
+            error.to_string(),
+            "input is closed; additionally: subscriber shutdown failed"
+        );
+    }
+
+    #[test]
+    fn anyhow_conversion_preserves_cause_order() {
+        let error = anyhow::anyhow!("root cause")
+            .context("middle context")
+            .context("outer context");
+        let error = InputError::from(error);
+
+        assert_eq!(error.message(), Some("outer context"));
+        assert_eq!(
+            error.causes().collect::<Vec<_>>(),
+            ["middle context", "root cause"]
+        );
     }
 }

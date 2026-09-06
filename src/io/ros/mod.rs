@@ -5,9 +5,11 @@ pub mod dist_graph_provider;
 mod mstlo;
 pub use dist_graph_provider::RosDistGraphProvider;
 pub use mstlo::{duration_from_ros, duration_to_ros, mstlo_value_from_ros, mstlo_value_to_ros};
-mod input_stream;
+pub(crate) mod input_stream;
 pub(crate) use input_stream::control_stream;
 pub use input_stream::{RosInputControl, open_ros_input};
+#[doc(hidden)]
+pub use input_stream::{RosInputItem, RosInputStream};
 pub mod ros_topic_stream_mapping;
 pub use ros_topic_stream_mapping::{RosMsgType, RosStreamMapping};
 mod value_publisher;
@@ -27,7 +29,7 @@ use crate::runtime::mstlo::MstloTimedValue;
 
 use ros_topic_stream_mapping::{VariableMappingData, string_to_ros_msg_type};
 
-fn raw_mapping_to_ros(
+pub(crate) fn raw_mapping_to_ros(
     mapping: BTreeMap<String, (String, String)>,
 ) -> anyhow::Result<RosStreamMapping> {
     mapping
@@ -52,6 +54,13 @@ impl RosStreamValue for Value {
         open_ros_input(executor, raw_mapping_to_ros(mapping)?)
     }
 
+    fn open_reconfigurable_ros_input(
+        executor: Rc<LocalExecutor<'static>>,
+        mapping: BTreeMap<String, (String, String)>,
+    ) -> anyhow::Result<(RosInputStream<Self>, RosInputControl)> {
+        input_stream::open_reconfigurable_ros_input(executor, mapping)
+    }
+
     fn open_ros_output(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,
@@ -73,6 +82,13 @@ impl RosStreamValue for MstloTimedValue {
         mapping: BTreeMap<String, (String, String)>,
     ) -> anyhow::Result<(InputStream<Self>, RosInputControl)> {
         mstlo::open_ros_input(executor, mapping)
+    }
+
+    fn open_reconfigurable_ros_input(
+        executor: Rc<LocalExecutor<'static>>,
+        mapping: BTreeMap<String, (String, String)>,
+    ) -> anyhow::Result<(RosInputStream<Self>, RosInputControl)> {
+        mstlo::open_reconfigurable_ros_input(executor, mapping)
     }
 
     fn open_ros_output(
@@ -99,7 +115,7 @@ mod tests {
     fn dynamic_output_rejects_mstlo_messages_during_configuration() {
         let interface = OutputInterface::from_bindings([OutputBinding::new(
             VarName::new("out"),
-            Some(Route::new("/out", Some(FormatId::new("MstloTimedValue").unwrap())).unwrap()),
+            Some(Route::new("/out", Some(FormatId::new("MstloTimedValue"))).unwrap()),
             OutputRole::Output,
         )])
         .expect("single-route interface should be valid");

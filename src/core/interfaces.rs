@@ -88,6 +88,14 @@ pub trait RosStreamValue: StreamData + Sized {
         crate::io::ros::RosInputControl,
     )>;
 
+    fn open_reconfigurable_ros_input(
+        executor: Rc<LocalExecutor<'static>>,
+        mapping: BTreeMap<String, (String, String)>,
+    ) -> anyhow::Result<(
+        crate::io::ros::RosInputStream<Self>,
+        crate::io::ros::RosInputControl,
+    )>;
+
     fn open_ros_output(
         executor: Rc<LocalExecutor<'static>>,
         node_name: String,

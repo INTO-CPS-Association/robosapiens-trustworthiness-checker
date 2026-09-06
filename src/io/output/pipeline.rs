@@ -341,6 +341,7 @@ impl<V> OutputPipeline<V> {
 
     pub fn with_shutdown_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.shutdown_timeout = timeout;
+        self.generation = PipelineGeneration::new();
         self
     }
 
@@ -2739,6 +2740,27 @@ mod tests {
             assert_ne!(first, second);
             pipeline.open(first).await.unwrap().close().await.unwrap();
             pipeline.open(second).await.unwrap().close().await.unwrap();
+        });
+    }
+
+    #[test]
+    fn shutdown_timeout_change_invalidates_an_existing_resolution() {
+        smol::block_on(async {
+            let pipeline = pipeline(vec![OutputDestination::new(
+                "out",
+                OutputBackendConfig::null(),
+            )]);
+            let resolved = pipeline
+                .resolve([VarName::new("x")], std::iter::empty::<VarName>(), None)
+                .unwrap();
+            let pipeline =
+                pipeline.with_shutdown_timeout(Some(std::time::Duration::from_millis(50)));
+
+            let error = match pipeline.open(resolved).await {
+                Ok(_) => panic!("a resolution prepared before the timeout change must be stale"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("durable configuration"));
         });
     }
 

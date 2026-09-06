@@ -1418,16 +1418,12 @@ impl<V> InputSource<V> {
                             Ok((variable.to_string(), (route.address().to_string(), codec)))
                         })
                         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-                    let (data, data_owner) = if mapping.is_empty() {
-                        (None, None)
-                    } else {
-                        let (stream, owner) = V::open_ros_input(executor.clone(), mapping)?;
-                        (Some(stream), Some(owner))
-                    };
+                    let (data, data_owner) =
+                        V::open_reconfigurable_ros_input(executor.clone(), mapping)?;
                     let (control, control_owner) =
                         crate::io::ros::control_stream(executor, control_route.to_string())?;
-                    let controls = data_owner.into_iter().chain([control_owner]).collect();
-                    Ok((controlled_input_stream(data, control), Some(InputSourceControl::Ros {
+                    let controls = vec![data_owner, control_owner];
+                    Ok((controlled_ros_input_stream(data, control), Some(InputSourceControl::Ros {
                         controls,
                         active_topics,
                     })))
@@ -1528,6 +1524,43 @@ impl<V> InputSource<V> {
                     },
                 }
             }
+            #[cfg(feature = "ros")]
+            InputSourceKind::Ros { executor, .. } => {
+                let active_topics = routes
+                    .iter()
+                    .map(|(variable, route)| (variable.clone(), route.address().to_owned()))
+                    .collect();
+                let mapping = routes
+                    .into_iter()
+                    .map(|(variable, route)| {
+                        let format = route.format().ok_or_else(|| {
+                            anyhow::anyhow!("ROS route for `{variable}` requires a route format")
+                        })?;
+                        Ok((
+                            variable.to_string(),
+                            (route.address().to_owned(), format.to_string()),
+                        ))
+                    })
+                    .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                let (stream, owner) = V::open_reconfigurable_ros_input(executor, mapping)?;
+                let stream = Box::pin(stream.map(|item| {
+                    item.map(|item| match item {
+                        crate::io::ros::RosInputItem::Data(batch) => {
+                            ReconfigurableInputItem::Data(batch)
+                        }
+                        crate::io::ros::RosInputItem::Boundary(id) => {
+                            ReconfigurableInputItem::Boundary(id)
+                        }
+                    })
+                }));
+                Ok((
+                    stream,
+                    Some(InputSourceControl::Ros {
+                        controls: vec![owner],
+                        active_topics,
+                    }),
+                ))
+            }
             kind => {
                 let source = Self {
                     kind,
@@ -1548,14 +1581,14 @@ impl<V> InputSource<V> {
 
 #[cfg(any(feature = "ros", test))]
 enum ControlledInputNext<V> {
-    Data(Result<InputBatch<V>, crate::InputError>),
+    Data(anyhow::Result<ReconfigurableInputItem<V>>),
     Control(anyhow::Result<ReconfigurationRequest>),
     Complete,
 }
 
 #[cfg(any(feature = "ros", test))]
 fn poll_controlled_input<V>(
-    data: &mut Option<InputStream<V>>,
+    data: &mut Option<ReconfigurableInputStream<V>>,
     control: &mut Option<crate::LocalStream<anyhow::Result<ReconfigurationRequest>>>,
     cx: &mut std::task::Context<'_>,
 ) -> std::task::Poll<ControlledInputNext<V>> {
@@ -1613,7 +1646,7 @@ fn contextualize_reconfigurable_stream<V: 'static>(
 
 #[cfg(any(feature = "ros", test))]
 fn controlled_input_stream<V: 'static>(
-    mut data: Option<InputStream<V>>,
+    mut data: Option<ReconfigurableInputStream<V>>,
     control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>>,
 ) -> ReconfigurableInputStream<V> {
     Box::pin(async_stream::try_stream! {
@@ -1628,12 +1661,27 @@ fn controlled_input_stream<V: 'static>(
                     yield ReconfigurableInputItem::Reconfigure(request?);
                 }
                 ControlledInputNext::Data(batch) => {
-                    yield ReconfigurableInputItem::Data(batch?);
+                    yield batch?;
                 }
                 ControlledInputNext::Complete => return,
             }
         }
     })
+}
+
+#[cfg(feature = "ros")]
+fn controlled_ros_input_stream<V: 'static>(
+    data: crate::io::ros::RosInputStream<V>,
+    control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>>,
+) -> ReconfigurableInputStream<V> {
+    let data: ReconfigurableInputStream<V> = Box::pin(data.map(|item| {
+        item.map(|item| match item {
+            crate::io::ros::RosInputItem::Data(batch) => ReconfigurableInputItem::Data(batch),
+            crate::io::ros::RosInputItem::Boundary(id) => ReconfigurableInputItem::Boundary(id),
+        })
+        .map_err(anyhow::Error::from)
+    }));
+    controlled_input_stream(Some(data), control)
 }
 
 /// Resolves reusable source descriptions and opens one logical input stream.
@@ -1801,7 +1849,9 @@ impl<V> InputPipeline<V> {
                             )
                         })?;
                     match &source.kind {
-                        InputSourceKind::Mqtt { .. } | InputSourceKind::Redis { .. } => {
+                        InputSourceKind::Mqtt { .. }
+                        | InputSourceKind::Redis { .. }
+                        | InputSourceKind::Ros { .. } => {
                             rebound.push((*candidate_source).clone());
                         }
                         InputSourceKind::Channel { .. } => {
@@ -2614,10 +2664,10 @@ mod resolution_tests {
 
     #[cfg(feature = "ros")]
     #[test]
-    fn ros_binding_change_is_rejected_during_plan_preparation() {
+    fn ros_binding_change_is_planned_as_an_in_place_rebind() {
         let executor = Rc::new(LocalExecutor::new());
         let format = FormatId::new("Int32");
-        let pipeline = InputPipeline::new(InputSource::ros(
+        let pipeline = InputPipeline::<Value>::new(InputSource::ros(
             BTreeMap::from([(
                 VarName::new("x"),
                 Route::new("/old", Some(format.clone())).unwrap(),
@@ -2638,20 +2688,18 @@ mod resolution_tests {
             .resolve(&variables, Some(&candidate_config))
             .unwrap();
 
-        let error = pipeline
+        let plan = pipeline
             .plan_reconfiguration(
                 &active,
                 candidate,
                 SessionId::new(),
                 SessionRevision::initial(),
             )
-            .unwrap_err();
+            .unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .contains("cannot change bindings in place")
-        );
+        assert!(plan.removed_sources().is_empty());
+        assert!(plan.added_sources().is_empty());
+        assert_eq!(plan.rebound_sources(), plan.candidate().sources());
     }
 
     #[test]
@@ -2964,7 +3012,7 @@ mod resolution_tests {
     #[test]
     fn data_eof_leaves_control_active() {
         smol::block_on(async {
-            let data: InputStream<Value> = Box::pin(futures::stream::empty());
+            let data: ReconfigurableInputStream<Value> = Box::pin(futures::stream::empty());
             let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::once(async {
                     smol::future::yield_now().await;
@@ -2979,9 +3027,33 @@ mod resolution_tests {
     }
 
     #[test]
+    fn controlled_input_prioritizes_control_and_preserves_boundaries() {
+        smol::block_on(async {
+            let data: ReconfigurableInputStream<Value> = Box::pin(futures::stream::iter([Ok(
+                ReconfigurableInputItem::Boundary(11),
+            )]));
+            let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
+                Box::pin(futures::stream::once(async {
+                    ReconfigurationRequest::from_json(r#"{"specification":"in x"}"#)
+                }));
+            let mut stream = controlled_input_stream(Some(data), control);
+
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Reconfigure(_)
+            ));
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Boundary(11)
+            ));
+            assert!(stream.next().await.is_none());
+        });
+    }
+
+    #[test]
     fn controlled_input_completes_after_both_branches_end() {
         smol::block_on(async {
-            let data: InputStream<Value> = Box::pin(futures::stream::empty());
+            let data: ReconfigurableInputStream<Value> = Box::pin(futures::stream::empty());
             let control: crate::LocalStream<anyhow::Result<ReconfigurationRequest>> =
                 Box::pin(futures::stream::empty());
             let mut stream = controlled_input_stream(Some(data), control);

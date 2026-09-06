@@ -36,7 +36,7 @@ use crate::core::Specification;
 use crate::core::{InputStream, LocalStream, OutputWriter, StreamData, VarName};
 use crate::runtime::builder::RuntimeBuilder;
 use crate::semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext};
-use crate::stream_utils::{drop_guard_stream, lift_no_val, oneshot_to_stream};
+use crate::stream_utils::{drop_guard_stream, oneshot_to_stream};
 
 #[derive(Clone)]
 struct ForwardingTracker {

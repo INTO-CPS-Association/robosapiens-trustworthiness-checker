@@ -16,11 +16,10 @@ use tc_core::causal::{
 use tc_core::core::{
     ExecutionPolicy, LocalStream, OutputInterface, OutputWriter, Runtime, RuntimeSpec, Semantics,
 };
+use tc_core::io::InputController;
 use tc_core::io::channel::{
     ChannelInputController, ChannelOutputReceiver, channel, open_output, output,
 };
-use tc_core::io::output::OutputBackendConfig;
-use tc_core::io::{InputController, OutputPipeline};
 
 use tc_core::runtime::builder::GeneralRuntimeBuilder;
 use tc_core::semantics::CausalRuntimeBuilder;
@@ -155,9 +154,9 @@ impl TcRuntime {
             collect_input_values(kwargs, &mut values)?;
         }
 
-        let provided = values.keys().cloned().collect::<BTreeSet<_>>();
-        let extra = provided
-            .difference(&self.input_vars)
+        let extra = values
+            .keys()
+            .filter(|variable| !self.input_vars.contains(*variable))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         if !extra.is_empty() {
@@ -366,13 +365,16 @@ fn build_runtime(
                             receiver.recv().await.map(|output| (output, receiver))
                         },
                     ));
-                    let output_pipeline =
-                        OutputPipeline::from_backend(OutputBackendConfig::channel(sender));
+                    let output_writer = open_output(
+                        sender,
+                        OutputInterface::outputs(spec.output_vars().clone())?,
+                    )
+                    .await?;
                     let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
                         .executor(runtime_executor.clone())
                         .model(spec)
                         .input(input)
-                        .output_pipeline(output_pipeline)
+                        .output_writer(output_writer)
                         .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
                         .semantics(semantics)
                         .build()

@@ -1,6 +1,6 @@
 use futures::StreamExt;
 
-use super::{DeferrableStreamData, OutputStream, StreamData};
+use super::{DeferrableStreamData, LocalStream, StreamData};
 
 /// Retain the latest present stream value.
 ///
@@ -17,7 +17,7 @@ pub(crate) fn retain_last<T: StreamData>(current: T, retained: &mut Option<T>) -
 }
 
 /// Retain the latest present value throughout a stream.
-pub(crate) fn retain_stream<T: StreamData>(mut input: OutputStream<T>) -> OutputStream<T> {
+pub(crate) fn retain_stream<T: StreamData>(mut input: LocalStream<T>) -> LocalStream<T> {
     Box::pin(async_stream::stream! {
         let mut retained = None;
         while let Some(current) = input.next().await {

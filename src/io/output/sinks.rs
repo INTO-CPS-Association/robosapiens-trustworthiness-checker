@@ -218,19 +218,19 @@ where
 
 /// Reusable opened owner for backends whose operation needs an interface snapshot.
 pub(crate) struct InterfaceSink<V> {
-    interface: OutputInterface,
-    inner: AsyncFnSink<(OutputInterface, OutputBatch<V>)>,
+    interface: Rc<OutputInterface>,
+    inner: AsyncFnSink<(Rc<OutputInterface>, OutputBatch<V>)>,
 }
 
 impl<V: 'static> InterfaceSink<V> {
     pub(crate) fn new<F, Fut>(interface: OutputInterface, operation: F) -> Self
     where
-        F: FnMut(OutputInterface, OutputBatch<V>) -> Fut + 'static,
+        F: FnMut(Rc<OutputInterface>, OutputBatch<V>) -> Fut + 'static,
         Fut: Future<Output = Result<(), OutputError>> + 'static,
     {
         let mut operation = operation;
         Self {
-            interface,
+            interface: Rc::new(interface),
             inner: AsyncFnSink::new(move |(interface, batch)| operation(interface, batch)),
         }
     }
@@ -241,14 +241,14 @@ impl<V: 'static> InterfaceSink<V> {
         close: C,
     ) -> Self
     where
-        F: FnMut(OutputInterface, OutputBatch<V>) -> Fut + 'static,
+        F: FnMut(Rc<OutputInterface>, OutputBatch<V>) -> Fut + 'static,
         Fut: Future<Output = Result<(), OutputError>> + 'static,
         C: FnOnce() -> CFut + 'static,
         CFut: Future<Output = Result<(), OutputError>> + 'static,
     {
         let mut operation = operation;
         Self {
-            interface,
+            interface: Rc::new(interface),
             inner: AsyncFnSink::with_close(
                 move |(interface, batch)| operation(interface, batch),
                 close,
@@ -263,7 +263,7 @@ impl<V: 'static> Sink<OutputBatch<V>> for InterfaceSink<V> {
         Pin::new(&mut self.inner).poll_ready(cx)
     }
     fn start_send(mut self: Pin<&mut Self>, batch: OutputBatch<V>) -> Result<(), Self::Error> {
-        let interface = self.interface.clone();
+        let interface = Rc::clone(&self.interface);
         Pin::new(&mut self.inner).start_send((interface, batch))
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -280,7 +280,7 @@ impl<V: 'static> OutputSink<V> for InterfaceSink<V> {
         _cx: &mut Context<'_>,
         interface: &OutputInterface,
     ) -> Poll<Result<(), OutputError>> {
-        self.interface = interface.clone();
+        self.interface = Rc::new(interface.clone());
         Poll::Ready(Ok(()))
     }
 }

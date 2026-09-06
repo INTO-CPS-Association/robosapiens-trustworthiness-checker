@@ -231,6 +231,43 @@ pub fn open_ros_input(
     ))
 }
 
+pub(crate) fn open_reconfigurable_ros_input(
+    executor: Rc<LocalExecutor<'static>>,
+    mapping: BTreeMap<String, (String, String)>,
+) -> anyhow::Result<(
+    super::RosInputStream<MstloTimedValue>,
+    super::RosInputControl,
+)> {
+    validate_mapping(&mapping)?;
+    super::input_stream::open_managed_ros_input(executor, mapping, create_input_streams)
+}
+
+fn create_input_streams(
+    node: &mut r2r::Node,
+    mapping: &BTreeMap<String, (String, String)>,
+) -> anyhow::Result<BTreeMap<VarName, LocalStream<anyhow::Result<MstloTimedValue>>>> {
+    mapping
+        .iter()
+        .map(|(variable, (topic, _))| {
+            let variable = VarName::new(variable);
+            let stream_variable = variable.clone();
+            let subscription =
+                node.subscribe::<RosMstloTimedValue>(topic, r2r::QosProfile::default())?;
+            let stream = Box::pin(subscription.map(move |message| {
+                let value = mstlo_value_from_ros(&message).with_context(|| {
+                    format!("invalid MstloTimedValue received for variable `{stream_variable}`")
+                })?;
+                anyhow::ensure!(
+                    matches!(value.value, MstloValue::Float(_)),
+                    "MSTLO ROS input for variable `{stream_variable}` must have FLOAT kind"
+                );
+                Ok(value)
+            })) as LocalStream<anyhow::Result<MstloTimedValue>>;
+            Ok((variable, stream))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -81,7 +81,13 @@ impl InputSourceControl {
             #[cfg(feature = "redis")]
             Self::RedisKnowledge(_) => Ok(false),
             #[cfg(feature = "ros")]
-            Self::Ros { .. } => Ok(false),
+            Self::Ros { controls, .. } => {
+                let mut native = false;
+                for control in controls {
+                    native |= control.pause(boundary).await?;
+                }
+                Ok(native)
+            }
             Self::Channel(control) => {
                 control.pause(boundary).await?;
                 Ok(true)
@@ -99,7 +105,12 @@ impl InputSourceControl {
             #[cfg(feature = "redis")]
             Self::RedisKnowledge(_) => Ok(()),
             #[cfg(feature = "ros")]
-            Self::Ros { .. } => Ok(()),
+            Self::Ros { controls, .. } => {
+                for control in controls {
+                    control.resume().await?;
+                }
+                Ok(())
+            }
             Self::Channel(control) => control.resume(),
             #[cfg(test)]
             Self::DelayedTest { .. } => Ok(()),
@@ -126,11 +137,37 @@ impl InputSourceControl {
                 anyhow::bail!("Redis knowledge input does not support in-place rebind")
             }
             #[cfg(feature = "ros")]
-            Self::Ros { active_topics, .. } if *active_topics == topics => Ok(()),
-            #[cfg(feature = "ros")]
-            Self::Ros { .. } => anyhow::bail!(
-                "ROS input bindings cannot be changed in place; replace the source instead"
-            ),
+            Self::Ros {
+                controls,
+                active_topics,
+            } => {
+                let mapping: std::collections::BTreeMap<String, (String, String)> = candidate
+                    .bindings()
+                    .iter()
+                    .map(|binding| {
+                        let format = binding.route().format().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "ROS route for `{}` requires a route format",
+                                binding.variable()
+                            )
+                        })?;
+                        Ok((
+                            binding.variable().to_string(),
+                            (binding.route().address().to_owned(), format.to_string()),
+                        ))
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                let mut rebound = false;
+                for control in controls {
+                    if control.supports_reconfiguration() {
+                        control.rebind(mapping.clone()).await?;
+                        rebound = true;
+                    }
+                }
+                anyhow::ensure!(rebound, "ROS input owner does not support in-place rebind");
+                *active_topics = topics;
+                Ok(())
+            }
             Self::Channel(control) => {
                 control
                     .rebind(

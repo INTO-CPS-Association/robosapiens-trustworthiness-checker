@@ -82,7 +82,7 @@ A secondary destination must establish its role with `routes`, `partition`, or `
 { coalesce: { max_delay_ms: 2, tick_limit: 128, update_limit: 256 } }
 ```
 
-At least one positive delay or count threshold is required. Coalescing emits when a threshold or deadline is reached, on flush, close or rebind, and when admission pressure requires progress. It does not apply last-update-wins reduction. Coalescing without an explicit queue uses a queue of 32 batches with no update-count threshold. Specify both objects to choose its admission limits, as in the complete example above.
+At least one positive delay or count threshold is required. Coalescing emits when a threshold or deadline is reached, on flush, close, or rebind, and when admission pressure requires progress. It does not apply last-update-wins reduction. Coalescing without an explicit queue uses a queue of 32 batches with no update-count threshold. Specify both objects to choose its admission limits, as in the complete example above.
 
 Each destination makes progress within its capacity. A slow destination eventually backpressures the producer; a terminal destination error stops the session. Outputs already accepted by other destinations are not rolled back.
 

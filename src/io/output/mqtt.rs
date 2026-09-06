@@ -1,6 +1,6 @@
 //! Sink-based MQTT output.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 use futures::future::try_join_all;
 
@@ -101,7 +101,7 @@ fn collect_messages<V: JsonStreamValue>(
 
 async fn publish_batch<V: JsonStreamValue>(
     client: MqttClient,
-    interface: OutputInterface,
+    interface: Rc<OutputInterface>,
     batch: OutputBatch<V>,
 ) -> Result<(), OutputError> {
     let messages = collect_messages(&batch, &interface)?;

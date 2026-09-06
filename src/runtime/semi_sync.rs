@@ -5,7 +5,7 @@ use crate::{
     runtime::RuntimeBuilder,
     runtime::output::{consume_row_streams, finish_writer, finish_writer_with_deadline},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
-    stream_utils::{self, lift_no_val},
+    stream_utils,
     utils::cancellation_token::CancellationToken,
 };
 

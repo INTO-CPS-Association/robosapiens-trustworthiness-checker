@@ -76,7 +76,7 @@ mod integration_tests {
         // Final ticks to let them complete
         x_tick.send(()).await?;
         y_tick.send(()).await?;
-        // Wait for publishers to complete and then shutdown MQTT server to terminate connections
+        // Wait for publishers to complete and then stop the owned ROS input session.
         info!("Waiting for publishers to complete...");
         x_publisher_task.await?;
         y_publisher_task.await?;
@@ -478,7 +478,7 @@ mod integration_tests {
                 test_reconfigurable_dataflow_ros_live_session_switches_topics,
                 "input_b_publisher",
             ),
-            input_b_topic,
+            input_b_topic.clone(),
         )?;
         input_b_publisher
             .wait_for_subscribers("ROS data input topic B subscription")
@@ -510,6 +510,30 @@ mod integration_tests {
             "post-barrier output must not appear on OUT_A"
         );
         assert_eq!(post_barrier_output_b, Some(3));
+
+        let second_request = serde_json::json!({
+            "specification": specification,
+            "input": {
+                "source": "default",
+                "inputs": {"x": [input_b_topic, "Int32"]},
+            },
+            "output": {
+                "outputs": {"z": [output_b_topic, "Int32"]},
+            },
+        })
+        .to_string();
+        control_publisher.publish(RosString {
+            data: second_request,
+        })?;
+        let second_acknowledgement = with_timeout(
+            ack_rx.recv(),
+            5,
+            "second ROS dataflow reconfiguration acknowledgement",
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ROS dataflow acknowledgement channel closed"))?;
+        assert!(!second_acknowledgement.monitor_changed);
+        assert!(!second_acknowledgement.interface_changed);
 
         let runtime_result =
             with_timeout(runtime_task.cancel(), 5, "ROS dataflow runtime shutdown").await?;

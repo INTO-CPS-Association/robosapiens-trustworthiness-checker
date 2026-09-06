@@ -589,11 +589,8 @@ mod tests {
         OutputBinding::new(
             var(name),
             Some(
-                crate::core::Route::new(
-                    topic,
-                    Some(crate::core::FormatId::new(message_type).unwrap()),
-                )
-                .unwrap(),
+                crate::core::Route::new(topic, Some(crate::core::FormatId::new(message_type)))
+                    .unwrap(),
             ),
             role,
         )

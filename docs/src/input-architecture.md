@@ -183,7 +183,7 @@ The backend boundaries have different ordering and lifetime facts:
 |---|---|
 | MQTT | The shared rumqttc MQTT 3.1.1/5 owner (default `3.1.1`) decodes data and control from one item stream, using QoS 1 subscriptions. Pause establishes a generation boundary; an ordered marker follows admitted old-generation observations before bindings change. Rejected MQTT 5 protocol acknowledgements are terminal for the driver. |
 | Redis Pub/Sub | Data and control are decoded from one Pub/Sub stream. Pause stops admission and queues a boundary marker behind admitted items; the same owner applies subscription and route changes before resuming. |
-| ROS | Data and control use independent subscriptions. The control subscription yields one request, while the data subscription remains separate; polling control first is a responsiveness choice, not a data-before-control ordering guarantee. |
+| ROS | Data and control use independent subscriptions. The persistent control subscription yields requests across reconfigurations, while the data subscriptions remain separate; polling control first is a responsiveness choice, not a data-before-control ordering guarantee. |
 | channel | Data and control use independent fanouts. The adapter polls control first for responsiveness, but the fanouts provide no cross-stream ordering edge. |
 
 MQTT, Redis, and ROS reject a control route that collides with an active data route. A channel source can provide a separate control fanout. The shared window driver adds a local barrier rule: when it observes a control item while data is pending, it emits the pending data before the control item. It does not establish an order between independent producers, and it does not guarantee that a later data item exists after the underlying source stream ends.
@@ -256,7 +256,7 @@ applied. An opened input session also carries an opaque `SessionId` and
 monotonic `SessionRevision`; reconfiguration checks both before it starts and
 advances the revision only after the candidate has been applied.
 
-`InputPipeline::plan_reconfiguration` compares active and candidate bindings by source ID. Unchanged owners remain live. MQTT, Redis, and channel owners apply changed bindings in place; removing an ID and adding a distinct ID retires one owner and opens another. Unsupported changes to a retained owner fail during preparation.
+`InputPipeline::plan_reconfiguration` compares active and candidate bindings by source ID. Unchanged owners remain live. MQTT, Redis, ROS, and channel owners apply changed bindings in place; removing an ID and adding a distinct ID retires one owner and opens another. Unsupported changes to a retained owner fail during preparation.
 
 A source owner follows this lifecycle during an in-place cutover:
 

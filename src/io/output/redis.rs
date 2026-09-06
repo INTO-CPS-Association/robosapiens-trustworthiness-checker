@@ -123,7 +123,7 @@ fn collect_messages<V: JsonStreamValue>(
 
 async fn publish_batch<V: JsonStreamValue>(
     connection: LocalRedisConnection,
-    interface: OutputInterface,
+    interface: Rc<OutputInterface>,
     batch: OutputBatch<V>,
 ) -> Result<(), OutputError> {
     let messages = collect_messages(&batch, &interface)?;
