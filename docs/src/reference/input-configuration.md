@@ -19,6 +19,37 @@ Use `--mqtt-protocol 3.1.1|5` to choose the wire protocol for MQTT input selecto
 
 Exactly one selector is required. `--redis-port` and `--mqtt-port` apply to simple sources and to configured sources whose own port is omitted.
 
+## Structured input values
+
+A DSRV input declared as `Struct<level: Int, status: Struct<valid: Bool>>` receives an object such as `{level: 2, status: {valid: true}}`. Each named field has its own declared type; nested `Struct` types describe nested objects. See [Receiving structured input](../tutorials/write-dsrv-monitor.md#receiving-structured-input) for a complete model, trace, and run.
+
+For `--input-file`, put the object after the input variable's `=`:
+
+```text
+0: reading = {level: 2, status: {valid: true}}
+```
+
+The input-file value is JSON5. Field names can be quoted or unquoted, string values need quotes, and Boolean values are `true` or `false`. Write each assignment on one physical line. An assignment replaces the entire input value for its logical tick; fields are not merged with an earlier object. The assignment name must be a declared input variable, so nested fields belong inside its object rather than on separate `reading.level = ...` lines.
+
+### Declared fields and supplied fields
+
+- Use `Struct<level: Int, valid: Bool>` when named fields have distinct types. `Map<Int>` instead describes an object whose values all have the same type, with keys chosen independently of a fixed field list.
+- Select declared fields in DSRV equations with dot notation, for example `reading.status.valid`. A field absent from the declared struct type is a type-checking error.
+- `Struct<level: Int, ...>` permits additional fields when type-checking struct expressions in a model. The listed fields retain their declared types. The ellipsis does not make them optional or declare types for the additional fields.
+- Incoming JSON5 objects are decoded independently of these model checks. Extra incoming fields are currently accepted even without `...`; a struct annotation is not an input schema validator. Supply all fields the equations read, with values of the declared types. Accessing a missing field fails monitoring with `Missing key for map get: FIELD`; a wrong field type can fail when the value is used. Missing fields do not inherit previous values.
+
+To construct a struct inside a DSRV equation, use an object expression such as `{level: x, valid: true}` or the explicit constructor `Struct("level": x, "valid": true)`. These are expression fragments: `x` refers to a stream in the model. An input file instead supplies concrete JSON5 values; it cannot contain the `Struct(...)` constructor or evaluate `x` as a stream reference.
+
+### MQTT and Redis payloads
+
+For JSON/JSON5 MQTT and Redis inputs, the route identifies the input stream, so send the object itself without the file's `timestamp: reading =` prefix. For example:
+
+```json
+{"level": 2, "status": {"valid": true}}
+```
+
+MQTT input unwraps a top-level `value` field when one is present. To supply a struct that itself has a field named `value`, wrap the whole struct once more: `{"value": {"value": 2, "valid": true}}`. File input and Redis Pub/Sub decode the object directly and need no such wrapper.
+
 ## Compact route catalog
 
 A route catalog is a JSON5 object keyed by checker variable:

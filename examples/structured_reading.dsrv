@@ -1,0 +1,3 @@
+in reading: Struct<level: Int, status: Struct<valid: Bool>>
+out below_limit: Bool
+below_limit = reading.status.valid && reading.level < 3

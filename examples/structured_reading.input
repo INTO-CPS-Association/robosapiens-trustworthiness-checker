@@ -1,0 +1,3 @@
+0: reading = {level: 2, status: {valid: true}}
+1: reading = {level: 3, status: {valid: true}}
+2: reading = {level: 1, status: {valid: false}}

@@ -62,7 +62,7 @@ Here `z[0]` in stdout labels the result at tick 0, and `Int(3)` displays its typ
 
 ### Type declarations and checking
 
-Write explicit types on input and output declarations by default. They document the values a source must provide, let the checker reject incompatible equations early, and keep transport mappings aligned with the model. Common scalar types are `Int`, `Float`, `Bool`, and `Str`; compound types include `List<T>`, `Map<T>`, tuples, and `Struct<...>`.
+Write explicit types on input and output declarations by default. They document the values a source must provide, let the checker reject incompatible equations early, and keep transport mappings aligned with the model. Common scalar types are `Int`, `Float`, `Bool`, and `Str`; compound types include `List<T>`, `Map<T>`, tuples, and `Struct<...>`. [Receiving structured input](#receiving-structured-input) below shows how to declare and supply named fields.
 
 For example, changing `y` to `Str` while retaining `z = x + y` makes the addition model ill-typed; you can inspect that model in `examples/simple_add_illtyped.dsrv`. Use `Any` only when a stream is intentionally heterogeneous or its concrete type cannot be declared. The default `gradual-typed-untimed` semantics checks explicit annotations and infers information for declarations that lack one.
 
@@ -159,6 +159,50 @@ The examples so far provide every input at every tick. DSRV distinguishes a miss
 | `Deferred` | A result is waiting for information, such as history before the start of the trace | `default(total[1], 0)` replaces this state with zero. |
 
 `default` handles `Deferred`; it does not fill missing `NoVal` inputs. A running total with gaps therefore needs an explicit policy for missing observations. Do not assume that the initialization in this example supplies that policy.
+
+## Receiving structured input
+
+A sensor reading can carry both a measurement and its validity status in one input value. Declare a `Struct` to give each field its own type:
+
+```dsrv
+in reading: Struct<level: Int, status: Struct<valid: Bool>>
+out below_limit: Bool
+below_limit = reading.status.valid && reading.level < 3
+```
+
+`reading` is one input stream. Its `level` field contains an integer, and its `status` field contains another struct with a Boolean `valid` field. Dot notation selects a field: `reading.level` reads the measurement, and `reading.status.valid` follows the nested fields. The output is true when the reading is valid and its level is below 3.
+
+The repository stores this model as `examples/structured_reading.dsrv`. Its trace, `examples/structured_reading.input`, supplies JSON5 objects:
+
+```text
+0: reading = {level: 2, status: {valid: true}}
+1: reading = {level: 3, status: {valid: true}}
+2: reading = {level: 1, status: {valid: false}}
+```
+
+In the declaration, `level: Int` specifies a field's type. In the input object, `level: 2` supplies its value. JSON5 permits the unquoted field names shown here; ordinary JSON objects such as `{"level": 2, "status": {"valid": true}}` also work. Keep each complete assignment on one line, including nested objects.
+
+Each assignment supplies the whole `reading` value for that tick. It does not update individual fields of the previous reading. Supply the fields used by the model at every tick that contains a reading; `reading.level = 2` is not an input-file assignment to a nested field.
+
+Run the example with:
+
+```sh
+cargo run --quiet -- examples/structured_reading.dsrv \
+  --input-file examples/structured_reading.input \
+  --output-stdout
+```
+
+The exact stdout is:
+
+```text
+below_limit[0] = Bool(true)
+below_limit[1] = Bool(false)
+below_limit[2] = Bool(false)
+```
+
+At tick 1 the level reaches 3; at tick 2 the level is below 3 but the reading is invalid. Both produce false. The process exits after the third reading.
+
+For field requirements, struct constructors, and transport payloads, see [Structured input values](../reference/input-configuration.md#structured-input-values).
 
 ## Receiving an expression with `defer`
 

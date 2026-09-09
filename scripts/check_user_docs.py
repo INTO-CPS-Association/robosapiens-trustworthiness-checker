@@ -202,6 +202,25 @@ def check_finite_examples() -> None:
                 "--bin",
                 "trustworthiness_checker",
                 "--",
+                "examples/structured_reading.dsrv",
+                "--input-file",
+                "examples/structured_reading.input",
+                "--output-stdout",
+            ],
+            (
+                "below_limit[0] = Bool(true)\n"
+                "below_limit[1] = Bool(false)\n"
+                "below_limit[2] = Bool(false)\n"
+            ),
+        ),
+        (
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--bin",
+                "trustworthiness_checker",
+                "--",
                 "examples/simple_stl.mstlo",
                 "--input-file",
                 "examples/simple_stl.input",
