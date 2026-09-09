@@ -122,7 +122,7 @@
   </g>
   <path d="M 500 264 C 470 276, 350 276, 292 287" fill="none" stroke="var(--fig-green-line)"
         stroke-width="1.4" marker-end="url(#mstlo-delayed-horizon-arrow)" />
-  <text x="470" y="278" text-anchor="middle" fill="var(--fig-ink-2)"
+  <text x="765" y="276" text-anchor="middle" fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif" font-size="11">emitted later · timestamp remains 0 s</text>
   <text x="500" y="384" text-anchor="middle" fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif" font-size="11">Samples at 4 s and 5 s complete the remaining verdicts for timestamps 2 s and 3 s.</text>

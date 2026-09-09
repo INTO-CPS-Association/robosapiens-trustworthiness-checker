@@ -206,6 +206,36 @@ def check_finite_examples() -> None:
                 'combo[7] = {"time":3000,"value":true}\n'
             ),
         ),
+        (
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--bin",
+                "trustworthiness_checker",
+                "--",
+                "examples/simple_stl_threshold.mstlo",
+                "--input-file",
+                "examples/simple_stl.input",
+                "--output-stdout",
+                "--language",
+                "mstlo",
+                "--semantics",
+                "delayed-quantitative",
+                "--execution-policy",
+                "synchronous",
+                "--mstlo-synchronization",
+                "none",
+                "--mstlo-vars",
+                "threshold=3",
+            ],
+            (
+                'always_x[0] = {"time":0,"value":1.0}\n'
+                'always_x[1] = {"time":1000,"value":-1.0}\n'
+                'always_x[2] = {"time":2000,"value":-1.0}\n'
+                'always_x[3] = {"time":3000,"value":-1.0}\n'
+            ),
+        ),
     )
     for command, expected in examples:
         actual = run(command)
