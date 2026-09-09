@@ -73,7 +73,7 @@ combo[7] = {"time":3000,"value":true}
 
 The bracketed number is the zero-based stdout event index, shared by all property outputs. The JSON `time` is the timestamp to which the verdict applies. Because the selected semantics are delayed, `always_x` at time `0` is emitted only after the sample at `2000` ms completes its two-second horizon. It is `true` because `x` is `5`, `4`, and `6` over that interval. The verdict at `1000` ms is `false` because its horizon includes `x = 2` at `3000` ms.
 
-![Delayed MSTLO verdicts retain the timestamp at the start of their completed future horizon](../assets/user/mstlo-delayed-horizon.svg)
+{{#include ../assets/user/mstlo-delayed-horizon.svg}}
 
 **Reading rule.** Cells at the same horizontal position have the same embedded MSTLO timestamp. A horizon bracket identifies the future samples needed for one verdict. The dashed guide marks when enough physical input has arrived to emit that verdict; the output cell remains aligned with the earlier timestamp to which the verdict applies.
 

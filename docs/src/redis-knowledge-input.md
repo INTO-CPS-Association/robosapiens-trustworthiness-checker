@@ -150,7 +150,7 @@ knowledge key. The names are deployment choices, not canonical Redis names.
 | Current selected plan | Key in database 2 | `maple:plan:current` | `current_plan` |
 | Legitimate completed | Pub/Sub channel | `maple:legitimate:completed` | `legitimate_completed` |
 
-![Analyse and Legitimate events combined with the current selected plan](assets/redis-knowledge-maple-example.svg)
+{{#include assets/redis-knowledge-maple-example.svg}}
 
 The MAPLE-K example exposes the current plan only after both phase-completion events are true:
 

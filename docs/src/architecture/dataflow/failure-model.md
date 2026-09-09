@@ -5,7 +5,7 @@ Failures are contained at different scopes. Recoverable execution-tier failures 
 ```mermaid
 flowchart TB
     accTitle: Dataflow failure containment ladder
-    accDescr: A tier-local guard or compilation failure may fall back to canonical evaluation. An unrecovered evaluator error fails the tick and permanently fails the monitor. Input, output, root cutover, or acknowledgement errors terminate the runtime. Cleanup still attempts to close I/O owners, but partial external and cutover effects are not rolled back.
+    accDescr: A tier-local guard or compilation failure may fall back to canonical evaluation. An unrecovered evaluator error fails the tick and permanently fails the monitor. Input, output, root cutover, or acknowledgement errors terminate the runtime. Termination stops and drains admitted input before flushing pending output and closing output owners under one absolute deadline. Partial external and cutover effects are not rolled back.
 
     tier["Tier-local guard or artifact failure"] --> fallback["Canonical fallback"]
     fallback --> tick["Current logical tick"]
@@ -14,10 +14,13 @@ flowchart TB
     output["Writer/session error"] --> runtime
     cutover["Root cutover or acknowledgement error"] --> runtime
     monitor --> runtime
-    runtime --> cleanup["Attempt I/O cleanup"]
+    runtime --> inputCleanup["Stop ingress and drain admitted input"]
+    inputCleanup --> outputCleanup["Flush pending output and close owners"]
+    deadline(["One absolute shutdown deadline"]) -. "bounds both phases" .-> inputCleanup
+    deadline -. "remaining time" .-> outputCleanup
 ```
 
-**Reading rule.** Downward movement widens the failed ownership scope. Cleanup releases or drains resources; it does not restore a failed monitor, undo external delivery, or roll back a partially applied cutover.
+**Reading rule.** Solid downward movement widens the failed ownership scope and then shows cleanup order: input stop-and-drain precedes output flush-and-close. Dashed edges apply one absolute deadline across both phases, so output receives only the time remaining after input cleanup. Cleanup does not restore a failed monitor, undo external delivery, or roll back a partially applied cutover.
 
 ## Tier-local containment
 

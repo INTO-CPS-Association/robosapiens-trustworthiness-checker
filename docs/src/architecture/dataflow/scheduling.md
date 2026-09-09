@@ -36,7 +36,7 @@ flowchart TB
 | semantic executable plan (`ScheduledExecutionPlan`) | Records source and main orders, stable slots, stream metadata, temporal effects, and commit streams for execution-tier lowering. |
 | execution owner (`MonitorExecution`) | Selects a cached schedule-specific `ExecutionPlan` or constructs one for the new source/main order. |
 
-## Current dependencies determine order
+## Current dependencies and evaluation order
 
 A current edge `producer → consumer` means that the consumer reads the producer's value from the same logical tick. Every valid schedule places the producer first. Inputs are preloaded into the environment and are not scheduled computed-stream vertices.
 

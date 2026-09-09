@@ -33,7 +33,7 @@ For each changed destination, `OutputWriter::rebind` flushes that writer before 
 
 ## What crosses the barrier
 
-Data admitted by a removed input relay belongs to the old side of the cutover and is evaluated by the old monitor. Pending engine rows from that work are submitted before input additions, output interface changes, and monitor replacement.
+Data admitted by a removed input relay belongs to the old side of the cutover and is evaluated by the old monitor. Input rebind can open additions before it returns. The runtime then flushes any pending old-side engine rows before changing output interfaces and replacing the monitor. Synchronous evaluation may submit rows earlier, but submission before input additions is not a general ordering guarantee. Newly opened input owners can admit observations under bounded backpressure; the owner loop evaluates those observations only after the cutover succeeds.
 
 Output acknowledgement is local. Existing external destinations can observe pre-barrier output before another destination fails, and no cross-destination rollback exists.
 
@@ -43,4 +43,7 @@ A stale or cross-pipeline plan is rejected. Input detach, drain, or addition fai
 
 `ReconfSemiSyncRuntime` uses the same persistence boundary. It replaces the monitor/evaluation generation and transfers compatible variable history, while the opened input and output sessions remain live and rebind their supported interfaces in place.
 
-See the full [input architecture](../../input-architecture.md), [output architecture](../../output.md), and [root cutover](reconfigurable-runtime.md).
+The [shared I/O lifecycle](../../io-lifecycle.md) describes input drain, output
+close, drop-time cleanup, and the single absolute shutdown deadline. See the full
+[input architecture](../../input-architecture.md), [output architecture](../../output.md),
+and [root cutover](reconfigurable-runtime.md) for the direction-specific contracts.

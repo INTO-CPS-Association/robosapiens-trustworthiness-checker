@@ -103,7 +103,7 @@ changes; returning to old text creates a fresh body rather than reviving the old
 evaluator. `defer(p)` seals the first accepted body and ignores later source
 strings while continuing to evaluate that body.
 
-![Dynamic replaces changed property bodies while defer keeps its first body](../assets/user/dynamic-defer-user-ticks.svg)
+{{#include ../assets/user/dynamic-defer-user-ticks.svg}}
 
 **Reading rule.** Cells aligned at one x-position belong to the same logical
 tick. Thin spans identify active body lifetimes; they are not serial phases.

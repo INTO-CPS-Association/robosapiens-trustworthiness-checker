@@ -1,41 +1,14 @@
 flowchart TB
-    accTitle: Input source ownership and policy boundary
-    accDescr: Reusable InputSource descriptions are held by InputSources. InputPipeline resolves model variables and request bindings into a generation-tagged ResolvedInput before source-specific owners are opened. Opened source owners are composed into logical InputBatch values, optionally transformed by one InputPolicy, and delivered through an OpenedInput owner. ReconfigurableInput adds a private data and control stream for runtime sessions.
+    accTitle: Input descriptions, opened owners, and runtime delivery
+    accDescr: InputPipeline combines reusable source descriptions with an optional input policy. It resolves model bindings without opening resources. Ordinary opening returns an OpenedInput that composes source data and applies the policy. Reconfigurable opening retains owners in an InputPipelineSession and delivers observations, requests, and lifecycle markers to a reconfigurable runtime.
 
-    subgraph Catalog[Resource-free source catalog]
-        sources["InputSources"]
-        description["InputSource descriptions"]
-        native["File, memory, MQTT, Redis, ROS, or channel adapter"]
-        native --> description --> sources
-    end
-
-    subgraph Plan[Resource-free resolution]
-        model["Model input variables"]
-        config["Optional InputConfiguration"]
-        pipeline["InputPipeline"]
-        resolved["Generation-tagged ResolvedInput<br/>InputBinding: variable + Route + FormatId"]
-        model --> pipeline
-        config --> pipeline
-        sources --> pipeline
-        pipeline --> resolved
-    end
-
-    subgraph Open[Opened owner and logical data]
-        open["Open native source owners"]
-        owner["OpenedInputSource + InputSourceSet"]
-        compose["Compose in locally observed order"]
-        policy["One optional InputPolicy"]
-        batches["InputBatch: ordered logical ticks"]
-        opened["OpenedInput: data stream + owner set"]
-        resolved --> open --> owner --> compose --> policy --> batches --> opened
-    end
-
-    subgraph Control[Private reconfiguration path]
-        control["ReconfigurableInput"]
-        items["Data / Reconfigure / Boundary items"]
-        session["Persistent InputPipelineSession"]
-        control --> items --> session
-    end
-
-    opened --> runtime["Ordinary runtime"]
-    owner -. "selected control owner" .-> control
+    sources["Source descriptions: InputSources"] --> resolve["Resolve model bindings"]
+    model["Model inputs and optional InputConfiguration"] --> resolve
+    resolve --> plan["ResolvedInput: selected sources and bindings"]
+    plan --> ordinary["Open ordinary input: OpenedInput"]
+    plan --> session["Open reconfigurable input: InputPipelineSession"]
+    control["Selected reconfiguration source"] -.-> session
+    ordinary --> data["Compose data and apply optional InputPolicy"]
+    session --> items["Compose data and requests; apply optional InputPolicy"]
+    data --> runtime["Ordinary runtime receives InputBatch values"]
+    items --> reconf["Reconfigurable runtime receives data and control items"]

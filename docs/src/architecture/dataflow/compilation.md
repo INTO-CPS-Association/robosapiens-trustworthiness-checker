@@ -14,19 +14,19 @@ Compilation fixes a `DataflowMonitor` definition's immutable meaning and stable 
 
 The numbered phases run once per definition. The runtime `Scheduler` may later replace the order established in phase 3, but it does not repeat compilation or reassign the stable identities established in phase 4. Nor does it revisit the signatures from phase 1: which work can be accelerated is decided here and never re-decided at runtime.
 
-## Lowering preserves operation order
+## AST lowering and operation order
 
 Typed and untyped ASTs lower to `EvaluationGraph<VarName>` values. Operands precede consumers, so `NodeId` identifies both an operation's position and its matching value/state slot within that graph. External references still use `VarName` until binding.
 
 Typed compilation retains expected types and the checked environment used to validate runtime-defined nested expressions. Untyped compilation lowers expressions without that later type-checking contract.
 
-## Dependency discovery has two views
+## Scope and scheduling dependencies
 
 Compilation collects all free variables to validate scope and separately collects same-tick free variables for scheduling. A direct positive historical read does not add a same-tick edge. Dependencies required to compute a compound delayed operand remain current prerequisites.
 
 Static current cycles are rejected. Positive delayed self-reference is legal because binding converts it to a recursive delay whose read comes from committed history.
 
-## Binding establishes stable locations
+## Binding names to stable locations
 
 `EnvironmentLayout` assigns slots to declared inputs and computed streams. Binding replaces external names with `EnvironmentSlot` values and validates nested graphs, function captures, recursion, and reconfigurable-expression scope.
 

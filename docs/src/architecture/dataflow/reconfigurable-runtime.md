@@ -37,9 +37,9 @@ Mutation begins at phase 1. Every later phase can fail after earlier effects hav
 
 {{#include ../../assets/dataflow/root-cutover-ticks.svg}}
 
-**Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before the candidate monitor and output interfaces become active. The second dashed line marks local candidate activation after the serial input rebind, output rebind, monitor application, session revision commits, row rebuild, and acknowledgement; neither line is a rollback boundary.
+**Reading rule.** The first dashed line is the locally delivered control barrier, not the instant at which all old work disappears. Removed or changed owners can still hold admitted batches; `DataflowRuntime` evaluates those logical ticks with the old `DataflowMonitor` and flushes their output before the candidate monitor and output interfaces become active. Candidate state is applied before acknowledgement, but the owner loop resumes candidate processing only after acknowledgement succeeds. Neither line is a rollback boundary.
 
-The old monitor evaluates every row drained from removed sources. Its resulting pending output rows cross the writer boundary before the candidate input and output interfaces become active.
+The old monitor evaluates every row drained from removed sources. Its resulting pending output rows cross the writer boundary before the candidate output interfaces and monitor become active.
 
 ## Monitor replacement and revisions
 
@@ -47,7 +47,7 @@ Applying a monitor plan advances `MonitorRevision` for an accepted root activati
 
 After monitor application, the direct engine rebuilds reusable rows and cached slot layouts for the replacement monitor. This transient rebuild does not own language state.
 
-## No root transaction
+## Partial failure and cleanup
 
 The cutover is serial but not atomic across subsystems. Examples of reachable partial state include:
 

@@ -98,7 +98,7 @@ in a window with last-update-wins for each variable; it is a local reduction
 window, not a broker transaction or a cross-source atomicity guarantee. A
 window boundary can separate messages that arrive near its edge.
 
-![Batch and atomic-step input-window behavior](../assets/user/input-window-modes.svg)
+{{#include ../assets/user/input-window-modes.svg}}
 
 **Reading rule.** Cells sharing an x-position are one logical tick, and values grouped in a cell are simultaneous. In the atomic-step row, earlier positions are reduced into the single emitted evaluation tick; they are not pending ticks. The dashed flush guide is a physical window boundary, not another incoming logical tick.
 

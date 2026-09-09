@@ -32,7 +32,7 @@ Local `DelayState` belongs to the evaluator occurrence that implements the delay
 
 New local state starts without samples unless compatible evaluator state is explicitly transferred, and returns `Value::Deferred` until enough activation-local samples have committed. Which replacements can donate that state is a property of the activation, not of history: see [dynamic properties](dynamic-properties.md#dynamic-activation-lifetime).
 
-## Retained environment is not history
+## Retained environment and monitor history
 
 Reconfigurable evaluation also carries a retained sparse environment used to lift outer values needed by nested expressions. That row may retain `Value::Deferred` or the last available outer value, but it is neither `HistoryStore` nor a `DelayState` ring and does not backfill newly activated temporal operators.
 

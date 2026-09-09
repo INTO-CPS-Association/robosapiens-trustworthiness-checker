@@ -55,7 +55,7 @@ At the local control barrier, already-pending data is emitted before the request
 
 The dataflow runtime can continue draining data already admitted to the old side after local control delivery, before the replacement becomes active:
 
-![A delivered local control barrier followed by old-side drain and the first tick under the replacement definition](../assets/user/reconfiguration-observation-ticks.svg)
+{{#include ../assets/user/reconfiguration-observation-ticks.svg}}
 
 **Reading rule.** Regular marks are logical data ticks. Dashed vertical guides are physical control-delivery and local-activation boundaries, not extra ticks. The old-side interval is specific to the in-place dataflow monitor cutover; the semisynchronous runtime changes monitor generation while retaining its I/O sessions. Neither model creates a global order across independent producers.
 

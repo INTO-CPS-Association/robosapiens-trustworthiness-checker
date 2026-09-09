@@ -78,6 +78,7 @@ fn group_updates_into_ticks() -> anyhow::Result<()> {
     ])?;
 
     assert_eq!(batch.tick_count(), 2);
+    assert_eq!(batch.update_count(), 3);
     Ok(())
 }
 // ANCHOR_END: input_batch_from_ticks
@@ -107,6 +108,37 @@ fn read_configured_input_batches() -> anyhow::Result<()> {
 }
 // ANCHOR_END: input_pipeline_build
 
+// ANCHOR: input_window_batch
+fn collect_ticks_without_merging_them() -> anyhow::Result<()> {
+    use std::{collections::BTreeSet, num::NonZeroUsize};
+
+    use futures::StreamExt;
+    use trustworthiness_checker::io::{InputPipeline, InputPolicy, InputSource, InputWindow};
+    use trustworthiness_checker::{InputBatch, InputUpdate, Value, VarName};
+
+    smol::block_on(async {
+        let source = InputSource::in_memory_ticks([
+            InputBatch::tick(vec![
+                InputUpdate::new("x".into(), Value::Int(1)),
+                InputUpdate::new("y".into(), Value::Int(2)),
+            ])?,
+            InputBatch::update("x", Value::Int(3)),
+        ]);
+        let limits = InputWindow::new(None, NonZeroUsize::new(3))?;
+        let pipeline = InputPipeline::new(source).with_policy(InputPolicy::Batch(limits))?;
+        let mut input = pipeline
+            .build(BTreeSet::from([VarName::new("x"), VarName::new("y")]))
+            .await?;
+
+        let batch = input.next().await.expect("collected batch")?;
+        assert_eq!(batch.tick_count(), 2);
+        assert_eq!(batch.update_count(), 3);
+        assert!(input.next().await.is_none());
+        Ok(())
+    })
+}
+// ANCHOR_END: input_window_batch
+
 // ANCHOR: output_pipeline_open
 fn write_one_output_row() -> anyhow::Result<()> {
     use trustworthiness_checker::io::output::{
@@ -131,7 +163,7 @@ fn write_one_output_row() -> anyhow::Result<()> {
         let mut writer = pipeline.open(resolved).await?;
 
         writer
-            .send(OutputBatch::update("total", Value::Int(8)))
+            .feed(OutputBatch::update("total", Value::Int(8)))
             .await?;
         writer.flush().await?;
         writer.close().await?;
@@ -158,6 +190,11 @@ fn input_batch_groups_updates_into_ticks() {
 #[test]
 fn input_pipeline_yields_one_batch_per_configured_tick() {
     read_configured_input_batches().expect("documented input example should run");
+}
+
+#[test]
+fn input_window_batches_ticks_without_merging_them() {
+    collect_ticks_without_merging_them().expect("documented input-window example should run");
 }
 
 #[test]

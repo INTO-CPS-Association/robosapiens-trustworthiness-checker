@@ -80,7 +80,7 @@ The interaction view exposes the old-batch callback, the owners crossed during a
 ```mermaid
 sequenceDiagram
     accTitle: Root replacement crosses persistent owners before acknowledgement
-    accDescr: InputPipelineSession yields a delivered reconfiguration request to DataflowRuntime. The runtime first builds a resource-free plan. It then consumes old-side batches through the input rebind callback, flushes old output, applies output changes, applies the monitor plan, commits both session revisions, rebuilds layouts, and finally sends an acknowledgement. Planning failure leaves owners structurally unchanged but terminates the loop. Application or acknowledgement failure runs cleanup without reversing earlier effects.
+    accDescr: InputPipelineSession yields a delivered reconfiguration request to DataflowRuntime. The runtime first builds a resource-free plan. It then consumes old-side batches through the input rebind callback, flushes old output, applies output changes, applies the monitor plan, commits both session revisions, rebuilds layouts, and finally sends an acknowledgement. On failure, the runtime consumes the input session's deadline-bounded drain before flushing pending output and closing output owners. Cleanup does not reverse earlier effects.
 
     participant input as InputPipelineSession
     participant runtime as DataflowRuntime
@@ -91,9 +91,11 @@ sequenceDiagram
     input-->>runtime: Reconfigure(request) after local barrier
     runtime->>runtime: plan_runtime_reconfiguration(request)
     alt planning fails
-        runtime->>machine: reconfiguration_failure(error)
-        machine-->>runtime: cleanup result
-        runtime->>input: drop session and terminate owner loop
+        runtime->>runtime: finish_reconfigurable_active(error)
+        runtime->>input: into_drain_with_deadline(deadline)
+        input-->>runtime: cleanup items, errors, then EOF
+        runtime->>output: flush pending rows and close owners
+        output-->>runtime: cleanup result, then terminate owner loop
     else resource-free plan ready
         Note over runtime,machine: A failed call skips later calls and enters cleanup
         runtime->>input: rebind(input_plan, process_old)
@@ -121,17 +123,19 @@ sequenceDiagram
             runtime->>input: next().await with new ActiveRuntime
         else acknowledgement fails
             ack-->>runtime: error
-            runtime->>machine: reconfiguration_failure(error)
+            runtime->>runtime: finish_reconfigurable_active(error)
             Note over input,ack: Cleanup does not restore detached or updated owners
-            machine-->>runtime: cleanup result
-            runtime->>input: drop session and terminate owner loop
+            runtime->>input: into_drain_with_deadline(deadline)
+            input-->>runtime: cleanup items, errors, then EOF
+            runtime->>output: flush pending rows and close owners
+            output-->>runtime: cleanup result, then terminate owner loop
         end
     end
 ```
 
-**Reading rule.** Solid arrows are calls, ownership-changing requests, or submitted old-side output; dashed arrows are yielded items, returned artifacts, completions, or terminal outcomes. The consuming input rebind callback keeps admitted old work on the old monitor side until the local boundary, and acknowledgement is attempted only after input, output, monitor, session-revision, and transient-layout changes. The failure branch is containment and cleanup, never rollback; effects completed before the failing call can remain active. Lifeline spacing is causal order rather than logical tick spacing.
+**Reading rule.** Solid arrows are calls, ownership-changing requests, or submitted old-side output; dashed arrows are yielded items, returned artifacts, completions, or terminal outcomes. The consuming input rebind callback keeps admitted old work on the old monitor side until the local boundary, and acknowledgement is attempted only after input, output, monitor, session-revision, and transient-layout changes. Failure cleanup stops and drains input before output flush and close under the same absolute deadline; completed effects remain active. Lifeline spacing is causal order rather than logical tick spacing.
 
-## Planning establishes a candidate
+## Candidate planning
 
 `DataflowRuntime` plans the complete target before opening or stopping resources:
 
@@ -143,7 +147,7 @@ sequenceDiagram
 
 A failure in this phase leaves active owners structurally unchanged. The `DataflowRuntime` owner loop nevertheless treats the request failure as terminal rather than retrying it.
 
-## Application is ordered, not transactional
+## Application order and partial failure
 
 Mutation begins at phase 3 of the sequence above, and each mutating phase completes before the next begins. What that costs is stated per phase: the effect below survives the failure of any later phase.
 

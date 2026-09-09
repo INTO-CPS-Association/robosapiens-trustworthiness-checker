@@ -54,7 +54,7 @@ last assignment is used. Variables not selected by the model are ignored. A
 selected variable missing from a tick has `NoVal`, rather than an implicit zero,
 and the stdout sink suppresses `NoVal` output.
 
-![Two finite input ticks and their corresponding monitor outputs](../assets/user/finite-monitor-ticks.svg)
+{{#include ../assets/user/finite-monitor-ticks.svg}}
 
 **Reading rule.** Cells at the same horizontal position belong to the same logical tick, and assignments grouped in one input cell are simultaneous. A gap would be an absent logical position rather than another assignment within a neighboring tick.
 
