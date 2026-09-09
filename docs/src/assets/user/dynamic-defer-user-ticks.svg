@@ -1,12 +1,60 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 980 480"
-     width="100%"
-     role="img"
-     aria-labelledby="dynamic-defer-user-ticks-title dynamic-defer-user-ticks-desc"
-     style="width:100%; max-width:980px; height:auto; background:#ffffff;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 480" width="100%" role="img" aria-labelledby="dynamic-defer-user-ticks-title dynamic-defer-user-ticks-desc" style="width:100%; max-width:980px; height:auto; background:var(--fig-bg);">
   <title id="dynamic-defer-user-ticks-title">Dynamic replaces a body; defer seals the first body</title>
   <desc id="dynamic-defer-user-ticks-desc">Read left to right at four shared logical ticks. The input x is 1, 2, 3, and 4, while source p supplies the strings x plus 1, x plus 1, x times 2, and x plus 1. Dynamic p keeps body A while the string is unchanged, replaces it with body B at tick 2, and creates a new body C when the old text returns at tick 3; its displayed results are 2, 3, 6, and 5, and C does not revive A. Defer p activates body A from the first accepted string at tick 0, seals it across all later ticks, and displays 2, 3, 4, and 5 while later source strings are ignored. Thin colored spans show active-body lifetimes; the shared baseline and short marks show logical positions. The spans are not serial phase steps.</desc>
-
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff;
+      --fig-edge: #d0d7de;
+      --fig-ink: #17212b;
+      --fig-ink-2: #52606d;
+      --fig-line: #65758b;
+      --fig-panel: #f7f9fb;
+      --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb;
+      --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0;
+      --fig-green-line: #147d64;
+      --fig-orange: #fff1e6;
+      --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8;
+      --fig-purple-line: #8055a3;
+      --fig-source: #eef6ff;
+      --fig-source-line: #3478b8;
+      --fig-redis: #fff5e8;
+      --fig-redis-line: #bc6b16;
+      --fig-checker: #f1ecff;
+      --fig-checker-line: #7254b3;
+      --fig-knowledge: #eaf8ee;
+      --fig-knowledge-line: #39834d;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26;
+        --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0;
+        --fig-ink-2: #a2acbd;
+        --fig-line: #8492a6;
+        --fig-panel: #1e2432;
+        --fig-panel-line: #3d465c;
+        --fig-blue: #16283d;
+        --fig-blue-line: #6aa9e0;
+        --fig-green: #123029;
+        --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f;
+        --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33;
+        --fig-purple-line: #b18fd4;
+        --fig-source: #14283c;
+        --fig-source-line: #6fa8db;
+        --fig-redis: #33260f;
+        --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34;
+        --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c;
+        --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="dynamic-defer-user-ticks-arrow"
             markerWidth="7"
@@ -16,21 +64,18 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="978.5" height="478.5" rx="6"
-        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="30"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700">Dynamic replaces a body; defer seals the first body</text>
-
   <g text-anchor="middle"
-     fill="#52606d"
+     fill="var(--fig-ink-2)"
      font-family="system-ui, sans-serif"
      font-size="11">
     <text x="300" y="63">tick 0</text>
@@ -38,8 +83,7 @@
     <text x="600" y="63">tick 2</text>
     <text x="750" y="63">tick 3</text>
   </g>
-
-  <g fill="#17212b">
+  <g fill="var(--fig-ink)">
     <text x="24" y="111"
           font-family="ui-monospace, monospace"
           font-size="13"
@@ -49,51 +93,48 @@
           font-size="13"
           font-weight="600">input x</text>
   </g>
-
   <g text-anchor="middle"
      font-family="ui-monospace, monospace"
      font-size="12"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="244" y="87" width="112" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="300" y="114">&quot;x + 1&quot;</text>
     <rect x="394" y="87" width="112" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="450" y="114">&quot;x + 1&quot;</text>
     <rect x="544" y="87" width="112" height="44" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="600" y="114">&quot;x * 2&quot;</text>
     <rect x="694" y="87" width="112" height="44" rx="5"
-          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+          fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5" />
     <text x="750" y="114">&quot;x + 1&quot;</text>
-
     <rect x="258" y="151" width="84" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="300" y="177">1</text>
     <rect x="408" y="151" width="84" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="450" y="177">2</text>
     <rect x="558" y="151" width="84" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="600" y="177">3</text>
     <rect x="708" y="151" width="84" height="42" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="750" y="177">4</text>
   </g>
-
   <text x="24" y="263"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600">dynamic(p)</text>
   <g fill="none" stroke-width="3" stroke-linecap="butt">
-    <line x1="300" y1="221" x2="600" y2="221" stroke="#147d64" />
-    <line x1="600" y1="221" x2="750" y2="221" stroke="#b54708" />
-    <line x1="750" y1="221" x2="850" y2="221" stroke="#8055a3" />
+    <line x1="300" y1="221" x2="600" y2="221" stroke="var(--fig-green-line)" />
+    <line x1="600" y1="221" x2="750" y2="221" stroke="var(--fig-orange-line)" />
+    <line x1="750" y1="221" x2="850" y2="221" stroke="var(--fig-purple-line)" />
   </g>
   <g text-anchor="middle"
-     fill="#17212b"
+     fill="var(--fig-ink)"
      font-family="ui-monospace, monospace"
      font-size="11"
      font-weight="600">
@@ -105,39 +146,38 @@
      font-family="ui-monospace, monospace"
      font-size="12"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="258" y="239" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="300" y="265">2</text>
     <rect x="408" y="239" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="450" y="265">3</text>
     <rect x="558" y="239" width="84" height="42" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="600" y="265">6</text>
     <rect x="708" y="239" width="84" height="42" rx="5"
-          fill="#f3ebf8" stroke="#8055a3" stroke-width="1.5" />
+          fill="var(--fig-purple)" stroke="var(--fig-purple-line)" stroke-width="1.5" />
     <text x="750" y="265">5</text>
   </g>
   <text x="575" y="305"
         text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">changed text replaces at that tick; returning text creates C, not A</text>
-
   <text x="24" y="375"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="13"
         font-weight="600">defer(p)</text>
   <line x1="300" y1="335" x2="850" y2="335"
         fill="none"
-        stroke="#147d64"
+        stroke="var(--fig-green-line)"
         stroke-width="3"
         stroke-linecap="butt" />
   <text x="575" y="322"
         text-anchor="middle"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="ui-monospace, monospace"
         font-size="11"
         font-weight="600">A · sealed at tick 0</text>
@@ -145,39 +185,38 @@
      font-family="ui-monospace, monospace"
      font-size="12"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="258" y="351" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="300" y="377">2</text>
     <rect x="408" y="351" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="450" y="377">3</text>
     <rect x="558" y="351" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="600" y="377">4</text>
     <rect x="708" y="351" width="84" height="42" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="750" y="377">5</text>
   </g>
   <text x="575" y="410"
         text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">later source strings are ignored; active A continues to evaluate</text>
-
   <line x1="215" y1="445" x2="900" y2="445"
         fill="none"
-        stroke="#65758b"
+        stroke="var(--fig-line)"
         stroke-width="1.5"
         marker-end="url(#dynamic-defer-user-ticks-arrow)" />
-  <g stroke="#65758b" stroke-width="1.5">
+  <g stroke="var(--fig-line)" stroke-width="1.5">
     <line x1="300" y1="439" x2="300" y2="451" />
     <line x1="450" y1="439" x2="450" y2="451" />
     <line x1="600" y1="439" x2="600" y2="451" />
     <line x1="750" y1="439" x2="750" y2="451" />
   </g>
   <text x="912" y="449"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">logical time</text>
 </svg>

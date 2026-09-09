@@ -16,7 +16,7 @@ git-repository-url = "https://github.com/INTO-CPS-Association/robosapiens-trustw
 # entry stays. Its *contents* are ours: `cp theme/mermaid-theme.js mermaid-init.js` after the
 # installer replaces the stock initialiser, which themes diagrams with the stock light/dark
 # palettes, with the one that reads the figure palette from theme/diagram-theme.css.
-additional-js = ["theme/dsrv-highlight.js", "mermaid.min.js", "mermaid-init.js", "theme/diagram-fullscreen.js"]
+additional-js = ["theme/dsrv-highlight.js", "mermaid.min.js", "mermaid-init.js", "theme/diagram-fullscreen.js", "theme/diagram-theme.js"]
 additional-css = ["theme/diagram-fullscreen.css", "theme/diagram-theme.css"]
 
 # Every Rust example imports `trustworthiness_checker`, which the public playground at

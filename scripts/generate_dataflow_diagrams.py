@@ -12,24 +12,32 @@ import argparse
 import sys
 from pathlib import Path
 
+from diagram_theme import SVG_THEME_BLOCK
+
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "docs/src/assets/dataflow"
 
 COLORS = {
-    "ink": "#17212b",
-    "muted": "#52606d",
-    "line": "#65758b",
-    "border": "#a8b3bf",
-    "panel": "#f7f9fb",
-    "blue": "#2563a6",
-    "blue_fill": "#e8f1fb",
-    "green": "#147d64",
-    "green_fill": "#e6f5f0",
-    "orange": "#b54708",
-    "orange_fill": "#fff1e6",
-    "purple": "#8055a3",
-    "purple_fill": "#f3ebf8",
+    "ink": "var(--fig-ink)",
+    "muted": "var(--fig-ink-2)",
+    "line": "var(--fig-line)",
+    "border": "var(--fig-panel-line)",
+    "panel": "var(--fig-panel)",
+    "blue": "var(--fig-blue-line)",
+    "blue_fill": "var(--fig-blue)",
+    "green": "var(--fig-green-line)",
+    "green_fill": "var(--fig-green)",
+    "orange": "var(--fig-orange-line)",
+    "orange_fill": "var(--fig-orange)",
+    "purple": "var(--fig-purple-line)",
+    "purple_fill": "var(--fig-purple)",
 }
+
+THEME_COMMENT = '''  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->'''
 
 
 def esc(value: str) -> str:
@@ -99,9 +107,11 @@ def divider(y: int, width: int) -> str:
 def svg(
     title: str, description: str, width: int, height: int, body: str, marker: str
 ) -> str:
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="{marker}-title {marker}-desc" style="width:100%;max-width:{width}px;height:auto;background:#ffffff;border:1px solid #d0d7de;border-radius:6px">
+    return f'''<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-labelledby="{marker}-title {marker}-desc" style="width:100%;max-width:{width}px;height:auto;background:var(--fig-bg);border:1px solid var(--fig-edge);border-radius:6px">
 <title id="{marker}-title">{esc(title)}</title>
 <desc id="{marker}-desc">{esc(description)}</desc>
+{THEME_COMMENT}
+{SVG_THEME_BLOCK}
 <defs>
   <marker id="{marker}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
     <path d="M 0 0 L 10 5 L 0 10 z" fill="{COLORS["line"]}"/>
@@ -134,8 +144,8 @@ def example_streams() -> tuple[str, str]:
         parts.append(arrow(x1, 84, x2, 84, marker))
     parts.extend(
         [
-            f'<path d="M 495 106 C 495 165, 555 165, 555 106" fill="none" stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
-            text(525, 151, "previous tick: total[1]", cls="small"),
+            f'<path d="M 495 106 C 495 158, 555 158, 555 106" fill="none" stroke="{COLORS["orange"]}" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#{marker})"/>',
+            text(525, 162, "previous tick: total[1]", cls="small"),
         ]
     )
     return (
@@ -1029,7 +1039,7 @@ def function_call() -> tuple[str, str]:
             f'<path d="M 445 175 C 520 220, 670 220, 745 175" fill="none" '
             f'stroke="{COLORS["green"]}" stroke-width="2" marker-end="url(#{marker})"/>'
         ),
-        text(595, 218, "callable state", cls="small"),
+        text(595, 228, "callable state", cls="small"),
         # RecursiveApply: every active depth gets a distinct reset evaluator
         # frame. Frames return to the per-call pool during unwind.
         f'<rect x="25" y="258" width="910" height="300" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}"/>',
@@ -1187,7 +1197,7 @@ def reconfigurable_expressions() -> tuple[str, str]:
             f'stroke="{COLORS["line"]}" stroke-width="1.8" stroke-dasharray="5 4" '
             f'marker-end="url(#{marker})"/>'
         ),
-        text(575, 235, "baseline is allowed but unused", cls="small"),
+        text(700, 235, "baseline is allowed but unused", cls="small"),
         # Point 2 and point 3 are subexpressions of one fixed decision equation.
         f'<rect x="85" y="415" width="770" height="185" rx="8" fill="{COLORS["panel"]}" stroke="{COLORS["border"]}" stroke-width="1.5"/>',
         text(105, 441, "decision = point 2 && point 3", anchor="start", cls="label"),

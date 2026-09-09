@@ -1,12 +1,60 @@
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 930 420"
-     width="100%"
-     role="img"
-     aria-labelledby="input-window-modes-title input-window-modes-desc"
-     style="width:100%; max-width:930px; height:auto; background:#ffffff;">
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 930 420" width="100%" role="img" aria-labelledby="input-window-modes-title input-window-modes-desc" style="width:100%; max-width:930px; height:auto; background:var(--fig-bg);">
   <title id="input-window-modes-title">Input window modes preserve or reduce logical ticks</title>
   <desc id="input-window-modes-desc">Read left to right along one shared baseline. The incoming window contains tick 1 with simultaneous x equals 1 and y equals 2, then tick 2 with x equals 3. Batch mode emits the same two logical ticks at the same x-positions inside one physical batch. Atomic-step mode applies last-update-wins reduction and emits one new simultaneous evaluation tick after the physical flush boundary, retaining y equals 2 and replacing x equals 1 with x equals 3. Earlier updates are reduced into that emitted tick; omitted input positions do not become output or evaluation ticks. The dashed vertical guide is the physical flush, not incoming logical data.</desc>
-
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff;
+      --fig-edge: #d0d7de;
+      --fig-ink: #17212b;
+      --fig-ink-2: #52606d;
+      --fig-line: #65758b;
+      --fig-panel: #f7f9fb;
+      --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb;
+      --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0;
+      --fig-green-line: #147d64;
+      --fig-orange: #fff1e6;
+      --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8;
+      --fig-purple-line: #8055a3;
+      --fig-source: #eef6ff;
+      --fig-source-line: #3478b8;
+      --fig-redis: #fff5e8;
+      --fig-redis-line: #bc6b16;
+      --fig-checker: #f1ecff;
+      --fig-checker-line: #7254b3;
+      --fig-knowledge: #eaf8ee;
+      --fig-knowledge-line: #39834d;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26;
+        --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0;
+        --fig-ink-2: #a2acbd;
+        --fig-line: #8492a6;
+        --fig-panel: #1e2432;
+        --fig-panel-line: #3d465c;
+        --fig-blue: #16283d;
+        --fig-blue-line: #6aa9e0;
+        --fig-green: #123029;
+        --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f;
+        --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33;
+        --fig-purple-line: #b18fd4;
+        --fig-source: #14283c;
+        --fig-source-line: #6fa8db;
+        --fig-redis: #33260f;
+        --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34;
+        --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c;
+        --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
   <defs>
     <marker id="input-window-modes-arrow"
             markerWidth="7"
@@ -16,57 +64,51 @@
             viewBox="0 0 10 10"
             orient="auto"
             markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758b" />
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
     </marker>
   </defs>
-
   <rect x="0.75" y="0.75" width="928.5" height="418.5" rx="6"
-        fill="#ffffff" stroke="#d0d7de" stroke-width="1.5" />
-
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
   <text x="24" y="30"
-        fill="#17212b"
+        fill="var(--fig-ink)"
         font-family="system-ui, sans-serif"
         font-size="15"
         font-weight="700">Input window modes preserve or reduce logical ticks</text>
-
   <!-- This boundary is physical window work, not a regular logical tick. -->
   <line x1="700" y1="48" x2="700" y2="374"
-        stroke="#8055a3" stroke-width="1.3" stroke-dasharray="6 4" />
+        stroke="var(--fig-purple-line)" stroke-width="1.3" stroke-dasharray="6 4" />
   <text x="700" y="49"
         text-anchor="middle"
-        fill="#8055a3"
+        fill="var(--fig-purple-line)"
         font-family="system-ui, sans-serif"
         font-size="11"
         font-weight="600">physical flush</text>
   <text x="700" y="65"
         text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">not an incoming tick</text>
-
   <line x1="185" y1="100" x2="820" y2="100"
         fill="none"
-        stroke="#65758b"
+        stroke="var(--fig-line)"
         stroke-width="1.5"
         marker-end="url(#input-window-modes-arrow)" />
   <text x="831" y="104"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">logical order</text>
-
-  <g stroke="#65758b" stroke-width="1.5">
+  <g stroke="var(--fig-line)" stroke-width="1.5">
     <line x1="300" y1="92" x2="300" y2="108" />
     <line x1="500" y1="92" x2="500" y2="108" />
   </g>
   <g text-anchor="middle"
-     fill="#52606d"
+     fill="var(--fig-ink-2)"
      font-family="system-ui, sans-serif"
      font-size="11">
     <text x="300" y="81">tick 1</text>
     <text x="500" y="81">tick 2</text>
   </g>
-
-  <g fill="#17212b">
+  <g fill="var(--fig-ink)">
     <text x="24" y="153"
           font-family="system-ui, sans-serif"
           font-size="13"
@@ -82,55 +124,49 @@
     <text x="24" y="351"
           font-family="system-ui, sans-serif"
           font-size="11"
-          fill="#52606d">last-update-wins reduction</text>
+          fill="var(--fig-ink-2)">last-update-wins reduction</text>
   </g>
-
   <g text-anchor="middle"
      font-family="ui-monospace, monospace"
      font-size="11.5"
      font-weight="600"
-     fill="#17212b">
+     fill="var(--fig-ink)">
     <rect x="215" y="130" width="170" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="300" y="157">{ x = 1, y = 2 }</text>
     <rect x="455" y="130" width="90" height="44" rx="5"
-          fill="#e8f1fb" stroke="#2563a6" stroke-width="1.5" />
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
     <text x="500" y="157">{ x = 3 }</text>
-
     <rect x="215" y="214" width="170" height="44" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="300" y="241">{ x = 1, y = 2 }</text>
     <rect x="455" y="214" width="90" height="44" rx="5"
-          fill="#e6f5f0" stroke="#147d64" stroke-width="1.5" />
+          fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5" />
     <text x="500" y="241">{ x = 3 }</text>
-
     <rect x="730" y="313" width="170" height="44" rx="5"
-          fill="#fff1e6" stroke="#b54708" stroke-width="1.5" />
+          fill="var(--fig-orange)" stroke="var(--fig-orange-line)" stroke-width="1.5" />
     <text x="815" y="340">{ x = 3, y = 2 }</text>
   </g>
-
   <path d="M 205 268 V 276 H 595 V 268"
         fill="none"
-        stroke="#65758b"
+        stroke="var(--fig-line)"
         stroke-width="1.3" />
   <text x="400" y="294"
         text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">one physical batch · two logical ticks</text>
-
   <line x1="708" y1="335" x2="721" y2="335"
-        stroke="#b54708" stroke-width="1.5"
+        stroke="var(--fig-orange-line)" stroke-width="1.5"
         marker-end="url(#input-window-modes-arrow)" />
   <text x="815" y="300"
         text-anchor="middle"
-        fill="#b54708"
+        fill="var(--fig-orange-line)"
         font-family="system-ui, sans-serif"
         font-size="11">one emitted evaluation tick</text>
-
   <text x="465" y="402"
         text-anchor="middle"
-        fill="#52606d"
+        fill="var(--fig-ink-2)"
         font-family="system-ui, sans-serif"
         font-size="11">Batch keeps both positions; atomic-step reduces them to the latest update per variable.</text>
 </svg>

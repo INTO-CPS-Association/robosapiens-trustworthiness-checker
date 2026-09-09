@@ -38,6 +38,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from diagram_theme import SVG_THEME_BLOCK
+
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "docs" / "src"
 BOOK = ROOT / "docs" / "book"
@@ -152,6 +154,12 @@ def check_svg_source(
 
     if not root.get("viewBox"):
         report.error(where, "no viewBox, so the figure cannot scale to the page width")
+
+    if "tc-figure" in root.get("class", "").split() and SVG_THEME_BLOCK not in text:
+        report.error(
+            where,
+            "does not contain the canonical SVG fallback theme from scripts/diagram_theme.py",
+        )
 
     return root
 
@@ -310,6 +318,13 @@ def check_mermaid(report: Report) -> int:
         for index, block in enumerate(MERMAID_BLOCK.findall(text), 1):
             blocks += 1
             where = f"{rel(md)} (mermaid block {index})"
+            include = INCLUDE.fullmatch(block.strip())
+            if include and include.group(1).strip().endswith(".mmd"):
+                source = (md.parent / include.group(1).strip()).resolve()
+                if not source.is_file():
+                    report.error(where, f"Mermaid include does not exist: {rel(source)}")
+                    continue
+                block = source.read_text(encoding="utf-8")
             for colour in MERMAID_COLOUR.findall(block):
                 report.error(
                     where,

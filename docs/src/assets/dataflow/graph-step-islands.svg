@@ -1,7 +1,60 @@
 <svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 378" role="img" aria-labelledby="t4 d4" style="width:100%; max-width:960px; height:auto; background:var(--fig-bg);">
 <title id="t4">Islands inside one graph step</title>
 <desc id="d4">The four nodes of the blended stream in graph order. Nodes 0 and 1 form one island, node 2 is a canonical run because a conditional is not an island operation, and node 3 forms a second island. Node 3 reads node 1 from a register, because a value consumed only by another island of the same region never reaches the canonical arena, and reads node 2 back from the arena because a canonical node produced it. Only node 3, the stream result, is exported.</desc>
-<style>.tc-figure{--fig-bg:#ffffff;--fig-edge:#d0d7de;--fig-ink:#17212b;--fig-ink-2:#52606d;--fig-line:#65758b;--fig-panel:#f7f9fb;--fig-panel-line:#a8b3bf;--fig-blue:#e8f1fb;--fig-blue-line:#2563a6;--fig-green:#e6f5f0;--fig-green-line:#147d64;--fig-orange:#fff1e6;--fig-orange-line:#b54708;--fig-purple:#f3ebf8;--fig-purple-line:#8055a3}@media (prefers-color-scheme:dark){.tc-figure{--fig-bg:#171b26;--fig-edge:#333a4d;--fig-ink:#e6e9f0;--fig-ink-2:#a2acbd;--fig-line:#8492a6;--fig-panel:#1e2432;--fig-panel-line:#3d465c;--fig-blue:#16283d;--fig-blue-line:#6aa9e0;--fig-green:#123029;--fig-green-line:#4fbfa0;--fig-orange:#33240f;--fig-orange-line:#e0a44e;--fig-purple:#241c33;--fig-purple-line:#b18fd4}}</style>
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff;
+      --fig-edge: #d0d7de;
+      --fig-ink: #17212b;
+      --fig-ink-2: #52606d;
+      --fig-line: #65758b;
+      --fig-panel: #f7f9fb;
+      --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb;
+      --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0;
+      --fig-green-line: #147d64;
+      --fig-orange: #fff1e6;
+      --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8;
+      --fig-purple-line: #8055a3;
+      --fig-source: #eef6ff;
+      --fig-source-line: #3478b8;
+      --fig-redis: #fff5e8;
+      --fig-redis-line: #bc6b16;
+      --fig-checker: #f1ecff;
+      --fig-checker-line: #7254b3;
+      --fig-knowledge: #eaf8ee;
+      --fig-knowledge-line: #39834d;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26;
+        --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0;
+        --fig-ink-2: #a2acbd;
+        --fig-line: #8492a6;
+        --fig-panel: #1e2432;
+        --fig-panel-line: #3d465c;
+        --fig-blue: #16283d;
+        --fig-blue-line: #6aa9e0;
+        --fig-green: #123029;
+        --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f;
+        --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33;
+        --fig-purple-line: #b18fd4;
+        --fig-source: #14283c;
+        --fig-source-line: #6fa8db;
+        --fig-redis: #33260f;
+        --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34;
+        --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c;
+        --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
 <defs><marker id="a4" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)"/></marker><marker id="a4b" markerWidth="7" markerHeight="7" refX="9" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-blue-line)"/></marker></defs>
 <rect x="0.75" y="0.75" width="958.5" height="376.5" rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.4" />
 <text x="26" y="30" text-anchor="start" fill="var(--fig-ink)" font-family="system-ui, sans-serif" font-size="15" font-weight="700">Islands inside one graph step</text>
