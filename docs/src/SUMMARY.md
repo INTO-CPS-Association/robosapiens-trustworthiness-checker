@@ -36,7 +36,11 @@
 
 # Architecture
 
-- [Input architecture](./input-architecture.md)
+- [I/O architecture](./io.md)
+  - [Input architecture](./input-architecture.md)
+  - [Output architecture](./output.md)
+  - [I/O ownership and lifecycle](./io-lifecycle.md)
+  - [Reconfiguration architecture](./reconfiguration.md)
 - [Dataflow architecture](./architecture/dataflow/index.md)
   - [Canonical semantics]()
     - [Execution model](./architecture/dataflow/model.md)
@@ -62,5 +66,3 @@
     - [Context transfer](./architecture/dataflow/context-transfer.md)
     - [Failure and termination](./architecture/dataflow/failure-model.md)
   - [Implementation mapping](./architecture/dataflow/implementation-guide.md)
-- [Output architecture](./output.md)
-- [Reconfiguration architecture](./reconfiguration.md)
