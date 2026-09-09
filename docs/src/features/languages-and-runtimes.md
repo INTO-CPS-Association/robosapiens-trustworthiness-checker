@@ -8,7 +8,7 @@ The TC accepts two specification languages. DSRV is the default stream-monitorin
 
 Use the default `dsrv` language for declarations such as `in x`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, and `gradual-typed-untimed`; the default is `gradual-typed-untimed`. The distributed DSRV runtime currently accepts only `untimed`.
 
-Start with [writing a DSRV monitor](../tutorials/write-dsrv-monitor.md) and the [two-input trace tutorial](../tutorials/finite-trace.md). Language-level `dynamic` and `defer` are distinct from root monitor reconfiguration.
+Start with [writing and running DSRV models](../tutorials/write-dsrv-monitor.md). Language-level `dynamic` and `defer` are distinct from root monitor reconfiguration.
 
 ### MSTLO
 
@@ -38,8 +38,8 @@ The `--execution-policy` values are `buffered` and `synchronous`. They describe 
 A running-total program demonstrates the default DSRV runtime:
 
 ```dsrv
-in x
-out z
+in x: Int
+out z: Int
 z = default(z[1], 0) + x
 ```
 
@@ -54,9 +54,9 @@ cargo run -- examples/counter.dsrv \
 For live reconfiguration, start from an addition rule:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 

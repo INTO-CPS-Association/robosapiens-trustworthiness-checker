@@ -27,7 +27,7 @@ See [languages and runtimes](features/languages-and-runtimes.md) when choosing b
 ## Choose a path
 
 - [Getting started](getting-started.md) installs Rust with rustup and runs a small DSRV running-total example on Linux or Unix. It also points native Windows and WSL users to the relevant setup.
-- [Tutorials](tutorials/finite-trace.md) build from one finite trace to DSRV and MSTLO authoring, live transports, reconfiguration, distributed monitoring, and Docker operation.
+- [Tutorials](tutorials/write-dsrv-monitor.md) build from one finite trace to DSRV and MSTLO authoring, live transports, reconfiguration, distributed monitoring, and Docker operation.
 - [Feature catalogues](features/capabilities.md) answer what the TC supports across inputs, outputs, languages, runtimes, integrations, and deployment.
 - [Reference](reference/cli.md) gives generated CLI facts and focused configuration, wire, and process contracts.
 - [Architecture](architecture/dataflow/index.md) explains internal dataflow execution, then links to input, output, and reconfiguration architecture.

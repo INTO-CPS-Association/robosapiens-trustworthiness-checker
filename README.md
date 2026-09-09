@@ -2,24 +2,22 @@
 
 The Trustworthiness Checker (TC) evaluates streaming observations against an executable monitor specification. It can replay a finite trace, remain attached to live MQTT/Redis/ROS sources, publish results to stdout or transports, and run selected distributed or reconfigurable runtimes.
 
-## Run an example monitor on Linux or Unix
+## Run an example monitor
 
-Prerequisites: Rust 1.95 with Cargo and a native C/C++ build toolchain.
+Prerequisites: Rust 1.95 with Cargo and a native C/C++ build toolchain. Run commands from the repository root.
 
 The first DSRV example adds each input to its previous result:
 
 ```dsrv
-in x
-out z
+in x: Int
+out z: Int
 z = default(z[1], 0) + x
 ```
 
 The repository stores this running-total program as `examples/counter.dsrv` and supplies four input values in `examples/counter.input`. Run it from the repository root:
 
-```sh
-cargo run -- examples/counter.dsrv \
-  --input-file examples/counter.input \
-  --output-stdout
+```console
+cargo run -- examples/counter.dsrv --input-file examples/counter.input --output-stdout
 ```
 
 The command exits after the four input ticks. Its exact stdout is:
@@ -33,31 +31,7 @@ z[3] = Int(4)
 
 The output index is zero-based. `z[1]` reads the preceding logical tick and `default(z[1], 0)` supplies the initial value at tick zero. The example needs no broker, ROS installation, or extra Cargo feature.
 
-## Run on Windows
-
-Native Windows builds use Rust 1.95 and the MSVC toolchain. The Windows example adds two explicitly typed integer inputs:
-
-```dsrv
-in x : Int
-in y : Int
-out z : Int
-z = x + y
-```
-
-The repository stores it as `tests/fixtures/simple_add_typed.dsrv` with three input pairs in `tests/fixtures/simple_add_typed.input`. From PowerShell in the repository root, run it without optional transport features:
-
-```powershell
-cargo +1.95 run `
-  --package trustworthiness_checker `
-  --bin trustworthiness_checker `
-  --no-default-features `
-  -- `
-  tests/fixtures/simple_add_typed.dsrv `
-  --input-file tests/fixtures/simple_add_typed.input `
-  --output-stdout
-```
-
-The [extended Windows usage](docs/src/tutorials/windows.md) page covers prerequisites, WSL, exact output, native testing, Docker Desktop MQTT/Redis input, and testing the cross-compiled Windows GNU executable with Wine on Linux.
+The command is the same in a Unix shell and PowerShell. The [Getting started guide](https://into-cps-association.github.io/robosapiens-trustworthiness-checker/getting-started.html) covers Linux and Unix prerequisites. Native Windows, WSL, and Wine setup are in [Extended Windows usage](https://into-cps-association.github.io/robosapiens-trustworthiness-checker/tutorials/windows.html).
 
 ## Documentation
 

@@ -56,8 +56,8 @@ Trustworthiness Checker is running, subscribed, or ready to evaluate input.
 This DSRV program exposes the selected state without changing it:
 
 ```dsrv
-in robot_mode
-out observed_mode
+in robot_mode: Str
+out observed_mode: Str
 observed_mode = robot_mode
 ```
 

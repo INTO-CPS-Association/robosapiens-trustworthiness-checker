@@ -9,9 +9,9 @@ Run the Trustworthiness Checker as a foreground process under a supervisor or co
 The checker invocation is a foreground command whose DSRV file and options are supplied as process arguments. The example program adds two inputs:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 

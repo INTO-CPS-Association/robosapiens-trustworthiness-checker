@@ -50,8 +50,8 @@ If you already have a checkout, run the remaining commands from its repository r
 The first DSRV example has one input, `x`, and one output, `z`:
 
 ```dsrv
-in x
-out z
+in x: Int
+out z: Int
 z = default(z[1], 0) + x
 ```
 
@@ -84,8 +84,7 @@ Under WSL, use the Linux instructions on this page inside the WSL distribution. 
 
 ## Continue from the first run
 
-- [Add two input streams from a trace](tutorials/finite-trace.md) explains timestamps, simultaneous assignments, missing values, and history.
-- [Write a DSRV monitor](tutorials/write-dsrv-monitor.md) introduces declarations, equations, `defer`, and `dynamic`.
+- [Write and run DSRV models](tutorials/write-dsrv-monitor.md) explains declarations, equations, timestamped traces, history, `defer`, and `dynamic`.
 - [Monitor timed signals with MSTLO](tutorials/mstlo-monitor.md) runs a timestamped Signal Temporal Logic property.
 - [Capabilities](features/capabilities.md) maps live inputs, outputs, reconfiguration, distributed monitoring, and integrations to focused pages.
 - [General usage](general-usage.md) gives the shortest command shape for each input route.

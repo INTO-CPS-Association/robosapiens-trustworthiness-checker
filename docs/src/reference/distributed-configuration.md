@@ -29,12 +29,12 @@ The node indexes in `node_labels` refer to the `graph.nodes` order. The labels i
 The distributed addition example computes an intermediate sum `w`, then uses it in final sum `v`:
 
 ```dsrv
-in x
-in y
-in z
-in c
-out w
-out v
+in x: Int
+in y: Int
+in z: Int
+in c: Any
+out w: Int
+out v: Int
 
 w = x + y
 v = z + w

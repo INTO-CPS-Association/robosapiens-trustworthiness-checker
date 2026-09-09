@@ -15,8 +15,8 @@ Choose where model output values are observed. If no output flag is selected, th
 The stdout sink increments its row index for each logical output tick. It suppresses auxiliary variables and `NoVal` values. For example, this DSRV program keeps a running total:
 
 ```dsrv
-in x
-out z
+in x: Int
+out z: Int
 z = default(z[1], 0) + x
 ```
 
@@ -41,7 +41,7 @@ Built-in MQTT output publishes each result at QoS 1 (at least once). A Rust `Mqt
 
 ## Choose a task
 
-- [Add two input streams from a trace](../tutorials/finite-trace.md) — inspect exact stdout.
+- [Write and run DSRV models](../tutorials/write-dsrv-monitor.md) — inspect exact stdout from finite traces.
 - [Live MQTT](../tutorials/live-mqtt.md) — publish JSON5 values and observe `{"value":...}`.
 - [ROS input and output](../tutorials/ros-input-output.md) — configure message types with the ROS feature.
 - [Output configuration reference](../reference/output-configuration.md) — use JSON5 destinations, routes, selectors, and delivery policies.

@@ -28,9 +28,9 @@ Keep data and control topics distinct.
 The checker initially adds two MQTT inputs:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 
@@ -59,9 +59,9 @@ mosquitto_pub -h localhost -p 1883 -t y -m '2'
 The replacement keeps the same inputs and output but adds 10 to their sum:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y + 10
 ```
 

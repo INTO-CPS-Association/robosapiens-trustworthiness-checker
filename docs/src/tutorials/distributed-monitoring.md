@@ -11,12 +11,12 @@ This walkthrough evaluates node A's local assignment from a timestamped input fi
 Run from the repository root with Rust/Cargo available. The DSRV program first adds `x` and `y`, then adds that intermediate result to `z`:
 
 ```dsrv
-in x
-in y
-in z
-in c
-out w
-out v
+in x: Int
+in y: Int
+in z: Int
+in c: Any
+out w: Int
+out v: Int
 
 w = x + y
 v = z + w

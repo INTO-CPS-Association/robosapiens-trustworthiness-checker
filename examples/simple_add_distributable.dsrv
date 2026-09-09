@@ -1,9 +1,9 @@
-in x
-in y
-in z
-in c
-out w
-out v
+in x: Int
+in y: Int
+in z: Int
+in c: Any
+out w: Int
+out v: Int
 
 w = x + y
 v = z + w

@@ -2,7 +2,7 @@
 
 The main [Getting started](../getting-started.md) path is Linux/Unix-first. Use this page when working in Windows Subsystem for Linux (WSL), building the Trustworthiness Checker (TC) as a native Windows executable, connecting that executable to Docker Desktop services, or testing a cross-compiled Windows executable with Wine on Linux.
 
-The native and Wine examples add three pairs of explicitly typed integers, write the results to stdout, and exit. Run commands from the repository root unless a section says otherwise.
+The native and Wine examples run the same typed four-tick running total as the Linux/Unix and WSL paths, write the results to stdout, and exit. Run commands from the repository root unless a section says otherwise.
 
 ## Windows Subsystem for Linux (WSL)
 
@@ -37,18 +37,17 @@ rustup target list --toolchain 1.95 --installed
 
 The installed-target list must contain `x86_64-pc-windows-msvc`.
 
-### Add two values from a file
+### Run the typed running total
 
-The Windows example uses explicit integer types while adding `x` and `y`:
+The native Windows path uses the same model as Getting Started:
 
 ```dsrv
-in x : Int
-in y : Int
-out z : Int
-z = x + y
+in x: Int
+out z: Int
+z = default(z[1], 0) + x
 ```
 
-The repository stores this program as `tests/fixtures/simple_add_typed.dsrv` and supplies three input pairs in `tests/fixtures/simple_add_typed.input`. Start with this file-input run before configuring a live broker. Build without the optional MQTT and Redis integrations, then run the native executable:
+The repository stores this program as `examples/counter.dsrv` and supplies four input values in `examples/counter.input`. Start with this file-input run before configuring a live broker. Build without the optional MQTT and Redis integrations, then run the native executable:
 
 ```powershell
 cargo +1.95 build `
@@ -57,17 +56,18 @@ cargo +1.95 build `
   --no-default-features
 
 & .\target\debug\trustworthiness_checker.exe `
-  tests/fixtures/simple_add_typed.dsrv `
-  --input-file tests/fixtures/simple_add_typed.input `
+  examples/counter.dsrv `
+  --input-file examples/counter.input `
   --output-stdout
 ```
 
 The process writes these results to stdout and exits:
 
 ```text
-z[0] = Int(3)
-z[1] = Int(7)
-z[2] = Int(11)
+z[0] = Int(1)
+z[1] = Int(2)
+z[2] = Int(3)
+z[3] = Int(4)
 ```
 
 This file-input process reaches end of input and exits without manual cleanup. To check the broader default feature set on a prepared Windows development host, run:
@@ -123,7 +123,7 @@ The installed-target list must contain `x86_64-pc-windows-gnu`.
 
 The checked-in `.cargo/config.toml` selects `x86_64-w64-mingw32-gcc` as the linker and Wine as the Cargo runner.
 
-### Initialize Wine and run the typed addition example
+### Initialize Wine and run the typed running total
 
 From the repository root, create a project-local Wine prefix:
 
@@ -143,12 +143,12 @@ cargo +1.95 run \
   --bin trustworthiness_checker \
   --no-default-features \
   -- \
-  tests/fixtures/simple_add_typed.dsrv \
-  --input-file tests/fixtures/simple_add_typed.input \
+  examples/counter.dsrv \
+  --input-file examples/counter.input \
   --output-stdout
 ```
 
-The expected stdout is the same three-line result shown in the native Windows section. Remove `target/wine-prefix` if you want Wine to recreate a clean Windows environment on the next run.
+The expected stdout is the same four-line result shown in the native Windows section. Remove `target/wine-prefix` if you want Wine to recreate a clean Windows environment on the next run.
 
 ## Run with MQTT or Redis on Windows
 

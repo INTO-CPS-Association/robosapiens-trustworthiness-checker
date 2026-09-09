@@ -16,16 +16,16 @@ The figure above draws this specification:
 in sensor: Int
 in baseline: Int
 in enabled: Bool
-in limit_source: Str
-in rule_source: Str
-in gate_source: Str
+in limit_source: Expr<Int>
+in rule_source: Expr<Bool>
+in gate_source: Expr<Bool>
 out score: Int
 out limit: Int
 out decision: Bool
 score    = sensor - baseline
-limit    = defer(limit_source: Int, {score, baseline})
-decision = dynamic(rule_source: Bool, {score, limit})
-           && dynamic(gate_source: Bool, {enabled})
+limit    = defer(limit_source, {score, baseline})
+decision = dynamic(rule_source, {score, limit})
+           && dynamic(gate_source, {enabled})
 ```
 
 With the three source inputs currently carrying `"score + 10"`, `"score > limit"`, and `"enabled"`:
@@ -38,7 +38,7 @@ With the three source inputs currently carrying `"score + 10"`, `"score > limit"
 
 `baseline` is permitted and unused, so it constrains nothing. The order must place `score` before `limit` and `limit` before `decision`; `enabled` is an input already present when the tick starts, so its edge orders no computed streams. One stream can contain more than one point, and the surrounding `&&` never changes.
 
-An automatic scope — `dynamic(source: T)` with no brace list — admits every declared variable except the enclosing stream. That is a wider permission set, not a wider dependency set. If two automatically scoped streams could each read the other, activating every permitted edge would invent a cycle on ticks where only one direction is used; activating only what the formulas read does not.
+An automatic scope — `dynamic(source)` with no brace list — admits every declared variable except the enclosing stream. The source's `Expr<T>` declaration determines the result type. That is a wider permission set, not a wider dependency set. If two automatically scoped streams could each read the other, activating every permitted edge would invent a cycle on ticks where only one direction is used; activating only what the formulas read does not.
 
 ## What compilation must fix in advance
 
@@ -78,7 +78,7 @@ The distinction is visible when temporal state exists inside and outside the dyn
 
 A newly activated temporal expression does not inherit the samples that passed before it existed. It begins recording on its activation tick, which is why a delay inside a fresh body yields `Deferred` for a while even though the stream it reads has been running.
 
-For `z = dynamic(source: Int)` where the source becomes `"x[2]"` only after two rows have passed:
+For `in source: Expr<Int>` and `z = dynamic(source)`, where the source becomes `"x[2]"` only after two rows have passed:
 
 | tick | `x` | `source` | `z` | samples held by the active `x[2]` |
 |---:|---:|---|---|---|
@@ -93,7 +93,7 @@ The body never sees 10 or 20. This is activation-local by design: a new body doe
 Temporal operators in the *fixed* specification are unaffected, because they are different owners. Given
 
 ```dsrv
-z        = dynamic(source: Int)
+z        = dynamic(source)
 previous = z[1]
 ```
 
@@ -131,7 +131,7 @@ The published language definition compares three strategies for making a newly a
 | statically declared dependencies | bounded by declared limits | up to each declared limit; beyond it, never |
 | dynamically updated dependencies | bounded, but the bound changes on activation | an existing deep-enough dependency may already hold the samples; otherwise retention grows from the activating tick |
 
-The first is unavailable because the monitor keeps no complete trace archive. The second is not exposed: an explicit scope such as `dynamic(source: Int, {x})` permits the name `x`, but it cannot declare "retain four samples of `x`". The bound comes from the active compiled body, and no construct accepts a separate memory-strategy selector.
+The first is unavailable because the monitor keeps no complete trace archive. The second is not exposed: an explicit scope such as `dynamic(source, {x})` permits the name `x`, but it cannot declare "retain four samples of `x`". The bound comes from the active compiled body, and no construct accepts a separate memory-strategy selector.
 
 What an activation *does* add is depth to the monitor's own bounded history for the variables it reads. That history is maintained independently of the body's local ring, so it can survive as context for a later replacement even after the body that caused it is gone.
 

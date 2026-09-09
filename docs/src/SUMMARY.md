@@ -5,8 +5,7 @@
 
 # Tutorials
 
-- [Add two input streams from a trace](./tutorials/finite-trace.md)
-- [Write a DSRV monitor](./tutorials/write-dsrv-monitor.md)
+- [Write and run DSRV models](./tutorials/write-dsrv-monitor.md)
 - [Monitor timed signals with MSTLO](./tutorials/mstlo-monitor.md)
 - [Monitor live MQTT input](./tutorials/live-mqtt.md)
 - [Redis knowledge-state input](./redis-knowledge-input.md)

@@ -57,8 +57,8 @@ The image does not contain repository examples. Mount the model, trace, or confi
 This running-total program reads each `x` value and adds it to the previous result:
 
 ```dsrv
-in x
-out z
+in x: Int
+out z: Int
 z = default(z[1], 0) + x
 ```
 

@@ -30,9 +30,9 @@ These MQTT shortcuts use protocol `3.1.1` by default. Add
 The DSRV program declares the two topic-backed inputs and their sum:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 

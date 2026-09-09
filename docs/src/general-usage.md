@@ -51,9 +51,7 @@ complete option set.
 ## Choose a focused page
 
 - [Extended Windows usage](tutorials/windows.md) — WSL, native PowerShell setup and invocation, Docker Desktop transport examples, and Wine-based testing of a cross-compiled Windows build.
-- [Add two input streams from a trace](tutorials/finite-trace.md) — add timestamped values, then interpret simultaneous inputs, ticks, and history.
-- [Write a DSRV monitor](tutorials/write-dsrv-monitor.md) — declarations,
-  history, `defer`, and cautious `dynamic` guidance.
+- [Write and run DSRV models](tutorials/write-dsrv-monitor.md) — typed declarations, timestamped values, simultaneous inputs, ticks, history, `defer`, and cautious `dynamic` guidance.
 - [Monitor timed signals with MSTLO](tutorials/mstlo-monitor.md) — STL formulas, embedded dense-time timestamps, delayed and early verdicts, robustness, and synchronization.
 - [Live MQTT](tutorials/live-mqtt.md) — broker, topics, JSON5 inputs, and wrapped
   MQTT outputs.

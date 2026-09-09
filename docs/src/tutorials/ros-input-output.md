@@ -27,9 +27,9 @@ again in every terminal that runs `cargo` or `ros2`.
 The DSRV program adds inputs `x` and `y` and exposes the result as `z`:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 

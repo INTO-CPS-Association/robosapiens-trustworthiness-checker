@@ -39,9 +39,9 @@ A file timestamp groups assignments into one simultaneous logical tick. A transp
 For example, this program adds two MQTT inputs:
 
 ```dsrv
-in x
-in y
-out z
+in x: Int
+in y: Int
+out z: Int
 z = x + y
 ```
 

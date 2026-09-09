@@ -92,8 +92,8 @@ Unknown fields are rejected. A named source is structurally validated before it 
 This DSRV program exposes the current `robot_mode` value as `observed_mode`:
 
 ```dsrv
-in robot_mode
-out observed_mode
+in robot_mode: Str
+out observed_mode: Str
 observed_mode = robot_mode
 ```
 
