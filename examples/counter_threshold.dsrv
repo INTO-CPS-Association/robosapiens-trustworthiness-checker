@@ -1,0 +1,5 @@
+in x: Int
+aux total: Int
+out below_limit: Bool
+total = default(total[1], 0) + x
+below_limit = total < 3
