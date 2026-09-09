@@ -1735,7 +1735,7 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
-    async fn test_async_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExecutor>) {
+    async fn test_dataflow_runtime_default_with_mqtt_distributed(_executor: Rc<LocalExecutor>) {
         let output = run_cli(&[
             &fixture_path("simple_add_typed.dsrv"),
             "--input-file",
@@ -1744,7 +1744,7 @@ mod integration_tests {
             "--mqtt-centralised-distributed",
             "node1",
             "node2",
-            // No --runtime specified, should default to async
+            // No --runtime specified, so this exercises the dataflow default.
         ])
         .await
         .expect("Failed to run CLI");

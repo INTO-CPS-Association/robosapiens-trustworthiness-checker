@@ -826,7 +826,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
     pub fn new() -> Self {
-        Self::with_defaults(RuntimeSpec::Async)
+        Self::with_defaults(RuntimeSpec::Dataflow(ExecutionPolicy::Buffered))
     }
 
     fn with_defaults(runtime: RuntimeSpec) -> Self {
@@ -1768,6 +1768,15 @@ mod tests {
     use crate::lang::mstlo::parse_named_properties;
 
     struct FailingOutputBackend;
+
+    #[test]
+    fn general_builder_defaults_to_buffered_dataflow() {
+        let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new();
+        assert_eq!(
+            builder.runtime,
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered)
+        );
+    }
 
     #[async_trait(?Send)]
     impl TestOutputOpener<Value> for FailingOutputBackend {

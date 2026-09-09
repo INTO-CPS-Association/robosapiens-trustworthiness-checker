@@ -68,7 +68,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 | `mstlo_algorithm` | `--mstlo-algorithm <MSTLO_ALGORITHM>` | MSTLO_ALGORITHM | 1 value(s) | no | — | `incremental`<br>`naive` | incremental | — | MSTLO monitor algorithm | — |
 | `mstlo_synchronization` | `--mstlo-synchronization <MSTLO_SYNCHRONIZATION>` | MSTLO_SYNCHRONIZATION | 1 value(s) | no | — | `linear`<br>`none`<br>`zero-order-hold` | zero-order-hold | — | MSTLO multi-signal synchronization strategy | — |
 | `mstlo_vars` | `--mstlo-vars <MSTLO_VARS>...` | MSTLO_VARS | 1–unbounded value(s); repeatable; delimiter ` ` | no | — | — | — | — | MSTLO variable bindings as name=value pairs | — |
-| `runtime` | `--runtime <RUNTIME>` | RUNTIME | 1 value(s) | no | — | `async`<br>`dataflow`<br>`distributed`<br>`reconf-dataflow` — Reconfigurable dataflow runtime<br>`reconf-semi-sync` — Independent semisynchronous reconfiguration reference runtime<br>`semi-sync` | async | — | DSRV runtime system to use for execution | — |
+| `runtime` | `--runtime <RUNTIME>` | RUNTIME | 1 value(s) | no | — | `async`<br>`dataflow`<br>`distributed`<br>`reconf-dataflow` — Reconfigurable dataflow runtime<br>`reconf-semi-sync` — Independent semisynchronous reconfiguration reference runtime<br>`semi-sync` | dataflow | — | DSRV runtime system to use for execution | — |
 
 ## 6. Input windows and tick composition
 

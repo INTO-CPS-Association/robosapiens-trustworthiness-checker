@@ -37,8 +37,8 @@ pub enum Language {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum RuntimeKind {
-    #[default]
     Async,
+    #[default]
     Dataflow,
     Distributed,
     SemiSync,
@@ -358,7 +358,7 @@ pub struct Cli {
     pub language: Language,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
     pub semantics: Semantics,
-    #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Async)]
+    #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Dataflow)]
     pub runtime: RuntimeKind,
 
     #[arg(
@@ -625,6 +625,25 @@ impl Cli {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+
+    #[test]
+    fn dataflow_is_the_default_runtime() {
+        assert_eq!(RuntimeKind::default(), RuntimeKind::Dataflow);
+
+        let cli = Cli::try_parse_from([
+            "trustworthiness_checker",
+            "model.dsrv",
+            "--input-file",
+            "trace.input",
+            "--output-stdout",
+        ])
+        .unwrap();
+        assert_eq!(cli.runtime, RuntimeKind::Dataflow);
+        assert_eq!(
+            resolve_runtime(cli.language, cli.runtime, cli.execution_policy, false,).unwrap(),
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        );
+    }
 
     #[test]
     fn dataflow_runtime_carries_its_execution_policy() {

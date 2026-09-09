@@ -24,8 +24,8 @@ Redis knowledge input produces ordinary DSRV `Value` values and is not supported
 
 | Runtime | Use when | Important boundary |
 |---|---|---|
-| `async` | Default DSRV execution for a simple finite or live monitor | Uses asynchronous input/output handling. |
-| `dataflow` | A DSRV dataflow execution policy is required | `buffered` is the default; `synchronous` requires a dataflow runtime. |
+| `async` | An asynchronous DSRV execution path is required | Uses asynchronous input/output handling. |
+| `dataflow` | Default DSRV execution for a finite or live monitor | `buffered` is the default execution policy; `synchronous` is also supported. |
 | `semi-sync` | A semisynchronous DSRV execution path is required | Do not treat it as a reconfiguration runtime. |
 | `distributed` | A distributed DSRV deployment is configured | DSRV semantics are restricted to `untimed`; the distributed deployment needs its transport and work assignment configured. |
 | `reconf-semi-sync` | Replace the running DSRV generation through a live control route | File input is rejected; a control-capable live source is required. |
