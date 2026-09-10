@@ -1901,6 +1901,8 @@ mod integration_tests {
                 "--mqtt-input".to_string(),
                 "--mqtt-port".to_string(),
                 format!("{}", mqtt_port),
+                "--execution-policy".to_string(),
+                "synchronous".to_string(),
                 "--output-stdout".to_string(),
             ];
             let cli_task = executor.spawn(async move {
@@ -2011,6 +2013,8 @@ mod integration_tests {
                 "--redis-input".to_string(),
                 "--redis-port".to_string(),
                 format!("{}", redis_port),
+                "--execution-policy".to_string(),
+                "synchronous".to_string(),
                 "--output-stdout".to_string(),
             ];
             let cli_task = executor.spawn(async move {
