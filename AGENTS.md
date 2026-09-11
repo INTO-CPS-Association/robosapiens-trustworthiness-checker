@@ -10,6 +10,28 @@
   - `cargo test --lib` for the fast unit tests.
   - `cargo test` also runs `cli_tests`, `runtime_tests`, and `test_distributed`.
 - Check a feature set with `cargo check --all-targets [--features ...]` before running its tests. A feature-gated suite reports `0 tests` rather than failing when its feature is off, so a green run proves nothing about the suites you did not enable.
+- Match integration-test frequency to the change:
+  - During ordinary iteration, run focused tests and the default-feature suite. Do not repeatedly run the complete container suite after small edits; its cold build and service startup are expensive.
+  - If a change touches MQTT, Redis, distributed transport, input/output pipelines, network-facing CLI behavior, or their shared infrastructure, run the relevant `--features testcontainers` suites before considering the change complete.
+  - If a change touches ROS adapters, ROS scheduler communication, `ros_interfaces/`, or code shared with those paths, run the relevant `--features ros` suites before considering the change complete. Rebuild the project image first when `ros_interfaces/` changed.
+  - If both areas are touched, or shared runtime/I/O lifecycle changes could affect both, run `cargo test --all-features` in the project image.
+  - Before pushing changes, run the complete `cargo test --all-features` suite once from the final worktree state. It must pass even when the change did not directly touch networking or ROS code.
+- The complete CI suite is available locally through the project `dev` image. Do not report ROS or container-backed tests as unavailable merely because the host environment lacks ROS or a Docker daemon; start the rootless Podman socket and run the all-feature suite in the image. The socket mount lets Testcontainers start sibling Mosquitto and Redis containers:
+
+  ```sh
+  systemctl --user start podman.socket
+  podman run --rm --userns=keep-id --security-opt label=disable \
+      --network host --privileged \
+      -v "$PWD":/ws/tc -w /ws/tc \
+      -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock \
+      -e DOCKER_HOST=unix:///var/run/docker.sock \
+      -e CARGO_TARGET_DIR=/ws/tc/target/all-features-container \
+      -e CARGO_HOME=/ws/tc/target/all-features-cargo-home \
+      trustworthiness-checker:dev \
+      bash -c 'export PATH=$HOME/.cargo/bin:$PATH; cargo test --all-features'
+  ```
+
+  Build or rebuild `trustworthiness-checker:dev` using the command below if the image is absent or `ros_interfaces/` changed.
 - `test_mqtt_io`, `test_redis_io`, and `test_distributed_mqtt` need `--features testcontainers` and a Docker-compatible socket. Rootless Podman works unchanged:
   - `systemctl --user start podman.socket`
   - `export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock`
