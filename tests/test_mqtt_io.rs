@@ -37,7 +37,7 @@ mod integration_tests {
 
     use approx::assert_abs_diff_eq;
     use std::{collections::BTreeMap, rc::Rc};
-    use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt};
+    use tc_testutils::mqtt::{get_mqtt_outputs, start_mqtt, start_mqtt_on_available_port};
 
     use trustworthiness_checker::dsrv_fixtures::integer_pair_input_stream;
     use trustworthiness_checker::{
@@ -326,13 +326,7 @@ mod integration_tests {
         const SUBSCRIBED_TOPIC: &str = "mqtt5/reconnect/subscribed";
         const PENDING_TOPIC: &str = "mqtt5/reconnect/pending";
 
-        let mqtt_server = start_mqtt().await;
-        let mqtt_port = with_timeout_res(
-            TokioCompat::new(mqtt_server.get_host_port_ipv4(1883)),
-            5,
-            "MQTT 5 reconnect port",
-        )
-        .await?;
+        let (mqtt_server, mqtt_port) = start_mqtt_on_available_port().await?;
         let retry = RetryPolicy::new(
             RetryLimit::Attempts(NonZeroU32::new(40).unwrap()),
             Duration::from_millis(50),

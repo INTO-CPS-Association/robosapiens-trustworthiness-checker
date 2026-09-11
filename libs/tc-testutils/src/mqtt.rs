@@ -7,6 +7,7 @@ use std::fmt::Debug;
 use testcontainers_modules::{
     mosquitto::{self, Mosquitto},
     testcontainers::runners::AsyncRunner,
+    testcontainers::{ImageExt, core::IntoContainerPort},
 };
 use tracing::{debug, info, instrument};
 use trustworthiness_checker::{
@@ -26,6 +27,38 @@ pub async fn start_mqtt() -> ContainerAsync<Mosquitto> {
             .expect("Timed out starting Mosquitto test container")
             .expect("Failed to start Mosquitto test container"),
     )
+}
+
+/// Start Mosquitto with an explicit, currently available host port mapping.
+///
+/// Use this when a test stops and restarts the same container: Docker may
+/// allocate a different port for an automatically published port on restart.
+/// Port selection and container creation cannot be atomic, so a collision
+/// during that handoff selects another port and retries.
+pub async fn start_mqtt_on_available_port() -> anyhow::Result<(ContainerAsync<Mosquitto>, u16)> {
+    const START_ATTEMPTS: usize = 10;
+    let mut last_start_error = None;
+
+    for _ in 0..START_ATTEMPTS {
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let host_port = reservation.local_addr()?.port();
+        drop(reservation);
+
+        let image = mosquitto::Mosquitto::default().with_mapped_port(host_port, 1883.tcp());
+        match TokioCompat::new(image.start())
+            .timeout(std::time::Duration::from_secs(10))
+            .await
+        {
+            Ok(Ok(container)) => return Ok((ContainerAsync::new(container), host_port)),
+            Ok(Err(error)) => last_start_error = Some(error),
+            Err(error) => return Err(anyhow::anyhow!("Timed out starting Mosquitto: {error}")),
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Failed to start Mosquitto with an available fixed port after {START_ATTEMPTS} attempts: {}",
+        last_start_error.expect("every start attempt records its error")
+    ))
 }
 
 #[instrument(level = tracing::Level::INFO)]

@@ -15,6 +15,7 @@
   - If a change touches MQTT, Redis, distributed transport, input/output pipelines, network-facing CLI behavior, or their shared infrastructure, run the relevant `--features testcontainers` suites before considering the change complete.
   - If a change touches ROS adapters, ROS scheduler communication, `ros_interfaces/`, or code shared with those paths, run the relevant `--features ros` suites before considering the change complete. Rebuild the project image first when `ros_interfaces/` changed.
   - If both areas are touched, or shared runtime/I/O lifecycle changes could affect both, run `cargo test --all-features` in the project image.
+  - Rootless Podman is sufficient for ordinary Testcontainers coverage, but it is not proof of Docker parity for container lifecycle behavior. If a change exercises container stop/start, automatic port publication, container networking, or volumes, avoid engine-specific assumptions and run the affected test against Docker before pushing when possible; CI uses Docker.
   - Before pushing changes, run the complete `cargo test --all-features` suite once from the final worktree state. It must pass even when the change did not directly touch networking or ROS code.
 - The complete CI suite is available locally through the project `dev` image. Do not report ROS or container-backed tests as unavailable merely because the host environment lacks ROS or a Docker daemon; start the rootless Podman socket and run the all-feature suite in the image. The socket mount lets Testcontainers start sibling Mosquitto and Redis containers:
 
