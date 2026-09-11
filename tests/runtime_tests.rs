@@ -3279,15 +3279,18 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 }
 
 #[apply(async_test)]
-async fn test_count_monitor_sequential_with_drop_guard(
+async fn test_count_monitor_sequential_dataflow_runs(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // Test running monitors sequentially using drop guard cancellation approach
+    // Test running default Dataflow monitors sequentially to clean completion.
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
         // First run
         {
-            let input_stream = map::input_stream(BTreeMap::new());
-            let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+            let input_stream = map::input_stream(BTreeMap::from([(
+                "tick".into(),
+                vec![0.into(), 1.into(), 2.into(), 3.into()],
+            )]));
+            let spec_untyped = ("in tick: Int\nout x: Int\nx = 1 + default(x[1], 0)")
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
@@ -3303,9 +3306,13 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .await
                 .expect("general runtime builder should succeed");
 
-            executor.spawn(monitor.run()).detach();
+            let monitor_task = executor.spawn(monitor.run());
             let result: Vec<(usize, BTreeMap<VarName, Value>)> =
                 with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
+
+            monitor_task
+                .await
+                .expect("first Dataflow monitor should complete cleanly");
 
             assert_eq!(
                 result,
@@ -3320,10 +3327,13 @@ async fn test_count_monitor_sequential_with_drop_guard(
             );
         }
 
-        // Second run - should work now with drop guard cancellation
+        // Second run on the same executor should also complete cleanly.
         {
-            let input_stream = map::input_stream(BTreeMap::new());
-            let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+            let input_stream = map::input_stream(BTreeMap::from([(
+                "tick".into(),
+                vec![0.into(), 1.into(), 2.into(), 3.into()],
+            )]));
+            let spec_untyped = ("in tick: Int\nout x: Int\nx = 1 + default(x[1], 0)")
                 .parse::<DsrvSpecification>()
                 .expect("test DSRV specification should parse");
 
@@ -3339,9 +3349,13 @@ async fn test_count_monitor_sequential_with_drop_guard(
                 .await
                 .expect("general runtime builder should succeed");
 
-            executor.spawn(monitor.run()).detach();
+            let monitor_task = executor.spawn(monitor.run());
             let result: Vec<(usize, BTreeMap<VarName, Value>)> =
                 with_timeout(outputs.take(4).enumerate().collect(), 5, "outputs.collect").await?;
+
+            monitor_task
+                .await
+                .expect("second Dataflow monitor should complete cleanly");
 
             assert_eq!(
                 result,
@@ -3431,13 +3445,16 @@ async fn test_direct_varmanager_cancellation(
 }
 
 #[apply(async_test)]
-async fn test_drop_guard_cancellation_behaviour(
+async fn test_dataflow_early_output_receiver_close(
     executor: Rc<LocalExecutor<'static>>,
 ) -> anyhow::Result<()> {
-    // Test to verify that drop guard properly stops VarManagers when output streams are dropped
+    // Closing the output receiver early intentionally stops the Dataflow monitor.
     for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
-        let input_stream = map::input_stream(BTreeMap::new());
-        let spec_untyped = ("out x: Int\nx = 1 + default(x[1], 0)")
+        let input_stream = map::input_stream(BTreeMap::from([(
+            "tick".into(),
+            vec![0.into(), 1.into(), 2.into(), 3.into()],
+        )]));
+        let spec_untyped = ("in tick: Int\nout x: Int\nx = 1 + default(x[1], 0)")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -3453,9 +3470,9 @@ async fn test_drop_guard_cancellation_behaviour(
             .await
             .expect("general runtime builder should succeed");
 
-        executor.spawn(monitor.run()).detach();
+        let monitor_task = executor.spawn(monitor.run());
 
-        // Take only 2 values - this should trigger drop guard when output stream is dropped
+        // Take only two values, then close the output receiver.
         let result: Vec<(usize, BTreeMap<VarName, Value>)> =
             with_timeout(outputs.take(2).enumerate().collect(), 5, "outputs.collect").await?;
 
@@ -3465,12 +3482,13 @@ async fn test_drop_guard_cancellation_behaviour(
                 (0, BTreeMap::from([("x".into(), Value::Int(1))])),
                 (1, BTreeMap::from([("x".into(), Value::Int(2))])),
             ],
-            "Drop guard cancellation failed for semantics {:?}",
+            "Early output close failed for semantics {:?}",
             semantics,
         );
 
-        // Add a small delay to allow cancellation to propagate via drop guard
-        smol::Timer::after(std::time::Duration::from_millis(100)).await;
+        monitor_task
+            .await
+            .expect("Dataflow monitor should stop cleanly when its output receiver closes");
     }
     Ok(())
 }

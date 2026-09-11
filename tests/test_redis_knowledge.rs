@@ -18,7 +18,7 @@ use tc_testutils::redis::start_redis;
 use tc_testutils::streams::with_timeout;
 use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::async_test;
-use trustworthiness_checker::core::REDIS_HOSTNAME;
+use trustworthiness_checker::core::{ExecutionPolicy, REDIS_HOSTNAME, RuntimeSpec};
 use trustworthiness_checker::io::{
     InputPipeline, InputPolicy, InputReduction, InputSource, InputSources, InputWindow,
     OutputBackendConfig, OutputPipeline, RedisKnowledgeConfig, RetryPolicy, Route,
@@ -461,6 +461,7 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
     ));
     let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
         .executor(executor.clone())
+        .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
         .model(spec.clone())
         .input(input)
         .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
