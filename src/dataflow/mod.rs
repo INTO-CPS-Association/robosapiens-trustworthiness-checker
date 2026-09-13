@@ -714,6 +714,9 @@ mod history_requirements;
 mod ir;
 #[cfg(feature = "jit")]
 mod jit_api;
+#[cfg(test)]
+#[allow(dead_code)]
+pub(in crate::dataflow) mod lifecycle_test_support;
 mod monitor;
 mod monitor_plan;
 mod program;
@@ -737,9 +740,12 @@ pub use error::{
 #[cfg(feature = "jit")]
 pub use typed::TypedJitMonitor;
 
+#[cfg(all(test, feature = "jit"))]
+pub(crate) use execution::jit::{compile_count as jit_compile_count, reset_compile_count};
 #[cfg(feature = "jit")]
 pub use jit_api::{JitConfig, JitPlan, JitReport};
 pub use monitor::DataflowMonitor;
+pub(crate) use monitor::MonitorConfiguration;
 pub(crate) use monitor::MonitorReconfigurationPlan;
 pub use monitor_plan::ReconfigurableExpressionId;
 pub use program::DataflowProgram;

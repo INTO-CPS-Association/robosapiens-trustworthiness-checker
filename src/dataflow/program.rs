@@ -8,13 +8,27 @@ use super::monitor_plan::MonitorPlan;
 use super::reconfiguration::DefinitionKey;
 use crate::fingerprint::FingerprintBuilder;
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static ROOT_COMPILE_COUNTS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
 /// An immutable compiled definition for a [`DataflowMonitor`](super::monitor::DataflowMonitor).
 ///
-/// A program contains the bound stream semantics and fixed monitor layout. It does not contain
-/// evaluator, scheduler, or other per-monitor execution state; call
+/// A program is a cheaply cloned handle to the bound stream semantics and fixed monitor layout. It
+/// does not contain evaluator, scheduler, or other per-monitor execution state; call
 /// [`DataflowMonitor::from_program`](super::monitor::DataflowMonitor::from_program) to create a
-/// stateful monitor.
+/// stateful monitor. Clones share only immutable compiled data; monitors created from them have
+/// independent execution state.
+#[derive(Clone)]
 pub struct DataflowProgram {
+    payload: Rc<DataflowProgramPayload>,
+}
+
+struct DataflowProgramPayload {
     input_vars: Vec<VarName>,
     output_vars: Vec<VarName>,
     output_slots: Vec<EnvironmentSlot>,
@@ -28,49 +42,83 @@ pub struct DataflowProgram {
 }
 
 impl DataflowProgram {
+    #[cfg(test)]
+    pub(in crate::dataflow) fn record_root_compile(checked: bool) {
+        ROOT_COMPILE_COUNTS.with(|counts| {
+            let (checked_count, untyped_count) = counts.get();
+            counts.set(if checked {
+                (checked_count + 1, untyped_count)
+            } else {
+                (checked_count, untyped_count + 1)
+            });
+        });
+    }
+
+    #[cfg(test)]
+    pub(in crate::dataflow) fn reset_root_compile_counts() {
+        ROOT_COMPILE_COUNTS.with(|counts| counts.set((0, 0)));
+    }
+
+    #[cfg(test)]
+    pub(in crate::dataflow) fn root_compile_counts() -> (usize, usize) {
+        ROOT_COMPILE_COUNTS.with(Cell::get)
+    }
+
+    /// Test-only identity for the shared immutable payload.
+    #[cfg(test)]
+    pub(in crate::dataflow) fn test_payload_identity(&self) -> *const () {
+        Rc::as_ptr(&self.payload).cast()
+    }
+
+    /// Test-only owner count for the shared immutable payload.
+    #[cfg(test)]
+    pub(in crate::dataflow) fn test_payload_strong_count(&self) -> usize {
+        Rc::strong_count(&self.payload)
+    }
+
     /// Input variables in the order expected by monitor evaluation.
     pub fn input_vars(&self) -> &[VarName] {
-        &self.input_vars
+        &self.payload.input_vars
     }
 
     /// Output variables in the order written by monitor evaluation.
     pub fn output_vars(&self) -> &[VarName] {
-        &self.output_vars
+        &self.payload.output_vars
     }
 
     /// Computed stream variables in their stable program order.
     pub fn stream_vars(&self) -> &[VarName] {
-        &self.stream_vars
+        &self.payload.stream_vars
     }
 
     /// Number of values in the monitor's environment row.
     pub fn environment_size(&self) -> usize {
-        self.environment_size
+        self.payload.environment_size
     }
 
     /// Canonical semantic identity of this definition.
     pub fn definition_key(&self) -> &DefinitionKey {
-        &self.definition_key
+        &self.payload.definition_key
     }
 
     pub(in crate::dataflow) fn output_slots(&self) -> &[EnvironmentSlot] {
-        &self.output_slots
+        &self.payload.output_slots
     }
 
     pub(in crate::dataflow) fn stream_programs(&self) -> &[Rc<StreamProgram>] {
-        &self.stream_programs
+        &self.payload.stream_programs
     }
 
     pub(in crate::dataflow) fn environment_layout(&self) -> &EnvironmentLayout {
-        &self.environment_layout
+        &self.payload.environment_layout
     }
 
     pub(in crate::dataflow) fn monitor_plan(&self) -> &MonitorPlan {
-        &self.monitor_plan
+        &self.payload.monitor_plan
     }
 
     pub(in crate::dataflow) fn history_requirements(&self) -> &HistoryRequirements {
-        &self.history_requirements
+        &self.payload.history_requirements
     }
 
     pub(in crate::dataflow) fn from_parts(
@@ -117,16 +165,18 @@ impl DataflowProgram {
         let definition_key =
             monitor_definition_key(&input_vars, &output_vars, &stream_vars, &stream_programs);
         Self {
-            input_vars,
-            output_vars,
-            output_slots,
-            stream_vars,
-            stream_programs,
-            environment_layout,
-            monitor_plan,
-            history_requirements,
-            environment_size,
-            definition_key,
+            payload: Rc::new(DataflowProgramPayload {
+                input_vars,
+                output_vars,
+                output_slots,
+                stream_vars,
+                stream_programs,
+                environment_layout,
+                monitor_plan,
+                history_requirements,
+                environment_size,
+                definition_key,
+            }),
         }
     }
 }

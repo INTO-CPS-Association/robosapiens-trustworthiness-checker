@@ -2,11 +2,29 @@
 
 use std::str::FromStr;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use super::{
     ast::{CheckedDsrvSpecification, DsrvSpecification},
     parser,
     type_checker::{self, SemanticErrors, SemanticResult},
 };
+
+#[cfg(test)]
+thread_local! {
+    static PIPELINE_COUNTS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_test_pipeline_counts() {
+    PIPELINE_COUNTS.with(|counts| counts.set((0, 0, 0)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_pipeline_counts() -> (usize, usize, usize) {
+    PIPELINE_COUNTS.with(Cell::get)
+}
 
 /// Type-inference policy used when checking a DSRV specification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +76,11 @@ impl FromStr for DsrvSpecification {
     type Err = parser::DsrvParseError;
 
     fn from_str(source: &str) -> Result<Self, Self::Err> {
+        #[cfg(test)]
+        PIPELINE_COUNTS.with(|counts| {
+            let (parse, strict, gradual) = counts.get();
+            counts.set((parse + 1, strict, gradual));
+        });
         parser::parse_str(source)
     }
 }
@@ -65,6 +88,14 @@ impl FromStr for DsrvSpecification {
 impl DsrvSpecification {
     /// Type check this specification using the requested policy.
     pub fn type_check(self, options: TypeCheckOptions) -> SemanticResult<CheckedDsrvSpecification> {
+        #[cfg(test)]
+        PIPELINE_COUNTS.with(|counts| {
+            let (parse, strict, gradual) = counts.get();
+            counts.set(match options.mode {
+                TypeCheckMode::Strict => (parse, strict + 1, gradual),
+                TypeCheckMode::Gradual => (parse, strict, gradual + 1),
+            });
+        });
         match options.mode {
             TypeCheckMode::Strict => type_checker::type_check(self, options.distributed),
             TypeCheckMode::Gradual => type_checker::type_check_gradual(self, options.distributed),

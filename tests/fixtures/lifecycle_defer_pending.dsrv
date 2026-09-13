@@ -1,0 +1,4 @@
+in x: Int
+in source: Str
+out z: Int
+z = defer(source: Int)

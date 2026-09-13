@@ -43,6 +43,21 @@ The central public operation is direct row evaluation. The caller allocates one 
 
 Each `evaluate` call is one logical tick, not one stream evaluation. The monitor schedules all computed streams, fills the complete output row, and commits successful temporal writes before the next call can observe them.
 
+## Reusing a compiled program
+
+`DataflowProgram` is a cheap, shallow-clone handle to an immutable compiled definition. Create a
+separate `DataflowMonitor` for each independent trace. `evaluate_trace` appends complete output rows
+in tick order, while `reset` reconstructs that monitor from its original program and latest
+execution configuration:
+
+```rust
+{{#include ../../../../tests/docs_examples.rs:dataflow_program_lifecycle}}
+```
+
+Reset discards temporal, dynamic, scheduling, optimization, revision, and failure state. It does not
+parse, check, or compile the original definition again, and it does not affect another monitor made
+from a clone of the same program.
+
 ## Two ticks
 
 {{#include ../../assets/dataflow/two-tick-evaluation.svg}}

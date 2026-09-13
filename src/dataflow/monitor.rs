@@ -24,12 +24,34 @@ pub(crate) use reconfiguration::MonitorReconfigurationPlan;
 
 #[cfg(test)]
 pub(in crate::dataflow) use tests::test_support;
+
+#[derive(Clone, Copy)]
+pub(crate) struct MonitorConfiguration {
+    pub(crate) quickening: bool,
+    #[cfg(feature = "jit")]
+    pub(crate) jit: Option<super::JitConfig>,
+    reconfiguration_transfer_policy: ContextTransferPolicy,
+}
+
+impl Default for MonitorConfiguration {
+    fn default() -> Self {
+        Self {
+            quickening: true,
+            #[cfg(feature = "jit")]
+            jit: None,
+            reconfiguration_transfer_policy: ContextTransferPolicy::MatchingStreamState,
+        }
+    }
+}
+
 /// A compiled, stateful synchronous dataflow monitor.
 ///
 /// Each tick evaluates expression sources, resolves reconfigurable expressions, updates the dependency
 /// schedule, evaluates every remaining stream once, and commits staged temporal state. Static
 /// monitors are the empty-reconfiguration quickening of the same flow.
 pub struct DataflowMonitor {
+    original_program: DataflowProgram,
+    configuration: MonitorConfiguration,
     program: DataflowProgram,
     execution: MonitorExecution,
     reconfiguration_state: ExpressionActivationState,
@@ -41,7 +63,6 @@ pub struct DataflowMonitor {
     retained_environment_values: Option<Vec<Value>>,
     revision: MonitorRevision,
     interface_revision: InterfaceRevision,
-    reconfiguration_transfer_policy: ContextTransferPolicy,
     failed: bool,
     #[cfg(test)]
     expression_scan_count: usize,
@@ -52,6 +73,14 @@ pub struct DataflowMonitor {
 impl DataflowMonitor {
     /// Create a stateful monitor from an immutable compiled definition.
     pub fn from_program(program: DataflowProgram) -> Self {
+        Self::from_configured_program(program.clone(), program, MonitorConfiguration::default())
+    }
+
+    fn from_configured_program(
+        original_program: DataflowProgram,
+        program: DataflowProgram,
+        configuration: MonitorConfiguration,
+    ) -> Self {
         let environment_size = program.environment_size();
         let monitor_plan = program.monitor_plan();
         let reconfiguration_state = ExpressionActivationState::new(
@@ -72,7 +101,7 @@ impl DataflowMonitor {
             history_bindings[slot.index()] = Some(history_id);
             effective_history_depths[slot.index()] = requirement.depth();
         }
-        let execution = MonitorExecution::new_with_source_prelude_and_history(
+        let mut execution = MonitorExecution::new_with_source_prelude_and_history(
             program.stream_programs().to_vec(),
             monitor_plan.stream_slots,
             reconfiguration_state.source_order(),
@@ -80,10 +109,17 @@ impl DataflowMonitor {
             monitor_plan.temporal_streams.as_slice(),
             &history_bindings,
         );
+        execution.set_quickening(configuration.quickening);
+        #[cfg(feature = "jit")]
+        if let Some(config) = configuration.jit {
+            execution.enable_jit(config);
+        }
 
         let retained_environment_values = (!monitor_plan.reconfigurable_expressions.is_empty())
             .then(|| vec![Value::NoVal; environment_size]);
         Self {
+            original_program,
+            configuration,
             program,
             execution,
             reconfiguration_state,
@@ -95,7 +131,6 @@ impl DataflowMonitor {
             retained_environment_values,
             revision: MonitorRevision::INITIAL,
             interface_revision: InterfaceRevision::INITIAL,
-            reconfiguration_transfer_policy: ContextTransferPolicy::MatchingStreamState,
             failed: false,
             #[cfg(test)]
             expression_scan_count: 0,
@@ -107,6 +142,32 @@ impl DataflowMonitor {
     /// Create a stateful monitor from an immutable compiled definition.
     pub fn new(program: DataflowProgram) -> Self {
         Self::from_program(program)
+    }
+
+    /// Create a monitor from a compiled program and enable integrated native execution.
+    ///
+    /// The selected JIT activation policy is retained by [`Self::reset`]. Native artifacts and
+    /// hotness are session state and are recreated rather than retained.
+    #[cfg(feature = "jit")]
+    pub fn from_program_with_jit(program: DataflowProgram, config: super::JitConfig) -> Self {
+        let mut configuration = MonitorConfiguration::default();
+        configuration.jit = Some(config);
+        Self::from_configured_program(program.clone(), program, configuration)
+    }
+
+    /// Discard all session state and reconstruct this monitor from its original compiled program.
+    ///
+    /// Reset preserves the latest quickening, integrated-JIT, and internal reconfiguration-transfer
+    /// selections. It restores the original definition even if [`Self::reconfigure`] replaced the
+    /// active root, clears a terminal evaluation failure, and returns both revisions to their
+    /// initial values. It does not parse or compile the original dataflow definition again.
+    pub fn reset(&mut self) {
+        let fresh = Self::from_configured_program(
+            self.original_program.clone(),
+            self.original_program.clone(),
+            self.configuration,
+        );
+        *self = fresh;
     }
 
     /// Return the immutable compiled definition backing this monitor.

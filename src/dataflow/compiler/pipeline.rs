@@ -45,6 +45,8 @@ impl DataflowProgram {
     pub fn compile_checked(
         specification: CheckedDsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
+        #[cfg(test)]
+        DataflowProgram::record_root_compile(true);
         Self::compile_specification(specification, build_checked_expression_graph)
     }
 
@@ -52,6 +54,8 @@ impl DataflowProgram {
     pub fn compile_untyped(
         specification: DsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
+        #[cfg(test)]
+        DataflowProgram::record_root_compile(false);
         Self::compile_specification(specification, build_expression_graph)
     }
 
@@ -90,9 +94,8 @@ impl DataflowMonitor {
         specification: CheckedDsrvSpecification,
         config: JitConfig,
     ) -> Result<Self, DataflowCompilationError> {
-        let mut monitor = Self::from_program(DataflowProgram::compile_checked(specification)?);
-        monitor.enable_jit(config);
-        Ok(monitor)
+        DataflowProgram::compile_checked(specification)
+            .map(|program| Self::from_program_with_jit(program, config))
     }
 
     pub fn compile_untyped(

@@ -1,0 +1,7 @@
+in x: Int
+in y: Int
+in source: Str
+out z: Int
+aux sum: Int
+z = dynamic(source: Int, {x, y, source, sum})
+sum = x + y

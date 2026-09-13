@@ -46,6 +46,35 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
 }
 // ANCHOR_END: monitor_evaluate
 
+// ANCHOR: dataflow_program_lifecycle
+fn reuse_a_compiled_program_for_independent_traces() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::{DataflowMonitor, DataflowProgram};
+    use trustworthiness_checker::{DsrvSpecification, Value};
+
+    let source = "in x: Int\n\
+        out total: Int\n\
+        total = default(total[1], 0) + x";
+    let spec = source.parse::<DsrvSpecification>()?;
+    let program = DataflowProgram::compile_untyped(spec)?;
+
+    let mut first = DataflowMonitor::from_program(program.clone());
+    let mut second = DataflowMonitor::from_program(program);
+    let mut first_rows = Vec::new();
+    first.evaluate_trace([[Value::Int(2)], [Value::Int(3)]], &mut first_rows)?;
+    assert_eq!(first_rows, vec![vec![Value::Int(2)], vec![Value::Int(5)]]);
+
+    let mut second_rows = Vec::new();
+    second.evaluate_trace([[Value::Int(10)]], &mut second_rows)?;
+    assert_eq!(second_rows, vec![vec![Value::Int(10)]]);
+
+    first.reset();
+    let mut restarted_rows = Vec::new();
+    first.evaluate_trace([[Value::Int(3)]], &mut restarted_rows)?;
+    assert_eq!(restarted_rows, vec![vec![Value::Int(3)]]);
+    Ok(())
+}
+// ANCHOR_END: dataflow_program_lifecycle
+
 // ANCHOR: reconfiguration_request
 fn build_reconfiguration_request() -> anyhow::Result<()> {
     use trustworthiness_checker::io::ReconfigurationRequest;
@@ -305,6 +334,12 @@ fn evaluate_else_if_chain() -> anyhow::Result<()> {
 #[test]
 fn dataflow_monitor_evaluates_rows() {
     evaluate_two_ticks().expect("documented monitor example should run");
+}
+
+#[test]
+fn dataflow_program_lifecycle_reuses_compilation_and_resets_state() {
+    reuse_a_compiled_program_for_independent_traces()
+        .expect("documented lifecycle example should run");
 }
 
 #[test]

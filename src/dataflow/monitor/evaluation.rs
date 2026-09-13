@@ -14,6 +14,7 @@ impl DataflowMonitor {
     /// execution plan, so it can also be used to compare canonical and quickened execution.
     pub fn set_quickening(&mut self, enabled: bool) {
         self.execution.set_quickening(enabled);
+        self.configuration.quickening = enabled;
     }
 
     #[cfg(test)]
@@ -24,6 +25,7 @@ impl DataflowMonitor {
     #[cfg(feature = "jit")]
     pub(crate) fn enable_jit(&mut self, config: JitConfig) {
         self.execution.enable_jit(config);
+        self.configuration.jit = Some(config);
     }
 
     #[cfg(feature = "jit")]
@@ -72,6 +74,30 @@ impl DataflowMonitor {
             return self.evaluate_stable_static(input, output);
         }
         self.evaluate_reconfigurable(input, output)
+    }
+
+    /// Evaluate input rows in iterator order and append one complete output row per successful tick.
+    ///
+    /// This is an append-only convenience loop over [`Self::evaluate`]. It preserves every
+    /// [`Value`], including [`Value::NoVal`] and [`Value::Deferred`], and appends empty rows for a
+    /// monitor with no outputs. On the first error it returns that error without appending the
+    /// failed row or pulling another input. Existing output rows and the successful prefix remain.
+    /// Iterator exhaustion neither resets nor finalizes the monitor.
+    pub fn evaluate_trace<I, R>(
+        &mut self,
+        inputs: I,
+        outputs: &mut Vec<Vec<Value>>,
+    ) -> Result<(), DataflowEvaluationError>
+    where
+        I: IntoIterator<Item = R>,
+        R: AsRef<[Value]>,
+    {
+        for input in inputs {
+            let mut output = vec![Value::NoVal; self.output_vars().len()];
+            self.evaluate(input.as_ref(), &mut output)?;
+            outputs.push(output);
+        }
+        Ok(())
     }
 
     #[inline(always)]

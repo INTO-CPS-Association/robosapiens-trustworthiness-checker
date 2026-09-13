@@ -1,0 +1,5 @@
+in timestamp: Int
+out seen: Int
+out ticks: Int
+seen = timestamp
+ticks = default(ticks[1], 0) + 1

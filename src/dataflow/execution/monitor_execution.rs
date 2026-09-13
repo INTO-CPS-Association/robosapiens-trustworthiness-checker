@@ -124,6 +124,16 @@ struct ExecutionEngine {
 
 impl MonitorExecution {
     #[cfg(test)]
+    pub(in crate::dataflow) fn lifecycle_capacity_snapshot(&self) -> (usize, usize, usize, usize) {
+        (
+            self.evaluators.evaluators.len(),
+            self.engine.cached_plans.len(),
+            self.shared_reconfigurable_expression_cache.entry_count(),
+            self.engine.next_plan_generation as usize,
+        )
+    }
+
+    #[cfg(test)]
     pub(in crate::dataflow) fn new_with_source_prelude(
         programs: Vec<Rc<StreamProgram>>,
         stream_slots: StreamSlots,

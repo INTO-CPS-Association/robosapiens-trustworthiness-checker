@@ -1,5 +1,11 @@
 use super::*;
 use crate::core::BinaryOperator;
+use crate::dataflow::StreamProgramError;
+use crate::dataflow::lifecycle_test_support::{
+    LifecycleOperation, arb_lifecycle_case, arb_operation_schedule,
+};
+#[cfg(feature = "jit")]
+use crate::dataflow::{JitConfig, JitPlan};
 use crate::dsrv_fixtures::TestConfig;
 use crate::io::map;
 use crate::io::testing::channel_output;
@@ -3855,4 +3861,460 @@ async fn dynamic_absent_source_reuses_the_retained_property_text(
         output_trace(&rows, "z"),
         vec![Value::Int(3), Value::Int(3), Value::NoVal]
     );
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LifecycleErrorSignature {
+    InputCount { expected: usize, actual: usize },
+    OutputCount { expected: usize, actual: usize },
+    Parse { expression: String, message: String },
+    Type { expression: String, message: String },
+    Context(Vec<VarName>),
+    InvalidSource(String),
+    InvalidDynamicProgram(InvalidDynamicProgramSignature),
+    DynamicDependencyCycle(VarName),
+    UnsupportedNestedReconfiguration,
+    RevisionOverflow,
+    MonitorFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InvalidDynamicProgramSignature {
+    UnguardedRecursiveOutput,
+    UnknownVariable(VarName),
+    TemporalFunctionBody(&'static str),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LifecyclePropertyObservation {
+    rows: Vec<Vec<Value>>,
+    error: Option<LifecycleErrorSignature>,
+    consumed: usize,
+    suffix: Vec<Vec<Value>>,
+    revision: MonitorRevision,
+    interface_revision: InterfaceRevision,
+    definition_key: DefinitionKey,
+    input_vars: Vec<VarName>,
+    output_vars: Vec<VarName>,
+}
+
+fn lifecycle_property_input(monitor: &DataflowMonitor, row: &[Value]) -> Vec<Value> {
+    monitor
+        .input_vars()
+        .iter()
+        .map(|name| {
+            if name == &VarName::new("x") {
+                row[0].clone()
+            } else if name == &VarName::new("flag") {
+                row[1].clone()
+            } else if name == &VarName::new("timestamp") {
+                row[2].clone()
+            } else {
+                unreachable!("lifecycle generator declares only x, flag, and timestamp")
+            }
+        })
+        .collect()
+}
+
+fn lifecycle_property_inputs(program: &DataflowProgram, rows: &[Vec<Value>]) -> Vec<Vec<Value>> {
+    let monitor = DataflowMonitor::from_program(program.clone());
+    rows.iter()
+        .map(|row| lifecycle_property_input(&monitor, row))
+        .collect()
+}
+
+fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSignature {
+    match error {
+        DataflowEvaluationError::InputCountMismatch { expected, actual } => {
+            LifecycleErrorSignature::InputCount {
+                expected: *expected,
+                actual: *actual,
+            }
+        }
+        DataflowEvaluationError::OutputCountMismatch { expected, actual } => {
+            LifecycleErrorSignature::OutputCount {
+                expected: *expected,
+                actual: *actual,
+            }
+        }
+        DataflowEvaluationError::ReconfigurableExpressionParse {
+            expression,
+            message,
+        } => LifecycleErrorSignature::Parse {
+            expression: expression.to_string(),
+            message: message.clone(),
+        },
+        DataflowEvaluationError::ReconfigurableExpressionType {
+            expression,
+            message,
+        } => LifecycleErrorSignature::Type {
+            expression: expression.to_string(),
+            message: message.clone(),
+        },
+        DataflowEvaluationError::ReconfigurableExpressionContext(variables) => {
+            LifecycleErrorSignature::Context(variables.clone())
+        }
+        DataflowEvaluationError::InvalidExpressionSource(message) => {
+            LifecycleErrorSignature::InvalidSource(message.clone())
+        }
+        DataflowEvaluationError::InvalidDynamicProgram(error) => {
+            let error = match error {
+                StreamProgramError::UnguardedRecursiveOutput => {
+                    InvalidDynamicProgramSignature::UnguardedRecursiveOutput
+                }
+                StreamProgramError::UnknownVariable(variable) => {
+                    InvalidDynamicProgramSignature::UnknownVariable(variable.clone())
+                }
+                StreamProgramError::TemporalFunctionBody { operator } => {
+                    InvalidDynamicProgramSignature::TemporalFunctionBody(operator)
+                }
+            };
+            LifecycleErrorSignature::InvalidDynamicProgram(error)
+        }
+        DataflowEvaluationError::DynamicDependencyCycle(variable) => {
+            LifecycleErrorSignature::DynamicDependencyCycle(variable.clone())
+        }
+        DataflowEvaluationError::UnsupportedNestedReconfiguration => {
+            LifecycleErrorSignature::UnsupportedNestedReconfiguration
+        }
+        DataflowEvaluationError::RevisionOverflow => LifecycleErrorSignature::RevisionOverflow,
+        DataflowEvaluationError::MonitorFailed => LifecycleErrorSignature::MonitorFailed,
+    }
+}
+
+fn lifecycle_property_observation(
+    monitor: &mut DataflowMonitor,
+    inputs: &[Vec<Value>],
+    prefix: Vec<Vec<Value>>,
+) -> LifecyclePropertyObservation {
+    let mut outputs = prefix;
+    let mut consumed = 0;
+    let mut iterator = inputs.iter();
+    let result = monitor.evaluate_trace(iterator.by_ref().inspect(|_| consumed += 1), &mut outputs);
+    let suffix = iterator.cloned().collect();
+    let error = result.as_ref().err().map(lifecycle_property_error);
+    LifecyclePropertyObservation {
+        consumed,
+        suffix,
+        rows: outputs,
+        error,
+        revision: monitor.revision(),
+        interface_revision: monitor.interface_revision(),
+        definition_key: monitor.definition_key().clone(),
+        input_vars: monitor.input_vars().to_vec(),
+        output_vars: monitor.output_vars().to_vec(),
+    }
+}
+
+fn lifecycle_property_apply_at(
+    monitor: &mut DataflowMonitor,
+    operation: LifecycleOperation,
+    raw_trace: &[Vec<Value>],
+    tick: usize,
+    outputs: &mut Vec<Vec<Value>>,
+) -> Option<LifecycleErrorSignature> {
+    match operation {
+        LifecycleOperation::ResetA | LifecycleOperation::ResetB => {
+            monitor.reset();
+            None
+        }
+        LifecycleOperation::EmptyA | LifecycleOperation::EmptyB => {
+            monitor
+                .evaluate_trace(std::iter::empty::<Vec<Value>>(), outputs)
+                .expect("empty trace is infallible");
+            None
+        }
+        LifecycleOperation::TickA | LifecycleOperation::TickB => {
+            let Some(raw_row) = raw_trace.get(tick % raw_trace.len().max(1)) else {
+                return None;
+            };
+            let input = lifecycle_property_input(monitor, raw_row);
+            monitor
+                .evaluate_trace([input], outputs)
+                .err()
+                .as_ref()
+                .map(lifecycle_property_error)
+        }
+    }
+}
+
+#[test]
+fn lifecycle_trace_consumption_retains_suffix_after_dynamic_error_prefix() {
+    let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
+        .parse()
+        .unwrap();
+    let program = DataflowProgram::compile_untyped(specification).unwrap();
+    let inputs = [
+        vec![Value::Int(1), Value::Str("x + 1".into())],
+        vec![Value::Int(2), Value::Str("(".into())],
+        vec![Value::Int(3), Value::Str("x + 3".into())],
+    ];
+    let mut monitor = DataflowMonitor::from_program(program);
+
+    let observation = lifecycle_property_observation(&mut monitor, &inputs, Vec::new());
+
+    assert_eq!(observation.consumed, 2);
+    assert_eq!(observation.rows, vec![vec![Value::Int(2)]]);
+    assert!(matches!(
+        observation.error,
+        Some(LifecycleErrorSignature::Parse { .. })
+    ));
+    assert_eq!(observation.suffix, vec![inputs[2].clone()]);
+}
+
+#[cfg(feature = "jit")]
+fn lifecycle_property_jit_shape(monitor: &DataflowMonitor) -> (JitPlan, usize, Vec<usize>, bool) {
+    let report = monitor
+        .jit_report()
+        .expect("JIT-enabled monitor has a report");
+    (
+        report.plan(),
+        report.compiled_artifacts(),
+        report.unsupported_streams().to_vec(),
+        report.backend_error().is_some(),
+    )
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(DATAFLOW_PROPTEST_CASES))]
+
+    /// A reset removes semantic state from every bounded valid generated graph. The reset side is
+    /// compared with a separately instantiated monitor from the same single compiled program.
+    #[test]
+    fn lifecycle_prop_reset_contamination(case in arb_lifecycle_case()) {
+        let program = DataflowProgram::compile_untyped(case.specification.clone())
+            .expect("lifecycle generator produces a valid program");
+        let trace_a = lifecycle_property_inputs(&program, &case.trace_a);
+        let trace_b = lifecycle_property_inputs(&program, &case.trace_b);
+        let mut subject = DataflowMonitor::from_program(program.clone());
+        let mut fresh = DataflowMonitor::from_program(program);
+        let _ = lifecycle_property_observation(&mut subject, &trace_a, Vec::new());
+        subject.reset();
+        let after_reset = lifecycle_property_observation(&mut subject, &trace_b, Vec::new());
+        let cold = lifecycle_property_observation(&mut fresh, &trace_b, Vec::new());
+        prop_assert_eq!(
+            after_reset,
+            cold,
+            "reset contamination for recipes {:?}",
+            case.recipes
+        );
+
+        let checked = case
+            .specification
+            .clone()
+            .type_check(TypeCheckOptions::STRICT)
+            .expect("lifecycle generator should pass strict type checking");
+        let checked_program =
+            DataflowProgram::compile_checked(checked).expect("checked program should compile");
+        let checked_a = lifecycle_property_inputs(&checked_program, &case.trace_a);
+        let checked_b = lifecycle_property_inputs(&checked_program, &case.trace_b);
+        let mut checked_subject = DataflowMonitor::from_program(checked_program.clone());
+        let mut checked_fresh = DataflowMonitor::from_program(checked_program);
+        let _ = lifecycle_property_observation(&mut checked_subject, &checked_a, Vec::new());
+        checked_subject.reset();
+        prop_assert_eq!(
+            lifecycle_property_observation(&mut checked_subject, &checked_b, Vec::new()),
+            lifecycle_property_observation(&mut checked_fresh, &checked_b, Vec::new())
+        );
+    }
+
+    /// evaluate_trace remains an append-only ordered loop when one trace is partitioned at
+    /// arbitrary (including duplicate) split points.
+    #[test]
+    fn lifecycle_prop_chunking(
+        case in arb_lifecycle_case(),
+        cuts in prop::collection::vec(0usize..=16, 0..=8)
+    ) {
+        let program = DataflowProgram::compile_untyped(case.specification.clone())
+            .expect("lifecycle generator produces a valid program");
+        let inputs = lifecycle_property_inputs(&program, &case.trace_b);
+        let prefix = vec![vec![Value::Int(999)]];
+
+        let mut whole = DataflowMonitor::from_program(program.clone());
+        let whole_observation =
+            lifecycle_property_observation(&mut whole, &inputs, prefix.clone());
+
+        let mut boundaries = cuts;
+        boundaries.push(0);
+        boundaries.push(inputs.len());
+        boundaries.sort_unstable();
+        let mut chunked = DataflowMonitor::from_program(program.clone());
+        let mut chunked_rows = prefix.clone();
+        let mut chunked_consumed = 0;
+        let mut chunked_error = None;
+        let mut chunked_suffix = Vec::new();
+        let mut start = 0;
+        for end in boundaries {
+            let end = end.min(inputs.len());
+            let mut consumed = 0;
+            let mut iterator = inputs[start..end].iter();
+            let result = chunked.evaluate_trace(
+                iterator.by_ref().inspect(|_| consumed += 1),
+                &mut chunked_rows,
+            );
+            let local_suffix = iterator.cloned().collect::<Vec<_>>();
+            let error = result.as_ref().err().map(lifecycle_property_error);
+            chunked_consumed += consumed;
+            if error.is_some() {
+                chunked_error = error;
+                chunked_suffix = local_suffix;
+                chunked_suffix.extend_from_slice(&inputs[end..]);
+                break;
+            }
+            start = end;
+        }
+        let chunked_observation = LifecyclePropertyObservation {
+            rows: chunked_rows,
+            error: chunked_error,
+            consumed: chunked_consumed,
+            suffix: chunked_suffix,
+            revision: chunked.revision(),
+            interface_revision: chunked.interface_revision(),
+            definition_key: chunked.definition_key().clone(),
+            input_vars: chunked.input_vars().to_vec(),
+            output_vars: chunked.output_vars().to_vec(),
+        };
+
+        let mut individual = DataflowMonitor::from_program(program);
+        let mut individual_rows = prefix;
+        let mut individual_error = None;
+        let mut individual_consumed = 0;
+        let mut individual_suffix = Vec::new();
+        for (index, input) in inputs.iter().enumerate() {
+            let mut output = vec![Value::NoVal; individual.output_vars().len()];
+            match individual.evaluate(input, &mut output) {
+                Ok(()) => {
+                    individual_rows.push(output);
+                    individual_consumed += 1;
+                }
+                Err(error) => {
+                    individual_error = Some(lifecycle_property_error(&error));
+                    individual_consumed += 1;
+                    individual_suffix.extend_from_slice(&inputs[index + 1..]);
+                    break;
+                }
+            }
+        }
+        let individual_observation = LifecyclePropertyObservation {
+            rows: individual_rows,
+            error: individual_error,
+            consumed: individual_consumed,
+            suffix: individual_suffix,
+            revision: individual.revision(),
+            interface_revision: individual.interface_revision(),
+            definition_key: individual.definition_key().clone(),
+            input_vars: individual.input_vars().to_vec(),
+            output_vars: individual.output_vars().to_vec(),
+        };
+
+        prop_assert_eq!(chunked_observation, whole_observation.clone());
+        prop_assert_eq!(individual_observation, whole_observation);
+    }
+
+    /// Two sessions made from the same immutable handle remain isolated under arbitrary tick,
+    /// empty-trace, and reset interleaving. Isolated replay is the oracle after every event.
+    #[test]
+    fn lifecycle_prop_session_interleaving(
+        case in arb_lifecycle_case(),
+        schedule in arb_operation_schedule()
+    ) {
+        let program = DataflowProgram::compile_untyped(case.specification.clone())
+            .expect("lifecycle generator produces a valid program");
+        let mut interleaved_a = DataflowMonitor::from_program(program.clone());
+        let mut interleaved_b = DataflowMonitor::from_program(program.clone());
+        let mut isolated_a = DataflowMonitor::from_program(program.clone());
+        let mut isolated_b = DataflowMonitor::from_program(program);
+        let mut interleaved_a_rows = Vec::new();
+        let mut interleaved_b_rows = Vec::new();
+        let mut isolated_a_rows = Vec::new();
+        let mut isolated_b_rows = Vec::new();
+        let mut a_cursor = 0;
+        let mut b_cursor = 0;
+
+        for operation in schedule {
+            let (interleaved, isolated, raw_trace, tick, interleaved_rows, isolated_rows) =
+                match operation {
+                    LifecycleOperation::TickA
+                    | LifecycleOperation::ResetA
+                    | LifecycleOperation::EmptyA => (
+                        &mut interleaved_a,
+                        &mut isolated_a,
+                        &case.trace_a,
+                        a_cursor,
+                        &mut interleaved_a_rows,
+                        &mut isolated_a_rows,
+                    ),
+                    LifecycleOperation::TickB
+                    | LifecycleOperation::ResetB
+                    | LifecycleOperation::EmptyB => (
+                        &mut interleaved_b,
+                        &mut isolated_b,
+                        &case.trace_b,
+                        b_cursor,
+                        &mut interleaved_b_rows,
+                        &mut isolated_b_rows,
+                    ),
+                };
+            let interleaved_error = lifecycle_property_apply_at(
+                interleaved,
+                operation,
+                raw_trace,
+                tick,
+                interleaved_rows,
+            );
+            let isolated_error = lifecycle_property_apply_at(
+                isolated,
+                operation,
+                raw_trace,
+                tick,
+                isolated_rows,
+            );
+            prop_assert_eq!(interleaved_error, isolated_error);
+            prop_assert_eq!(
+                lifecycle_property_observation(interleaved, &[], interleaved_rows.clone()),
+                lifecycle_property_observation(isolated, &[], isolated_rows.clone())
+            );
+            match operation {
+                LifecycleOperation::TickA => a_cursor += 1,
+                LifecycleOperation::TickB => b_cursor += 1,
+                _ => {}
+            }
+        }
+    }
+}
+
+#[cfg(feature = "jit")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(RUNTIME_EQUIVALENCE_PROPTEST_CASES))]
+
+    /// The integrated JIT's selected activation threshold survives reset while hotness and
+    /// artifacts are recreated from a cold monitor. Backend wording is intentionally excluded.
+    #[test]
+    fn lifecycle_prop_jit_reset_contamination(
+        case in arb_lifecycle_case(),
+        threshold in prop_oneof![
+            Just(JitConfig::after_events(0)),
+            Just(JitConfig::after_events(1)),
+            Just(JitConfig::after_events(3)),
+            Just(JitConfig::eager()),
+        ]
+    ) {
+        let checked = case
+            .specification
+            .clone()
+            .type_check(TypeCheckOptions::STRICT)
+            .expect("lifecycle generator should pass strict type checking");
+        let program = DataflowProgram::compile_checked(checked)
+            .expect("checked lifecycle program should compile");
+        let trace_a = lifecycle_property_inputs(&program, &case.trace_a);
+        let trace_b = lifecycle_property_inputs(&program, &case.trace_b);
+        let mut subject = DataflowMonitor::from_program_with_jit(program.clone(), threshold);
+        let mut fresh = DataflowMonitor::from_program_with_jit(program, threshold);
+        let _ = lifecycle_property_observation(&mut subject, &trace_a, Vec::new());
+        subject.reset();
+        let after_reset = lifecycle_property_observation(&mut subject, &trace_b, Vec::new());
+        let cold = lifecycle_property_observation(&mut fresh, &trace_b, Vec::new());
+        prop_assert_eq!(after_reset, cold);
+        prop_assert_eq!(lifecycle_property_jit_shape(&subject), lifecycle_property_jit_shape(&fresh));
+    }
 }

@@ -196,6 +196,11 @@ name = "dataflow_allocations"
 harness = false
 
 [[bench]]
+name = "dataflow_lifecycle"
+harness = false
+required-features = ["jemalloc"]
+
+[[bench]]
 name = "threshold_property"
 harness = false
 required-features = ["jemalloc"]

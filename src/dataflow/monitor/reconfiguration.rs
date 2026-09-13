@@ -68,7 +68,7 @@ impl DataflowMonitor {
     }
 
     pub(crate) fn set_reconfiguration_transfer_policy(&mut self, policy: ContextTransferPolicy) {
-        self.reconfiguration_transfer_policy = policy;
+        self.configuration.reconfiguration_transfer_policy = policy;
     }
 
     pub(crate) fn plan_reconfiguration(
@@ -382,11 +382,11 @@ impl DataflowMonitor {
             reconfiguration_state,
             scheduler,
             environment_values,
-            reconfiguration_transfer_policy,
+            configuration,
             ..
         } = self;
         let reconfigurable_expressions = &program.monitor_plan().reconfigurable_expressions;
-        let transfer = *reconfiguration_transfer_policy;
+        let transfer = configuration.reconfiguration_transfer_policy;
         let mut resolution = ReconfigurationResolution::default();
 
         let mut resolution_index = 0;
@@ -483,13 +483,18 @@ impl DataflowMonitor {
         configure: F,
     ) -> Result<ReconfigurationReport, DataflowStateError>
     where
-        F: FnOnce(&mut DataflowMonitor),
+        F: FnOnce(&mut super::MonitorConfiguration),
     {
         match plan {
             MonitorReconfigurationPlan::RetainExact => self.retain_exact(io_interface_changed),
             MonitorReconfigurationPlan::InstallCold { target } => {
-                let mut candidate = DataflowMonitor::from_program(target);
-                configure(&mut candidate);
+                let mut configuration = self.configuration;
+                configure(&mut configuration);
+                let candidate = DataflowMonitor::from_configured_program(
+                    self.original_program.clone(),
+                    target,
+                    configuration,
+                );
                 self.reconfigure_candidate(
                     candidate,
                     ContextTransferPolicy::None,
@@ -502,8 +507,13 @@ impl DataflowMonitor {
                 mapping,
                 policy,
             } => {
-                let mut candidate = DataflowMonitor::from_program(target);
-                configure(&mut candidate);
+                let mut configuration = self.configuration;
+                configure(&mut configuration);
+                let candidate = DataflowMonitor::from_configured_program(
+                    self.original_program.clone(),
+                    target,
+                    configuration,
+                );
                 self.reconfigure_candidate(candidate, policy, Some(mapping), io_interface_changed)
             }
         }
@@ -597,7 +607,6 @@ impl DataflowMonitor {
                 }),
                 [],
             );
-            candidate.reconfiguration_transfer_policy = active.reconfiguration_transfer_policy;
             candidate.install_revision(monitor_revision, interface_revision);
             let report = ReconfigurationReport::new(
                 monitor_changed,
@@ -647,7 +656,6 @@ impl DataflowMonitor {
         });
         let prepared = candidate.prepare_context_transfer(active, mapping, policy)?;
         let transfer = candidate.context_transfer_from(active, prepared);
-        candidate.reconfiguration_transfer_policy = active.reconfiguration_transfer_policy;
         candidate.install_revision(monitor_revision, interface_revision);
         let report = ReconfigurationReport::new(
             monitor_changed,

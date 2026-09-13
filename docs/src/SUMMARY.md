@@ -46,6 +46,7 @@
     - [Execution model](./architecture/dataflow/model.md)
     - [Compilation](./architecture/dataflow/compilation.md)
     - [Runtime ownership](./architecture/dataflow/runtime-ownership.md)
+    - [Synchronous lifecycle contract](./architecture/dataflow/lifecycle-contract.md)
     - [Scheduling](./architecture/dataflow/scheduling.md)
     - [Tick execution](./architecture/dataflow/tick-execution.md)
   - [Stateful language mechanisms]()

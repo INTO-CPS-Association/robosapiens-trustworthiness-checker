@@ -106,7 +106,8 @@ use crate::core::{
 use crate::dataflow::JitConfig;
 use crate::dataflow::{
     ContextTransferPolicy, DataflowCompilationError, DataflowMonitor, DataflowProgram,
-    InterfaceRevision, MonitorReconfigurationPlan, MonitorRevision, ReconfigurationReport,
+    InterfaceRevision, MonitorConfiguration, MonitorReconfigurationPlan, MonitorRevision,
+    ReconfigurationReport,
 };
 
 use crate::io::InputPipelineReconfigurationPlan;
@@ -155,11 +156,11 @@ struct ExecutionConfiguration {
 }
 
 impl ExecutionConfiguration {
-    fn configure(self, monitor: &mut DataflowMonitor) {
-        monitor.set_quickening(self.quickening);
+    fn configure(self, configuration: &mut MonitorConfiguration) {
+        configuration.quickening = self.quickening;
         #[cfg(feature = "jit")]
-        if let Some(config) = self.jit {
-            monitor.enable_jit(config);
+        {
+            configuration.jit = self.jit;
         }
     }
 }
@@ -502,7 +503,11 @@ where
                 jit: self.jit_config,
             };
             let mut monitor = DataflowMonitor::from_program(compiled.program);
-            execution_configuration.configure(&mut monitor);
+            monitor.set_quickening(execution_configuration.quickening);
+            #[cfg(feature = "jit")]
+            if let Some(config) = execution_configuration.jit {
+                monitor.enable_jit(config);
+            }
             monitor.set_reconfiguration_transfer_policy(self.transfer_policy);
 
             let input_session = match input.open_session(resolved_input.clone()).await {
@@ -1826,9 +1831,52 @@ mod tests {
         assert!(!runtime.monitor.as_ref().unwrap().quickening_enabled());
         let state = runtime.reconfiguration.as_ref().unwrap();
         let replacement = (state.compiler)("in x: Int\nout z: Int\nz = x + 2").unwrap();
+        let mut configuration = MonitorConfiguration::default();
+        state.execution_configuration.configure(&mut configuration);
         let mut replacement = DataflowMonitor::from_program(replacement.program);
-        state.execution_configuration.configure(&mut replacement);
+        replacement.set_quickening(configuration.quickening);
         assert!(!replacement.quickening_enabled());
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn eager_jit_runtime_replacement_compiles_candidate_once_for_cold_and_transfer_plans() {
+        fn checked_program(source: &str) -> DataflowProgram {
+            let checked = source
+                .parse::<DsrvSpecification>()
+                .unwrap()
+                .type_check(TypeCheckOptions::STRICT)
+                .unwrap();
+            DataflowProgram::compile_checked(checked).unwrap()
+        }
+
+        for policy in [
+            ContextTransferPolicy::None,
+            ContextTransferPolicy::MatchingStreamState,
+        ] {
+            let original = checked_program("in x: Int\nout z: Int\nz = x + 1");
+            let replacement = checked_program("in x: Int\nout z: Int\nz = x + 2");
+            let mut monitor = DataflowMonitor::from_program(original);
+            let plan = monitor.plan_reconfiguration(replacement, policy);
+            let execution_configuration = ExecutionConfiguration {
+                quickening: true,
+                jit: Some(JitConfig::eager()),
+            };
+
+            crate::dataflow::reset_compile_count();
+            monitor
+                .apply_reconfiguration_plan(plan, false, |configuration| {
+                    execution_configuration.configure(configuration)
+                })
+                .unwrap();
+
+            assert_eq!(
+                crate::dataflow::jit_compile_count(),
+                1,
+                "the {policy:?} replacement candidate must be configured before its sole construction"
+            );
+            assert_eq!(monitor.jit_report().unwrap().compiled_artifacts(), 1);
+        }
     }
 
     #[apply(async_test)]
@@ -2198,6 +2246,70 @@ mod tests {
                 .map(|update| update.value.clone())
                 .collect::<Vec<_>>(),
             vec![Value::Int(299), Value::NoVal]
+        );
+    }
+
+    #[apply(async_test)]
+    async fn lifecycle_adapter_boundary_emits_every_declared_output_cell(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let batches = Rc::new(RefCell::new(Vec::new()));
+        let spec_src = "in x: Int\nin choose: Bool\nout past: Int\nout sum: Int\nout branch: Int\n\
+                        past = x[2]\n\
+                        sum = default(sum[1], 0) + x\n\
+                        branch = if choose then x[1] else default(x[2], -1)";
+        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+            .executor(executor)
+            .model(spec)
+            .input(
+                map::input_stream(BTreeMap::from([
+                    (
+                        VarName::new("x"),
+                        vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+                    ),
+                    (
+                        VarName::new("choose"),
+                        vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+                    ),
+                ]))
+                .into(),
+            )
+            .output_writer(recording_writer(Rc::clone(&batches)))
+            .build()
+            .await;
+        runtime.run().await.unwrap();
+
+        let actual = batches
+            .borrow()
+            .iter()
+            .flat_map(|batch| {
+                batch.ticks().map(|tick| {
+                    tick.updates()
+                        .map(|update| (update.variable.name(), update.value.clone()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                vec![
+                    ("past".into(), Value::Deferred),
+                    ("sum".into(), Value::Int(10)),
+                    ("branch".into(), Value::Deferred),
+                ],
+                vec![
+                    ("past".into(), Value::Deferred),
+                    ("sum".into(), Value::Int(30)),
+                    ("branch".into(), Value::Int(-1)),
+                ],
+                vec![
+                    ("past".into(), Value::Int(10)),
+                    ("sum".into(), Value::Int(60)),
+                    ("branch".into(), Value::Int(20)),
+                ],
+            ]
         );
     }
 

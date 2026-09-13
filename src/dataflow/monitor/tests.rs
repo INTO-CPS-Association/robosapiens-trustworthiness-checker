@@ -39,7 +39,9 @@ use crate::dataflow::{
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
+use crate::lang::dsrv::ast::Expr;
 use crate::{CheckedDsrvSpecification, DsrvSpecification};
+use std::collections::{BTreeMap, BTreeSet};
 
 fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
     monitor
@@ -624,8 +626,7 @@ fn none_root_transfer_initializes_stream_state() {
     let mut output = [Value::NoVal];
     source.evaluate(&[Value::Int(1)], &mut output).unwrap();
 
-    let mut candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
-    candidate.set_quickening(true);
+    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
     let report = source
         .reconfigure(candidate.program, ContextTransferPolicy::None)
         .unwrap();
@@ -640,7 +641,7 @@ fn none_root_transfer_initializes_stream_state() {
     );
     assert_eq!(source.revision(), MonitorRevision(1));
     assert_eq!(source.interface_revision(), InterfaceRevision::INITIAL);
-    assert!(source.quickening_enabled());
+    assert!(!source.quickening_enabled());
     let history_id = history_id_for(&source, "x");
     assert!(source.history_store[history_id].is_empty());
 
@@ -2198,4 +2199,1080 @@ fn deoptimization_state_survives_cached_plan_swaps() {
     );
     monitor.evaluate(&input, &mut output).unwrap();
     assert_eq!(output, [Value::Int(1), Value::Int(2), Value::Bool(true)]);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LifecycleSnapshot {
+    failed: bool,
+    revision: MonitorRevision,
+    interface_revision: InterfaceRevision,
+    definition_key: DefinitionKey,
+    input_vars: Vec<VarName>,
+    output_vars: Vec<VarName>,
+    environment_values: Vec<Value>,
+    retained_environment_values: Option<Vec<Value>>,
+    history_state: Vec<(bool, usize, usize, usize)>,
+    execution_capacity: (usize, usize, usize, usize),
+    quickening: bool,
+}
+
+fn lifecycle_snapshot(monitor: &DataflowMonitor) -> LifecycleSnapshot {
+    let history_state = monitor
+        .history_bindings
+        .iter()
+        .map(|binding| {
+            binding.map_or((false, 0, 0, 0), |history_id| {
+                let history = &monitor.history_store[history_id];
+                (
+                    true,
+                    history.required_depth(),
+                    history.len(),
+                    history.capacity(),
+                )
+            })
+        })
+        .collect();
+    LifecycleSnapshot {
+        failed: monitor.failed,
+        revision: monitor.revision(),
+        interface_revision: monitor.interface_revision(),
+        definition_key: monitor.definition_key().clone(),
+        input_vars: monitor.input_vars().to_vec(),
+        output_vars: monitor.output_vars().to_vec(),
+        environment_values: monitor.environment_values.clone(),
+        retained_environment_values: monitor.retained_environment_values.clone(),
+        history_state,
+        execution_capacity: monitor.execution.lifecycle_capacity_snapshot(),
+        quickening: monitor.quickening_enabled(),
+    }
+}
+
+fn lifecycle_input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
+    input_row(monitor, values)
+}
+
+fn lifecycle_counter_program() -> DataflowProgram {
+    DataflowProgram::compile_untyped(
+        "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
+            .parse()
+            .expect("counter specification should parse"),
+    )
+    .expect("counter specification should compile")
+}
+
+fn lifecycle_dynamic_program() -> DataflowProgram {
+    DataflowProgram::compile_untyped(
+        "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
+         z = dynamic(source: Int, {x, y, source, sum})\n\
+         sum = x + y"
+            .parse()
+            .expect("dynamic specification should parse"),
+    )
+    .expect("dynamic specification should compile")
+}
+
+#[test]
+fn lifecycle_compile_once_clones_payload_but_not_session_state() {
+    DataflowProgram::reset_root_compile_counts();
+    crate::lang::dsrv::reset_test_pipeline_counts();
+    let specification = "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
+        .parse::<DsrvSpecification>()
+        .expect("counter specification should parse");
+    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 0, 0));
+    let program = DataflowProgram::compile_untyped(specification);
+    let program = program.expect("counter specification should compile");
+    assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
+
+    let clone = program.clone();
+    assert_eq!(
+        program.test_payload_identity(),
+        clone.test_payload_identity()
+    );
+    assert_eq!(program.test_payload_strong_count(), 2);
+
+    let mut first = DataflowMonitor::from_program(program.clone());
+    let mut second = DataflowMonitor::from_program(program.clone());
+    assert_eq!(program.test_payload_strong_count(), 6);
+    assert_ne!(
+        first.environment_values.as_ptr(),
+        second.environment_values.as_ptr(),
+        "fresh monitors must own their environments"
+    );
+
+    let mut first_rows = Vec::new();
+    let mut second_rows = Vec::new();
+    first
+        .evaluate_trace([[Value::Int(2)], [Value::Int(3)]], &mut first_rows)
+        .unwrap();
+    second
+        .evaluate_trace([[Value::Int(2)], [Value::Int(3)]], &mut second_rows)
+        .unwrap();
+    assert_eq!(first_rows, vec![vec![Value::Int(2)], vec![Value::Int(5)]]);
+    assert_eq!(first_rows, second_rows);
+    assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
+    assert_eq!(
+        crate::lang::dsrv::test_pipeline_counts(),
+        (1, 0, 0),
+        "cloning and monitor construction must not parse or type-check the root again"
+    );
+
+    DataflowProgram::reset_root_compile_counts();
+    let checked_spec = "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
+        .parse::<CheckedDsrvSpecification>()
+        .expect("counter should type-check");
+    let checked_program = DataflowProgram::compile_checked(checked_spec).unwrap();
+    let mut checked_monitor = DataflowMonitor::from_program(checked_program);
+    checked_monitor.reset();
+    checked_monitor.reset();
+    assert_eq!(
+        DataflowProgram::root_compile_counts(),
+        (1, 0),
+        "instantiate and reset must not compile the immutable root again"
+    );
+}
+
+#[test]
+fn lifecycle_reset_matches_fresh_after_nominal_and_repeated_cycles() {
+    let program = lifecycle_counter_program();
+    let mut subject = DataflowMonitor::from_program(program.clone());
+    let mut fresh = DataflowMonitor::from_program(program);
+    let mut output = [Value::NoVal];
+
+    subject.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    subject.evaluate(&[Value::Int(3)], &mut output).unwrap();
+    assert_eq!(subject.revision(), MonitorRevision::INITIAL);
+    subject.reset();
+    assert_eq!(subject.revision(), MonitorRevision::INITIAL);
+    assert_eq!(subject.interface_revision(), InterfaceRevision::INITIAL);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+
+    subject.reset();
+    subject.reset();
+    let mut subject_rows = Vec::new();
+    let mut fresh_rows = Vec::new();
+    subject
+        .evaluate_trace([[Value::Int(4)], [Value::Int(1)]], &mut subject_rows)
+        .unwrap();
+    fresh
+        .evaluate_trace([[Value::Int(4)], [Value::Int(1)]], &mut fresh_rows)
+        .unwrap();
+    assert_eq!(subject_rows, fresh_rows);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+}
+
+#[test]
+fn lifecycle_interleaved_reset_of_one_monitor_does_not_change_the_other() {
+    let program = lifecycle_counter_program();
+    let mut first = DataflowMonitor::from_program(program.clone());
+    let mut second = DataflowMonitor::from_program(program);
+    let mut first_output = [Value::NoVal];
+    let mut second_output = [Value::NoVal];
+    first.evaluate(&[Value::Int(2)], &mut first_output).unwrap();
+    second
+        .evaluate(&[Value::Int(10)], &mut second_output)
+        .unwrap();
+    let second_key = second.definition_key().clone();
+    let second_environment = second.environment_values.as_ptr();
+    let second_execution = &second.execution as *const _;
+    let second_revision = second.revision();
+    first.reset();
+    first.evaluate(&[Value::Int(2)], &mut first_output).unwrap();
+    second
+        .evaluate(&[Value::Int(1)], &mut second_output)
+        .unwrap();
+
+    assert_eq!(first_output, [Value::Int(2)]);
+    assert_eq!(second_output, [Value::Int(11)]);
+    assert_eq!(second.definition_key(), &second_key);
+    assert_eq!(second.environment_values.as_ptr(), second_environment);
+    assert_eq!(&second.execution as *const _, second_execution);
+    assert_eq!(second.revision(), second_revision);
+}
+
+#[test]
+fn lifecycle_reset_after_evaluator_error_clears_poison_and_staging() {
+    let program = lifecycle_dynamic_program();
+    let mut subject = DataflowMonitor::from_program(program.clone());
+    let mut fresh = DataflowMonitor::from_program(program);
+    let mut output = [Value::NoVal];
+    let valid = |monitor: &DataflowMonitor, source: &str| {
+        lifecycle_input_row(
+            monitor,
+            &[
+                ("x", Value::Int(2)),
+                ("y", Value::Int(3)),
+                ("source", Value::Str(source.into())),
+            ],
+        )
+    };
+
+    subject
+        .evaluate(&valid(&subject, "x"), &mut output)
+        .unwrap();
+    subject
+        .evaluate(&valid(&subject, "sum"), &mut output)
+        .unwrap();
+    let error = subject.evaluate(&valid(&subject, "("), &mut output);
+    assert!(matches!(
+        error,
+        Err(DataflowEvaluationError::ReconfigurableExpressionParse { .. })
+    ));
+    assert!(subject.failed);
+    assert!(matches!(
+        subject.evaluate(&valid(&subject, "sum"), &mut output),
+        Err(DataflowEvaluationError::MonitorFailed)
+    ));
+
+    subject.reset();
+    assert!(!subject.failed);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+    subject
+        .evaluate(&valid(&subject, "sum"), &mut output)
+        .unwrap();
+    fresh.evaluate(&valid(&fresh, "sum"), &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+}
+
+#[test]
+fn lifecycle_dynamic_error_variants_preserve_prefix_and_reset_to_nominal() {
+    for (source, expected_error) in [("(", "parse"), ("x > 0", "type"), ("unknown", "context")] {
+        let program = if expected_error == "type" {
+            let checked = "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
+                           z = dynamic(source: Int, {x, y, source, sum})\n\
+                           sum = x + y"
+                .parse::<DsrvSpecification>()
+                .unwrap()
+                .type_check(crate::TypeCheckOptions::STRICT)
+                .unwrap();
+            DataflowProgram::compile_checked(checked).unwrap()
+        } else {
+            lifecycle_dynamic_program()
+        };
+        let mut monitor = DataflowMonitor::from_program(program);
+        let mut output = [Value::NoVal];
+        let valid = lifecycle_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(2)),
+                ("y", Value::Int(3)),
+                ("source", Value::Str("x".into())),
+            ],
+        );
+        monitor.evaluate(&valid, &mut output).unwrap();
+        let invalid = lifecycle_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(4)),
+                ("y", Value::Int(5)),
+                ("source", Value::Str(source.into())),
+            ],
+        );
+        let mut rows = vec![vec![Value::Int(2)]];
+        let error = monitor
+            .evaluate_trace([invalid], &mut rows)
+            .err()
+            .unwrap_or_else(|| panic!("expected {expected_error} error for source {source:?}"));
+        assert_eq!(rows, vec![vec![Value::Int(2)]]);
+        match (expected_error, error) {
+            (
+                "parse",
+                DataflowEvaluationError::ReconfigurableExpressionParse {
+                    expression,
+                    message,
+                },
+            ) => {
+                assert_eq!(expression.as_str(), "(");
+                assert!(!message.is_empty());
+            }
+            (
+                "type",
+                DataflowEvaluationError::ReconfigurableExpressionType {
+                    expression,
+                    message,
+                },
+            ) => {
+                assert_eq!(expression.as_str(), "x > 0");
+                assert!(!message.is_empty());
+            }
+            ("context", DataflowEvaluationError::ReconfigurableExpressionContext(variables)) => {
+                assert!(!variables.is_empty());
+            }
+            (expected, error) => panic!("expected {expected} error, got {error:?}"),
+        }
+        assert!(monitor.failed);
+        assert!(matches!(
+            monitor.evaluate(&valid, &mut output),
+            Err(DataflowEvaluationError::MonitorFailed)
+        ));
+
+        monitor.reset();
+        let nominal = lifecycle_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(2)),
+                ("y", Value::Int(3)),
+                ("source", Value::Str("sum".into())),
+            ],
+        );
+        monitor.evaluate(&nominal, &mut output).unwrap();
+        assert_eq!(output, [Value::Int(5)]);
+        assert_eq!(monitor.revision(), MonitorRevision(1));
+    }
+}
+
+#[test]
+fn lifecycle_dynamic_cycle_error_poison_and_reset_are_contained() {
+    let program = DataflowProgram::compile_untyped(
+        "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\n\
+         a = dynamic(first: Int)\n\
+         b = dynamic(second: Int)"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut monitor = DataflowMonitor::from_program(program);
+    let mut output = [Value::NoVal, Value::NoVal];
+    let row = |monitor: &DataflowMonitor, first: &str, second: &str| {
+        lifecycle_input_row(
+            monitor,
+            &[
+                ("x", Value::Int(1)),
+                ("first", Value::Str(first.into())),
+                ("second", Value::Str(second.into())),
+            ],
+        )
+    };
+    monitor
+        .evaluate(&row(&monitor, "x", "a"), &mut output)
+        .unwrap();
+    let mut rows = vec![vec![Value::Int(1), Value::Int(1)]];
+    let cycle = row(&monitor, "b", "a");
+    let error = monitor.evaluate_trace([cycle], &mut rows).unwrap_err();
+    assert!(matches!(
+        error,
+        DataflowEvaluationError::DynamicDependencyCycle(variable)
+            if variable == VarName::new("a")
+    ));
+    assert_eq!(rows, vec![vec![Value::Int(1), Value::Int(1)]]);
+    monitor.reset();
+    let nominal = row(&monitor, "x", "a");
+    monitor.evaluate(&nominal, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(1), Value::Int(1)]);
+}
+
+#[test]
+fn lifecycle_trace_is_append_only_and_empty_calls_do_not_check_poison() {
+    let no_output = DataflowProgram::compile_untyped(
+        "in x: Int"
+            .parse()
+            .expect("no-output specification should parse"),
+    )
+    .expect("no-output specification should compile");
+    let mut monitor = DataflowMonitor::from_program(no_output);
+    let mut rows = vec![vec![Value::Int(99)]];
+    monitor
+        .evaluate_trace(std::iter::empty::<Vec<Value>>(), &mut rows)
+        .unwrap();
+    assert_eq!(rows, vec![vec![Value::Int(99)]]);
+    monitor
+        .evaluate_trace(
+            [[Value::Int(1)], [Value::Int(2)], [Value::Int(3)]],
+            &mut rows,
+        )
+        .unwrap();
+    assert_eq!(rows, vec![vec![Value::Int(99)], vec![], vec![], vec![]]);
+
+    let mut poisoned = DataflowMonitor::from_program(lifecycle_dynamic_program());
+    let mut output = [Value::NoVal];
+    let bad = lifecycle_input_row(
+        &poisoned,
+        &[
+            ("x", Value::Int(1)),
+            ("y", Value::Int(1)),
+            ("source", Value::Str("(".into())),
+        ],
+    );
+    assert!(poisoned.evaluate(&bad, &mut output).is_err());
+    let before = lifecycle_snapshot(&poisoned);
+    let mut poisoned_rows = vec![vec![Value::Int(7)]];
+    poisoned
+        .evaluate_trace(std::iter::empty::<Vec<Value>>(), &mut poisoned_rows)
+        .unwrap();
+    assert_eq!(poisoned_rows, vec![vec![Value::Int(7)]]);
+    assert_eq!(before, lifecycle_snapshot(&poisoned));
+    assert!(matches!(
+        poisoned.evaluate_trace([bad], &mut poisoned_rows),
+        Err(DataflowEvaluationError::MonitorFailed)
+    ));
+}
+
+#[test]
+fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
+    let names = [
+        "integer", "boolean", "string", "list", "tuple", "map", "unit", "absent", "waiting",
+    ];
+    let expressions = BTreeMap::from([
+        (VarName::new("integer"), Expr::Val(Value::Int(7))),
+        (VarName::new("boolean"), Expr::Val(Value::Bool(true))),
+        (VarName::new("string"), Expr::Val(Value::Str("a".into()))),
+        (
+            VarName::new("list"),
+            Expr::List(vec![Expr::Val(Value::Int(1)), Expr::Val(Value::Int(2))].into()),
+        ),
+        (
+            VarName::new("tuple"),
+            Expr::Tuple(vec![Expr::Val(Value::Int(1)), Expr::Val(Value::Bool(false))].into()),
+        ),
+        (
+            VarName::new("map"),
+            Expr::Map(BTreeMap::from([("k".into(), Expr::Val(Value::Int(3)))])),
+        ),
+        (VarName::new("unit"), Expr::Val(Value::Unit)),
+        (VarName::new("absent"), Expr::Val(Value::NoVal)),
+        (
+            VarName::new("waiting"),
+            Expr::SIndex(Box::new(Expr::Val(Value::Int(1))), 1),
+        ),
+    ]);
+    let specification = DsrvSpecification::new(
+        BTreeSet::new(),
+        names.iter().map(|name| VarName::new(*name)).collect(),
+        expressions,
+        BTreeMap::new(),
+        [],
+    );
+    let mut monitor = DataflowMonitor::compile_untyped(specification)
+        .expect("complete-value spec should compile");
+    let mut output = Vec::new();
+    monitor
+        .evaluate_trace([Vec::<Value>::new()], &mut output)
+        .unwrap();
+    assert_eq!(
+        monitor.output_vars(),
+        &names
+            .iter()
+            .map(|name| VarName::new(*name))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        output,
+        vec![vec![
+            Value::Int(7),
+            Value::Bool(true),
+            Value::Str("a".into()),
+            Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+            Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
+            Value::Map(BTreeMap::from([("k".into(), Value::Int(3))])),
+            Value::Unit,
+            Value::NoVal,
+            Value::Deferred,
+        ]]
+    );
+}
+
+#[test]
+fn lifecycle_equal_encoded_timestamps_are_distinct_ticks_and_chunking_is_exact() {
+    let program = DataflowProgram::compile_untyped(
+        "in timestamp: Int\nout seen: Int\nout ticks: Int\n\
+         seen = timestamp\nticks = default(ticks[1], 0) + 1"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let rows = vec![vec![Value::Int(7)], vec![Value::Int(7)]];
+    let mut whole = DataflowMonitor::from_program(program.clone());
+    let mut chunked = DataflowMonitor::from_program(program.clone());
+    let mut individual = DataflowMonitor::from_program(program);
+    let mut whole_output = Vec::new();
+    let mut chunked_output = Vec::new();
+    let mut individual_output = Vec::new();
+    whole
+        .evaluate_trace(rows.iter(), &mut whole_output)
+        .unwrap();
+    for chunk in [&rows[0..0], &rows[0..1], &rows[1..1], &rows[1..2]] {
+        chunked
+            .evaluate_trace(chunk.iter(), &mut chunked_output)
+            .unwrap();
+    }
+    for row in &rows {
+        let mut one = vec![Value::NoVal, Value::NoVal];
+        individual.evaluate(row, &mut one).unwrap();
+        individual_output.push(one);
+    }
+    assert_eq!(
+        whole_output,
+        vec![
+            vec![Value::Int(7), Value::Int(1)],
+            vec![Value::Int(7), Value::Int(2)]
+        ]
+    );
+    assert_eq!(whole_output, chunked_output);
+    assert_eq!(
+        individual_output,
+        vec![
+            vec![Value::Int(7), Value::Int(1)],
+            vec![Value::Int(7), Value::Int(2)]
+        ]
+    );
+}
+
+#[test]
+fn lifecycle_past_recursive_and_lazy_state_restarts_cold() {
+    let spec = "in x: Int\nin choose: Bool\nout past: Int\nout sum: Int\nout branch: Int\n\
+                past = x[2]\n\
+                sum = default(sum[1], 0) + x\n\
+                branch = if choose then x[1] else default(x[2], -1)";
+    let program = DataflowProgram::compile_untyped(spec.parse().unwrap()).unwrap();
+    let rows_a = vec![
+        vec![Value::Int(10), Value::Bool(true)],
+        vec![Value::Int(20), Value::Bool(false)],
+        vec![Value::Int(30), Value::Bool(true)],
+        vec![Value::Int(40), Value::Bool(false)],
+    ];
+    let rows_b = vec![
+        vec![Value::Int(5), Value::Bool(false)],
+        vec![Value::Int(6), Value::Bool(true)],
+        vec![Value::Int(7), Value::Bool(false)],
+    ];
+    let expected_a = vec![
+        vec![Value::Deferred, Value::Int(10), Value::Deferred],
+        vec![Value::Deferred, Value::Int(30), Value::Int(-1)],
+        vec![Value::Int(10), Value::Int(60), Value::Int(20)],
+        vec![Value::Int(20), Value::Int(100), Value::Int(20)],
+    ];
+    let expected_b = vec![
+        vec![Value::Deferred, Value::Int(5), Value::Int(-1)],
+        vec![Value::Deferred, Value::Int(11), Value::Int(5)],
+        vec![Value::Int(5), Value::Int(18), Value::Int(5)],
+    ];
+    let mut subject = DataflowMonitor::from_program(program.clone());
+    let mut fresh = DataflowMonitor::from_program(program);
+    let mut subject_a = Vec::new();
+    subject
+        .evaluate_trace(rows_a.iter(), &mut subject_a)
+        .unwrap();
+    assert_eq!(subject_a, expected_a);
+    subject.reset();
+    let mut subject_b = Vec::new();
+    let mut fresh_b = Vec::new();
+    subject
+        .evaluate_trace(rows_b.iter(), &mut subject_b)
+        .unwrap();
+    fresh.evaluate_trace(rows_b.iter(), &mut fresh_b).unwrap();
+    assert_eq!(subject_b, expected_b);
+    assert_eq!(subject_b, fresh_b);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+}
+
+#[test]
+fn lifecycle_past_recursive_and_lazy_reset_matches_both_quickening_modes() {
+    let spec = "in x: Int\nin choose: Bool\nout past: Int\nout sum: Int\nout branch: Int\n\
+                past = x[2]\n\
+                sum = default(sum[1], 0) + x\n\
+                branch = if choose then x[1] else default(x[2], -1)";
+    let rows_a = [
+        vec![Value::Int(10), Value::Bool(true)],
+        vec![Value::Int(20), Value::Bool(false)],
+        vec![Value::Int(30), Value::Bool(true)],
+    ];
+    let rows_b = [
+        vec![Value::Int(5), Value::Bool(false)],
+        vec![Value::Int(6), Value::Bool(true)],
+    ];
+    for quickening in [false, true] {
+        let program = DataflowProgram::compile_untyped(spec.parse().unwrap()).unwrap();
+        let mut subject = DataflowMonitor::from_program(program.clone());
+        let mut fresh = DataflowMonitor::from_program(program);
+        subject.set_quickening(quickening);
+        fresh.set_quickening(quickening);
+        let mut ignored = Vec::new();
+        subject.evaluate_trace(rows_a.iter(), &mut ignored).unwrap();
+        subject.reset();
+        let mut subject_rows = Vec::new();
+        let mut fresh_rows = Vec::new();
+        subject
+            .evaluate_trace(rows_b.iter(), &mut subject_rows)
+            .unwrap();
+        fresh
+            .evaluate_trace(rows_b.iter(), &mut fresh_rows)
+            .unwrap();
+        assert_eq!(subject_rows, fresh_rows);
+        assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+        assert_eq!(subject.quickening_enabled(), quickening);
+    }
+}
+
+#[test]
+fn lifecycle_defer_noval_and_deferred_are_rows_and_eof_does_not_finalize() {
+    let program = DataflowProgram::compile_untyped(
+        "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    for source in [Value::NoVal, Value::Deferred] {
+        let mut monitor = DataflowMonitor::from_program(program.clone());
+        let mut rows = Vec::new();
+        let input = lifecycle_input_row(
+            &monitor,
+            &[("x", Value::Int(2)), ("source", source.clone())],
+        );
+        monitor.evaluate_trace([input], &mut rows).unwrap();
+        assert_eq!(rows, vec![vec![source]]);
+        let before_eof = lifecycle_snapshot(&monitor);
+        monitor
+            .evaluate_trace(std::iter::empty::<Vec<Value>>(), &mut rows)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(before_eof, lifecycle_snapshot(&monitor));
+
+        let continuation = lifecycle_input_row(
+            &monitor,
+            &[("x", Value::Int(3)), ("source", Value::Str("x + 1".into()))],
+        );
+        let mut continuation_output = [Value::NoVal];
+        monitor
+            .evaluate(&continuation, &mut continuation_output)
+            .unwrap();
+        assert_eq!(continuation_output, [Value::Int(4)]);
+
+        let mut reset_monitor = DataflowMonitor::from_program(program.clone());
+        let mut fresh = DataflowMonitor::from_program(program.clone());
+        reset_monitor.reset();
+        let reset_input = lifecycle_input_row(
+            &reset_monitor,
+            &[
+                ("x", Value::Int(4)),
+                ("source", Value::Str("x + 100".into())),
+            ],
+        );
+        let fresh_input = lifecycle_input_row(
+            &fresh,
+            &[
+                ("x", Value::Int(4)),
+                ("source", Value::Str("x + 100".into())),
+            ],
+        );
+        let mut reset_output = [Value::NoVal];
+        let mut fresh_output = [Value::NoVal];
+        reset_monitor
+            .evaluate(&reset_input, &mut reset_output)
+            .unwrap();
+        fresh.evaluate(&fresh_input, &mut fresh_output).unwrap();
+        assert_eq!(reset_output, fresh_output);
+        assert_eq!(reset_output, [Value::Int(104)]);
+    }
+}
+
+#[test]
+fn lifecycle_dynamic_and_defer_activation_history_and_sealing_reset() {
+    let dynamic = lifecycle_dynamic_program();
+    let mut subject = DataflowMonitor::from_program(dynamic.clone());
+    let mut fresh = DataflowMonitor::from_program(dynamic);
+    let mut output = [Value::NoVal];
+    for (x, y, source, expected) in [
+        (2, 3, "x", Value::Int(2)),
+        (4, 5, "sum", Value::Int(9)),
+        (6, 7, "default(x[2], 0)", Value::Int(0)),
+    ] {
+        let input = lifecycle_input_row(
+            &subject,
+            &[
+                ("x", Value::Int(x)),
+                ("y", Value::Int(y)),
+                ("source", Value::Str(source.into())),
+            ],
+        );
+        subject.evaluate(&input, &mut output).unwrap();
+        assert_eq!(output, [expected]);
+    }
+    assert!(history_depth_for(&subject, "x").unwrap_or(0) >= 2);
+    assert!(subject.retained_environment_values.is_some());
+    subject.reset();
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+    let reset_input = lifecycle_input_row(
+        &subject,
+        &[
+            ("x", Value::Int(2)),
+            ("y", Value::Int(3)),
+            ("source", Value::Str("sum".into())),
+        ],
+    );
+    subject.evaluate(&reset_input, &mut output).unwrap();
+    fresh.evaluate(&reset_input, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
+
+    let defer = DataflowProgram::compile_untyped(
+        "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut deferred = DataflowMonitor::from_program(defer.clone());
+    let mut deferred_fresh = DataflowMonitor::from_program(defer);
+    let mut deferred_output = [Value::NoVal];
+    let first = lifecycle_input_row(
+        &deferred,
+        &[("x", Value::Int(2)), ("source", Value::Str("x + 1".into()))],
+    );
+    deferred.evaluate(&first, &mut deferred_output).unwrap();
+    assert_eq!(deferred_output, [Value::Int(3)]);
+    assert!(deferred.revision().0 > 0);
+    deferred.reset();
+    assert_eq!(
+        lifecycle_snapshot(&deferred),
+        lifecycle_snapshot(&deferred_fresh)
+    );
+    let after_reset = lifecycle_input_row(
+        &deferred,
+        &[
+            ("x", Value::Int(4)),
+            ("source", Value::Str("x + 100".into())),
+        ],
+    );
+    let fresh_after_reset = after_reset.clone();
+    let mut reset_output = [Value::NoVal];
+    let mut fresh_output = [Value::NoVal];
+    deferred.evaluate(&after_reset, &mut reset_output).unwrap();
+    deferred_fresh
+        .evaluate(&fresh_after_reset, &mut fresh_output)
+        .unwrap();
+    assert_eq!(reset_output, fresh_output);
+    assert_eq!(reset_output, [Value::Int(104)]);
+
+    let continuation = lifecycle_input_row(
+        &deferred,
+        &[
+            ("x", Value::Int(5)),
+            ("source", Value::Str("x + 100".into())),
+        ],
+    );
+    let fresh_continuation = continuation.clone();
+    deferred.evaluate(&continuation, &mut reset_output).unwrap();
+    deferred_fresh
+        .evaluate(&fresh_continuation, &mut fresh_output)
+        .unwrap();
+    assert_eq!(reset_output, fresh_output);
+    assert_eq!(reset_output, [Value::Int(105)]);
+    assert_eq!(
+        lifecycle_snapshot(&deferred),
+        lifecycle_snapshot(&deferred_fresh)
+    );
+}
+
+#[test]
+fn lifecycle_arity_errors_are_preflight_and_trace_stops_at_first_failed_row() {
+    let mut monitor = DataflowMonitor::from_program(lifecycle_counter_program());
+    let mut output = [Value::Int(77)];
+    assert!(matches!(
+        monitor.evaluate(&[], &mut output),
+        Err(DataflowEvaluationError::InputCountMismatch {
+            expected: 1,
+            actual: 0
+        })
+    ));
+    assert_eq!(output, [Value::Int(77)]);
+    assert!(matches!(
+        monitor.evaluate(&[Value::Int(1), Value::Int(2)], &mut output),
+        Err(DataflowEvaluationError::InputCountMismatch {
+            expected: 1,
+            actual: 2
+        })
+    ));
+    assert!(matches!(
+        monitor.evaluate(&[Value::Int(1)], &mut []),
+        Err(DataflowEvaluationError::OutputCountMismatch {
+            expected: 1,
+            actual: 0
+        })
+    ));
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(2)]);
+
+    struct CountingRows {
+        rows: Vec<Vec<Value>>,
+        pulls: usize,
+    }
+    impl Iterator for CountingRows {
+        type Item = Vec<Value>;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.pulls += 1;
+            self.rows.pop()
+        }
+    }
+    let mut iterator = CountingRows {
+        rows: vec![
+            vec![Value::Int(4)],
+            vec![],
+            vec![Value::Int(3)],
+            vec![Value::Int(99)],
+        ]
+        .into_iter()
+        .rev()
+        .collect(),
+        pulls: 0,
+    };
+    let mut trace = vec![vec![Value::Int(99)]];
+    let error = monitor
+        .evaluate_trace(&mut iterator, &mut trace)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DataflowEvaluationError::InputCountMismatch {
+            expected: 1,
+            actual: 0
+        }
+    ));
+    assert_eq!(iterator.pulls, 2);
+    assert_eq!(trace, vec![vec![Value::Int(99)], vec![Value::Int(6)]]);
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(10)]);
+
+    let mut poisoned = DataflowMonitor::from_program(lifecycle_dynamic_program());
+    let mut poisoned_output = [Value::NoVal];
+    let invalid = lifecycle_input_row(
+        &poisoned,
+        &[
+            ("x", Value::Int(1)),
+            ("y", Value::Int(1)),
+            ("source", Value::Str("(".into())),
+        ],
+    );
+    assert!(poisoned.evaluate(&invalid, &mut poisoned_output).is_err());
+    assert!(matches!(
+        poisoned.evaluate(&[], &mut poisoned_output),
+        Err(DataflowEvaluationError::MonitorFailed)
+    ));
+}
+
+#[test]
+fn lifecycle_transfer_is_stateful_before_reset_but_reset_is_cold_and_no_transfer() {
+    let spec = "in x: Int\nout z: Int\nz = default(z[1], 0) + x";
+    let mut monitor = DataflowMonitor::compile_untyped(spec.parse().unwrap()).unwrap();
+    let mut output = [Value::NoVal];
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    let candidate = DataflowMonitor::compile_untyped(
+        "in a: Int\nin x: Int\nout z: Int\nz = default(z[1], 0) + x"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let report = monitor
+        .reconfigure(
+            candidate.program,
+            ContextTransferPolicy::MatchingStreamState,
+        )
+        .unwrap();
+    assert_eq!(
+        report.context_transfer.streams[0].outcome,
+        StreamStateTransferOutcome::Transferred
+    );
+    monitor
+        .evaluate(&[Value::NoVal, Value::Int(3)], &mut output)
+        .unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+    assert_eq!(
+        monitor.configuration.reconfiguration_transfer_policy,
+        ContextTransferPolicy::MatchingStreamState
+    );
+    monitor.reset();
+    assert_eq!(monitor.revision(), MonitorRevision::INITIAL);
+    monitor.evaluate(&[Value::Int(3)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(3)]);
+
+    monitor.set_reconfiguration_transfer_policy(ContextTransferPolicy::None);
+    monitor.reset();
+    assert_eq!(
+        monitor.configuration.reconfiguration_transfer_policy,
+        ContextTransferPolicy::None
+    );
+}
+
+#[test]
+fn lifecycle_reset_restores_original_root_and_interface_after_replacement() {
+    let base = DataflowProgram::compile_untyped(
+        "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let compatible = DataflowProgram::compile_untyped(
+        "in x: Int\nout z: Int\nz = default(z[1], 0) + x + 1"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let interface = DataflowProgram::compile_untyped(
+        "in y: Int\nin x: Int\nout other: Int\nout z: Int\nother = y\nz = x"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let base_key = base.definition_key().clone();
+    let mut monitor = DataflowMonitor::from_program(base);
+    monitor.set_quickening(false);
+    let mut output = [Value::NoVal];
+    let report = monitor
+        .reconfigure(compatible, ContextTransferPolicy::None)
+        .unwrap();
+    assert!(report.monitor_changed);
+    assert_eq!(monitor.revision(), report.monitor_revision);
+    assert_eq!(monitor.interface_revision(), report.interface_revision);
+    assert_eq!(monitor.input_vars(), &[VarName::new("x")]);
+    assert_eq!(monitor.output_vars(), &[VarName::new("z")]);
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(3)]);
+    let interface_report = monitor
+        .reconfigure(interface, ContextTransferPolicy::None)
+        .unwrap();
+    assert!(interface_report.monitor_changed);
+    assert!(interface_report.interface_changed);
+    assert_eq!(monitor.revision(), interface_report.monitor_revision);
+    assert_eq!(
+        monitor.interface_revision(),
+        interface_report.interface_revision
+    );
+    assert_eq!(
+        monitor.input_vars(),
+        &[VarName::new("x"), VarName::new("y")]
+    );
+    assert_eq!(
+        monitor.output_vars(),
+        &[VarName::new("z"), VarName::new("other")]
+    );
+    monitor.reset();
+    assert_eq!(monitor.definition_key(), &base_key);
+    assert_eq!(monitor.input_vars(), &[VarName::new("x")]);
+    assert_eq!(monitor.output_vars(), &[VarName::new("z")]);
+    assert_eq!(monitor.revision(), MonitorRevision::INITIAL);
+    assert_eq!(monitor.interface_revision(), InterfaceRevision::INITIAL);
+    assert!(!monitor.quickening_enabled());
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(2)]);
+}
+
+#[test]
+fn lifecycle_repeated_reset_rebuilds_bounded_session_capacity() {
+    let program = DataflowProgram::compile_untyped(
+        "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut monitor = DataflowMonitor::from_program(program.clone());
+    let fresh = DataflowMonitor::from_program(program);
+    let fresh_shape = lifecycle_snapshot(&fresh);
+    let mut output = [Value::NoVal];
+    for cycle in 0..100 {
+        let source = if cycle % 2 == 0 { "x[4]" } else { "x[1]" };
+        let input = lifecycle_input_row(
+            &monitor,
+            &[
+                ("x", Value::Int(cycle)),
+                ("source", Value::Str(source.into())),
+            ],
+        );
+        monitor.evaluate(&input, &mut output).unwrap();
+        monitor.reset();
+        let snapshot = lifecycle_snapshot(&monitor);
+        assert_eq!(
+            snapshot.execution_capacity, fresh_shape.execution_capacity,
+            "reset cycle {cycle} retained an execution cache"
+        );
+        assert_eq!(snapshot.history_state, fresh_shape.history_state);
+        assert_eq!(snapshot.environment_values, fresh_shape.environment_values);
+        assert_eq!(
+            monitor.history_store.len(),
+            fresh.history_store.len(),
+            "reset cycle {cycle} retained dynamic history entries"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_old_constructors_and_iterator_forms_remain_usable() {
+    let specification = "in x: Int\nout z: Int\nz = x"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let program: DataflowProgram = specification.clone().try_into().unwrap();
+    let mut monitor = DataflowMonitor::new(program.clone());
+    assert_eq!(monitor.program().definition_key(), program.definition_key());
+
+    let borrowed = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
+    let mut outputs = Vec::new();
+    monitor.evaluate_trace(&borrowed, &mut outputs).unwrap();
+    let mut iterator = borrowed.iter();
+    monitor.reset();
+    outputs.clear();
+    monitor.evaluate_trace(&mut iterator, &mut outputs).unwrap();
+    assert_eq!(outputs, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+
+    let mut from_try: DataflowMonitor = specification.try_into().unwrap();
+    let mut single = vec![Value::NoVal];
+    from_try.evaluate(&[Value::Int(3)], &mut single).unwrap();
+    assert_eq!(single, [Value::Int(3)]);
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
+    let specification = "in x: Int\nout z: Int\nz = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let program = DataflowProgram::compile_checked(specification).unwrap();
+    let mut monitor =
+        DataflowMonitor::from_program_with_jit(program.clone(), JitConfig::after_events(2));
+    let mut output = [Value::NoVal];
+    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::Pending);
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(3)], &mut output).unwrap();
+    assert!(test_support::jit_artifact_count(&monitor) > 0);
+    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
+
+    monitor.reset();
+    assert_eq!(monitor.configuration.jit, Some(JitConfig::after_events(2)));
+    assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::Pending);
+    assert_eq!(test_support::jit_artifact_count(&monitor), 0);
+    monitor.evaluate(&[Value::Int(10)], &mut output).unwrap();
+    monitor.evaluate(&[Value::Int(11)], &mut output).unwrap();
+    assert_eq!(test_support::jit_artifact_count(&monitor), 0);
+    monitor.evaluate(&[Value::Int(12)], &mut output).unwrap();
+    assert!(test_support::jit_artifact_count(&monitor) > 0);
+
+    let eager_specification = "in x: Int\nout z: Int\nz = x + 1"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let eager_program = DataflowProgram::compile_checked(eager_specification).unwrap();
+    let mut eager = DataflowMonitor::from_program_with_jit(eager_program, JitConfig::eager());
+    assert_eq!(eager.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
+    assert!(test_support::jit_artifact_count(&eager) > 0);
+    eager.reset();
+    assert_eq!(eager.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
+
+    let unsupported_specification = "in x: Str\nout z: Str\nz = x"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let unsupported_program = DataflowProgram::compile_checked(unsupported_specification).unwrap();
+    let mut unsupported =
+        DataflowMonitor::from_program_with_jit(unsupported_program, JitConfig::eager());
+    assert_eq!(
+        unsupported.jit_report().unwrap().plan(),
+        JitPlan::Unavailable
+    );
+    assert_eq!(unsupported.jit_report().unwrap().unsupported_streams(), [0]);
+    assert_eq!(unsupported.jit_report().unwrap().backend_error(), None);
+    let mut string_output = [Value::NoVal];
+    unsupported
+        .evaluate(&[Value::Str("hello".into())], &mut string_output)
+        .unwrap();
+    assert_eq!(string_output, [Value::Str("hello".into())]);
+    unsupported.reset();
+    assert_eq!(
+        unsupported.jit_report().unwrap().plan(),
+        JitPlan::Unavailable
+    );
 }

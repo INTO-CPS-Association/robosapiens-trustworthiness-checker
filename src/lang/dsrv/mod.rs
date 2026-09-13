@@ -11,3 +11,5 @@ pub(crate) mod test_support;
 
 pub use parser::DsrvParseError;
 pub use pipeline::{DsrvPipelineError, TypeCheckMode, TypeCheckOptions};
+#[cfg(test)]
+pub(crate) use pipeline::{reset_test_pipeline_counts, test_pipeline_counts};

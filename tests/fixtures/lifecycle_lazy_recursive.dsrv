@@ -1,0 +1,8 @@
+in x: Int
+in choose: Bool
+out past: Int
+out sum: Int
+out branch: Int
+past = x[2]
+sum = default(sum[1], 0) + x
+branch = if choose then x[1] else default(x[2], -1)

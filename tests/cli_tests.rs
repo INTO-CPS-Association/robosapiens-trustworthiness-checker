@@ -2625,4 +2625,126 @@ mod integration_tests {
         cleanup_file(&input_map);
         cleanup_file(&output_map);
     }
+
+    #[apply(async_test)]
+    async fn lifecycle_synchronous_cli_corpus_preserves_complete_serialized_rows() {
+        let cases = [
+            (
+                "counter",
+                &[
+                    "z[0] = Int(1)",
+                    "z[1] = Int(2)",
+                    "z[2] = Int(3)",
+                    "z[3] = Int(4)",
+                    "z[4] = Int(6)",
+                    "z[5] = Int(9)",
+                ][..],
+            ),
+            (
+                "lifecycle_equal_time",
+                &[
+                    "seen[0] = Int(7)",
+                    "ticks[0] = Int(1)",
+                    "seen[1] = Int(7)",
+                    "ticks[1] = Int(2)",
+                ][..],
+            ),
+            (
+                "lifecycle_lazy_recursive",
+                &[
+                    "past[0] = Deferred",
+                    "sum[0] = Int(10)",
+                    "branch[0] = Deferred",
+                    "past[1] = Deferred",
+                    "sum[1] = Int(30)",
+                    "branch[1] = Int(-1)",
+                    "past[2] = Int(10)",
+                    "sum[2] = Int(60)",
+                    "branch[2] = Int(20)",
+                    "past[3] = Int(20)",
+                    "sum[3] = Int(100)",
+                    "branch[3] = Int(20)",
+                ][..],
+            ),
+            ("lifecycle_dynamic", &["z[0] = Int(2)", "z[1] = Int(9)"][..]),
+        ];
+
+        for (stem, expected_lines) in cases {
+            let model = fixture_path(&format!("{stem}.dsrv"));
+            let input = fixture_path(&format!("{stem}.input"));
+            let output = run_cli(&[
+                &model,
+                "--input-file",
+                &input,
+                "--output-stdout",
+                "--runtime",
+                "dataflow",
+                "--execution-policy",
+                "synchronous",
+            ])
+            .await
+            .unwrap_or_else(|error| panic!("failed to run {stem} CLI case: {error}"));
+            assert!(
+                output.status.success(),
+                "{stem} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let actual = String::from_utf8_lossy(&output.stdout);
+            let actual_lines = actual.lines().collect::<Vec<_>>();
+            assert_eq!(actual_lines, expected_lines, "serialized rows for {stem}");
+            assert!(
+                output.stderr.is_empty(),
+                "{stem} wrote unexpected stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[apply(async_test)]
+    async fn lifecycle_synchronous_cli_pending_eof_has_no_synthetic_row() {
+        let output = run_cli(&[
+            &fixture_path("lifecycle_defer_pending.dsrv"),
+            "--input-file",
+            &fixture_path("lifecycle_defer_pending.input"),
+            "--output-stdout",
+            "--runtime",
+            "dataflow",
+            "--execution-policy",
+            "synchronous",
+        ])
+        .await
+        .expect("pending CLI case should run");
+        assert!(output.status.success());
+        assert!(
+            output.stdout.is_empty(),
+            "NoVal is omitted by the existing serializer, but EOF must not add a row"
+        );
+        assert!(output.stderr.is_empty());
+    }
+
+    #[apply(async_test)]
+    async fn lifecycle_synchronous_cli_failure_keeps_only_successful_prefix() {
+        let output = run_cli(&[
+            &fixture_path("lifecycle_failure.dsrv"),
+            "--input-file",
+            &fixture_path("lifecycle_failure.input"),
+            "--output-stdout",
+            "--runtime",
+            "dataflow",
+            "--execution-policy",
+            "synchronous",
+        ])
+        .await
+        .expect("failure CLI case should run");
+        assert_cli_error_contains(&output, &["invalid dynamic expression", "`(`"]);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout.lines().collect::<Vec<_>>(),
+            vec!["z[0] = Int(2)", "z[1] = Int(9)"]
+        );
+        assert!(
+            !stdout.contains("[2]"),
+            "failed and suffix ticks must be absent"
+        );
+    }
 }

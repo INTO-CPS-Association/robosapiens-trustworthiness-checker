@@ -123,6 +123,11 @@ impl SharedReconfigurableExpressionCacheEntry {
 }
 
 impl SharedReconfigurableExpressionCache {
+    #[cfg(test)]
+    pub(in crate::dataflow) fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     pub(in crate::dataflow) fn lookup(
         &self,
         source_text: &EcoString,
