@@ -535,11 +535,12 @@ fn fold_node(node: &LoweredNode) -> Option<ScalarRef> {
                 Op::Or => Some(*lhs | *rhs),
                 Op::Implication => Some((!*lhs & 1) | *rhs),
                 Op::Equal => Some(i64::from(lhs == rhs)),
+                Op::NotEqual => Some(i64::from(lhs != rhs)),
                 Op::Less => Some(i64::from(lhs < rhs)),
                 Op::LessEqual => Some(i64::from(lhs <= rhs)),
                 Op::Greater => Some(i64::from(lhs > rhs)),
                 Op::GreaterEqual => Some(i64::from(lhs >= rhs)),
-                Op::Concatenate => None,
+                Op::Concatenate | Op::Power => None,
             }?;
             Some(constant(folded, *output_kind))
         }
@@ -624,7 +625,7 @@ fn supported_binary(
     use BinaryOperator as Op;
     let numeric = |kind| matches!(kind, ScalarKind::Int | ScalarKind::Float);
     match op {
-        Op::Add | Op::Subtract | Op::Multiply => {
+        Op::Add | Op::Subtract | Op::Multiply | Op::Power => {
             numeric(left)
                 && numeric(right)
                 && output
@@ -650,7 +651,7 @@ fn supported_binary(
         Op::And | Op::Or | Op::Implication => {
             left == ScalarKind::Bool && right == ScalarKind::Bool && output == ScalarKind::Bool
         }
-        Op::Equal => {
+        Op::Equal | Op::NotEqual => {
             output == ScalarKind::Bool
                 && ((numeric(left) && numeric(right))
                     || (left == ScalarKind::Bool && right == ScalarKind::Bool))

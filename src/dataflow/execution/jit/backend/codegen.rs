@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
-use cranelift_codegen::ir::{self, AbiParam, InstBuilder, MemFlagsData, types};
+use cranelift_codegen::ir::{self, AbiParam, FuncRef, InstBuilder, MemFlagsData, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -29,6 +29,100 @@ use super::ir::{
     TemporalProgram, TemporalSource,
 };
 use super::lowering::Lowering;
+
+const CHECKED_INT_POWER_SYMBOL: &str = "dsrv_checked_int_power";
+const INT_POWER_SYMBOL: &str = "dsrv_int_power";
+const FLOAT_POWER_SYMBOL: &str = "dsrv_float_power";
+const FAILURE_INTEGER_DIVISION_BY_ZERO: i64 = 1;
+const FAILURE_NEGATIVE_INTEGER_EXPONENT: i64 = 2;
+const FAILURE_INTEGER_POWER_OVERFLOW: i64 = 3;
+
+extern "C" fn checked_int_power(base: i64, exponent: i64) -> u8 {
+    if exponent < 0 {
+        return FAILURE_NEGATIVE_INTEGER_EXPONENT as u8;
+    }
+    if checked_int_power_value(base, exponent).is_some() {
+        0
+    } else {
+        FAILURE_INTEGER_POWER_OVERFLOW as u8
+    }
+}
+
+fn checked_int_power_value(mut base: i64, mut exponent: i64) -> Option<i64> {
+    let mut result = 1_i64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result = result.checked_mul(base)?;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            base = base.checked_mul(base)?;
+        }
+    }
+    Some(result)
+}
+
+extern "C" fn int_power(base: i64, exponent: i64) -> i64 {
+    // The generated code calls this only after `checked_int_power` accepted the
+    // same operands, so the value is present without narrowing the exponent.
+    checked_int_power_value(base, exponent).unwrap_or(0)
+}
+
+extern "C" fn float_power(base: f64, exponent: f64) -> f64 {
+    base.powf(exponent)
+}
+
+#[derive(Clone, Copy)]
+struct PowerHelpers {
+    checked_int: FuncRef,
+    int: FuncRef,
+    float: FuncRef,
+}
+
+fn register_power_helpers(builder: &mut JITBuilder) {
+    builder.symbol(CHECKED_INT_POWER_SYMBOL, checked_int_power as *const u8);
+    builder.symbol(INT_POWER_SYMBOL, int_power as *const u8);
+    builder.symbol(FLOAT_POWER_SYMBOL, float_power as *const u8);
+}
+
+fn declare_power_helpers(
+    module: &mut JITModule,
+    function: &mut ir::Function,
+) -> Result<PowerHelpers, String> {
+    let mut checked_signature = module.make_signature();
+    checked_signature.params.push(AbiParam::new(types::I64));
+    checked_signature.params.push(AbiParam::new(types::I64));
+    checked_signature.returns.push(AbiParam::new(types::I8));
+    let checked_int = module
+        .declare_function(
+            CHECKED_INT_POWER_SYMBOL,
+            Linkage::Import,
+            &checked_signature,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut int_signature = module.make_signature();
+    int_signature.params.push(AbiParam::new(types::I64));
+    int_signature.params.push(AbiParam::new(types::I64));
+    int_signature.returns.push(AbiParam::new(types::I64));
+    let int = module
+        .declare_function(INT_POWER_SYMBOL, Linkage::Import, &int_signature)
+        .map_err(|error| error.to_string())?;
+
+    let mut float_signature = module.make_signature();
+    float_signature.params.push(AbiParam::new(types::F64));
+    float_signature.params.push(AbiParam::new(types::F64));
+    float_signature.returns.push(AbiParam::new(types::F64));
+    let float = module
+        .declare_function(FLOAT_POWER_SYMBOL, Linkage::Import, &float_signature)
+        .map_err(|error| error.to_string())?;
+
+    Ok(PowerHelpers {
+        checked_int: module.declare_func_in_func(checked_int, function),
+        int: module.declare_func_in_func(int, function),
+        float: module.declare_func_in_func(float, function),
+    })
+}
 
 #[derive(Clone, Copy)]
 struct TemporalValue {
@@ -118,6 +212,7 @@ fn define_temporal_run_function(
 
     let mut context = module.make_context();
     context.func.signature = signature;
+    let power_helpers = declare_power_helpers(module, &mut context.func)?;
     let mut function_builder_context = FunctionBuilderContext::new();
     {
         let mut builder = FunctionBuilder::new(&mut context.func, &mut function_builder_context);
@@ -128,7 +223,11 @@ fn define_temporal_run_function(
         let input_base = builder.block_params(entry)[0];
         let output_base = builder.block_params(entry)[1];
         let state = builder.block_params(entry)[2];
-        let failure_block = checked.then(|| builder.create_block());
+        let failure_block = checked.then(|| {
+            let block = builder.create_block();
+            builder.append_block_param(block, types::I8);
+            block
+        });
         let mut pending = Vec::new();
         let mut next_state_offset = 0usize;
         let mut produced_values = BTreeMap::<EnvironmentSlot, NativeValue>::new();
@@ -232,6 +331,7 @@ fn define_temporal_run_function(
                 builder: &mut builder,
                 input_values,
                 failure_block,
+                power_helpers,
             }
             .compile(&program.graph);
             match &abi {
@@ -291,7 +391,7 @@ fn define_temporal_run_function(
             builder.ins().return_(&[success]);
             builder.switch_to_block(failure_block);
             builder.seal_block(failure_block);
-            let failure = builder.ins().iconst(types::I8, 1);
+            let failure = builder.block_params(failure_block)[0];
             builder.ins().return_(&[failure]);
         } else {
             builder.ins().return_(&[]);
@@ -338,7 +438,7 @@ pub(in crate::dataflow::execution::jit) fn compile_temporal_monitor(
     }
     let checked = lowered
         .iter()
-        .any(|(_, program)| program.requires_division_guard());
+        .any(|(_, program)| program.requires_failure_guard());
     if states.is_empty()
         || !plan
             .commit_streams
@@ -372,10 +472,9 @@ pub(in crate::dataflow::execution::jit) fn compile_temporal_monitor(
         .map_err(|error| error.to_string())?
         .finish(settings::Flags::new(flag_builder))
         .map_err(|error| error.to_string())?;
-    let mut module = JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
-    ));
+    let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    register_power_helpers(&mut jit_builder);
+    let mut module = JITModule::new(jit_builder);
 
     let value_function_id = {
         let input_indices = external_inputs
@@ -718,6 +817,7 @@ fn define_scalar_run_function(
 
     let mut context = module.make_context();
     context.func.signature = signature;
+    let power_helpers = declare_power_helpers(module, &mut context.func)?;
     let mut function_builder_context = FunctionBuilderContext::new();
     {
         let mut builder = FunctionBuilder::new(&mut context.func, &mut function_builder_context);
@@ -727,7 +827,11 @@ fn define_scalar_run_function(
         builder.seal_block(entry);
         let input_base = builder.block_params(entry)[0];
         let output_base = builder.block_params(entry)[1];
-        let failure_block = checked.then(|| builder.create_block());
+        let failure_block = checked.then(|| {
+            let block = builder.create_block();
+            builder.append_block_param(block, types::I8);
+            block
+        });
         let mut produced_values = BTreeMap::<EnvironmentSlot, NativeValue>::new();
         let mut value_output_stores = Vec::<(usize, NativeValue)>::with_capacity(lowered.len());
         let mut direct_output_stores =
@@ -784,6 +888,7 @@ fn define_scalar_run_function(
                 builder: &mut builder,
                 input_values,
                 failure_block,
+                power_helpers,
             }
             .compile(&program.graph);
             match &abi {
@@ -825,7 +930,7 @@ fn define_scalar_run_function(
             builder.ins().return_(&[success]);
             builder.switch_to_block(failure_block);
             builder.seal_block(failure_block);
-            let failure = builder.ins().iconst(types::I8, 1);
+            let failure = builder.block_params(failure_block)[0];
             builder.ins().return_(&[failure]);
         } else {
             builder.ins().return_(&[]);
@@ -868,7 +973,7 @@ pub(in crate::dataflow::execution::jit) fn compile_scalar_region(
 
     let checked = lowered
         .iter()
-        .any(|(program, _, _)| program.requires_division_guard());
+        .any(|(program, _, _)| program.requires_failure_guard());
     let produced_slots = lowered
         .iter()
         .map(|(_, slot, _)| *slot)
@@ -896,10 +1001,9 @@ pub(in crate::dataflow::execution::jit) fn compile_scalar_region(
         .map_err(|error| error.to_string())?
         .finish(settings::Flags::new(flag_builder))
         .map_err(|error| error.to_string())?;
-    let mut module = JITModule::new(JITBuilder::with_isa(
-        isa,
-        cranelift_module::default_libcall_names(),
-    ));
+    let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    register_power_helpers(&mut jit_builder);
+    let mut module = JITModule::new(jit_builder);
 
     let value_function_id = {
         let input_indices = external_inputs
@@ -1028,10 +1132,13 @@ fn native_integer_division(
     if division == IntegerDivision::Checked {
         let failure_block = failure_block.expect("checked division requires a failure block");
         let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, rhs, 0);
+        let status = builder
+            .ins()
+            .iconst(types::I8, FAILURE_INTEGER_DIVISION_BY_ZERO);
         let continuation = builder.create_block();
         builder
             .ins()
-            .brif(nonzero, continuation, &[], failure_block, &[]);
+            .brif(nonzero, continuation, &[], failure_block, &[status.into()]);
         builder.switch_to_block(continuation);
         builder.seal_block(continuation);
     }
@@ -1054,6 +1161,7 @@ struct GraphCodegen<'a, 'b> {
     builder: &'a mut FunctionBuilder<'b>,
     input_values: Vec<NativeValue>,
     failure_block: Option<ir::Block>,
+    power_helpers: PowerHelpers,
 }
 
 #[derive(Clone, Copy)]
@@ -1200,17 +1308,29 @@ impl GraphCodegen<'_, '_> {
                 Op::Subtract => self.builder.ins().fsub(lhs, rhs),
                 Op::Multiply => self.builder.ins().fmul(lhs, rhs),
                 Op::Divide => self.builder.ins().fdiv(lhs, rhs),
+                Op::Power => {
+                    let call = self
+                        .builder
+                        .ins()
+                        .call(self.power_helpers.float, &[lhs, rhs]);
+                    self.builder.inst_results(call)[0]
+                }
                 _ => unreachable!("lowering admitted an unsupported float operation"),
             }
+        } else if matches!(op, Op::Equal | Op::NotEqual) && lhs.kind != rhs.kind {
+            self.builder
+                .ins()
+                .iconst(types::I64, i64::from(op == Op::NotEqual))
         } else if matches!(
             op,
-            Op::Equal | Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual
+            Op::Equal | Op::NotEqual | Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual
         ) && (lhs.kind == ScalarKind::Float || rhs.kind == ScalarKind::Float)
         {
             let lhs = self.to_float(lhs);
             let rhs = self.to_float(rhs);
             let condition = match op {
                 Op::Equal => FloatCC::Equal,
+                Op::NotEqual => FloatCC::NotEqual,
                 Op::Less => FloatCC::LessThan,
                 Op::LessEqual => FloatCC::LessThanOrEqual,
                 Op::Greater => FloatCC::GreaterThan,
@@ -1248,11 +1368,37 @@ impl GraphCodegen<'_, '_> {
                     self.builder.ins().bor(not_lhs, rhs)
                 }
                 Op::Equal => self.compare(IntCC::Equal, lhs, rhs),
+                Op::NotEqual => self.compare(IntCC::NotEqual, lhs, rhs),
                 Op::Less => self.compare(IntCC::SignedLessThan, lhs, rhs),
                 Op::LessEqual => self.compare(IntCC::SignedLessThanOrEqual, lhs, rhs),
                 Op::Greater => self.compare(IntCC::SignedGreaterThan, lhs, rhs),
                 Op::GreaterEqual => self.compare(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
-                Op::Concatenate => unreachable!("concatenation is not JIT eligible"),
+                Op::Power => {
+                    let failure_block = self
+                        .failure_block
+                        .expect("integer power requires a failure block");
+                    let checked = self
+                        .builder
+                        .ins()
+                        .call(self.power_helpers.checked_int, &[lhs, rhs]);
+                    let status = self.builder.inst_results(checked)[0];
+                    let valid = self.builder.ins().icmp_imm_s(IntCC::Equal, status, 0);
+                    let continuation = self.builder.create_block();
+                    self.builder.ins().brif(
+                        valid,
+                        continuation,
+                        &[],
+                        failure_block,
+                        &[status.into()],
+                    );
+                    self.builder.switch_to_block(continuation);
+                    self.builder.seal_block(continuation);
+                    let call = self.builder.ins().call(self.power_helpers.int, &[lhs, rhs]);
+                    self.builder.inst_results(call)[0]
+                }
+                Op::Concatenate => {
+                    unreachable!("lowering admitted an unsupported operation")
+                }
             }
         };
         NativeValue {

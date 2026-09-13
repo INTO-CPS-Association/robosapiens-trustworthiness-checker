@@ -14,6 +14,68 @@ fn typed_monitor_mixed_rows_avoid_the_value_interface() {
     assert_eq!(monitor.evaluate(&(4, 0.5)), (2.0,));
 }
 
+// SYN-R15/E1: checked typed execution preserves the canonical result type and
+// value for both revised operators.
+#[test]
+fn typed_monitor_evaluates_power_and_inequality() {
+    let specification = "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
+         result = x ** exponent\ndifferent = x != exponent"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        TypedDataflowMonitor::<(i64, i64), (i64, bool)>::compile_checked(specification).unwrap();
+
+    assert_eq!(monitor.evaluate(&(2, 3)), (8, true));
+    assert_eq!(monitor.evaluate(&(-2, 3)), (-8, true));
+    assert_eq!(monitor.evaluate(&(1, i64::MAX)), (1, true));
+    assert_eq!(monitor.evaluate(&(0, 0)), (1, false));
+}
+
+// SYN-R15/E1: the typed monitor reaches a direct native artifact for the actual
+// revised operators, not just for an unrelated arithmetic prefix.
+#[cfg(feature = "jit")]
+#[test]
+fn typed_monitor_activates_direct_jit_for_power_and_inequality() {
+    crate::dataflow::execution::jit::reset_compile_count();
+    let specification = "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
+         result = x ** exponent\ndifferent = x != exponent"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor = TypedDataflowMonitor::<(i64, i64), (i64, bool)>::compile_checked_with_jit(
+        specification,
+        JitConfig::after_events(1),
+    )
+    .unwrap();
+
+    assert!(!monitor.is_direct_jit_active());
+    assert_eq!(monitor.evaluate(&(2, 3)), (8, true));
+    assert!(!monitor.is_direct_jit_active());
+    assert_eq!(monitor.evaluate(&(-2, 3)), (-8, true));
+    assert!(monitor.is_direct_jit_active());
+    assert!(
+        monitor
+            .jit_report()
+            .expect("typed JIT report")
+            .compiled_artifacts()
+            > 0
+    );
+    assert_eq!(monitor.evaluate(&(0, 0)), (1, false));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn eager_native_jit_preserves_variant_sensitive_mixed_numeric_inequality() {
+    let specification =
+        "in integer: Int\nin float: Float\nout different: Bool\ndifferent = integer != float"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+    let mut monitor =
+        TypedJitMonitor::<(i64, f64), (bool,)>::compile_checked(specification).unwrap();
+
+    assert_eq!(monitor.evaluate(&(1, 1.0)), (true,));
+    assert_eq!(monitor.evaluate(&(1, 2.0)), (true,));
+}
+
 #[test]
 fn typed_monitor_reports_a_non_concrete_output_rather_than_guessing() {
     // Sparse ticks are not representable in a typed row. The first tick of a delayed stream has
@@ -67,6 +129,34 @@ fn jit_direct_rejects_zero_integer_divisors_without_a_hardware_trap() {
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
     monitor.evaluate(&(17, 0));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+#[should_panic(expected = "negative integer exponent in direct JIT monitor")]
+fn jit_direct_reports_negative_integer_exponents_distinctly() {
+    let specification =
+        "in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+    let mut monitor =
+        TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
+
+    monitor.evaluate(&(2, -1));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+#[should_panic(expected = "integer overflow during exponentiation in direct JIT monitor")]
+fn jit_direct_reports_integer_power_overflow_distinctly() {
+    let specification =
+        "in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+    let mut monitor =
+        TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
+
+    monitor.evaluate(&(2, 63));
 }
 
 #[cfg(feature = "jit")]

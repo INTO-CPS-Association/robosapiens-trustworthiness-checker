@@ -75,6 +75,93 @@ fn parse_spec(source: &str) -> trustworthiness_checker::DsrvSpecification {
         .expect("test DSRV specification should parse")
 }
 
+// SYN-R15/R18/E1/E2: the in-process distributed runtime carries revised scalar
+// operators through its normal scheduling and output path.
+#[apply(async_test)]
+async fn test_distributed_revised_operators(executor: Rc<LocalExecutor<'static>>) {
+    let input_handler = map::input_stream(BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::Int(2), Value::Int(3), Value::Int(1)],
+        ),
+        (
+            VarName::new("exponent"),
+            vec![Value::Int(3), Value::Int(2), Value::Int(i64::MAX)],
+        ),
+    ]));
+
+    let mut graph = DiGraph::new();
+    let central = graph.add_node("A".into());
+    let worker = graph.add_node("B".into());
+    graph.add_edge(central, worker, 0);
+    let labelled_graph = LabelledDistributionGraph {
+        dist_graph: Rc::new(DistributionGraph {
+            central_monitor: central,
+            graph,
+        }),
+        var_names: vec![
+            "x".into(),
+            "exponent".into(),
+            "power".into(),
+            "different".into(),
+        ],
+        node_labels: BTreeMap::from([
+            (central, vec![]),
+            (
+                worker,
+                vec![
+                    "x".into(),
+                    "exponent".into(),
+                    "power".into(),
+                    "different".into(),
+                ],
+            ),
+        ]),
+    };
+    let spec = parse_spec(
+        "in x: Int\nin exponent: Int\nout power: Int\nout different: Bool\n\
+         power = x ** exponent\ndifferent = x != exponent",
+    );
+    let outputs = BTreeSet::from([VarName::new("different"), VarName::new("power")]);
+    let (output_writer, output_stream) = channel_output(outputs).await;
+    let var_msg_types = BTreeMap::from([
+        (VarName::new("x"), "Int32".to_owned()),
+        (VarName::new("exponent"), "Int32".to_owned()),
+        (VarName::new("power"), "Int32".to_owned()),
+        (VarName::new("different"), "Int32".to_owned()),
+    ]);
+
+    let runtime = TestDistRuntimeBuilder::new()
+        .executor(executor.clone())
+        .input(input_handler.into())
+        .model(spec)
+        .var_msg_types(var_msg_types)
+        .static_dist_graph(labelled_graph)
+        .output_writer(output_writer)
+        .build()
+        .await;
+    executor.spawn(runtime.run()).detach();
+
+    let output: Vec<_> = output_stream.take(3).collect().await;
+    assert_eq!(
+        output,
+        vec![
+            BTreeMap::from([
+                (VarName::new("different"), Value::Bool(true)),
+                (VarName::new("power"), Value::Int(8)),
+            ]),
+            BTreeMap::from([
+                (VarName::new("different"), Value::Bool(true)),
+                (VarName::new("power"), Value::Int(9)),
+            ]),
+            BTreeMap::from([
+                (VarName::new("different"), Value::Bool(true)),
+                (VarName::new("power"), Value::Int(1)),
+            ]),
+        ]
+    );
+}
+
 #[apply(async_test)]
 async fn test_distributed_at_stream(executor: Rc<LocalExecutor<'static>>) {
     let x = vec![1.into(), 2.into(), 3.into()];

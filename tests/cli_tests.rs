@@ -619,6 +619,33 @@ mod integration_tests {
         );
     }
 
+    // SYN-R06: an overflowing source literal fails at the CLI boundary with
+    // diagnostics instead of aborting or being accepted as infinity.
+    #[apply(async_test)]
+    async fn test_dsrv_syntax_revision_invalid_float_literal() {
+        let model = fixture_path("dsrv_syntax_revision_invalid_literal.dsrv");
+        let input = fixture_path("empty.input");
+        let output = run_cli(&[&model, "--input-file", &input, "--output-stdout"])
+            .await
+            .expect("Failed to run CLI");
+
+        assert!(
+            !output.status.success(),
+            "overflowing literal must fail the CLI"
+        );
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            diagnostics.contains("float literal")
+                || diagnostics.contains("could not be parsed")
+                || diagnostics.contains("invalid"),
+            "expected a source diagnostic, got: {diagnostics}"
+        );
+    }
+
     /// Test error handling for invalid input file
     #[apply(async_test)]
     async fn test_invalid_input_file() {

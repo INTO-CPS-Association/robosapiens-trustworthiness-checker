@@ -517,6 +517,7 @@ fn eval_binary(left: Value, right: Value, operator: &BinaryOperator) -> Option<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lang::dsrv::span::Span;
 
     #[test]
     fn lowering_collects_transitive_inputs_and_monitored_streams_once() {
@@ -583,5 +584,152 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    // SYN-R17/E2: compact constraints are partial evaluators. Arithmetic
+    // failures become absence, unlike normal monitor execution.
+    #[test]
+    fn compact_power_evaluation_returns_none_for_missing_and_failed_values() {
+        let spec = ("in base\nin exponent\nout constraint\nconstraint = base ** exponent")
+            .parse::<DsrvSpecification>()
+            .expect("power constraint should parse");
+        let plan = DistributionConstraintPlan::lower(
+            &spec,
+            [VarName::new("constraint")],
+            ConstraintProfile::CompactEvaluator,
+        )
+        .unwrap();
+
+        let complete = BTreeMap::from([
+            (VarName::new("base"), Value::Int(2)),
+            (VarName::new("exponent"), Value::Int(3)),
+        ]);
+        assert_eq!(
+            plan.evaluate_var(&VarName::new("constraint"), &complete, None),
+            Some(Value::Int(8))
+        );
+        for exponent in [-1, i64::MIN] {
+            let bindings = BTreeMap::from([
+                (VarName::new("base"), Value::Int(2)),
+                (VarName::new("exponent"), Value::Int(exponent)),
+            ]);
+            assert_eq!(
+                plan.evaluate_var(&VarName::new("constraint"), &bindings, None),
+                None,
+                "negative exponent {exponent} must be absent"
+            );
+        }
+        let overflow = BTreeMap::from([
+            (VarName::new("base"), Value::Int(2)),
+            (VarName::new("exponent"), Value::Int(63)),
+        ]);
+        assert_eq!(
+            plan.evaluate_var(&VarName::new("constraint"), &overflow, None),
+            None
+        );
+        assert_eq!(
+            plan.evaluate_var(
+                &VarName::new("constraint"),
+                &BTreeMap::from([(VarName::new("base"), Value::Int(2))]),
+                None,
+            ),
+            None,
+        );
+
+        let nested = "in base\nin exponent\nin gate\nout constraint\n\
+                      constraint = if gate then base ** exponent else 0"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let nested_plan = DistributionConstraintPlan::lower(
+            &nested,
+            [VarName::new("constraint")],
+            ConstraintProfile::CompactEvaluator,
+        )
+        .unwrap();
+        assert_eq!(
+            nested_plan.evaluate_var(
+                &VarName::new("constraint"),
+                &BTreeMap::from([
+                    (VarName::new("base"), Value::Int(2)),
+                    (VarName::new("exponent"), Value::Int(-1)),
+                    (VarName::new("gate"), Value::Bool(true)),
+                ]),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            nested_plan.evaluate_var(
+                &VarName::new("constraint"),
+                &BTreeMap::from([
+                    (VarName::new("base"), Value::Int(2)),
+                    (VarName::new("exponent"), Value::Int(-1)),
+                    (VarName::new("gate"), Value::Bool(false)),
+                ]),
+                None,
+            ),
+            Some(Value::Int(0))
+        );
+    }
+
+    // SYN-R18/E2: inequality survives constraint lowering and retains its
+    // first-class operator metadata.
+    #[test]
+    fn inequality_constraints_lower_with_dependencies_and_direct_semantics() {
+        let source = "in left\nin right\nout constraint\nconstraint = left != right";
+        let spec = source
+            .parse::<DsrvSpecification>()
+            .expect("inequality constraint should parse");
+        let plan = DistributionConstraintPlan::lower(
+            &spec,
+            [VarName::new("constraint")],
+            ConstraintProfile::CompactEvaluator,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.input_dependencies(),
+            &BTreeSet::from([VarName::new("left"), VarName::new("right")])
+        );
+        let expression = plan.expression(&VarName::new("constraint")).unwrap();
+        assert_eq!(expression.display, "(left != right)");
+        let start = source.find("left != right").unwrap() as u32;
+        assert_eq!(
+            expression.span,
+            Span::new(start, start + "left != right".len() as u32)
+        );
+        assert!(matches!(
+            expression.kind,
+            ConstraintExprKind::Binary(_, _, BinaryOperator::NotEqual)
+        ));
+        for (left, right, expected) in [(1, 2, true), (4, 4, false)] {
+            let bindings = BTreeMap::from([
+                (VarName::new("left"), Value::Int(left)),
+                (VarName::new("right"), Value::Int(right)),
+            ]);
+            assert_eq!(
+                plan.evaluate_var(&VarName::new("constraint"), &bindings, None),
+                Some(Value::Bool(expected))
+            );
+        }
+    }
+
+    // SYN-R17/V4: floating overflow is a successful IEEE value in constraints.
+    #[test]
+    fn compact_float_power_overflow_remains_some_infinity() {
+        let spec = ("out constraint\nconstraint = 1e308 ** 2.0")
+            .parse::<DsrvSpecification>()
+            .expect("float power constraint should parse");
+        let plan = DistributionConstraintPlan::lower(
+            &spec,
+            [VarName::new("constraint")],
+            ConstraintProfile::CompactEvaluator,
+        )
+        .unwrap();
+        let Some(Value::Float(value)) =
+            plan.evaluate_var(&VarName::new("constraint"), &BTreeMap::new(), None)
+        else {
+            panic!("float overflow should be an ordinary Float result");
+        };
+        assert!(value.is_infinite() && value.is_sign_positive());
     }
 }

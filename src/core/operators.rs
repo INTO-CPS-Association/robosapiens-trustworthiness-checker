@@ -28,11 +28,13 @@ pub enum BinaryOperator {
     Multiply,
     Divide,
     Modulo,
+    Power,
     Or,
     And,
     Implication,
     Concatenate,
     Equal,
+    NotEqual,
     Less,
     LessEqual,
     Greater,
@@ -51,12 +53,15 @@ pub enum BinaryOperatorKind {
 impl BinaryOperator {
     pub fn kind(self) -> BinaryOperatorKind {
         match self {
-            Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Modulo => {
-                BinaryOperatorKind::Numeric
-            }
+            Self::Add
+            | Self::Subtract
+            | Self::Multiply
+            | Self::Divide
+            | Self::Modulo
+            | Self::Power => BinaryOperatorKind::Numeric,
             Self::Or | Self::And | Self::Implication => BinaryOperatorKind::Boolean,
             Self::Concatenate => BinaryOperatorKind::String,
-            Self::Equal => BinaryOperatorKind::Equality,
+            Self::Equal | Self::NotEqual => BinaryOperatorKind::Equality,
             Self::Less | Self::LessEqual | Self::Greater | Self::GreaterEqual => {
                 BinaryOperatorKind::Ordering
             }
@@ -70,15 +75,38 @@ impl BinaryOperator {
             Self::Multiply => "multiplication",
             Self::Divide => "division",
             Self::Modulo => "modulo",
+            Self::Power => "exponentiation",
             Self::Or => "boolean or",
             Self::And => "boolean and",
             Self::Implication => "boolean implication",
             Self::Concatenate => "string concatenation",
             Self::Equal => "equality",
+            Self::NotEqual => "inequality",
             Self::Less => "less-than comparison",
             Self::LessEqual => "less-than-or-equal comparison",
             Self::Greater => "greater-than comparison",
             Self::GreaterEqual => "greater-than-or-equal comparison",
+        }
+    }
+
+    pub(crate) fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Divide => "/",
+            Self::Modulo => "%",
+            Self::Power => "**",
+            Self::Or => "||",
+            Self::And => "&&",
+            Self::Implication => "=>",
+            Self::Concatenate => "++",
+            Self::Equal => "==",
+            Self::NotEqual => "!=",
+            Self::Less => "<",
+            Self::LessEqual => "<=",
+            Self::Greater => ">",
+            Self::GreaterEqual => ">=",
         }
     }
 }

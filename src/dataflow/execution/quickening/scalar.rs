@@ -130,7 +130,7 @@ pub(super) fn supports_binary(
     use ScalarKind as Kind;
 
     match op {
-        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo => {
+        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo | Op::Power => {
             matches!(left, Kind::Int | Kind::Float)
                 && matches!(right, Kind::Int | Kind::Float)
                 && output
@@ -143,7 +143,7 @@ pub(super) fn supports_binary(
         Op::Or | Op::And | Op::Implication => {
             left == Kind::Bool && right == Kind::Bool && output == Kind::Bool
         }
-        Op::Equal => output == Kind::Bool,
+        Op::Equal | Op::NotEqual => output == Kind::Bool,
         Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual => {
             output == Kind::Bool
                 && ((matches!(left, Kind::Int | Kind::Float)
@@ -221,6 +221,7 @@ pub(super) fn apply_binary(
             })
         }
         (left, right) if op == Op::Equal => Scalar::Bool(left == right),
+        (left, right) if op == Op::NotEqual => Scalar::Bool(left != right),
         (left, right)
             if matches!(
                 op,
@@ -255,6 +256,7 @@ fn is_arithmetic(op: BinaryOperator) -> bool {
             | BinaryOperator::Multiply
             | BinaryOperator::Divide
             | BinaryOperator::Modulo
+            | BinaryOperator::Power
     )
 }
 
@@ -265,6 +267,7 @@ fn float_binary(op: BinaryOperator, left: f64, right: f64) -> f64 {
         BinaryOperator::Multiply => left * right,
         BinaryOperator::Divide => left / right,
         BinaryOperator::Modulo => left % right,
+        BinaryOperator::Power => left.powf(right),
         _ => unreachable!(),
     }
 }

@@ -69,7 +69,7 @@ fn arb_valid_dataflow_program_and_inputs()
                 let rhs = dependency(second);
                 let offset = u64::from(second % 5);
                 let var = |name: VarName| Expr::Var(name);
-                let expression = match operator % 12 {
+                let expression = match operator % 13 {
                     0 => Expr::BinOp(Box::new(var(lhs)), Box::new(var(rhs)), BinaryOperator::Add),
                     1 => Expr::If(
                         Box::new(var(VarName::new("flag"))),
@@ -102,6 +102,11 @@ fn arb_valid_dataflow_program_and_inputs()
                         BinaryOperator::Subtract,
                     ),
                     10 => Expr::Default(Box::new(var(lhs)), Box::new(var(rhs))),
+                    11 => Expr::BinOp(
+                        Box::new(var(lhs)),
+                        Box::new(Expr::Val(Value::Int(1))),
+                        BinaryOperator::Power,
+                    ),
                     _ => Expr::Val(Value::Int(i64::from(first))),
                 };
                 exprs.insert(name.clone(), expression.into());
@@ -128,7 +133,6 @@ fn arb_valid_dataflow_program_and_inputs()
                 .into(),
             );
             annotations.insert(specialized_binary, StreamType::Int);
-
             let stream_vars = exprs.keys().cloned().collect::<BTreeSet<_>>();
             let spec = DsrvSpecification::new(
                 BTreeSet::from([VarName::new("x"), VarName::new("flag")]),
@@ -179,7 +183,7 @@ fn arb_specialized_runtime_program_and_inputs()
                 let name = VarName::from(format!("generated_{index}"));
                 let lhs = available[usize::from(first) % available.len()].clone();
                 let rhs = available[usize::from(second) % available.len()].clone();
-                let expression = match operator % 4 {
+                let expression = match operator % 5 {
                     0 => Expr::BinOp(
                         Box::new(Expr::Var(lhs)),
                         Box::new(Expr::Var(rhs)),
@@ -191,6 +195,11 @@ fn arb_specialized_runtime_program_and_inputs()
                         BinaryOperator::Subtract,
                     ),
                     2 => Expr::Abs(Box::new(Expr::Var(lhs))),
+                    3 => Expr::BinOp(
+                        Box::new(Expr::Var(lhs)),
+                        Box::new(Expr::Val(Value::Int(1))),
+                        BinaryOperator::Power,
+                    ),
                     _ => Expr::If(
                         Box::new(Expr::Var(flag.clone())),
                         Box::new(Expr::Var(lhs)),
@@ -243,18 +252,20 @@ fn arb_runtime_compiled_program(
                         1 => Value::Deferred,
                         _ => {
                             let offset = expression % 5;
-                            let source = match (combinator, expression % 10) {
+                            let source = match (combinator, expression % 12) {
                                 ("defer", 2) => "x + y".to_owned(),
                                 ("defer", 5) => format!("default(y[{offset}], x)"),
                                 (_, 0) => "x".to_owned(),
                                 (_, 1) => "y".to_owned(),
                                 (_, 2) => "sum".to_owned(),
                                 (_, 3) => "x + y".to_owned(),
-                                (_, 4) => format!("default(x[{offset}], 0) + y"),
+                                (_, 4) => format!("default(x[{offset}], 0,) + y"),
                                 (_, 5) => format!("default(sum[{offset}], x)"),
                                 (_, 6) => "if x > y then x + y else x".to_owned(),
                                 (_, 7) => "latch(x, x > y)".to_owned(),
                                 (_, 8) => "update(x, y)".to_owned(),
+                                (_, 9) => "x ** 2".to_owned(),
+                                (_, 10) => "if x != y and x > y then 1 else 0".to_owned(),
                                 _ => "if when(x) then 1 else 0".to_owned(),
                             };
                             Value::Str(source.into())
@@ -1804,6 +1815,164 @@ async fn dataflow_matches_arithmetic(executor: Rc<LocalExecutor<'static>>) {
         ],
     )
     .await;
+}
+
+// SYN-R15/SYN-R16/E1: generic dataflow, the checked/specialized dataflow
+// runtime, and the semi-sync reference must agree on revised operators.
+#[apply(async_test)]
+async fn dataflow_revised_operators_match_all_runtime_references(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let spec = "in x: Int\nin exponent: Int\nout power: Int\nout different: Bool\n\
+                power = x ** exponent\ndifferent = x != exponent"
+        .parse::<DsrvSpecification>()
+        .expect("revised operator specification should parse");
+    let trace = assert_runtime_parity(
+        executor.clone(),
+        spec,
+        BTreeMap::from([
+            (
+                VarName::new("x"),
+                vec![Value::Int(2), Value::Int(-2), Value::Int(1), Value::Int(0)],
+            ),
+            (
+                VarName::new("exponent"),
+                vec![
+                    Value::Int(3),
+                    Value::Int(3),
+                    Value::Int(i64::MAX),
+                    Value::Int(0),
+                ],
+            ),
+        ]),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&trace, "power"),
+        vec![Value::Int(8), Value::Int(-8), Value::Int(1), Value::Int(1)]
+    );
+    assert_eq!(
+        output_trace(&trace, "different"),
+        vec![
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(false)
+        ]
+    );
+
+    // SYN-R11: brackets remain temporal history access in the same parity harness.
+    let temporal = "in x: Int\nout delayed: Int\ndelayed = x[1]"
+        .parse::<DsrvSpecification>()
+        .expect("temporal specification should parse");
+    let trace = assert_runtime_parity(
+        executor,
+        temporal,
+        BTreeMap::from([(
+            VarName::new("x"),
+            vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        )]),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&trace, "delayed"),
+        vec![Value::Deferred, Value::Int(10), Value::Int(20)]
+    );
+}
+
+// SYN-R19/E3: revised operators survive source replacement through both
+// reconfigurable forms, including an explicit scope and trailing comma.
+#[apply(async_test)]
+async fn reconfigurable_revised_operator_sources_match_static_results(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::Int(2), Value::Int(3), Value::Int(4)],
+        ),
+        (
+            VarName::new("exponent"),
+            vec![Value::Int(3), Value::Int(2), Value::Int(1)],
+        ),
+        (
+            VarName::new("source"),
+            vec![
+                Value::Str("x ** exponent".into()),
+                Value::Str("x ** 2".into()),
+                Value::Str("if x != exponent and x > 0 then x else 0".into()),
+            ],
+        ),
+    ]);
+    let dynamic = "in x: Int\nin exponent: Int\nin source: Str\nout result: Int\n\
+                   result = dynamic(source: Int, {x, exponent, source},)";
+    let dynamic_trace = assert_runtime_parity(
+        executor.clone(),
+        dynamic
+            .parse()
+            .expect("dynamic replacement specification should parse"),
+        inputs.clone(),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&dynamic_trace, "result"),
+        vec![Value::Int(8), Value::Int(9), Value::Int(4)]
+    );
+
+    let evaluated = dynamic.replace("dynamic", "eval");
+    let eval_trace = assert_runtime_parity(
+        executor.clone(),
+        evaluated
+            .parse()
+            .expect("eval replacement specification should parse"),
+        inputs.clone(),
+    )
+    .await;
+    assert_eq!(
+        output_trace(&eval_trace, "result"),
+        vec![Value::Int(8), Value::Int(9), Value::Int(4)]
+    );
+
+    let deferred = "in x: Int\nin exponent: Int\nin source: Str\nout result: Int\n\
+                    result = defer(source: Int)";
+    let deferred_trace = assert_runtime_parity(
+        executor,
+        deferred
+            .parse()
+            .expect("defer replacement specification should parse"),
+        inputs,
+    )
+    .await;
+    assert_eq!(
+        output_trace(&deferred_trace, "result"),
+        vec![Value::Int(8), Value::Int(9), Value::Int(4)]
+    );
+}
+
+// SYN-R19/E3: a source whose revised expression is statically invalid is
+// rejected during nested compilation, before an output row is published.
+#[test]
+fn reconfigured_negative_integer_power_reports_source_context() {
+    let spec = "in source: Str\nout result: Int\nresult = dynamic(source: Int)"
+        .parse::<DsrvSpecification>()
+        .unwrap()
+        .type_check(TypeCheckOptions::STRICT)
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
+    let mut output = vec![Value::NoVal];
+    let error = monitor
+        .evaluate(&[Value::Str("2 ** -1".into())], &mut output)
+        .expect_err("known negative integer power must be rejected on installation");
+    assert!(matches!(
+        error,
+        DataflowEvaluationError::ReconfigurableExpressionType { ref message, .. }
+            if message.contains("integer exponent must be non-negative")
+    ));
+    assert_eq!(output, [Value::NoVal]);
+    assert!(matches!(
+        monitor.evaluate(&[Value::Str("2 ** 1".into())], &mut output),
+        Err(DataflowEvaluationError::MonitorFailed)
+    ));
 }
 
 #[apply(async_test)]

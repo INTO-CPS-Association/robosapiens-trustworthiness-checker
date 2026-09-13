@@ -172,6 +172,136 @@ fn write_one_output_row() -> anyhow::Result<()> {
 }
 // ANCHOR_END: output_pipeline_open
 
+// ANCHOR: dsrv_operator_syntax
+fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+
+    let source = "in base: Int\n\
+        in exponent: Int\n\
+        out different: Bool\n\
+        out signed_power: Int\n\
+        out both_positive: Bool\n\
+        different = base != exponent\n\
+        signed_power = (-base) ** exponent\n\
+        both_positive = base > 0 and exponent > 0";
+    let spec = source.parse::<DsrvSpecification>()?;
+    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let outputs = monitor.output_vars().to_vec();
+    let output_index = |name: &str| {
+        outputs
+            .iter()
+            .position(|variable| variable == &VarName::new(name))
+            .expect("declared output")
+    };
+    let mut row = vec![Value::NoVal; outputs.len()];
+
+    monitor.evaluate(&[Value::Int(2), Value::Int(3)], &mut row)?;
+    assert_eq!(row[output_index("different")], Value::Bool(true));
+    assert_eq!(row[output_index("signed_power")], Value::Int(-8));
+    assert_eq!(row[output_index("both_positive")], Value::Bool(true));
+    Ok(())
+}
+// ANCHOR_END: dsrv_operator_syntax
+
+// ANCHOR: dsrv_numeric_literals
+fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
+    use trustworthiness_checker::lang::dsrv::ast::ExprView;
+    use trustworthiness_checker::lang::dsrv::parser::parse_expr;
+    use trustworthiness_checker::{CheckedDsrvSpecification, Value};
+
+    let literals = [
+        ("42", Value::Int(42)),
+        ("0.5", Value::Float(0.5)),
+        ("1.", Value::Float(1.0)),
+        ("1e6", Value::Float(1_000_000.0)),
+        ("1E-6", Value::Float(1e-6)),
+        ("1.5e+3", Value::Float(1_500.0)),
+    ];
+    for (source, expected) in literals {
+        let expression = parse_expr(source)?;
+        let matches_expected = match (&expected, expression.as_ref().view()) {
+            (Value::Int(expected), ExprView::Val(Value::Int(actual))) => *actual == *expected,
+            (Value::Float(expected), ExprView::Val(Value::Float(actual))) => {
+                actual.to_bits() == expected.to_bits()
+            }
+            _ => false,
+        };
+        assert!(matches_expected, "{source} parsed to an unexpected value");
+    }
+
+    for literal in ["1e2.3", "1.2e3.4"] {
+        let source = format!("out result: Float\nresult = {literal}");
+        assert!(
+            source.parse::<CheckedDsrvSpecification>().is_err(),
+            "{literal} must be rejected as a malformed numeric specification"
+        );
+    }
+    Ok(())
+}
+// ANCHOR_END: dsrv_numeric_literals
+
+// ANCHOR: dsrv_trailing_commas_and_list_get
+fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+
+    let source = "in values: List<Int,>\n\
+        out first: Int\n\
+        out count: Int\n\
+        first = List.get(values, 0,)\n\
+        count = List.len(values,)";
+    let spec = source.parse::<DsrvSpecification>()?;
+    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let outputs = monitor.output_vars().to_vec();
+    let output_index = |name: &str| {
+        outputs
+            .iter()
+            .position(|variable| variable == &VarName::new(name))
+            .expect("declared output")
+    };
+    let mut row = vec![Value::NoVal; outputs.len()];
+
+    monitor.evaluate(
+        &[Value::List(vec![Value::Int(7), Value::Int(9)].into())],
+        &mut row,
+    )?;
+    assert_eq!(row[output_index("first")], Value::Int(7));
+    assert_eq!(row[output_index("count")], Value::Int(2));
+    Ok(())
+}
+// ANCHOR_END: dsrv_trailing_commas_and_list_get
+
+// ANCHOR: dsrv_else_if_chain
+fn evaluate_else_if_chain() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+
+    let source = "in temperature: Int\n\
+        out level: Int\n\
+        level = if temperature > 90 then 2\n\
+                else if temperature > 70 then 1\n\
+                else 0";
+    let spec = source.parse::<DsrvSpecification>()?;
+    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let output = VarName::new("level");
+    let mut row = vec![Value::NoVal];
+
+    for (temperature, expected) in [(95, 2), (80, 1), (40, 0)] {
+        monitor.evaluate(&[Value::Int(temperature)], &mut row)?;
+        assert_eq!(
+            row[monitor
+                .output_vars()
+                .iter()
+                .position(|variable| variable == &output)
+                .expect("declared output")],
+            Value::Int(expected)
+        );
+    }
+    Ok(())
+}
+// ANCHOR_END: dsrv_else_if_chain
+
 #[test]
 fn dataflow_monitor_evaluates_rows() {
     evaluate_two_ticks().expect("documented monitor example should run");
@@ -200,4 +330,24 @@ fn input_window_batches_ticks_without_merging_them() {
 #[test]
 fn output_pipeline_writes_a_row_and_closes() {
     write_one_output_row().expect("documented output example should run");
+}
+
+#[test]
+fn revised_operator_reference_example_runs() {
+    evaluate_revised_operator_syntax().expect("documented operator example should run");
+}
+
+#[test]
+fn numeric_literal_reference_example_runs() {
+    parse_numeric_literal_syntax().expect("documented literal example should run");
+}
+
+#[test]
+fn trailing_comma_reference_example_runs() {
+    evaluate_trailing_commas_and_list_get().expect("documented trailing-comma example should run");
+}
+
+#[test]
+fn else_if_reference_example_runs() {
+    evaluate_else_if_chain().expect("documented conditional example should run");
 }

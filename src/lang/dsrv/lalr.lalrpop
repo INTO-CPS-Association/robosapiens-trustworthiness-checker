@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
+use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ExprBuilder, ReconfigurableExprScope, ExprKind, ExprId, VarOrNodeName};
 use crate::lang::dsrv::parser::Declaration;
@@ -7,7 +8,7 @@ use crate::core::{BinaryOperator, Value, VarName, StreamType, StreamTypeAscripti
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
-grammar(builder: &mut ExprBuilder);
+grammar(builder: &mut ExprBuilder, user_error_location: &mut Option<usize>);
 
 // Macro to automatically wrap parsed nodes with their span information
 MakeSpanned<T>: ExprId = {
@@ -27,11 +28,35 @@ match {
 
 RawIdent: &'input str = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => s;
 Ident: VarName = <s:RawIdent> => VarName::from(s);
-Uint: u64 = <s:r"[0-9]+"> => u64::from_str(s).unwrap();
+Uint: u64 = <l:@L> <s:r"[0-9]+"> =>? u64::from_str(s)
+    .map_err(|_| {
+        *user_error_location = Some(l);
+        ParseError::User { error: "unsigned integer literal is out of range" }
+    });
 // Negative numbers handled in unary minus - but need a separate case to not accept
 // numbers too large for i64 here.
-Int: i64 = <s:r"[0-9]+"> => i64::from_str(s).unwrap();
-Float: f64 = <s:r"(?:0|[1-9][0-9]*)\.[0-9]*(?:[eE]-?[0-9]+)?"> => f64::from_str(s).unwrap();
+Int: i64 = <l:@L> <s:r"[0-9]+"> =>? i64::from_str(s)
+    .map_err(|_| {
+        *user_error_location = Some(l);
+        ParseError::User { error: "integer literal is out of range" }
+    });
+MalformedFloat: Value = <l:@L> <_s:r"[0-9]+\.[0-9]*(?:\.[0-9]+)+"> =>?
+    {
+        *user_error_location = Some(l);
+        Err(ParseError::User { error: "invalid float literal" })
+    };
+Float: f64 = <l:@L> <s:r"[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)|[0-9]+\.[0-9]*"> =>? {
+    let value = f64::from_str(s).map_err(|_| {
+        *user_error_location = Some(l);
+        ParseError::User { error: "invalid float literal" }
+    })?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        *user_error_location = Some(l);
+        Err(ParseError::User { error: "float literal is out of range" })
+    }
+};
 Bool: bool = {
     "true" => true,
     "false" => false
@@ -66,6 +91,15 @@ SepListOpt<T, Sep>: EcoVec<T> = {
     => EcoVec::new(),
 };
 
+DelimitedSepListOpt<T, Sep>: EcoVec<T> = {
+    <mut v:(<T> Sep)*> <last:T?> => {
+        if let Some(last) = last {
+            v.push(last);
+        }
+        v.into()
+    },
+};
+
 // Key-value pair:
 KVPair<K, V>: (K, V) = {
     <k: K> ":" <v: V> => (k, v)
@@ -85,16 +119,21 @@ ObjectLiteralKVPair: (EcoString, ExprId) = {
 };
 
 VarSet: EcoVec<VarName> = {
-    "{" <vars: SepListOpt<Ident, ",">> "}" => vars,
+    "{" <vars: DelimitedSepListOpt<Ident, ",">> "}" => vars,
 };
 
 ExprList: EcoVec<ExprId> = {
-    <items: SepListOpt<Expr, ",">> => items
+    <items: DelimitedSepListOpt<Expr, ",">> => items
 };
 
 LambdaParam: (VarName, StreamType) = {
     <name: Ident> ":" <typ: StreamTyp> => (name, typ),
 }
+
+TrailingComma: () = {
+    => (),
+    "," => (),
+};
 
 // -----------------------------------------------------------------------------
 // Terminals / simple expressions
@@ -102,6 +141,7 @@ LambdaParam: (VarName, StreamType) = {
 
 // Literal values mapped to Value
 LiteralVal: Value = {
+    MalformedFloat,
     Int => Value::Int(<>),
     Float => Value::Float(<>),
     Bool => Value::Bool(<>),
@@ -149,13 +189,13 @@ ContainerExpr: ExprId = {
   <l:@L> "Tuple" "(" <v:ExprList> ")" <r:@R> => {
         builder.alloc(ExprKind::Tuple(v), Span::new(l as u32, r as u32))
     },
-  <l:@L> "Map" "(" <kv_pairs: SepListOpt<ExprKVPair, ",">> ")" <r:@R> => {
+  <l:@L> "Map" "(" <kv_pairs: DelimitedSepListOpt<ExprKVPair, ",">> ")" <r:@R> => {
         builder.alloc(ExprKind::Map(kv_pairs.into()), Span::new(l as u32, r as u32))
     },
-  <l:@L> "Struct" "(" <kv_pairs: SepListOpt<ExprKVPair, ",">> ")" <r:@R> => {
+  <l:@L> "Struct" "(" <kv_pairs: DelimitedSepListOpt<ExprKVPair, ",">> ")" <r:@R> => {
         builder.alloc(ExprKind::Struct(kv_pairs.into()), Span::new(l as u32, r as u32))
     },
-  <l:@L> "{" <kv_pairs: SepListOpt<ObjectLiteralKVPair, ",">> "}" <r:@R> => {
+  <l:@L> "{" <kv_pairs: DelimitedSepListOpt<ObjectLiteralKVPair, ",">> "}" <r:@R> => {
         builder.alloc(ExprKind::ObjectLiteral(kv_pairs.into()), Span::new(l as u32, r as u32))
     }
 }
@@ -165,83 +205,83 @@ ContainerExpr: ExprId = {
 // -----------------------------------------------------------------------------
 
 SpecialKeywords: ExprId = {
-  <l:@L> "dynamic" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "dynamic" "(" <e: Expr> <t: TypeAnno> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "eval" "(" <e: Expr> <t: TypeAnno> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dynamic(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Expr> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> "," <vs: VarSet> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Explicit(vs)), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Unascribed, ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> ")" <r:@R> =>
+  <l:@L> "defer" "(" <e: Expr> <t: TypeAnno> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Defer(e, StreamTypeAscription::Ascribed(t), ReconfigurableExprScope::Automatic), Span::new(l as u32, r as u32)),
-  <l:@L> "update" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "update" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Update(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "default" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "default" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Default(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "is_defined" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "is_defined" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::IsDefined(e), Span::new(l as u32, r as u32)),
-  <l:@L> "when" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "when" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::When(e), Span::new(l as u32, r as u32)),
-  <l:@L> "latch" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "latch" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Latch(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "init" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "init" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Init(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.get" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "List.get" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LIndex(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.concat" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "List.concat" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LConcat(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.append" "(" <e1: Expr> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "List.append" "(" <e1: Expr> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LAppend(e1, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "List.head" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.head" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LHead(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.tail" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.tail" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LTail(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.len" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.len" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LLen(e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.map" "(" <f: Expr> "," <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.map" "(" <f: Expr> "," <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LMap(f, e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.filter" "(" <f: Expr> "," <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.filter" "(" <f: Expr> "," <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LFilter(f, e), Span::new(l as u32, r as u32)),
-  <l:@L> "List.fold" "(" <f: Expr> "," <init: Expr> "," <e: Expr> ")" <r:@R> =>
+  <l:@L> "List.fold" "(" <f: Expr> "," <init: Expr> "," <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::LFold(f, init, e), Span::new(l as u32, r as u32)),
-  <l:@L> "fix" "(" <f: Expr> ")" <r:@R> =>
+  <l:@L> "fix" "(" <f: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Fix(f), Span::new(l as u32, r as u32)),
-  <l:@L> "partial" "(" <f: Expr> <args:("," <Expr>)*> ")" <r:@R> =>
+  <l:@L> "partial" "(" <f: Expr> <args:("," <Expr>)*> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Partial(f, args.into()), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.get" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.get" "(" <e: Expr> "," <k: String> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MGet(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.remove" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.remove" "(" <e: Expr> "," <k: String> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MRemove(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.has_key" "(" <e: Expr> "," <k: String> ")" <r:@R> =>
+  <l:@L> "Map.has_key" "(" <e: Expr> "," <k: String> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MHasKey(e, k), Span::new(l as u32, r as u32)),
-  <l:@L> "Map.insert" "(" <e1: Expr> "," <k: String> "," <e2: Expr> ")" <r:@R> =>
+  <l:@L> "Map.insert" "(" <e1: Expr> "," <k: String> "," <e2: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MInsert(e1, k, e2), Span::new(l as u32, r as u32)),
-  <l:@L> "sin" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "sin" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Sin(e), Span::new(l as u32, r as u32)),
-  <l:@L> "cos" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "cos" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Cos(e), Span::new(l as u32, r as u32)),
-  <l:@L> "tan" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "tan" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Tan(e), Span::new(l as u32, r as u32)),
-  <l:@L> "abs" "(" <e: Expr> ")" <r:@R> =>
+  <l:@L> "abs" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Abs(e), Span::new(l as u32, r as u32)),
-  <l:@L> "monitored_at" "(" <v: Ident> "," <n: PlacementNode> ")" <r:@R> =>
+  <l:@L> "monitored_at" "(" <v: Ident> "," <n: PlacementNode> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MonitoredAt(v, n), Span::new(l as u32, r as u32)),
-  <l:@L> "dist" "(" <v1: VarOrNodeName> "," <v2: VarOrNodeName> ")" <r:@R> =>
+  <l:@L> "dist" "(" <v1: VarOrNodeName> "," <v2: VarOrNodeName> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Dist(v1, v2), Span::new(l as u32, r as u32)),
 }
 
@@ -269,7 +309,7 @@ FieldName: EcoString = {
 // construction and giving every generated node its exact source span.
 Atom: ExprId = {
     AtomBase,
-    <base: Atom> "(" <args: SepListOpt<Expr, ",">> ")" <r:@R> => {
+    <base: Atom> "(" <args: DelimitedSepListOpt<Expr, ",">> ")" <r:@R> => {
         let start = builder.metadata(base).start;
         builder.alloc(ExprKind::Apply(base, args), Span::new(start, r as u32))
     },
@@ -283,14 +323,23 @@ Atom: ExprId = {
 // Unary expressions
 // -----------------------------------------------------------------------------
 
-UnaryExpr<Next>: ExprId = {
-   <l:@L> "-" <x: UnaryExpr<Next>> <r:@R> => {
+UnaryExpr: ExprId = {
+   <l:@L> "-" <x: UnaryExpr> <r:@R> => {
         builder.alloc(ExprKind::Neg(x), Span::new(l as u32, r as u32))
    },
-   <l:@L> "!" <b: UnaryExpr<Next>> <r:@R> => {
+   <l:@L> "!" <b: UnaryExpr> <r:@R> => {
         builder.alloc(ExprKind::Not(b), Span::new(l as u32, r as u32))
     },
-    Next
+   <l:@L> "not" <b: UnaryExpr> <r:@R> => {
+        builder.alloc(ExprKind::Not(b), Span::new(l as u32, r as u32))
+    },
+    PowerExpr
+};
+
+PowerExpr: ExprId = {
+    <l:@L> <lhs:Atom> "**" <rhs:UnaryExpr> <r:@R> =>
+        builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Power), Span::new(l as u32, r as u32)),
+    Atom,
 };
 
 // -----------------------------------------------------------------------------
@@ -342,7 +391,7 @@ RelExpr<Next>: ExprId ={
 // Comparison (==)
 CompExprHelp: BinaryOperator = {
     "==" => BinaryOperator::Equal,
-    // "!=" => BinaryOperator::NotEqual, // Not implemented yet
+    "!=" => BinaryOperator::NotEqual,
 }
 
 CompExpr<Next>: ExprId = {
@@ -353,15 +402,25 @@ CompExpr<Next>: ExprId = {
 };
 
 // Boolean
+AndExprHelp: () = {
+    "&&" => (),
+    "and" => (),
+};
+
 AndExpr<Next>: ExprId = {
-  <l:@L>  <lhs: AndExpr<Next>> "&&" <rhs: Next> <r:@R> => {
+  <l:@L>  <lhs: AndExpr<Next>> <_op:AndExprHelp> <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::And), Span::new(l as u32, r as u32))
     },
     Next
 };
 
+OrExprHelp: () = {
+    "||" => (),
+    "or" => (),
+};
+
 OrExpr<Next>: ExprId = {
-   <l:@L> <lhs: OrExpr<Next>> "||" <rhs: Next> <r:@R> => {
+   <l:@L> <lhs: OrExpr<Next>> <_op:OrExprHelp> <rhs: Next> <r:@R> => {
         builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Or), Span::new(l as u32, r as u32))
     },
     Next
@@ -407,8 +466,8 @@ StructTypeField: (EcoString, StreamType) = {
 }
 
 StructPermissiveFields: EcoVec<(EcoString, StreamType)> = {
-    "..." => EcoVec::new(),
-    <mut fields:(<StructTypeField> ",")*> <field: StructTypeField> "," "..." => {
+    "..." ","? => EcoVec::new(),
+    <mut fields:(<StructTypeField> ",")*> <field: StructTypeField> "," "..." ","? => {
         fields.push(field);
         fields.into()
     },
@@ -421,17 +480,17 @@ StreamTyp: StreamType = {
     "Bool" => StreamType::Bool,
     "Unit" => StreamType::Unit,
     "Any" => StreamType::Any,
-    "List" "<" <inner: StreamTyp> ">" => StreamType::List(Box::new(inner)),
-    "Map" "<" <inner: StreamTyp> ">" => StreamType::Map(Box::new(inner)),
-    "Expr" "<" <inner: StreamTyp> ">" => StreamType::Expr(Box::new(inner)),
+    "List" "<" <inner: StreamTyp> ","? ">" => StreamType::List(Box::new(inner)),
+    "Map" "<" <inner: StreamTyp> ","? ">" => StreamType::Map(Box::new(inner)),
+    "Expr" "<" <inner: StreamTyp> ","? ">" => StreamType::Expr(Box::new(inner)),
     "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),
-    "Struct" "<" <fields: SepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
+    "Struct" "<" <fields: DelimitedSepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
     "(" <first: StreamTyp> "," ")" => {
         let mut elems = EcoVec::new();
         elems.push(first);
         StreamType::Tuple(elems)
     },
-    "(" <first: StreamTyp> "," <second: StreamTyp> <rest:("," <StreamTyp>)*> ")" => {
+    "(" <first: StreamTyp> "," <second: StreamTyp> <rest:("," <StreamTyp>)*> ","? ")" => {
         let mut elems = EcoVec::new();
         elems.push(first);
         elems.push(second);
@@ -452,15 +511,15 @@ TypeAnno: StreamType = {
 // -----------------------------------------------------------------------------
 
 // Operator precedence chain with Final having highest precedence
-PrecChain<Final>: ExprId = {
-    ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr<Final>>>>>>>>>,
+PrecChain: ExprId = {
+    ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr>>>>>>>>,
 }
 
 // The top-level expression
 pub Expr: ExprId = {
     Ifelse, // If-else binds weaker than the PrecChain chain to handle dangling else, i.e., if a then b else c + d is parsed as if a then b else (c + d)
     LambdaExpr,
-    PrecChain<Atom>
+    PrecChain
 };
 
 // -----------------------------------------------------------------------------

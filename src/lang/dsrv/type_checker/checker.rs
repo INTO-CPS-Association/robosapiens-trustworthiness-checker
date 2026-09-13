@@ -228,9 +228,20 @@ fn check(
         BinOp(lhs, rhs, parsed) => {
             // The result constraint is not an operand constraint: comparisons
             // produce `Bool` while comparing values of another type.
-            let lhs = check(lhs, None, context)?;
-            let rhs = check(rhs, None, context)?;
-            resolve_binary(expr, parsed, &lhs, &rhs)?
+            let lhs_type = check(lhs, None, context)?;
+            let rhs_type = check(rhs, None, context)?;
+            if parsed == BinaryOperator::Power
+                && lhs_type == TCType::Int
+                && rhs_type == TCType::Int
+                && is_negative_integer_literal(rhs)
+            {
+                return Err(error(
+                    rhs,
+                    TypeErrorKind::OperatorTypeMismatch,
+                    "integer exponent must be non-negative".to_owned(),
+                ));
+            }
+            resolve_binary(expr, parsed, &lhs_type, &rhs_type)?
         }
         If(cond, yes, no) => {
             require(
@@ -908,6 +919,18 @@ fn value_type(value: &Value, expected: Option<&TCType>) -> Result<TCType, Semant
     })
 }
 
+fn is_negative_integer_literal(expr: ExprRef<'_>) -> bool {
+    match expr.view() {
+        ExprView::Neg(inner) => {
+            matches!(inner.view(), ExprView::Val(Value::Int(value)) if *value > 0)
+        }
+        // Source literals represent negativity as `Neg`, but programmatically
+        // constructed ASTs may contain any negative `Value::Int` directly.
+        ExprView::Val(Value::Int(value)) => *value < 0,
+        _ => false,
+    }
+}
+
 fn resolve_binary(
     expr: ExprRef<'_>,
     operator: BinaryOperator,
@@ -918,7 +941,11 @@ fn resolve_binary(
         error(
             expr,
             TypeErrorKind::OperatorTypeMismatch,
-            format!("operator cannot combine {lhs} and {rhs}"),
+            format!(
+                "{} operator `{}` cannot combine {lhs} and {rhs}",
+                operator.name(),
+                operator.symbol()
+            ),
         )
     };
     let numeric_result = || match (lhs, rhs) {

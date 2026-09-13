@@ -33,6 +33,12 @@ pub(super) fn numeric_binary(
                     }
                     left.checked_rem(right)
                 }
+                Op::Power => {
+                    if right < 0 {
+                        return Err(ValueOpError::NegativeIntegerExponent { exponent: right });
+                    }
+                    checked_int_power(left, right)
+                }
                 _ => unreachable!(),
             };
             result.map(Value::Int).ok_or(ValueOpError::IntegerOverflow {
@@ -59,8 +65,24 @@ fn float_binary(operation: BinaryOperator, left: f64, right: f64) -> f64 {
         BinaryOperator::Multiply => left * right,
         BinaryOperator::Divide => left / right,
         BinaryOperator::Modulo => left % right,
+        BinaryOperator::Power => left.powf(right),
         _ => unreachable!(),
     }
+}
+
+fn checked_int_power(mut base: i64, mut exponent: i64) -> Option<i64> {
+    debug_assert!(exponent >= 0);
+    let mut result = 1_i64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result = result.checked_mul(base)?;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            base = base.checked_mul(base)?;
+        }
+    }
+    Some(result)
 }
 
 pub(super) fn compare_ordering(

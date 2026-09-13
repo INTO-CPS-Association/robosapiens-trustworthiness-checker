@@ -111,6 +111,14 @@ pub fn eq(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::Equal, x, y), x, y)
 }
 
+pub fn neq(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
+    stream_lift2(|x, y| eval_binary(BinaryOperator::NotEqual, x, y), x, y)
+}
+
+pub fn power(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
+    stream_lift2(|x, y| eval_binary(BinaryOperator::Power, x, y), x, y)
+}
+
 pub fn le(x: LocalStream<Value>, y: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift2(|x, y| eval_binary(BinaryOperator::LessEqual, x, y), x, y)
 }

@@ -54,8 +54,8 @@ pub(super) struct LoweredProgram {
 }
 
 impl LoweredProgram {
-    pub(super) fn requires_division_guard(&self) -> bool {
-        graph_requires_division_guard(&self.graph)
+    pub(super) fn requires_failure_guard(&self) -> bool {
+        graph_requires_failure_guard(&self.graph)
     }
 
     pub(super) fn output_kind(&self) -> ScalarKind {
@@ -98,17 +98,21 @@ pub(super) enum TemporalSource {
     Output,
 }
 
-fn graph_requires_division_guard(graph: &LoweredGraph) -> bool {
+fn graph_requires_failure_guard(graph: &LoweredGraph) -> bool {
     graph.nodes.iter().any(|node| match node {
         LoweredNode::Binary {
             division: IntegerDivision::Checked,
+            ..
+        } => true,
+        LoweredNode::Binary {
+            op: BinaryOperator::Power,
             ..
         } => true,
         LoweredNode::If {
             then_graph,
             else_graph,
             ..
-        } => graph_requires_division_guard(then_graph) || graph_requires_division_guard(else_graph),
+        } => graph_requires_failure_guard(then_graph) || graph_requires_failure_guard(else_graph),
         LoweredNode::Unary { .. } | LoweredNode::Binary { .. } => false,
     })
 }

@@ -22,6 +22,9 @@ pub enum ValueOpError {
     IntegerDivisionByZero {
         operation: &'static str,
     },
+    NegativeIntegerExponent {
+        exponent: i64,
+    },
     NegativeListIndex(i64),
     ListIndexOutOfBounds {
         index: usize,
@@ -52,6 +55,12 @@ impl fmt::Display for ValueOpError {
             }
             Self::IntegerDivisionByZero { operation } => {
                 write!(f, "integer division by zero during {operation}")
+            }
+            Self::NegativeIntegerExponent { exponent } => {
+                write!(
+                    f,
+                    "negative integer exponent for exponentiation: {exponent}"
+                )
             }
             Self::NegativeListIndex(index) => {
                 write!(f, "List index must be non-negative: {index}")
@@ -108,7 +117,7 @@ pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Va
     use BinaryOperator as Op;
 
     match operation {
-        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo => {
+        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo | Op::Power => {
             numeric::numeric_binary(operation, left, right)
         }
         Op::Or | Op::And | Op::Implication => match (left, right) {
@@ -128,6 +137,7 @@ pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Va
             (left, right) => invalid_binary(operation, left, right),
         },
         Op::Equal => Ok(Value::Bool(left == right)),
+        Op::NotEqual => Ok(Value::Bool(left != right)),
         Op::LessEqual | Op::Less | Op::GreaterEqual | Op::Greater => {
             let ordering = numeric::compare_ordering(operation, left, right)?;
             Ok(Value::Bool(ordering.is_some_and(

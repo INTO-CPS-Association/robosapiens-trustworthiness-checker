@@ -489,7 +489,7 @@ fn is_symbolically_compilable(
         E::Not(value) => is_symbolically_compilable(value, plan, visiting),
         E::Binary(left, right, operator)
             if operator.kind() == BinaryOperatorKind::Boolean
-                || *operator == BinaryOperator::Equal =>
+                || matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) =>
         {
             is_symbolically_compilable(left, plan, visiting)
                 && is_symbolically_compilable(right, plan, visiting)
@@ -958,7 +958,27 @@ fn compile_expr_to_lit(
             } else {
                 let left = compile_expr_to_lit(left, plan, st)?;
                 let right = compile_expr_to_lit(right, plan, st)?;
-                Ok(st.tseitin_eq(left, right))
+                if left == right {
+                    constant_to_lit(Value::Bool(true), st)
+                } else {
+                    Ok(st.tseitin_eq(left, right))
+                }
+            }
+        }
+        E::Binary(left, right, BinaryOperator::NotEqual) => {
+            if let (Some(left_value), Some(right_value)) = (
+                plan.evaluate_expr(left, &st.value_bindings, None),
+                plan.evaluate_expr(right, &st.value_bindings, None),
+            ) {
+                constant_to_lit(Value::Bool(left_value != right_value), st)
+            } else {
+                let left = compile_expr_to_lit(left, plan, st)?;
+                let right = compile_expr_to_lit(right, plan, st)?;
+                if left == right {
+                    constant_to_lit(Value::Bool(false), st)
+                } else {
+                    Ok(-st.tseitin_eq(left, right))
+                }
             }
         }
         E::If(condition, then_expr, else_expr) => {
@@ -996,16 +1016,21 @@ fn compile_expr_to_lit(
 
 fn constant_to_lit(value: Value, st: &mut CnfCompilerState) -> Result<Lit, SatCompileError> {
     let literal = sat_literal(st)?;
-    match value {
-        Value::Bool(true) => st.add_clause1(literal),
-        Value::Bool(false) | Value::NoVal | Value::Deferred => st.add_clause1(-literal),
+    let truth_literal = match value {
+        Value::Bool(true) => literal,
+        Value::Bool(false) | Value::NoVal | Value::Deferred => -literal,
         value => {
             return Err(SatCompileError::UnsupportedExpr(format!(
                 "Unsupported non-boolean constant expression in SAT constraint compilation: {value:?}"
             )));
         }
-    }
-    Ok(literal)
+    };
+    // Fix the backing variable true and encode the constant's truth in the
+    // returned literal. This keeps a false root as `-literal`, so requiring the
+    // root produces the explicit contradictory unit clauses expected by the
+    // SAT backend.
+    st.add_clause1(literal);
+    Ok(truth_literal)
 }
 
 fn sat_literal(st: &mut CnfCompilerState) -> Result<Lit, SatCompileError> {
@@ -1014,6 +1039,19 @@ fn sat_literal(st: &mut CnfCompilerState) -> Result<Lit, SatCompileError> {
     })
 }
 fn solve_with_sat_solver(state: &CnfCompilerState) -> Option<HashMap<usize, bool>> {
+    let mut units = HashSet::new();
+    for clause in &state.cnf {
+        if clause.is_empty() {
+            return None;
+        }
+        if let [literal] = clause.as_slice() {
+            if units.contains(&-*literal) {
+                return None;
+            }
+            units.insert(*literal);
+        }
+    }
+
     let cnf: Cnf<PackedLiteral> = Cnf::new(state.cnf.clone());
     let mut solver: SolverImpls = SolverImpls::new(cnf);
 
@@ -1213,6 +1251,81 @@ mod tests {
         let mut stream = solver.possible_labelled_dist_graph_stream(graph);
 
         assert!(futures::StreamExt::next(&mut stream).await.is_none());
+    }
+
+    // SYN-R18/E2: NotEqual must compile as the Boolean complement of equality,
+    // including symbolic inputs and constant-folded cases.
+    #[test]
+    fn sat_inequality_matches_direct_constraint_truth_and_satisfiability() {
+        let cases = [
+            (
+                "in a\nin b\nout c\nc = a != b",
+                "c",
+                true,
+                Some(("a", "b")),
+                false,
+            ),
+            (
+                "in a\nin b\nin c\nout d\nd = if a then b != c else b == c",
+                "d",
+                true,
+                None,
+                false,
+            ),
+            ("out c\nc = true != false", "c", true, None, true),
+            ("out c\nc = true != true", "c", false, None, true),
+            (
+                "in a\nout c\nc = a != a",
+                "c",
+                false,
+                Some(("a", "a")),
+                false,
+            ),
+        ];
+
+        for (source, root, satisfiable, symbolic, check_direct) in cases {
+            let spec = source
+                .parse::<DsrvSpecification>()
+                .expect("inequality constraint should parse");
+            let plan = DistributionConstraintPlan::lower(
+                &spec,
+                [VarName::new(root)],
+                ConstraintProfile::Sat,
+            )
+            .expect("inequality should be in the SAT fragment");
+            if check_direct {
+                assert_eq!(
+                    plan.evaluate_var(&VarName::new(root), &BTreeMap::new(), None),
+                    Some(Value::Bool(satisfiable)),
+                    "SAT constant disagrees with direct evaluation for {source}"
+                );
+            }
+            let graph = simple_dist_graph();
+            let expression = plan.expression(&VarName::new(root)).unwrap();
+            let mut state = CnfCompilerState::new(&graph);
+            let literal = compile_expr_to_lit(expression, &plan, &mut state).unwrap();
+            state.add_clause1(literal);
+            let assignment = solve_with_sat_solver(&state);
+
+            assert_eq!(
+                assignment.is_some(),
+                satisfiable,
+                "unexpected SAT result for {source}"
+            );
+            if let (Some(assignment), Some((left, right))) = (assignment, symbolic) {
+                let left = state.symbolic_input_atoms[&VarName::new(left)];
+                let right = state.symbolic_input_atoms[&VarName::new(right)];
+                let value = |literal: Lit| {
+                    let value = assignment[&(literal.unsigned_abs() as usize)];
+                    if literal.is_negative() { !value } else { value }
+                };
+                assert_ne!(
+                    value(left),
+                    value(right),
+                    "satisfying a != b must assign opposite values"
+                );
+            }
+        }
     }
 
     #[apply(crate::async_test)]

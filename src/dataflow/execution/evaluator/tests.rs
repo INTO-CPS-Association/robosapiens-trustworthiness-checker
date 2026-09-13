@@ -27,6 +27,53 @@ fn add_graph(left: i64, right: i64) -> BoundEvaluationGraph {
     )
 }
 
+// SYN-R15/SYN-R16/E1: the canonical evaluator owns the same checked operation
+// semantics used by the accelerated execution tiers.
+#[test]
+fn canonical_evaluator_evaluates_revised_binary_operators_and_terminates_errors() {
+    let mut power = Evaluator::new(program(BoundEvaluationGraph::new(
+        vec![BoundOp::Binary {
+            op: BinaryOperator::Power,
+            lhs: BoundRef::Const(Value::Int(2)),
+            rhs: BoundRef::Const(Value::Int(3)),
+        }],
+        vec![None],
+        BoundRef::Node(NodeId::new(0)),
+    )));
+    assert_eq!(power.evaluate_static_and_stage(&[], None), Value::Int(8));
+
+    let mut inequality = Evaluator::new(program(BoundEvaluationGraph::new(
+        vec![BoundOp::Binary {
+            op: BinaryOperator::NotEqual,
+            lhs: BoundRef::Const(Value::Int(1)),
+            rhs: BoundRef::Const(Value::Int(2)),
+        }],
+        vec![None],
+        BoundRef::Node(NodeId::new(0)),
+    )));
+    assert_eq!(
+        inequality.evaluate_static_and_stage(&[], None),
+        Value::Bool(true)
+    );
+
+    let mut failing = Evaluator::new(program(BoundEvaluationGraph::new(
+        vec![BoundOp::Binary {
+            op: BinaryOperator::Power,
+            lhs: BoundRef::Const(Value::Int(2)),
+            rhs: BoundRef::Const(Value::Int(-1)),
+        }],
+        vec![None],
+        BoundRef::Node(NodeId::new(0)),
+    )));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            failing.evaluate_static_and_stage(&[], None);
+        }))
+        .is_err(),
+        "a dynamic negative integer exponent must terminate the canonical tick"
+    );
+}
+
 #[test]
 fn cloned_evaluator_has_independent_state() {
     let program = program(add_graph(1, 2));
@@ -238,6 +285,56 @@ fn exact_nested_expression_reconfiguration_keeps_warm_state() {
     assert_eq!(
         evaluate_active_dynamic_body(&mut evaluator, 2),
         Value::Int(1)
+    );
+}
+
+// SYN-R19/E3: runtime source replacement compiles revised operators and does
+// not retain the previous expression's result.
+#[test]
+fn revised_operators_work_through_dynamic_reconfiguration() {
+    let mut evaluator = Evaluator::new(dynamic_program(0));
+    let (activation, preserved) = reconfigure(
+        &mut evaluator,
+        "x ** x",
+        ContextTransferPolicy::MatchingStreamState,
+    );
+    assert!(matches!(
+        activation,
+        ReconfigurableExpressionActivation::Activated { .. }
+    ));
+    assert!(!preserved);
+    assert_eq!(
+        evaluate_active_dynamic_body(&mut evaluator, 3),
+        Value::Int(27)
+    );
+
+    let (activation, _) = reconfigure(
+        &mut evaluator,
+        "x != x",
+        ContextTransferPolicy::MatchingStreamState,
+    );
+    assert!(matches!(
+        activation,
+        ReconfigurableExpressionActivation::Replaced { .. }
+    ));
+    assert_eq!(
+        evaluate_active_dynamic_body(&mut evaluator, 3),
+        Value::Bool(false)
+    );
+
+    // An untyped dynamic source is compiled, then follows the normal arithmetic
+    // error path when its runtime exponent is negative.
+    reconfigure(
+        &mut evaluator,
+        "x ** -1",
+        ContextTransferPolicy::MatchingStreamState,
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        evaluate_active_dynamic_body(&mut evaluator, 3)
+    }));
+    assert!(
+        result.is_err(),
+        "dynamic negative exponent must terminate evaluation"
     );
 }
 

@@ -17,7 +17,7 @@ pub fn type_check(
 mod tests {
     use super::*;
     use crate::VarName;
-    use crate::core::StreamType;
+    use crate::core::{BinaryOperator, StreamType, Value};
     use crate::lang::dsrv::ast::Expr;
     use crate::lang::dsrv::span::Span;
     use ecow::EcoVec;
@@ -52,6 +52,136 @@ mod tests {
             SemanticError::TypeError(type_error)
                 if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
         )));
+    }
+
+    // SYN-R12/V2: both semantic drivers implement the complete numeric power table.
+    #[test]
+    fn power_type_table_and_static_negative_exponent_rule() {
+        for (source, expected) in [
+            ("out z: Int\nz = 2 ** 3", TCType::Int),
+            ("out z: Float\nz = 4 ** 0.5", TCType::Float),
+            ("out z: Float\nz = 2.0 ** -3", TCType::Float),
+            ("out z: Float\nz = 4.0 ** 0.5", TCType::Float),
+            ("out z: Int\nz = 2 ** -0", TCType::Int),
+            ("out z: Int\nz = 0 ** (-0)", TCType::Int),
+        ] {
+            let strict =
+                type_check(source.parse().unwrap(), false).expect("strict power should type check");
+            assert_eq!(
+                strict.var_expr_ref(&VarName::new("z")).unwrap().typ(),
+                &expected
+            );
+            let gradual = type_check_gradual(source.parse().unwrap(), false)
+                .expect("gradual power should type check");
+            assert_eq!(
+                gradual.var_expr_ref(&VarName::new("z")).unwrap().typ(),
+                &expected
+            );
+        }
+
+        for source in ["out z: Int\nz = 2 ** -1", "out z: Int\nz = 2 ** (-1)"] {
+            for errors in [
+                type_check(source.parse().unwrap(), false)
+                    .expect_err("strict must reject known negative exponent"),
+                type_check_gradual(source.parse().unwrap(), false)
+                    .expect_err("gradual must reject known negative exponent"),
+            ] {
+                assert!(errors.iter().any(|error| matches!(
+                    error,
+                    SemanticError::TypeError(type_error)
+                        if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+                            && type_error.message().contains("integer exponent must be non-negative")
+                            && type_error.span().is_some()
+                )));
+            }
+        }
+
+        let dynamic = "in base: Int\nin exponent: Int\nout z: Int\nz = base ** exponent";
+        type_check(dynamic.parse().unwrap(), false).expect("dynamic Int exponent is valid");
+        type_check_gradual(dynamic.parse().unwrap(), false)
+            .expect("gradual dynamic Int exponent is valid");
+
+        let z = VarName::new("z");
+        let direct_negative_exponent = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z.clone()]),
+            BTreeMap::from([(
+                z.clone(),
+                Expr::BinOp(
+                    Box::new(Expr::Val(Value::Int(2))),
+                    Box::new(Expr::Val(Value::Int(-1))),
+                    BinaryOperator::Power,
+                ),
+            )]),
+            BTreeMap::from([(z, StreamType::Int)]),
+            BTreeSet::new(),
+        );
+        for errors in [
+            type_check(direct_negative_exponent.clone(), false)
+                .expect_err("strict must reject a direct negative literal Value"),
+            type_check_gradual(direct_negative_exponent, false)
+                .expect_err("gradual must reject a direct negative literal Value"),
+        ] {
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.message().contains("integer exponent must be non-negative")
+            )));
+        }
+
+        for source in [
+            "out z: Int\nz = true ** 1",
+            "out z: Int\nz = \"text\" ** 1",
+            "out z: Int\nz = 1 ** true",
+        ] {
+            assert!(
+                type_check(source.parse().unwrap(), false).is_err(),
+                "{source} should fail"
+            );
+            assert!(
+                type_check_gradual(source.parse().unwrap(), false).is_err(),
+                "{source} should fail in gradual mode"
+            );
+        }
+    }
+
+    // SYN-R12/V1: inequality has equality's admissibility, rather than ordering's.
+    #[test]
+    fn inequality_shares_equality_admissibility_in_strict_and_gradual_modes() {
+        for source in [
+            "out z: Bool\nz = 1 != 2",
+            "out z: Bool\nz = 1.0 != 2.0",
+            "out z: Bool\nz = 1 != 2.0",
+            "out z: Bool\nz = true != false",
+            "out z: Bool\nz = \"a\" != \"b\"",
+            "out z: Bool\nz = [1] != [1]",
+            "out z: Bool\nz = Tuple(1) != Tuple(1)",
+            "out z: Bool\nz = Map(\"x\": 1) != Map(\"x\": 1)",
+        ] {
+            type_check(source.parse().unwrap(), false)
+                .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
+            type_check_gradual(source.parse().unwrap(), false)
+                .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
+        }
+        for source in [
+            "out z: Bool\nz = [1] != true",
+            "out z: Bool\nz = Tuple(1) != 1",
+        ] {
+            let errors = type_check(source.parse().unwrap(), false)
+                .expect_err("incompatible inequality operands should fail");
+            assert!(
+                errors.iter().any(|error| {
+                    matches!(
+                        error,
+                        SemanticError::TypeError(type_error)
+                            if type_error.message().contains("inequality")
+                                || type_error.message().contains("!=")
+                    )
+                }),
+                "diagnostic should identify inequality: {errors:?}"
+            );
+            assert!(type_check_gradual(source.parse().unwrap(), false).is_err());
+        }
     }
 
     #[test]

@@ -3635,6 +3635,65 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
     Ok(())
 }
 
+// SYN-R19/E3: one public runtime replacement test covers revised source
+// syntax without repeating the arithmetic matrix in every transport fixture.
+#[apply(async_test)]
+async fn test_revised_dynamic_source_replacement(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec_source = "in x: Int\n\
+                       in exponent: Int\n\
+                       in source: Str\n\
+                       out result: Int\n\
+                       result = dynamic(source: Int, {x, exponent, source},)";
+    for config in TestConfiguration::all() {
+        let spec = spec_source
+            .parse::<DsrvSpecification>()
+            .expect("revised dynamic specification should parse");
+        let input = map::input_stream(BTreeMap::from([
+            (
+                VarName::new("x"),
+                vec![Value::Int(2), Value::Int(3), Value::Int(4)],
+            ),
+            (
+                VarName::new("exponent"),
+                vec![Value::Int(3), Value::Int(2), Value::Int(1)],
+            ),
+            (
+                VarName::new("source"),
+                vec![
+                    Value::Str("x ** exponent".into()),
+                    Value::Str("x ** 2".into()),
+                    Value::Str("if x != exponent and x > 0 then x else 0".into()),
+                ],
+            ),
+        ]));
+        let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
+        let builder = GeneralRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(input)
+            .output_writer(output_writer);
+        let monitor = create_builder_from_config(builder, config)
+            .build()
+            .await
+            .expect("revised dynamic runtime should build");
+        executor.spawn(monitor.run()).detach();
+        let result: Vec<_> =
+            with_timeout(outputs.take(3).collect(), 5, "revised dynamic outputs").await?;
+        assert_eq!(
+            result,
+            vec![
+                BTreeMap::from([(VarName::new("result"), Value::Int(8))]),
+                BTreeMap::from([(VarName::new("result"), Value::Int(9))]),
+                BTreeMap::from([(VarName::new("result"), Value::Int(4))]),
+            ],
+            "revised dynamic replacement failed for {config:?}"
+        );
+    }
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     for config in TestConfiguration::all() {

@@ -200,9 +200,92 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         may_widen_without_annotation: false,
     })
     .boxed();
+    let powers = prop_oneof![
+        (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Int(i64::from(base)))),
+                Box::new(Expr::Val(Value::Int(i64::from(exponent)))),
+                BinaryOperator::Power,
+            )
+            .into(),
+            expected: StreamType::Int,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+        (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Int(i64::from(base)))),
+                Box::new(Expr::Val(Value::Float(f64::from(exponent)))),
+                BinaryOperator::Power,
+            )
+            .into(),
+            expected: StreamType::Float,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+        (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Float(f64::from(base)))),
+                Box::new(Expr::Val(Value::Int(i64::from(exponent)))),
+                BinaryOperator::Power,
+            )
+            .into(),
+            expected: StreamType::Float,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+        (-3_i16..=3, 0_u8..=8).prop_map(|(base, exponent)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Float(f64::from(base)))),
+                Box::new(Expr::Val(Value::Float(f64::from(exponent)))),
+                BinaryOperator::Power,
+            )
+            .into(),
+            expected: StreamType::Float,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+    ]
+    .boxed();
+    let inequalities = prop_oneof![
+        (any::<i16>(), any::<i16>()).prop_map(|(left, right)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Int(i64::from(left)))),
+                Box::new(Expr::Val(Value::Int(i64::from(right)))),
+                BinaryOperator::NotEqual,
+            )
+            .into(),
+            expected: StreamType::Bool,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+        (any::<bool>(), any::<bool>()).prop_map(|(left, right)| TypeDirectedCase {
+            expr: Expr::BinOp(
+                Box::new(Expr::Val(Value::Bool(left))),
+                Box::new(Expr::Val(Value::Bool(right))),
+                BinaryOperator::NotEqual,
+            )
+            .into(),
+            expected: StreamType::Bool,
+            inputs: BTreeMap::new(),
+            may_widen_without_annotation: false,
+        }),
+    ]
+    .boxed();
 
     prop_oneof![
-        integers, floats, booleans, strings, lists, maps, tuples, structs, functions, unit,
+        integers,
+        floats,
+        booleans,
+        strings,
+        lists,
+        maps,
+        tuples,
+        structs,
+        functions,
+        unit,
+        powers,
+        inequalities,
     ]
 }
 

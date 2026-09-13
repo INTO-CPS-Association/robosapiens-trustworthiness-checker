@@ -51,8 +51,9 @@ pub(crate) enum Declaration {
 
 pub fn parse_expr(input: &str) -> Result<Expr, Error> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
+    let mut user_error_location = None;
     let root = EXPR_PARSER
-        .parse(&mut builder, input)
+        .parse(&mut builder, &mut user_error_location, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
     let expr = builder
         .finish(root)
@@ -66,8 +67,9 @@ pub fn parse_expr(input: &str) -> Result<Expr, Error> {
 #[cfg(test)]
 fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
+    let mut user_error_location = None;
     let declarations = DECLARATIONS_PARSER
-        .parse(&mut builder, input)
+        .parse(&mut builder, &mut user_error_location, input)
         .map_err(|e| anyhow!("Parse error: {:?}", e))?;
     if declarations.len() != 1 {
         return Err(anyhow!(
@@ -176,14 +178,17 @@ fn line_col(input: &str, byte: usize) -> LineCol {
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
     let mut builder = ExprBuilder::with_capacity(input.len() / 4);
+    let mut user_error_location = None;
     let stmts = DECLARATIONS_PARSER
-        .parse(&mut builder, input)
+        .parse(&mut builder, &mut user_error_location, input)
         .map_err(|e| {
             let err_fixed = e.map_location(|byte| line_col(&input, byte));
-            DsrvParseError::Syntax(
-                anyhow::anyhow!(err_fixed.to_string())
-                    .context(format!("Failed to parse input {}", input)),
-            )
+            let location = user_error_location
+                .map(|byte| format!(" near {}", line_col(input, byte)))
+                .unwrap_or_default();
+            DsrvParseError::Syntax(anyhow::anyhow!(err_fixed.to_string()).context(format!(
+                "Failed to parse input {input}{location}: {err_fixed}"
+            )))
         })?;
     create_dsrv_spec(builder, stmts).map_err(DsrvParseError::Ast)
 }
@@ -195,6 +200,8 @@ pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
 #[cfg(test)]
 mod tests {
     // TODO: Fix the test
+    use contiguous_tree::TreeCursorExt;
+
     use crate::core::StreamType;
 
     use crate::VarName;
@@ -204,6 +211,12 @@ mod tests {
 
     use crate::core::StreamTypeAscription;
     use crate::lang::dsrv::span::{presult_strip_span, strip_span, strip_span_ref};
+    use crate::lang::dsrv::test_support::{
+        arb_finite_float_literal_source, arb_invalid_integer_literal_source,
+        arb_revised_operator_display_expr, arb_trailing_comma_pair,
+        arb_valid_integer_literal_source,
+    };
+    use proptest::prelude::*;
 
     use super::*;
     use test_log::test;
@@ -225,6 +238,28 @@ mod tests {
             operand.view(),
             ExprView::Val(crate::Value::Int(42))
         ));
+    }
+
+    #[test]
+    fn integer_literal_magnitudes_stop_at_i64_max_without_panicking() {
+        let expression =
+            parse_expr("-9223372036854775807").expect("largest negative magnitude should parse");
+        let ExprView::Neg(operand) = expression.as_ref().view() else {
+            panic!("largest accepted negative literal should retain a Neg root");
+        };
+        assert!(matches!(
+            operand.view(),
+            ExprView::Val(crate::Value::Int(i64::MAX))
+        ));
+
+        for source in [
+            "9223372036854775808",
+            "-9223372036854775808",
+            "999999999999999999999999999999999999999999",
+            "-999999999999999999999999999999999999999999",
+        ] {
+            assert!(parse_expr(source).is_err(), "{source} should be rejected");
+        }
     }
 
     #[test]
@@ -1465,6 +1500,630 @@ mod tests {
             presult_strip_span(&parse_expr("if a then b else c + d").unwrap()),
             r#"Ok(If(Var(VarName::new("a")), Var(VarName::new("b")), BinOp(Var(VarName::new("c")), Var(VarName::new("d")), Add)))"#
         )
+    }
+
+    // SYN-R01: revised operators remain distinct AST nodes and retain source spans.
+    #[test]
+    fn syntax_revision_operators_are_first_class_and_display_roundtrip() {
+        for (source, operator) in [
+            ("a != b", BinaryOperator::NotEqual),
+            ("a ** b", BinaryOperator::Power),
+        ] {
+            let expression = parse_expr(source).expect("revised operator should parse");
+            let ExprView::BinOp(left, right, actual) = expression.as_ref().view() else {
+                panic!("expected a binary expression for {source}");
+            };
+            assert_eq!(actual, operator);
+            assert_eq!(actual.kind(), operator.kind());
+            assert_eq!(
+                actual.name(),
+                match operator {
+                    BinaryOperator::NotEqual => "inequality",
+                    BinaryOperator::Power => "exponentiation",
+                    _ => unreachable!(),
+                }
+            );
+            assert_eq!(
+                expression.as_ref().span(),
+                Span::new(0, source.len() as u32)
+            );
+            assert_eq!(left.span(), Span::new(0, 1));
+            assert_eq!(
+                right.span(),
+                Span::new((source.len() - 1) as u32, source.len() as u32)
+            );
+
+            let displayed = expression.to_string();
+            assert!(
+                displayed.contains(if operator == BinaryOperator::Power {
+                    "**"
+                } else {
+                    "!="
+                }),
+                "display lost the operator spelling: {displayed}"
+            );
+            let reparsed = parse_expr(&displayed).expect("displayed expression should parse");
+            assert_eq!(strip_span(&expression), strip_span(&reparsed));
+        }
+        let expected = strip_span(&parse_expr("a != b").unwrap());
+        for source in [
+            "a!=b",
+            "a \n != \n b",
+            "a (* inequality *) != // continue\n b",
+        ] {
+            assert_eq!(
+                strip_span(&parse_expr(source).unwrap()),
+                expected,
+                "operator whitespace/comment changed the AST for {source:?}"
+            );
+        }
+    }
+
+    // SYN-R02/SYN-R03: keyword aliases use the symbolic precedence table.
+    #[test]
+    fn boolean_keyword_aliases_match_symbolic_forms() {
+        for (symbolic, keyword) in [
+            ("a && b", "a and b"),
+            ("a || b", "a or b"),
+            ("!a", "not a"),
+            ("!a && b || c", "not a and b or c"),
+            ("!!a", "not not a"),
+            ("a && b && c", "a and b and c"),
+        ] {
+            assert_eq!(
+                strip_span(&parse_expr(symbolic).unwrap()),
+                strip_span(&parse_expr(keyword).unwrap()),
+                "{symbolic:?} and {keyword:?} should have equal ASTs"
+            );
+        }
+
+        let cases = [
+            (
+                "2 ** 3 ** 2",
+                "BinOp(Val(Int(2)), BinOp(Val(Int(3)), Val(Int(2)), Power), Power)",
+            ),
+            ("-2 ** 2", "Neg(BinOp(Val(Int(2)), Val(Int(2)), Power))"),
+            ("(-2) ** 2", "BinOp(Neg(Val(Int(2))), Val(Int(2)), Power)"),
+            ("2 ** -3", "BinOp(Val(Int(2)), Neg(Val(Int(3))), Power)"),
+            (
+                "2 ** --3",
+                "BinOp(Val(Int(2)), Neg(Neg(Val(Int(3)))), Power)",
+            ),
+            (
+                "a * b ** c",
+                "BinOp(Var(VarName::new(\"a\")), BinOp(Var(VarName::new(\"b\")), Var(VarName::new(\"c\")), Power), Multiply)",
+            ),
+            (
+                "a ** b * c",
+                "BinOp(BinOp(Var(VarName::new(\"a\")), Var(VarName::new(\"b\")), Power), Var(VarName::new(\"c\")), Multiply)",
+            ),
+            (
+                "a + b != c * d",
+                "BinOp(BinOp(Var(VarName::new(\"a\")), Var(VarName::new(\"b\")), Add), BinOp(Var(VarName::new(\"c\")), Var(VarName::new(\"d\")), Multiply), NotEqual)",
+            ),
+            (
+                "a != b and c",
+                "BinOp(BinOp(Var(VarName::new(\"a\")), Var(VarName::new(\"b\")), NotEqual), Var(VarName::new(\"c\")), And)",
+            ),
+            (
+                "a != b == c",
+                "BinOp(BinOp(Var(VarName::new(\"a\")), Var(VarName::new(\"b\")), NotEqual), Var(VarName::new(\"c\")), Equal)",
+            ),
+            (
+                "not a == b",
+                "BinOp(Not(Var(VarName::new(\"a\"))), Var(VarName::new(\"b\")), Equal)",
+            ),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(
+                strip_span(&parse_expr(source).unwrap()),
+                expected,
+                "unexpected grouping for {source}"
+            );
+        }
+        assert_eq!(
+            strip_span(&parse_expr("if true then 2 ** 3 else -1").unwrap()),
+            "If(Val(Bool(true)), BinOp(Val(Int(2)), Val(Int(3)), Power), Neg(Val(Int(1))))"
+        );
+    }
+
+    // SYN-R02: aliases are reserved in identifier positions, but only at token boundaries.
+    #[test]
+    fn boolean_keywords_are_reserved_without_affecting_neighbouring_identifiers() {
+        for source in [
+            "in and: Bool",
+            "out or: Bool",
+            "aux not: Bool",
+            "and = true",
+            "and",
+            "or",
+            "not",
+        ] {
+            assert!(
+                parse_str(source).is_err(),
+                "{source:?} should fail lexically rather than as an undeclared variable"
+            );
+        }
+        for source in ["android", "origin", "notice", "and_", "or2", "notable"] {
+            assert!(matches!(
+                parse_expr(source).unwrap().as_ref().view(),
+                ExprView::Var(name) if name == &VarName::new(source)
+            ));
+            assert!(
+                parse_str(&format!("in {source}: Bool")).is_ok(),
+                "{source:?} should remain a valid declaration name"
+            );
+        }
+        assert!(matches!(
+            parse_expr("\"and or not\"").unwrap().as_ref().view(),
+            ExprView::Val(crate::Value::Str(value)) if value == "and or not"
+        ));
+        for source in [
+            r#"\and: Bool -> and"#,
+            "dynamic(source, {and})",
+            "{and: 1}",
+            "x.and",
+            "monitored_at(x, and)",
+        ] {
+            assert!(
+                parse_expr(source).is_err(),
+                "{source:?} should reject a reserved alias"
+            );
+        }
+        assert!(parse_expr(r#"{"and": 1}"#).is_ok());
+        assert!(
+            parse_expr("not(a)").is_ok(),
+            "adjacent parentheses must be accepted"
+        );
+    }
+
+    // SYN-R03/SYN-R04: signed RHS operands are unary AST nodes, not signed tokens.
+    #[test]
+    fn power_accepts_signed_rhs_but_rejects_unary_plus_and_source_i64_min() {
+        assert!(matches!(
+            parse_expr("x ** -1").unwrap().as_ref().view(),
+            ExprView::BinOp(_, rhs, BinaryOperator::Power)
+                if matches!(rhs.view(), ExprView::Neg(inner)
+                    if matches!(inner.view(), ExprView::Val(crate::Value::Int(1))))
+        ));
+        for source in [
+            "x ** +1",
+            "x ** -9223372036854775808",
+            "2 *** 3",
+            "**",
+            "2 * * 3",
+        ] {
+            assert!(parse_expr(source).is_err(), "{source} should be rejected");
+        }
+    }
+
+    // SYN-R05/SYN-R06: numeric source boundaries are errors, not successful prefixes or panics.
+    #[test]
+    fn numeric_literal_matrix_and_full_input_consumption() {
+        for (source, expected) in [
+            ("0", crate::Value::Int(0)),
+            ("00", crate::Value::Int(0)),
+            ("00042", crate::Value::Int(42)),
+            ("9223372036854775807", crate::Value::Int(i64::MAX)),
+        ] {
+            assert!(matches!(
+                parse_expr(source).unwrap().as_ref().view(),
+                ExprView::Val(value) if value == &expected
+            ));
+        }
+        for (source, expected) in [
+            ("0.5", 0.5_f64),
+            ("00.5", 0.5_f64),
+            ("1.", 1.0_f64),
+            ("01.", 1.0_f64),
+            ("1e6", 1_000_000.0_f64),
+            ("1E-6", 1e-6_f64),
+            ("1.5e+3", 1_500.0_f64),
+            ("1e-3", 1e-3_f64),
+        ] {
+            let expression = parse_expr(source).unwrap();
+            assert!(matches!(
+                expression.as_ref().view(),
+                ExprView::Val(crate::Value::Float(value))
+                    if value.to_bits() == expected.to_bits()
+            ));
+        }
+
+        let negative = parse_expr("-1e-6").unwrap();
+        let ExprView::Neg(operand) = negative.as_ref().view() else {
+            panic!("leading minus must remain a Neg node");
+        };
+        assert_eq!(negative.as_ref().span(), Span::new(0, 5));
+        assert_eq!(operand.span(), Span::new(1, 5));
+        assert!(
+            matches!(operand.view(), ExprView::Val(crate::Value::Float(value))
+            if value.to_bits() == (1e-6_f64).to_bits())
+        );
+
+        for source in [
+            ".5", "1e", "1e+", "1e-", "1e++3", "1.2.3", "1_000", "1e309", "-1e309",
+        ] {
+            assert!(
+                parse_expr(source).is_err(),
+                "{source} should be rejected completely"
+            );
+        }
+        let error = parse_str("out result: Float\nresult = 1e309").unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("line 2, column 10"),
+            "source errors should carry the literal's location: {diagnostic}"
+        );
+        for source in ["NaN", "inf", "Infinity"] {
+            assert!(matches!(
+                parse_expr(source).unwrap().as_ref().view(),
+                ExprView::Var(name) if name == &VarName::new(source)
+            ));
+            assert!(
+                parse_str(&format!("in {source}: Float")).is_ok(),
+                "{source} should remain a declared identifier"
+            );
+        }
+        for source in ["1e-4000", "-1e-4000"] {
+            let expression = parse_expr(source).unwrap();
+            let value = match expression.as_ref().view() {
+                ExprView::Val(crate::Value::Float(value)) => *value,
+                ExprView::Neg(operand) => match operand.view() {
+                    ExprView::Val(crate::Value::Float(value)) => -*value,
+                    _ => panic!("expected a float operand"),
+                },
+                _ => panic!("expected a float literal"),
+            };
+            assert_eq!(value.to_bits(), source.parse::<f64>().unwrap().to_bits());
+        }
+    }
+
+    // SYN-R06: a second dot after a scientific exponent is not a valid
+    // specification, even if the lexer can otherwise interpret the suffix as
+    // field syntax.
+    #[test]
+    fn malformed_exponent_dot_combinations_are_rejected_by_the_pipeline() {
+        for literal in ["1e2.3", "1.2e3.4"] {
+            let source = format!("out result: Float\nresult = {literal}");
+            assert!(
+                source.parse::<crate::CheckedDsrvSpecification>().is_err(),
+                "{literal} must not be accepted as a valid typed specification"
+            );
+        }
+    }
+
+    // SYN-R05/SYN-R11: unsigned offsets and tuple-field indices have a checked parser boundary.
+    #[test]
+    fn temporal_and_field_indices_accept_u64_max_but_not_overflow() {
+        let expression = parse_expr("x[18446744073709551615]").unwrap();
+        assert!(matches!(
+            expression.as_ref().view(),
+            ExprView::SIndex(input, u64::MAX)
+                if matches!(input.view(), ExprView::Var(name) if name == &VarName::new("x"))
+        ));
+        let field = parse_expr("values.18446744073709551615").unwrap();
+        assert!(matches!(
+            field.as_ref().view(),
+            ExprView::SGet(input, key)
+                if key == "18446744073709551615"
+                    && matches!(input.view(), ExprView::Var(name) if name == &VarName::new("values"))
+        ));
+        assert!(parse_expr("x[18446744073709551616]").is_err());
+        assert!(parse_expr("values.18446744073709551616").is_err());
+        let error = parse_str("out result: Int\nresult = x[18446744073709551616]").unwrap_err();
+        assert!(
+            error.to_string().contains("line 2, column 12"),
+            "unsigned literal errors should carry the index location: {error}"
+        );
+        assert!(parse_expr("values[i]").is_err());
+        assert!(matches!(
+            parse_expr("List.get(values, i)").unwrap().as_ref().view(),
+            ExprView::LIndex(_, _)
+        ));
+    }
+
+    // SYN-R07/SYN-R09: every changed value/call family accepts exactly one trailing comma.
+    #[test]
+    fn approved_value_and_builtin_lists_accept_one_trailing_comma_only() {
+        let pairs = [
+            ("[1, 2]", "[1, 2,]"),
+            ("List(1)", "List(1,)"),
+            ("Tuple(1)", "Tuple(1,)"),
+            ("Map(\"x\": 1)", "Map(\"x\": 1,)"),
+            ("Struct(\"x\": 1)", "Struct(\"x\": 1,)"),
+            ("{x: 1}", "{x: 1,}"),
+            ("f(x)", "f(x,)"),
+            ("f(x)(y)", "f(x,)(y,)"),
+            ("dynamic(source, {x})", "dynamic(source, {x,},)"),
+            ("eval(source, {x})", "eval(source, {x,},)"),
+            ("defer(source, {x})", "defer(source, {x,},)"),
+            ("update(x, y)", "update(x, y,)"),
+            ("default(x, y)", "default(x, y,)"),
+            ("is_defined(x)", "is_defined(x,)"),
+            ("when(x)", "when(x,)"),
+            ("latch(x, y)", "latch(x, y,)"),
+            ("init(x, y)", "init(x, y,)"),
+            ("List.get(x, y)", "List.get(x, y,)"),
+            ("List.concat(x, y)", "List.concat(x, y,)"),
+            ("List.append(x, y)", "List.append(x, y,)"),
+            ("List.head(x)", "List.head(x,)"),
+            ("List.tail(x)", "List.tail(x,)"),
+            ("List.len(x)", "List.len(x,)"),
+            ("List.map(f, x)", "List.map(f, x,)"),
+            ("List.filter(f, x)", "List.filter(f, x,)"),
+            ("List.fold(f, x, y)", "List.fold(f, x, y,)"),
+            ("fix(f)", "fix(f,)"),
+            ("partial(f)", "partial(f,)"),
+            ("partial(f, x, y)", "partial(f, x, y,)"),
+            ("Map.get(m, \"x\")", "Map.get(m, \"x\",)"),
+            ("Map.remove(m, \"x\")", "Map.remove(m, \"x\",)"),
+            ("Map.has_key(m, \"x\")", "Map.has_key(m, \"x\",)"),
+            ("Map.insert(m, \"x\", y)", "Map.insert(m, \"x\", y,)"),
+            ("sin(x)", "sin(x,)"),
+            ("cos(x)", "cos(x,)"),
+            ("tan(x)", "tan(x,)"),
+            ("abs(x)", "abs(x,)"),
+            ("monitored_at(x, node)", "monitored_at(x, node,)"),
+            ("dist(x, node)", "dist(x, node,)"),
+        ];
+        for (without, with) in pairs {
+            let without = parse_expr(without).unwrap_or_else(|error| panic!("{without}: {error}"));
+            let with = parse_expr(with).unwrap_or_else(|error| panic!("{with}: {error}"));
+            assert_eq!(
+                strip_span(&without),
+                strip_span(&with),
+                "{without:?} vs {with:?}"
+            );
+        }
+        assert!(parse_expr("[]").is_ok());
+        for source in [
+            "[,]",
+            "[1,,]",
+            "[1,2,,]",
+            "f(x,,)",
+            "f(,x)",
+            "List(,)",
+            "Map(\"x\": 1,,)",
+        ] {
+            assert!(parse_expr(source).is_err(), "{source} should be rejected");
+        }
+        assert_eq!(
+            strip_span(&parse_expr("[1, 2,\n]").unwrap()),
+            strip_span(&parse_expr("[1, 2]").unwrap())
+        );
+        assert_eq!(
+            strip_span(&parse_expr("f(x, // trailing argument\n)").unwrap()),
+            strip_span(&parse_expr("f(x)").unwrap())
+        );
+    }
+
+    // SYN-R08: type wrappers and tuple/struct forms use the same one-comma boundary.
+    #[test]
+    fn approved_type_lists_accept_one_trailing_comma() {
+        let pairs = [
+            ("List<Int>", "List<Int,>"),
+            ("Map<Bool>", "Map<Bool,>"),
+            ("Expr<Float>", "Expr<Float,>"),
+            ("(Int,)", "(Int,)"),
+            ("(Int, Bool)", "(Int, Bool,)"),
+            ("Struct<x: Int>", "Struct<x: Int,>"),
+            ("Struct<...>", "Struct<...,>"),
+            ("Struct<x: Int, ...>", "Struct<x: Int, ...,>"),
+        ];
+        let parse_type = |typ: &str| {
+            let (_, declaration) =
+                parse_declaration(&format!("in value: {typ}")).expect("type should parse");
+            let Declaration::Input(_, typ, _) = declaration else {
+                panic!("expected input declaration");
+            };
+            typ
+        };
+        for (without, with) in pairs {
+            assert_eq!(parse_type(without), parse_type(with), "{without} vs {with}");
+        }
+        let (_, declaration) = parse_declaration("in value: Struct<>").unwrap();
+        assert!(matches!(
+            declaration,
+            Declaration::Input(_, Some(StreamType::Struct(fields, false)), _)
+                if fields.is_empty()
+        ));
+        assert!(parse_declaration("in value: Struct<,>").is_err());
+        let nested_plain = parse_declaration("in value: List<Map<Int>>").unwrap().1;
+        let nested_trailing = parse_declaration("in value: List<Map<Int,>,>").unwrap().1;
+        let (
+            Declaration::Input(_, plain_type, plain_span),
+            Declaration::Input(_, trailing_type, trailing_span),
+        ) = (&nested_plain, &nested_trailing)
+        else {
+            panic!("expected nested list declarations");
+        };
+        assert_eq!(plain_type, trailing_type);
+        assert_eq!(*plain_span, Span::new(0, 24));
+        assert_eq!(*trailing_span, Span::new(0, 26));
+        assert!(parse_declaration("in f: (Int -> Bool)").is_ok());
+        for source in [
+            "in value: List<Int,,>",
+            "in value: List<Int, Bool>",
+            "in value: (Int,,)",
+            "in value: Struct<x: Int,,>",
+            "in value: (Int,) -> Int",
+            "in value: (Int -> Bool,)",
+        ] {
+            assert!(
+                parse_declaration(source).is_err(),
+                "{source} should be rejected"
+            );
+        }
+        assert!(parse_expr(r#"\x: Int, y: Int -> x"#).is_ok());
+        assert!(parse_expr(r#"\x: Int, -> x"#).is_err());
+        assert!(parse_expr(r#"\x: Int, y: Int, -> x"#).is_err());
+    }
+
+    // SYN-R10: canonical else-if nesting is right-nested and preserves dangling-else attachment.
+    #[test]
+    fn else_if_chains_and_temporal_brackets_keep_their_existing_ast_forms() {
+        let source = "if a then 1 else if b then 2 else 3";
+        let expected = "If(Var(VarName::new(\"a\")), Val(Int(1)), If(Var(VarName::new(\"b\")), Val(Int(2)), Val(Int(3))))";
+        let expression = parse_expr(source).unwrap();
+        assert_eq!(strip_span(&expression), expected);
+        assert_eq!(
+            strip_span(&parse_expr("if a then 1\nelse if b then 2\nelse 3").unwrap()),
+            expected
+        );
+        assert_eq!(
+            strip_span(&parse_expr("if a then if b then 1 else 2 else 3").unwrap()),
+            "If(Var(VarName::new(\"a\")), If(Var(VarName::new(\"b\")), Val(Int(1)), Val(Int(2))), Val(Int(3)))"
+        );
+        assert_eq!(
+            strip_span(&parse_expr(&expression.to_string()).unwrap()),
+            expected
+        );
+        for source in ["if a then 1", "if a 1 else 2", "if a then 1 else 2 else 3"] {
+            assert!(parse_expr(source).is_err(), "{source} should be rejected");
+        }
+        assert!(parse_expr("if a then 1 elif b then 2 else 3").is_err());
+        assert!(
+            parse_expr("elif").is_ok(),
+            "elif is not a reserved identifier"
+        );
+
+        assert_eq!(
+            strip_span(&parse_expr("x[1]").unwrap()),
+            "SIndex(Var(VarName::new(\"x\")), 1)"
+        );
+        assert_eq!(
+            strip_span(&parse_expr("(x + y)[2]").unwrap()),
+            "SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add), 2)"
+        );
+        assert_eq!(
+            strip_span(&parse_expr("x[1] ** 2").unwrap()),
+            "BinOp(SIndex(Var(VarName::new(\"x\")), 1), Val(Int(2)), Power)"
+        );
+        assert!(
+            parse_expr("x[1,]").is_err(),
+            "temporal offsets are not sequences"
+        );
+    }
+
+    // SYN-P01/P03/P04/P06: bounded generators exercise totality and source/display composition.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn valid_integer_literal_sources_roundtrip((source, value) in arb_valid_integer_literal_source()) {
+            let expression = parse_expr(&source).expect("generated integer source should parse");
+            let actual = match expression.as_ref().view() {
+                ExprView::Val(crate::Value::Int(actual)) => *actual,
+                ExprView::Neg(operand) => match operand.view() {
+                    ExprView::Val(crate::Value::Int(actual)) => -*actual,
+                    _ => panic!("expected an integer operand"),
+                },
+                _ => panic!("expected an integer expression"),
+            };
+            prop_assert_eq!(actual, value);
+            let displayed = expression.to_string();
+            let reparsed = parse_expr(&displayed).expect("displayed integer should parse");
+            prop_assert_eq!(strip_span(&expression), strip_span(&reparsed));
+        }
+
+        #[test]
+        fn out_of_range_integer_literal_sources_are_errors(source in arb_invalid_integer_literal_source()) {
+            let result = std::panic::catch_unwind(|| parse_expr(&source));
+            prop_assert!(result.is_ok(), "integer parsing panicked for {source}");
+            prop_assert!(result.unwrap().is_err(), "out-of-range integer parsed: {source}");
+        }
+
+        #[test]
+        fn finite_float_literal_sources_match_rust_and_roundtrip((source, expected) in arb_finite_float_literal_source()) {
+            let expression = parse_expr(&source).expect("generated float source should parse");
+            let ExprView::Val(crate::Value::Float(actual)) = expression.as_ref().view() else {
+                panic!("expected a float literal");
+            };
+            prop_assert_eq!(actual.to_bits(), expected.to_bits());
+            let reparsed = parse_expr(&expression.to_string()).expect("displayed float should parse");
+            prop_assert_eq!(strip_span(&expression), strip_span(&reparsed));
+        }
+
+        #[test]
+        fn one_trailing_comma_is_a_spanless_ast_metamorphism((without, with) in arb_trailing_comma_pair()) {
+            let is_type = without.starts_with("List<")
+                || without.starts_with("Map<")
+                || without.starts_with("Expr<")
+                || without.starts_with('(')
+                || without.starts_with("Struct<");
+            if is_type {
+                let (_, plain_declaration) = parse_declaration(&format!("in value: {without}"))
+                    .expect("generated type should parse");
+                let (_, trailed_declaration) = parse_declaration(&format!("in value: {with}"))
+                    .expect("generated type with comma should parse");
+                let (Declaration::Input(_, plain, _), Declaration::Input(_, trailed, _)) =
+                    (plain_declaration, trailed_declaration)
+                else {
+                    panic!("generated type pair did not parse as input declarations");
+                };
+                prop_assert_eq!(plain, trailed);
+            } else if without.starts_with('{') {
+                prop_assert_eq!(
+                    strip_span(&parse_expr(&format!("dynamic(source, {without})")).expect("generated scope should parse")),
+                    strip_span(&parse_expr(&format!("dynamic(source, {with})")).expect("generated scope with comma should parse"))
+                );
+            } else {
+                prop_assert_eq!(
+                    strip_span(&parse_expr(without).expect("generated expression should parse")),
+                    strip_span(&parse_expr(with).expect("generated expression with comma should parse"))
+                );
+            }
+        }
+
+        // SYN-P06: this is a distinct AST rendering property, rather than a
+        // relabelled literal/comma property. The generator guarantees both
+        // revised operators and a negative-base power survive shrinking.
+        #[test]
+        fn revised_operator_ast_display_roundtrips_bounded_typed_trees(
+            expression in arb_revised_operator_display_expr()
+        ) {
+            let nodes = expression.as_ref().postorder().collect::<Vec<_>>();
+            prop_assert!(nodes.len() <= 40, "generated AST has {} nodes", nodes.len());
+            prop_assert!(
+                nodes.iter().any(|node| matches!(
+                    node.view(),
+                    ExprView::BinOp(_, _, BinaryOperator::Power)
+                )),
+                "generated AST omitted Power"
+            );
+            prop_assert!(
+                nodes.iter().any(|node| matches!(
+                    node.view(),
+                    ExprView::BinOp(_, _, BinaryOperator::NotEqual)
+                )),
+                "generated AST omitted NotEqual"
+            );
+            prop_assert!(
+                nodes.iter().any(|node| matches!(node.view(), ExprView::Neg(_))),
+                "generated AST omitted Neg"
+            );
+            prop_assert!(
+                nodes.iter().any(|node| matches!(
+                    node.view(),
+                    ExprView::BinOp(lhs, _, BinaryOperator::Power)
+                        if matches!(lhs.view(), ExprView::Neg(_))
+                )),
+                "generated Power did not have a negative base"
+            );
+            prop_assert!(
+                nodes.iter().any(|node| matches!(
+                    node.view(),
+                    ExprView::BinOp(_, _, BinaryOperator::Add | BinaryOperator::Multiply)
+                )),
+                "generated AST omitted an adjacent-precedence arithmetic operator"
+            );
+
+            let displayed = expression.to_string();
+            let reparsed = parse_expr(&displayed).unwrap_or_else(|error| {
+                panic!("displayed AST should parse: {displayed:?}: {error}")
+            });
+            prop_assert_eq!(strip_span(&expression), strip_span(&reparsed));
+        }
     }
 
     #[test]

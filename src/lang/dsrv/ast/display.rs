@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Error};
 
-use crate::core::{BinaryOperator, StreamTypeAscription, VarName};
+use crate::core::{BinaryOperator, StreamTypeAscription, Value, VarName};
 
 use super::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
@@ -39,7 +39,17 @@ impl Display for ExprRef<'_> {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),
             BinOp(lhs, rhs, operator) => {
-                write!(f, "({} {} {})", lhs, binary_operator_symbol(operator), rhs)
+                let negative_base = match lhs.view() {
+                    super::ExprView::Neg(_) => true,
+                    super::ExprView::Val(Value::Int(value)) => *value < 0,
+                    super::ExprView::Val(Value::Float(value)) => value.is_sign_negative(),
+                    _ => false,
+                };
+                if operator == BinaryOperator::Power && negative_base {
+                    write!(f, "(({}) {} {})", lhs, operator.symbol(), rhs)
+                } else {
+                    write!(f, "({} {} {})", lhs, operator.symbol(), rhs)
+                }
             }
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
             SIndex(expr, index) => write!(f, "{}[{index}]", expr),
@@ -174,25 +184,6 @@ impl Display for ExprRef<'_> {
     }
 }
 
-fn binary_operator_symbol(operator: BinaryOperator) -> &'static str {
-    match operator {
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-        BinaryOperator::Modulo => "%",
-        BinaryOperator::Or => "||",
-        BinaryOperator::And => "&&",
-        BinaryOperator::Implication => "=>",
-        BinaryOperator::Concatenate => "++",
-        BinaryOperator::Equal => "==",
-        BinaryOperator::Less => "<",
-        BinaryOperator::LessEqual => "<=",
-        BinaryOperator::Greater => ">",
-        BinaryOperator::GreaterEqual => ">=",
-    }
-}
-
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let aux_vars = self.aux_vars();
@@ -225,5 +216,38 @@ impl Display for DsrvSpecification {
             writeln!(f, "{v} = {expression}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::dsrv::parser::parse_expr;
+
+    #[test]
+    fn power_display_parenthesizes_direct_negative_value_bases() {
+        for value in [
+            Value::Int(-2),
+            Value::Float(-2.0),
+            Value::Float(f64::NEG_INFINITY),
+            Value::Float(-0.0),
+        ] {
+            let expression = Expr::BinOp(
+                Box::new(Expr::Val(value)),
+                Box::new(Expr::Val(Value::Int(2))),
+                BinaryOperator::Power,
+            );
+            let displayed = expression.to_string();
+            assert!(
+                displayed.starts_with("(("),
+                "negative base was not parenthesized: {displayed}"
+            );
+            let reparsed = parse_expr(&displayed).unwrap();
+            assert!(matches!(
+                reparsed.as_ref().view(),
+                super::super::ExprView::BinOp(lhs, _, BinaryOperator::Power)
+                    if matches!(lhs.view(), super::super::ExprView::Neg(_))
+            ));
+        }
     }
 }

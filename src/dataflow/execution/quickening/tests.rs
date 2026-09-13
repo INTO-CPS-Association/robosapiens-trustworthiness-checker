@@ -101,6 +101,49 @@ fn add_graph(left: BoundRef, right: BoundRef) -> BoundEvaluationGraph {
     binary_graph(BinaryOperator::Add, left, right)
 }
 
+// SYN-R15/SYN-R16/E1: a quickened scalar island executes checked integer power
+// and declines the row on an arithmetic error without publishing a replacement.
+#[test]
+fn quickened_integer_power_matches_canonical_and_rejects_negative_exponents() {
+    let layout = layout();
+    let programs = vec![program(
+        binary_graph(
+            BinaryOperator::Power,
+            BoundRef::External(EnvironmentSlot::new(0)),
+            BoundRef::External(EnvironmentSlot::new(1)),
+        ),
+        &layout,
+    )];
+    let scheduled = ScheduledExecutionPlan::new(
+        PlanId(0),
+        &programs,
+        StreamSlots::new(EnvironmentSlot::new(2), programs.len()),
+        &[],
+        &[StreamId::new(0)],
+        &[],
+    );
+    let region =
+        QuickenedRegionPlan::new(&scheduled).expect("integer power should form a scalar island");
+    let mut state = QuickenedRegionState::new(&region);
+    let mut environment = vec![Value::NoVal; scheduled.environment_len];
+    let output = scheduled.streams[0].output.environment().index();
+
+    environment[0] = Value::Int(2);
+    environment[1] = Value::Int(3);
+    assert!(region.execute(&mut state, &mut environment));
+    assert_eq!(environment[output], Value::Int(8));
+
+    let output_before = environment[output].clone();
+    environment[1] = Value::Int(-1);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            region.execute(&mut state, &mut environment)
+        }))
+        .is_err()
+    );
+    assert_eq!(environment[output], output_before);
+}
+
 fn schedule(
     programs: &[Rc<StreamProgram>],
     source_order: &[StreamId],

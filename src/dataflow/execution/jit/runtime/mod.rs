@@ -58,8 +58,12 @@ impl PreparedDirectJit {
         match self.function {
             DirectFunction::Void(function) => unsafe { function(input, output, self.state) },
             DirectFunction::Checked(function) => {
-                if unsafe { function(input, output, self.state) } != 0 {
-                    panic!("integer division by zero in direct JIT monitor");
+                match unsafe { function(input, output, self.state) } {
+                    0 => {}
+                    1 => panic!("integer division by zero in direct JIT monitor"),
+                    2 => panic!("negative integer exponent in direct JIT monitor"),
+                    3 => panic!("integer overflow during exponentiation in direct JIT monitor"),
+                    status => panic!("unknown direct JIT failure status {status}"),
                 }
             }
         }

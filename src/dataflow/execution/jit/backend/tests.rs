@@ -221,6 +221,81 @@ fn native_arithmetic_overflow_wraps() {
 }
 
 #[test]
+fn integer_and_float_power_activate_native_execution() {
+    assert_rows(
+        "in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent",
+        &[
+            vec![Value::Int(2), Value::Int(62)],
+            vec![Value::Int(-2), Value::Int(63)],
+            vec![Value::Int(1), Value::Int(i64::MAX)],
+        ],
+    );
+    assert_rows(
+        "in x: Float\nin exponent: Float\nout result: Float\nresult = x ** exponent",
+        &[
+            vec![Value::Float(4.0), Value::Float(0.5)],
+            vec![Value::Float(2.0), Value::Float(-3.0)],
+        ],
+    );
+}
+
+// SYN-R15/E1: inequality itself, rather than an unrelated scalar operation,
+// must produce a native artifact and agree with the canonical monitor.
+#[test]
+fn inequality_activates_native_execution() {
+    assert_rows(
+        "in x: Int\nin y: Int\nout result: Bool\nresult = x != y",
+        &[
+            vec![Value::Int(1), Value::Int(2)],
+            vec![Value::Int(4), Value::Int(4)],
+            vec![Value::Int(i64::MIN), Value::Int(i64::MAX)],
+        ],
+    );
+}
+
+#[test]
+fn native_integer_power_rejects_negative_exponents_and_overflow() {
+    for row in [
+        [Value::Int(2), Value::Int(-1)],
+        [Value::Int(2), Value::Int(63)],
+    ] {
+        let checked = "in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let mut monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
+            .expect("power graph should compile natively");
+        assert!(jit_artifact_count(&monitor) > 0);
+        let mut output = [Value::NoVal];
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                monitor.evaluate(&row, &mut output).unwrap();
+            }))
+            .is_err()
+        );
+    }
+}
+
+// SYN-R16/E1: the native path must preserve the complete i64 exponent rather
+// than narrowing it before checking the negative-exponent error.
+#[test]
+fn native_integer_power_rejects_i64_min_exponent_without_wrapping() {
+    let checked = "in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent"
+        .parse::<CheckedDsrvSpecification>()
+        .unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager()).unwrap();
+    assert!(jit_artifact_count(&monitor) > 0);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            monitor
+                .evaluate(&[Value::Int(1), Value::Int(i64::MIN)], &mut [Value::NoVal])
+                .unwrap();
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn dependent_streams_publish_native_results_to_the_environment() {
     assert_rows(
         "in x: Int\nout first: Int\nout second: Int\nfirst = x + 1\nsecond = first * 2",
