@@ -88,3 +88,4 @@ Under WSL, use the Linux instructions on this page inside the WSL distribution. 
 - [Monitor timed signals with MSTLO](tutorials/mstlo-monitor.md) runs a timestamped Signal Temporal Logic property.
 - [Capabilities](features/capabilities.md) maps live inputs, outputs, reconfiguration, distributed monitoring, and integrations to focused pages.
 - [General usage](general-usage.md) gives the shortest command shape for each input route.
+- [Editor support](./features/editor-support.md) provides an overview of the DSRV VS Code extension.

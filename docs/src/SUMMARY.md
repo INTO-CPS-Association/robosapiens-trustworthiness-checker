@@ -23,6 +23,7 @@
 - [Inputs](./features/inputs.md)
 - [Outputs](./features/outputs.md)
 - [Integrations and deployment](./features/integrations-and-deployment.md)
+- [Editor support](./features/editor-support.md)
 
 # Reference
 
