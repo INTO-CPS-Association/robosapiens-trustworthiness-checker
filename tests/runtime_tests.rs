@@ -586,7 +586,7 @@ fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
     assert!(
-        type_check(spec, false).is_err(),
+        type_check(spec).is_err(),
         "strict checker should reject missing annotations"
     );
     CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
@@ -599,7 +599,7 @@ fn test_gradual_type_check_rejects_annotated_mismatch() {
     let spec = ("out gbz: Bool\ngbz = 1 + 1")
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse");
-    assert!(type_check_gradual(spec, false).is_err());
+    assert!(type_check_gradual(spec).is_err());
 }
 
 #[apply(async_test)]
@@ -1253,7 +1253,7 @@ x = values.x
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
-        let errors = type_check(spec, false).expect_err("object literal should not type-check");
+        let errors = type_check(spec).expect_err("object literal should not type-check");
         assert!(
             errors
                 .iter()
@@ -1451,8 +1451,7 @@ robot = Struct("id": 7)
     .parse::<DsrvSpecification>()
     .expect("test DSRV specification should parse");
 
-    let errors =
-        type_check(spec, false).expect_err("Struct constructor should not type-check as a Map");
+    let errors = type_check(spec).expect_err("Struct constructor should not type-check as a Map");
     assert!(
         errors.iter().any(|err| format!("{err:?}")
             .contains("Struct constructor requires an expected Struct type")),

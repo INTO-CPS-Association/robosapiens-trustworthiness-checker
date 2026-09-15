@@ -318,8 +318,14 @@ where
 
         // Localized model is used only for evaluating constraint outputs.
         // Dependencies of constraints become inputs in this localized spec.
-        let localised_spec = model.localise(&dist_constraints);
-        let builder = builder.model(localised_spec);
+        let builder = match model.try_localise(&dist_constraints) {
+            Ok(localised_spec) => builder.model(localised_spec),
+            Err(error) => {
+                return Box::pin(stream! {
+                    yield Err(anyhow::Error::new(error));
+                });
+            }
+        };
 
         info!(
             "Starting optimized distributed graph generation (target_step={:?})",

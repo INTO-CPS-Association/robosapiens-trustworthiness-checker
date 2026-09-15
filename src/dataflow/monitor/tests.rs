@@ -2609,6 +2609,7 @@ fn lifecycle_trace_is_append_only_and_empty_calls_do_not_check_poison() {
 
 #[test]
 fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
+    let source = VarName::new("source");
     let names = [
         "integer", "boolean", "string", "list", "tuple", "map", "unit", "absent", "waiting",
     ];
@@ -2650,24 +2651,24 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
             )])),
         ),
         (VarName::new("unit"), Expr::Val(SyntaxLiteral::Unit)),
-        (VarName::new("absent"), Expr::Val(SyntaxLiteral::NoVal)),
+        (VarName::new("absent"), Expr::Var(source.clone())),
         (
             VarName::new("waiting"),
-            Expr::SIndex(Box::new(Expr::Val(SyntaxLiteral::Int(1))), 1),
+            Expr::SIndex(Box::new(Expr::Var(source.clone())), 1),
         ),
     ]);
     let specification = DsrvSpecification::new(
-        BTreeSet::new(),
+        BTreeSet::from([source]),
         names.iter().map(|name| VarName::new(*name)).collect(),
         expressions,
-        BTreeMap::new(),
+        BTreeMap::from([(VarName::new("source"), crate::core::StreamType::Int)]),
         [],
     );
     let mut monitor = DataflowMonitor::compile_untyped(specification)
         .expect("complete-value spec should compile");
     let mut output = Vec::new();
     monitor
-        .evaluate_trace([Vec::<Value>::new()], &mut output)
+        .evaluate_trace([[Value::NoVal]], &mut output)
         .unwrap();
     assert_eq!(
         monitor.output_vars(),

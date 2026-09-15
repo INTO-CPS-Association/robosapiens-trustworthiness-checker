@@ -4,13 +4,18 @@
 use super::*;
 use crate::DsrvSpecification;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::ast::{LanguageMode, Local, ValidatedDsrvSpecification};
 
 /// Strictly type-check a specification and attach type metadata to its nodes.
-pub fn type_check(
-    spec: DsrvSpecification,
-    distributed: bool,
-) -> SemanticResult<CheckedDsrvSpecification> {
-    super::checker::check_specification(spec, distributed)
+pub fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    super::checker::check_specification::<Local>(spec)
+}
+
+pub fn check_validated_strict<M: LanguageMode>(
+    spec: ValidatedDsrvSpecification<M>,
+) -> SemanticResult<CheckedDsrvSpecification<M>> {
+    super::checker::check_specification::<M>(spec.into_specification())
+        .map(CheckedDsrvSpecification::into_mode)
 }
 
 #[cfg(test)]
@@ -27,11 +32,10 @@ mod tests {
     #[test]
     fn unary_minus_accepts_int_and_float_and_rejects_non_numeric_values() {
         for source in ["out z: Int\nz = -1", "out z: Float\nz = -1.5"] {
-            type_check(source.parse().unwrap(), false)
-                .expect("numeric negation should be accepted");
+            type_check(source.parse().unwrap()).expect("numeric negation should be accepted");
         }
 
-        let errors = type_check("out z: Bool\nz = -true".parse().unwrap(), false)
+        let errors = type_check("out z: Bool\nz = -true".parse().unwrap())
             .expect_err("boolean negation should be rejected");
         assert!(errors.iter().any(|error| matches!(
             error,
@@ -42,10 +46,10 @@ mod tests {
 
     #[test]
     fn equality_and_ordering_have_distinct_operand_rules() {
-        type_check("out z: Bool\nz = [1] == [1]".parse().unwrap(), false)
+        type_check("out z: Bool\nz = [1] == [1]".parse().unwrap())
             .expect("equal lists should be comparable for equality");
 
-        let errors = type_check("out z: Bool\nz = [1] < [1]".parse().unwrap(), false)
+        let errors = type_check("out z: Bool\nz = [1] < [1]".parse().unwrap())
             .expect_err("lists should not support ordering");
         assert!(errors.iter().any(|error| matches!(
             error,
@@ -66,12 +70,12 @@ mod tests {
             ("out z: Int\nz = 0 ** (-0)", TCType::Int),
         ] {
             let strict =
-                type_check(source.parse().unwrap(), false).expect("strict power should type check");
+                type_check(source.parse().unwrap()).expect("strict power should type check");
             assert_eq!(
                 strict.var_expr_ref(&VarName::new("z")).unwrap().typ(),
                 &expected
             );
-            let gradual = type_check_gradual(source.parse().unwrap(), false)
+            let gradual = type_check_gradual(source.parse().unwrap())
                 .expect("gradual power should type check");
             assert_eq!(
                 gradual.var_expr_ref(&VarName::new("z")).unwrap().typ(),
@@ -81,9 +85,9 @@ mod tests {
 
         for source in ["out z: Int\nz = 2 ** -1", "out z: Int\nz = 2 ** (-1)"] {
             for errors in [
-                type_check(source.parse().unwrap(), false)
+                type_check(source.parse().unwrap())
                     .expect_err("strict must reject known negative exponent"),
-                type_check_gradual(source.parse().unwrap(), false)
+                type_check_gradual(source.parse().unwrap())
                     .expect_err("gradual must reject known negative exponent"),
             ] {
                 assert!(errors.iter().any(|error| matches!(
@@ -97,8 +101,8 @@ mod tests {
         }
 
         let dynamic = "in base: Int\nin exponent: Int\nout z: Int\nz = base ** exponent";
-        type_check(dynamic.parse().unwrap(), false).expect("dynamic Int exponent is valid");
-        type_check_gradual(dynamic.parse().unwrap(), false)
+        type_check(dynamic.parse().unwrap()).expect("dynamic Int exponent is valid");
+        type_check_gradual(dynamic.parse().unwrap())
             .expect("gradual dynamic Int exponent is valid");
 
         let z = VarName::new("z");
@@ -117,9 +121,9 @@ mod tests {
             BTreeSet::new(),
         );
         for errors in [
-            type_check(direct_negative_exponent.clone(), false)
+            type_check(direct_negative_exponent.clone())
                 .expect_err("strict must reject a direct negative integer literal"),
-            type_check_gradual(direct_negative_exponent, false)
+            type_check_gradual(direct_negative_exponent)
                 .expect_err("gradual must reject a direct negative integer literal"),
         ] {
             assert!(errors.iter().any(|error| matches!(
@@ -135,11 +139,11 @@ mod tests {
             "out z: Int\nz = 1 ** true",
         ] {
             assert!(
-                type_check(source.parse().unwrap(), false).is_err(),
+                type_check(source.parse().unwrap()).is_err(),
                 "{source} should fail"
             );
             assert!(
-                type_check_gradual(source.parse().unwrap(), false).is_err(),
+                type_check_gradual(source.parse().unwrap()).is_err(),
                 "{source} should fail in gradual mode"
             );
         }
@@ -158,16 +162,16 @@ mod tests {
             "out z: Bool\nz = Tuple(1) != Tuple(1)",
             "out z: Bool\nz = Map(\"x\": 1) != Map(\"x\": 1)",
         ] {
-            type_check(source.parse().unwrap(), false)
+            type_check(source.parse().unwrap())
                 .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
-            type_check_gradual(source.parse().unwrap(), false)
+            type_check_gradual(source.parse().unwrap())
                 .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
         }
         for source in [
             "out z: Bool\nz = [1] != true",
             "out z: Bool\nz = Tuple(1) != 1",
         ] {
-            let errors = type_check(source.parse().unwrap(), false)
+            let errors = type_check(source.parse().unwrap())
                 .expect_err("incompatible inequality operands should fail");
             assert!(
                 errors.iter().any(|error| {
@@ -180,7 +184,7 @@ mod tests {
                 }),
                 "diagnostic should identify inequality: {errors:?}"
             );
-            assert!(type_check_gradual(source.parse().unwrap(), false).is_err());
+            assert!(type_check_gradual(source.parse().unwrap()).is_err());
         }
     }
 
@@ -200,7 +204,7 @@ mod tests {
             type_annotations,
             BTreeSet::new(),
         );
-        let result = type_check(spec, false);
+        let result = type_check(spec);
         assert!(
             result.is_ok(),
             "Expected Ok for spec with y : List<Int> = [], got {:?}",
@@ -233,7 +237,7 @@ mod tests {
             BTreeSet::from([u.clone()]),
         );
 
-        let typed = type_check(spec, false).expect("strict type check should preserve aux vars");
+        let typed = type_check(spec).expect("strict type check should preserve aux vars");
 
         assert_eq!(typed.aux_vars(), &BTreeSet::from([u.clone()]));
         assert_eq!(typed.stream_vars(), &BTreeSet::from([z.clone(), u]));
@@ -265,7 +269,7 @@ mod tests {
             Vec::new(),
         );
 
-        let checked = type_check(spec, false).expect("both contextual types are valid");
+        let checked = type_check(spec).expect("both contextual types are valid");
 
         assert_eq!(
             checked.var_expr_ref(&int_output).unwrap().typ(),
@@ -287,7 +291,7 @@ mod tests {
         let source = input;
         let spec = source.parse().unwrap();
 
-        let errors = type_check(spec, false).expect_err("spec should fail type checking");
+        let errors = type_check(spec).expect_err("spec should fail type checking");
         let expected_start = input.find("x + true").expect("expression should exist") as u32;
         let expected_end = expected_start + "x + true".len() as u32;
 
@@ -310,7 +314,7 @@ mod tests {
         let source = input;
         let spec = source.parse().unwrap();
 
-        let errors = type_check(spec, false).expect_err("spec should fail type checking");
+        let errors = type_check(spec).expect_err("spec should fail type checking");
         let expected_start = input.find("x + true").expect("expression should exist") as u32;
         let expected_end = expected_start + "x + true".len() as u32;
 
@@ -333,7 +337,7 @@ mod tests {
             .parse()
             .unwrap();
 
-        type_check(spec, false).expect("latch trigger type must not constrain its value type");
+        type_check(spec).expect("latch trigger type must not constrain its value type");
     }
 
     #[test]
@@ -342,7 +346,7 @@ mod tests {
         let source = input;
         let spec = source.parse().unwrap();
 
-        let errors = type_check(spec, false).expect_err("spec should fail type checking");
+        let errors = type_check(spec).expect_err("spec should fail type checking");
         let expected_start = input.find('1').expect("expression should exist") as u32;
         let expected_end = expected_start + 1;
 
@@ -378,7 +382,7 @@ mod tests {
             ];
             for spec in specs {
                 let errors =
-                    type_check(spec, false).expect_err("invalid runtime scope should be rejected");
+                    type_check(spec).expect_err("invalid runtime scope should be rejected");
                 assert!(
                     errors
                         .iter()
@@ -392,7 +396,7 @@ mod tests {
     #[test]
     fn explicit_defer_scope_type_checks() {
         let document = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int, {x, source})";
-        type_check(document.parse().unwrap(), false).expect("defer scope should type-check");
+        type_check(document.parse().unwrap()).expect("defer scope should type-check");
     }
 
     #[test]
@@ -401,7 +405,7 @@ mod tests {
             let source = format!(
                 "in property: Expr<List<Int>>\nout result: List<Int>\nresult = {operator}(property)"
             );
-            let checked = type_check(source.parse().unwrap(), false)
+            let checked = type_check(source.parse().unwrap())
                 .unwrap_or_else(|errors| panic!("{operator} should accept Expr<T>: {errors:?}"));
             let result = checked.var_expr_ref(&VarName::new("result")).unwrap();
             assert_eq!(result.typ(), &TCType::list(TCType::Int));
@@ -422,13 +426,13 @@ mod tests {
         for operator in ["dynamic", "defer"] {
             let accepted =
                 format!("in property: Str\nout result: Int\nresult = {operator}(property: Int)");
-            type_check(accepted.parse().unwrap(), false).unwrap_or_else(|errors| {
+            type_check(accepted.parse().unwrap()).unwrap_or_else(|errors| {
                 panic!("legacy {operator} source should pass: {errors:?}")
             });
 
             let rejected =
                 format!("in property: Str\nout result: Int\nresult = {operator}(property)");
-            let errors = type_check(rejected.parse().unwrap(), false)
+            let errors = type_check(rejected.parse().unwrap())
                 .expect_err("an unascribed Str source must fail strict checking");
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -442,7 +446,7 @@ mod tests {
     fn expression_source_type_must_match_the_result_type() {
         for expression in ["dynamic(property)", "defer(property: Int)"] {
             let source = format!("in property: Expr<Bool>\nout result: Int\nresult = {expression}");
-            type_check(source.parse().unwrap(), false)
+            type_check(source.parse().unwrap())
                 .expect_err("an Expr<Bool> source cannot produce Int");
         }
     }
@@ -451,7 +455,7 @@ mod tests {
     fn string_literals_can_initialize_typed_expression_streams() {
         let source = "aux property: Expr<Int>\nout result: Int\n\
                       property = \"1 + 1\"\nresult = dynamic(property)";
-        type_check(source.parse().unwrap(), false)
+        type_check(source.parse().unwrap())
             .expect("a string literal should initialize an explicitly typed Expr<T> stream");
     }
 
@@ -460,14 +464,14 @@ mod tests {
         let source = "in n: Int\nin bias: Int\nout z: Int\n\
                       z = fix(\\self: (Int -> Int), k: Int -> \
                       if k == 0 then bias else self(k - 1) + 1)(n)";
-        type_check(source.parse().unwrap(), false)
+        type_check(source.parse().unwrap())
             .expect("recursive function application should type-check");
     }
 
     #[test]
     fn checking_a_clone_does_not_annotate_or_poison_the_original() {
         let original: DsrvSpecification = "out z: Int\nz = 1".parse().unwrap();
-        let checked = type_check(original.clone(), false).unwrap();
+        let checked = type_check(original.clone()).unwrap();
 
         assert_eq!(
             checked.var_expr_ref(&"z".into()).unwrap().typ(),
@@ -478,7 +482,6 @@ mod tests {
         contradictory
             .type_annotations
             .insert("z".into(), StreamType::Bool);
-        type_check(contradictory, false)
-            .expect_err("a prior check must not cache away a new constraint");
+        type_check(contradictory).expect_err("a prior check must not cache away a new constraint");
     }
 }

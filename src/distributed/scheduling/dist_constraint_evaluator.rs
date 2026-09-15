@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
+    sync::Arc,
 };
 
 use async_stream::stream;
@@ -12,6 +13,10 @@ use crate::{
     distributed::{
         distribution_constraint::{ConstraintProfile, DistributionConstraintPlan},
         distribution_graphs::{LabelledDistributionGraph, NodeName},
+    },
+    lang::dsrv::{
+        ast::{Distributed, ValidatedDsrvSpecification},
+        type_checker::SemanticErrors,
     },
 };
 
@@ -54,6 +59,7 @@ pub type ConstraintInputBatch = Vec<ConstraintInputUpdate>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DistConstraintEvaluatorError {
+    Validation(Arc<SemanticErrors>),
     Lowering(ConstraintLoweringError),
     MissingInputs { variables: BTreeSet<VarName> },
     DuplicateInputs { variables: BTreeSet<VarName> },
@@ -62,6 +68,9 @@ pub enum DistConstraintEvaluatorError {
 impl std::fmt::Display for DistConstraintEvaluatorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Validation(errors) => {
+                write!(f, "distributed specification failed validation: {errors:?}")
+            }
             Self::Lowering(error) => error.fmt(f),
             Self::MissingInputs { variables } => write!(
                 f,
@@ -78,6 +87,7 @@ impl std::fmt::Display for DistConstraintEvaluatorError {
 impl std::error::Error for DistConstraintEvaluatorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Validation(_) => None,
             Self::Lowering(error) => Some(error),
             Self::MissingInputs { .. } | Self::DuplicateInputs { .. } => None,
         }
@@ -181,8 +191,11 @@ pub fn try_dist_constraint_event_stream(
     input_index: ConstraintInputIndex,
     mut input_events: LocalStream<ConstraintInputBatch>,
 ) -> Result<LocalStream<bool>, DistConstraintEvaluatorError> {
-    let plan =
-        DistributionConstraintPlan::lower(&spec, constraints, ConstraintProfile::CompactEvaluator)?;
+    let validated = spec
+        .validate::<Distributed>()
+        .map_err(Arc::new)
+        .map_err(DistConstraintEvaluatorError::Validation)?;
+    let plan = lower_compact_constraints(&validated, constraints)?;
 
     let mut seen_inputs = BTreeSet::new();
     let duplicate_inputs = input_index
@@ -291,13 +304,28 @@ fn record_latest_input(latest_inputs: &mut [Value], index: usize, value: Value) 
 pub fn try_dist_constraint_input_vars(
     spec: &DsrvSpecification,
     constraints: &[VarName],
-) -> Result<BTreeSet<VarName>, ConstraintLoweringError> {
+) -> Result<BTreeSet<VarName>, DistConstraintEvaluatorError> {
+    let validated = spec
+        .clone()
+        .validate::<Distributed>()
+        .map_err(Arc::new)
+        .map_err(DistConstraintEvaluatorError::Validation)?;
+    Ok(
+        lower_compact_constraints(&validated, constraints.iter().cloned())?
+            .input_dependencies()
+            .clone(),
+    )
+}
+
+fn lower_compact_constraints(
+    spec: &ValidatedDsrvSpecification<Distributed>,
+    constraints: impl IntoIterator<Item = VarName>,
+) -> Result<DistributionConstraintPlan, ConstraintLoweringError> {
     DistributionConstraintPlan::lower(
-        spec,
-        constraints.iter().cloned(),
+        spec.specification(),
+        constraints,
         ConstraintProfile::CompactEvaluator,
     )
-    .map(|plan| plan.input_dependencies().clone())
 }
 
 pub fn dist_constraint_input_vars(

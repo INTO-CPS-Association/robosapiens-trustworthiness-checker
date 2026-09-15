@@ -125,6 +125,11 @@ impl UnresolvedTypeError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SemanticError {
+    DuplicateDeclaration {
+        variable: crate::VarName,
+        first: Span,
+        duplicate: Span,
+    },
     TypeError(TypeError),
     DeferredError(String, Option<Span>),
     UndeclaredVariable(String, Option<Span>),
@@ -156,6 +161,7 @@ impl SemanticError {
 
     pub fn span(&self) -> Option<Span> {
         match self {
+            Self::DuplicateDeclaration { duplicate, .. } => Some(*duplicate),
             Self::TypeError(error) => error.span(),
             Self::DeferredError(_, span)
             | Self::UndeclaredVariable(_, span)
@@ -171,6 +177,7 @@ impl SemanticError {
 
     pub fn set_span_if_absent(&mut self, span: Span) {
         match self {
+            Self::DuplicateDeclaration { duplicate, .. } => *duplicate = span,
             Self::TypeError(error) => error.set_span_if_absent(span),
             Self::DeferredError(_, error_span)
             | Self::UndeclaredVariable(_, error_span)

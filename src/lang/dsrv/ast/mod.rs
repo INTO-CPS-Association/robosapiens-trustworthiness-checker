@@ -31,13 +31,32 @@ pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprRefs,
 };
 
-pub use specification::{CheckedDsrvSpecification, DsrvAstError, DsrvSpecification};
-pub(crate) use specification::{UnvalidatedAssignment, UnvalidatedDsrvSpecification};
+pub(crate) use specification::UnvalidatedDsrvSpecification;
+pub use specification::{
+    CheckedDsrvSpecification, Distributed, DsrvAstError, DsrvSpecification, LanguageMode, Local,
+    SemanticEntry, ValidatedDsrvSpecification,
+};
 
 #[cfg(feature = "thread-safe-ast")]
 static_assertions::assert_impl_all!(DsrvSpecification: Send, Sync);
 #[cfg(feature = "thread-safe-ast")]
 static_assertions::assert_impl_all!(CheckedDsrvSpecification: Send, Sync);
+#[cfg(feature = "thread-safe-ast")]
+type ThreadSafeLocalValidated = ValidatedDsrvSpecification<Local>;
+#[cfg(feature = "thread-safe-ast")]
+type ThreadSafeDistributedValidated = ValidatedDsrvSpecification<Distributed>;
+#[cfg(feature = "thread-safe-ast")]
+type ThreadSafeLocalChecked = CheckedDsrvSpecification<Local>;
+#[cfg(feature = "thread-safe-ast")]
+type ThreadSafeDistributedChecked = CheckedDsrvSpecification<Distributed>;
+#[cfg(feature = "thread-safe-ast")]
+static_assertions::assert_impl_all!(ThreadSafeLocalValidated: Send, Sync);
+#[cfg(feature = "thread-safe-ast")]
+static_assertions::assert_impl_all!(ThreadSafeDistributedValidated: Send, Sync);
+#[cfg(feature = "thread-safe-ast")]
+static_assertions::assert_impl_all!(ThreadSafeLocalChecked: Send, Sync);
+#[cfg(feature = "thread-safe-ast")]
+static_assertions::assert_impl_all!(ThreadSafeDistributedChecked: Send, Sync);
 #[cfg(feature = "thread-safe-ast")]
 static_assertions::assert_impl_all!(Expr: Send, Sync);
 #[cfg(feature = "thread-safe-ast")]

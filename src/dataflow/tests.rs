@@ -1155,6 +1155,52 @@ fn dataflow_compilers_accept_zero_stream_indices() {
 }
 
 #[test]
+fn interleaved_statement_order_keeps_positional_io_separate_from_dependencies() {
+    let source = "in z: Int\n\
+                  out b: Int\n\
+                  b = a + z\n\
+                  in q: Int\n\
+                  aux a: Int\n\
+                  a = q + 1\n\
+                  out c: Int\n\
+                  c = z - q";
+    let specification = source.parse::<DsrvSpecification>().unwrap();
+    let typed = specification
+        .clone()
+        .type_check(TypeCheckOptions::STRICT)
+        .unwrap();
+    let untyped_program = DataflowProgram::compile_untyped(specification).unwrap();
+    let typed_program = DataflowProgram::compile_checked(typed).unwrap();
+
+    for program in [&untyped_program, &typed_program] {
+        assert_eq!(
+            program.input_vars(),
+            &[VarName::new("z"), VarName::new("q")]
+        );
+        assert_eq!(
+            program.output_vars(),
+            &[VarName::new("b"), VarName::new("c")]
+        );
+        assert_eq!(
+            program.stream_vars(),
+            &[VarName::new("a"), VarName::new("b"), VarName::new("c")]
+        );
+    }
+    let mut untyped = DataflowMonitor::from_program(untyped_program);
+    let mut typed = DataflowMonitor::from_program(typed_program);
+    let mut untyped_output = [Value::NoVal, Value::NoVal];
+    let mut typed_output = [Value::NoVal, Value::NoVal];
+    untyped
+        .evaluate(&[Value::Int(10), Value::Int(2)], &mut untyped_output)
+        .unwrap();
+    typed
+        .evaluate(&[Value::Int(10), Value::Int(2)], &mut typed_output)
+        .unwrap();
+    assert_eq!(untyped_output, [Value::Int(13), Value::Int(8)]);
+    assert_eq!(typed_output, untyped_output);
+}
+
+#[test]
 fn dataflow_compilation_reports_computed_dependency_cycles() {
     let spec = "in x\nout z\naux a\naux b\na = b + x\nb = a + x\nz = a"
         .parse::<DsrvSpecification>()
@@ -1173,21 +1219,154 @@ fn dataflow_compilation_reports_computed_dependency_cycles() {
 
 #[test]
 fn dataflow_compilation_reports_unavailable_variables() {
-    let spec = "out z\nz = missing + 1"
-        .parse::<DsrvSpecification>()
-        .unwrap();
+    let source = "out z\nz = missing + 1";
+    let spec = source.parse::<DsrvSpecification>().unwrap();
 
+    DataflowProgram::reset_root_compile_counts();
     let error = match DataflowMonitor::compile_untyped(spec) {
-        Ok(_) => panic!("unavailable input should be rejected"),
+        Ok(_) => panic!("undeclared input should be rejected during admission"),
         Err(error) => error,
     };
 
     match error {
-        DataflowCompilationError::UnavailableVariables { variables, .. } => {
-            assert_eq!(variables, [VarName::new("missing")]);
+        DataflowCompilationError::Semantic(errors) => {
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                crate::lang::dsrv::type_checker::SemanticError::UndeclaredVariable(message, Some(span))
+                    if message.contains("missing")
+                        && *span == crate::lang::dsrv::span::Span::new(
+                            source.find("missing").unwrap() as u32,
+                            (source.find("missing").unwrap() + "missing".len()) as u32,
+                        )
+            )));
         }
         error => panic!("unexpected compile error: {error:?}"),
     }
+    assert_eq!(
+        DataflowProgram::root_compile_counts(),
+        (0, 0),
+        "semantic admission failures must not reach lowering"
+    );
+}
+
+#[test]
+fn raw_facades_validate_before_lowering_and_tryfrom_forwards_valid_models() {
+    let valid = "in x\nout y\ny = x + 1"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let program = DataflowProgram::try_from(valid.clone()).expect("raw program facade");
+    assert_eq!(program.input_vars(), &[VarName::new("x")]);
+    assert_eq!(program.output_vars(), &[VarName::new("y")]);
+    let mut monitor = DataflowMonitor::try_from(valid).expect("raw monitor facade");
+    let mut output = [Value::NoVal];
+    monitor.evaluate(&[Value::Int(4)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(5)]);
+
+    // Untyped lowering intentionally does not demand type annotations.
+    let ill_typed = "out y: Bool\ny = 1".parse::<DsrvSpecification>().unwrap();
+    DataflowMonitor::compile_untyped(ill_typed)
+        .expect("semantic validity is enough for the untyped lowering boundary");
+
+    let invalid_sources = [
+        "in x\nin x\nout y\ny = x",
+        "out y\ny = missing",
+        "in source: Str\nout y\ny = dynamic(source: Int, {missing})",
+        "out y\ny = dist(node1, node2)",
+    ];
+    for source in invalid_sources {
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        DataflowProgram::reset_root_compile_counts();
+        for result in [
+            DataflowProgram::compile_untyped(specification.clone()).map(|_| ()),
+            DataflowMonitor::compile_untyped(specification).map(|_| ()),
+        ] {
+            let error = result.expect_err("invalid local input must be rejected");
+            assert!(
+                matches!(error, DataflowCompilationError::Semantic(_)),
+                "admission error should be exposed by raw facade: {error:?}"
+            );
+        }
+        assert_eq!(
+            DataflowProgram::root_compile_counts(),
+            (0, 0),
+            "semantic facade errors must not reach root compilation"
+        );
+    }
+}
+
+#[test]
+fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
+    let source = "in x: Int\nout y: Int\ny = x + 1";
+    crate::lang::dsrv::reset_test_pipeline_counts();
+    let specification = source.parse::<DsrvSpecification>().unwrap();
+    let validated = specification
+        .validate::<crate::lang::dsrv::ast::Local>()
+        .unwrap();
+    assert_eq!(
+        crate::lang::dsrv::test_pipeline_counts(),
+        (1, 0, 0),
+        "validation is a proof boundary, not a second parse"
+    );
+
+    DataflowProgram::reset_root_compile_counts();
+    let _program = DataflowProgram::compile_validated(validated).unwrap();
+    assert_eq!(
+        DataflowProgram::root_compile_counts(),
+        (0, 1),
+        "validated untyped input should reach lowering exactly once"
+    );
+    assert_eq!(
+        crate::lang::dsrv::test_pipeline_counts(),
+        (1, 0, 0),
+        "consuming a validated proof must not revalidate it"
+    );
+
+    crate::lang::dsrv::reset_test_pipeline_counts();
+    let checked = source
+        .parse::<DsrvSpecification>()
+        .unwrap()
+        .type_check(TypeCheckOptions::STRICT)
+        .unwrap();
+    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 1, 0));
+    DataflowProgram::reset_root_compile_counts();
+    let _program = DataflowProgram::compile_checked(checked).unwrap();
+    assert_eq!(
+        DataflowProgram::root_compile_counts(),
+        (1, 0),
+        "checked input should reach the typed lowering exactly once"
+    );
+    assert_eq!(
+        crate::lang::dsrv::test_pipeline_counts(),
+        (1, 1, 0),
+        "consuming a checked proof must not type-check it again"
+    );
+}
+
+#[test]
+fn raw_static_noval_is_rejected_without_allocating_a_monitor() {
+    let output = VarName::new("output");
+    let specification = DsrvSpecification::new(
+        BTreeSet::new(),
+        BTreeSet::from([output.clone()]),
+        BTreeMap::from([(output, Expr::Val(SyntaxLiteral::NoVal))]),
+        BTreeMap::new(),
+        [],
+    );
+    DataflowProgram::reset_root_compile_counts();
+    let error = match DataflowMonitor::compile_untyped(specification) {
+        Ok(_) => panic!("static NoVal is not a source literal"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        DataflowCompilationError::Semantic(errors)
+            if errors.iter().any(|error| matches!(
+                error,
+                crate::lang::dsrv::type_checker::SemanticError::UnsupportedLiteral(message, _)
+                    if message.contains("runtime states")
+            ))
+    ));
+    assert_eq!(DataflowProgram::root_compile_counts(), (0, 0));
 }
 
 #[test]

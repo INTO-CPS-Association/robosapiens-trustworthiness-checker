@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Display, Error};
 
-use crate::core::{BinaryOperator, StreamTypeAscription};
+use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
 
 use super::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
-    ReconfigurableExprScope, SyntaxLiteral,
+    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef, LanguageMode,
+    ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
 };
 
 impl Debug for CheckedExpr {
@@ -25,9 +25,9 @@ impl Display for Expr {
     }
 }
 
-impl Display for CheckedDsrvSpecification {
+impl<M: LanguageMode> Display for CheckedDsrvSpecification<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.spec, f)
+        fmt_specification(&self.spec, f, |name, _| self.type_annotation(name))
     }
 }
 
@@ -186,42 +186,52 @@ impl Display for ExprRef<'_> {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.type_annotations.is_empty() {
-            for v in &self.input_order {
-                writeln!(f, "in {v}")?;
-            }
-            for v in &self.output_order {
-                writeln!(f, "out {v}")?;
-            }
-            for v in &self.aux_order {
-                writeln!(f, "aux {v}")?;
-            }
-        } else {
-            for v in &self.input_order {
-                let typ = self.type_annotations.get(v).ok_or(Error)?;
-                writeln!(f, "in {v}: {typ}")?;
-            }
-            for v in &self.output_order {
-                let typ = self.type_annotations.get(v).ok_or(Error)?;
-                writeln!(f, "out {v}: {typ}")?;
-            }
-            for v in &self.aux_order {
-                let typ = self.type_annotations.get(v).ok_or(Error)?;
-                writeln!(f, "aux {v}: {typ}")?;
-            }
-        }
-        for v in &self.assignment_order {
-            let expression = self.exprs.get(v).ok_or(Error)?;
-            writeln!(f, "{v} = {expression}")?;
-        }
-        Ok(())
+        fmt_specification(self, f, |_, annotation| annotation)
     }
+}
+
+fn fmt_specification<'a>(
+    spec: &'a DsrvSpecification,
+    f: &mut std::fmt::Formatter<'_>,
+    annotation_for: impl Fn(&'a crate::VarName, Option<&'a StreamType>) -> Option<&'a StreamType>,
+) -> std::fmt::Result {
+    for entry in &spec.semantic_entries {
+        match entry {
+            SemanticEntry::Input {
+                name, annotation, ..
+            }
+            | SemanticEntry::Output {
+                name, annotation, ..
+            }
+            | SemanticEntry::Aux {
+                name, annotation, ..
+            } => {
+                let keyword = match entry {
+                    SemanticEntry::Input { .. } => "in",
+                    SemanticEntry::Output { .. } => "out",
+                    SemanticEntry::Aux { .. } => "aux",
+                    SemanticEntry::Assignment { .. } => unreachable!(),
+                };
+                write!(f, "{keyword} {name}")?;
+                if let Some(typ) = annotation_for(name, annotation.as_ref()) {
+                    write!(f, ": {typ}")?;
+                }
+                writeln!(f)?;
+            }
+            SemanticEntry::Assignment { name, .. } => {
+                let expression = spec.exprs.get(name).ok_or(Error)?;
+                writeln!(f, "{name} = {expression}")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lang::dsrv::parser::parse_expr;
+    use crate::{TypeCheckOptions, VarName, core::StreamType};
 
     #[test]
     fn power_display_parenthesizes_direct_negative_value_bases() {
@@ -248,5 +258,31 @@ mod tests {
                     if matches!(lhs.view(), super::super::ExprView::Neg(_))
             ));
         }
+    }
+
+    #[test]
+    fn checked_display_uses_inferred_annotation_projection() {
+        let checked =
+            CheckedDsrvSpecification::parse_with("out y\ny = 1", TypeCheckOptions::GRADUAL)
+                .expect("gradual checking should infer the output type");
+
+        assert_eq!(
+            checked.type_annotation(&VarName::new("y")),
+            Some(&StreamType::Int)
+        );
+        let displayed = checked.to_string();
+        assert_eq!(displayed, "out y: Int\ny = 1\n");
+        displayed
+            .parse::<CheckedDsrvSpecification>()
+            .expect("checked display must be accepted by strict checking");
+    }
+
+    #[test]
+    fn raw_display_preserves_annotations_for_duplicate_declaration_occurrences() {
+        let raw = "in x: Int\nin x: Bool\nout y\ny = x"
+            .parse::<DsrvSpecification>()
+            .expect("raw parsing retains declaration occurrences");
+
+        assert_eq!(raw.to_string(), "in x: Int\nin x: Bool\nout y\ny = x\n");
     }
 }

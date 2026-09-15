@@ -10,12 +10,31 @@ use std::{cell::RefCell, rc::Rc};
 
 use serde::{Deserialize, Serialize};
 
-// Variable names are represented by compact usize identities. In the default
-// configuration the interner remains thread-local, preserving the fast local
-// path: an identity is only meaningful on the thread that interned it, so
-// values that travel between threads must be re-interned there. The opt-in
-// `thread-safe-ast` configuration replaces it with one process-global
-// Mutex-protected interner, making an identity valid across every thread.
+// Interned list of all variables in the system. This is used to represent
+// individual variables as indices in the runtime instead of strings. This makes
+// variables very cheap to clone, order, or compare.
+//
+// Variable names are assumed to act like atoms in programming languages: the
+// only permitted operations are equality, cloning, comparison, and hashing (the
+// results of the latter two operations are arbitrary but consistent for a given
+// program run). They can also be converted to and from strings. For all of these
+// operations they should act indistinguishably from strings: any case in which
+// this interned state is observable within these constraints is a bug.
+//
+// In the default configuration, variables and their interner are thread local:
+// an identity is only meaningful on the thread that interned it, so values that
+// travel between threads must be re-interned there. The opt-in `thread-safe-ast`
+// configuration instead uses one process-global, Mutex-protected interner,
+// making an identity valid across every thread.
+//
+// This is related to: https://dl.acm.org/doi/10.5555/646066.756689
+// and is a standard technique in both programming language implementations and
+// computer algebra systems.
+//
+// Note that this means that we retain some memory for each unique variable
+// encountered in the system: this is hopefully an acceptable trade-off given
+// how significant interning is for symbolic computations and how unwieldy any
+// solution without shared identities would be.
 const HASH_INDEX_THRESHOLD: usize = 20;
 
 #[cfg(feature = "thread-safe-ast")]
@@ -196,7 +215,9 @@ mod tests {
         let second = VarName::new("variables_test_alpha");
 
         assert_eq!(first, duplicate);
+        #[cfg(not(feature = "thread-safe-ast"))]
         assert_eq!(second.index, first.index + 1);
+        #[cfg(not(feature = "thread-safe-ast"))]
         assert!(first < second);
         assert_eq!(first.name(), "variables_test_zeta");
         assert_eq!(String::from(&second), "variables_test_alpha");

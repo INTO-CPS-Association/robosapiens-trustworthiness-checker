@@ -9,6 +9,196 @@ use proptest::prelude::*;
 
 use crate::{DsrvSpecification, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
 
+/// Span-free semantic-entry oracle for ordered-specification properties.
+///
+/// The oracle is deliberately independent of `SemanticEntry`: properties should
+/// derive the expected projections from this vector rather than from the AST's
+/// own projection methods.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SemanticEntryOracle {
+    Input {
+        name: String,
+        annotation: Option<&'static str>,
+    },
+    Output {
+        name: String,
+        annotation: Option<&'static str>,
+    },
+    Aux {
+        name: String,
+        annotation: Option<&'static str>,
+    },
+    Assignment {
+        name: String,
+        expression: String,
+    },
+}
+
+impl SemanticEntryOracle {
+    fn declaration(
+        role: u8,
+        name: String,
+        annotation: Option<&'static str>,
+    ) -> SemanticEntryOracle {
+        match role {
+            0 => Self::Input { name, annotation },
+            1 => Self::Output { name, annotation },
+            _ => Self::Aux { name, annotation },
+        }
+    }
+
+    pub(crate) fn source_line(&self) -> String {
+        match self {
+            Self::Input { name, annotation }
+            | Self::Output { name, annotation }
+            | Self::Aux { name, annotation } => {
+                let role = match self {
+                    Self::Input { .. } => "in",
+                    Self::Output { .. } => "out",
+                    Self::Aux { .. } => "aux",
+                    Self::Assignment { .. } => unreachable!(),
+                };
+                annotation.map_or_else(
+                    || format!("{role} {name}"),
+                    |annotation| format!("{role} {name}: {annotation}"),
+                )
+            }
+            Self::Assignment { name, expression } => format!("{name} = {expression}"),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Input { name, .. }
+            | Self::Output { name, .. }
+            | Self::Aux { name, .. }
+            | Self::Assignment { name, .. } => name,
+        }
+    }
+
+    pub(crate) fn role(&self) -> Option<u8> {
+        match self {
+            Self::Input { .. } => Some(0),
+            Self::Output { .. } => Some(1),
+            Self::Aux { .. } => Some(2),
+            Self::Assignment { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct OrderedSpecificationCase {
+    pub(crate) source: String,
+    pub(crate) entries: Vec<SemanticEntryOracle>,
+}
+
+fn render_ordered_case(entries: Vec<SemanticEntryOracle>) -> OrderedSpecificationCase {
+    let source = entries
+        .iter()
+        .map(SemanticEntryOracle::source_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    OrderedSpecificationCase { source, entries }
+}
+
+/// Valid, bounded integer specifications with arbitrary statement interleaving.
+///
+/// There are 1--3 inputs, 1--3 outputs, and 0--2 auxiliaries. Every stream has
+/// exactly one declaration and every output/aux has one assignment. Expressions
+/// use only the first input, keeping semantic validity independent of statement
+/// order. Sorting generated `(priority, original_index)` pairs supplies a
+/// shrink-friendly permutation without depending on interned-name ordering.
+pub(crate) fn arb_ordered_specification_case() -> impl Strategy<Value = OrderedSpecificationCase> {
+    (1_usize..=3, 1_usize..=3, 0_usize..=2).prop_flat_map(
+        |(input_count, output_count, aux_count)| {
+            let mut entries = Vec::new();
+            for index in 0..input_count {
+                entries.push(SemanticEntryOracle::Input {
+                    name: format!("input_{index}"),
+                    annotation: (index % 2 == 0).then_some("Int"),
+                });
+            }
+            for index in 0..output_count {
+                let name = format!("output_{index}");
+                entries.push(SemanticEntryOracle::Output {
+                    name: name.clone(),
+                    annotation: Some("Int"),
+                });
+                entries.push(SemanticEntryOracle::Assignment {
+                    name,
+                    expression: format!("input_0 + {}", index + 1),
+                });
+            }
+            for index in 0..aux_count {
+                let name = format!("aux_{index}");
+                entries.push(SemanticEntryOracle::Aux {
+                    name: name.clone(),
+                    annotation: Some("Int"),
+                });
+                entries.push(SemanticEntryOracle::Assignment {
+                    name,
+                    expression: format!("input_0 + {}", output_count + index + 1),
+                });
+            }
+            let len = entries.len();
+            prop::collection::vec(any::<u16>(), len).prop_map(move |priorities| {
+                let mut keyed = entries
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, entry)| ((priorities[index], index), entry))
+                    .collect::<Vec<_>>();
+                keyed.sort_by_key(|(key, _)| *key);
+                render_ordered_case(keyed.into_iter().map(|(_, entry)| entry).collect())
+            })
+        },
+    )
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DuplicateDeclarationCase {
+    pub(crate) source: String,
+    pub(crate) entries: Vec<SemanticEntryOracle>,
+    pub(crate) duplicate_name: String,
+}
+
+/// Ordered specifications containing exactly one injected repeated/cross-role
+/// declaration. Shrinking can reduce the base model, insertion point, role, and
+/// annotation while the `prop_flat_map` reconstruction always retains both
+/// occurrences of the duplicated name.
+pub(crate) fn arb_duplicate_declaration_case() -> impl Strategy<Value = DuplicateDeclarationCase> {
+    arb_ordered_specification_case().prop_flat_map(|base| {
+        let declarations = base
+            .entries
+            .iter()
+            .filter(|entry| entry.role().is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        let declaration_count = declarations.len();
+        (
+            Just(base),
+            0..declaration_count,
+            0_u8..3,
+            prop::option::of(proptest::sample::select(vec!["Int", "Bool"])),
+            0..=declaration_count * 2 + 5,
+        )
+            .prop_map(move |(base, target, role, annotation, insertion)| {
+                let duplicate_name = declarations[target].name().to_owned();
+                let duplicate =
+                    SemanticEntryOracle::declaration(role, duplicate_name.clone(), annotation);
+                let mut entries = base.entries;
+                let insertion = insertion.min(entries.len());
+                entries.insert(insertion, duplicate);
+                let rendered = render_ordered_case(entries);
+                DuplicateDeclarationCase {
+                    source: rendered.source,
+                    entries: rendered.entries,
+                    duplicate_name,
+                }
+            })
+    })
+}
+
 /// A generated integer-power input and its independent checked-arithmetic oracle.
 ///
 /// `expected == None` means either a negative exponent or mathematical overflow.

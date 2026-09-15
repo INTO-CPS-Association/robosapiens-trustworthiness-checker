@@ -359,6 +359,14 @@ impl<'arena> ExprRef<'arena> {
     pub fn span(self) -> Span {
         self.node().span
     }
+
+    /// Compare expression structure and payload while ignoring source metadata.
+    pub(crate) fn structurally_eq(self, other: ExprRef<'_>) -> bool {
+        self.try_zip_with::<std::convert::Infallible, _>(other, |left, right| {
+            Ok(left.kind().same_payload(right.kind()))
+        })
+        .unwrap_or_else(|never| match never {})
+    }
 }
 
 impl PartialEq for Expr {

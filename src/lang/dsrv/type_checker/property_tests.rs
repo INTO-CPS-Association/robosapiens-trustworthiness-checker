@@ -330,8 +330,8 @@ proptest! {
     #[test]
     fn strict_and_gradual_accept_type_directed_programs(case in arb_type_directed_case()) {
         let spec = specification(&case, true);
-        let strict = type_check(spec.clone(), false).expect("type-directed strict program must type check");
-        let gradual = type_check_gradual(spec, false).expect("type-directed gradual program must type check");
+        let strict = type_check(spec.clone()).expect("type-directed strict program must type check");
+        let gradual = type_check_gradual(spec).expect("type-directed gradual program must type check");
         let output = VarName::new("result");
         let expected = TCType::from_stream_type(&case.expected);
         let output_expr = strict.var_expr_ref(&output).unwrap();
@@ -342,7 +342,7 @@ proptest! {
 
     #[test]
     fn gradual_infers_unannotated_type_directed_programs(case in arb_type_directed_case()) {
-        let typed = type_check_gradual(specification(&case, false), false)
+        let typed = type_check_gradual(specification(&case, false))
             .expect("gradual checker must infer a type-directed expression");
         let result = typed.var_expr_ref(&VarName::new("result")).unwrap();
         let actual = result.typ().clone();
@@ -353,7 +353,7 @@ proptest! {
 
     #[test]
     fn strict_requires_output_annotations(case in arb_type_directed_case()) {
-        let errors = type_check(specification(&case, false), false)
+        let errors = type_check(specification(&case, false))
             .expect_err("strict checker must reject a missing output annotation");
         prop_assert!(errors.iter().any(|error| matches!(error, SemanticError::MissingTypeAnnotation(_, _))));
     }
@@ -362,8 +362,8 @@ proptest! {
     fn incompatible_annotations_are_rejected_by_both_drivers(case in arb_type_directed_case()) {
         let mut spec = specification(&case, true);
         spec.type_annotations.insert(VarName::new("result"), incompatible_type(&case.expected));
-        let strict = type_check(spec.clone(), false).expect_err("strict checker must reject contradiction");
-        let gradual = type_check_gradual(spec, false).expect_err("gradual checker must reject contradiction");
+        let strict = type_check(spec.clone()).expect_err("strict checker must reject contradiction");
+        let gradual = type_check_gradual(spec).expect_err("gradual checker must reject contradiction");
         for errors in [strict, gradual] {
             prop_assert!(!errors.is_empty());
         }
@@ -385,7 +385,7 @@ proptest! {
             case.inputs.clone(),
             Vec::new(),
         );
-        let typed = type_check_gradual(spec, false)
+        let typed = type_check_gradual(spec)
             .expect("gradual inference must resolve a forward dependency chain");
         let source_type = typed.var_expr_ref(&source).unwrap().typ().clone();
         let consumer_type = typed.var_expr_ref(&consumer).unwrap().typ().clone();
@@ -399,7 +399,7 @@ proptest! {
     fn accepted_typed_programs_produce_values_of_the_declared_type(
         case in arb_type_directed_case()
     ) {
-        let typed = type_check(specification(&case, true), false)
+        let typed = type_check(specification(&case, true))
             .expect("type-directed program must pass strict checking");
         let mut monitor = DataflowMonitor::compile_checked(typed)
             .expect("type-directed program must compile to dataflow");
@@ -422,11 +422,11 @@ proptest! {
 
     #[test]
     fn strict_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = type_check(spec, false);
+        let _ = type_check(spec);
     }
 
     #[test]
     fn gradual_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = type_check_gradual(spec, false);
+        let _ = type_check_gradual(spec);
     }
 }

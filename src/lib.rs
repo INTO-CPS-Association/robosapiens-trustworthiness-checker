@@ -17,7 +17,10 @@ pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
     DsrvPipelineError, TypeCheckMode, TypeCheckOptions,
-    ast::{CheckedDsrvSpecification, DsrvSpecification},
+    ast::{
+        CheckedDsrvSpecification, Distributed, DsrvSpecification, LanguageMode, Local,
+        SemanticEntry, ValidatedDsrvSpecification,
+    },
 };
 pub mod distributed;
 pub mod dsrv_fixtures;

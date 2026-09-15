@@ -15,7 +15,7 @@ use crate::{
         DistributionGraph, LabelledDistGraphStream, LabelledDistributionGraph,
     },
     io::{config::TopicMapping, mqtt::dist_graph_provider::DistGraphProvider},
-    semantics::distributed::localisation::Localisable,
+    semantics::distributed::localisation::TryLocalisable,
 };
 
 use super::{
@@ -44,7 +44,7 @@ fn should_plan_on_constraints_fail(
             && (previous_constraints_hold != Some(false) || planning_state_changed))
 }
 
-pub struct Scheduler<M: Specification + Localisable> {
+pub struct Scheduler<M: Specification> {
     replanning_condition: ReplanningCondition,
     dist_graph_output_stream: Option<LabelledDistGraphStream>,
     planner: Box<dyn SchedulerPlanner>,
@@ -59,7 +59,7 @@ pub struct Scheduler<M: Specification + Localisable> {
     suppress_output: bool,
 }
 
-impl<M: Specification + Localisable> Scheduler<M> {
+impl<M: Specification + TryLocalisable> Scheduler<M> {
     pub fn new(
         spec: M,
         var_msg_types: BTreeMap<VarName, String>,

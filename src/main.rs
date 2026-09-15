@@ -27,7 +27,6 @@ use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
-use trustworthiness_checker::semantics::distributed::localisation::Localisable;
 use trustworthiness_checker::{self as tc, Specification};
 use trustworthiness_checker::{Value, VarName};
 
@@ -122,7 +121,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let model = match (&builder.distribution_mode, model) {
         (DistributionMode::LocalMonitor(locality_mode), LangSpecification::Dsrv(model)) => {
             debug!(?locality_mode, "Localising model");
-            let model = model.localise(locality_mode);
+            let model = model
+                .try_localise(locality_mode)
+                .context("Distributed model failed admission or localisation")?;
             info!(?model, output_vars=?model.output_vars(), input_vars=?model.input_vars(), "Localised model");
             LangSpecification::Dsrv(model)
         }
@@ -138,7 +139,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                let localized = model.localise(&localized_constraint_vars);
+                let localized = model
+                    .try_localise(&localized_constraint_vars)
+                    .context("Distribution constraints failed admission or localisation")?;
                 let mut input_vars = localized.input_vars().clone();
                 input_vars.extend(dist_constraint_input_vars(
                     model,

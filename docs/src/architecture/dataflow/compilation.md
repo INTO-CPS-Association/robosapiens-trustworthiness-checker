@@ -14,6 +14,70 @@ Compilation fixes a `DataflowMonitor` definition's immutable meaning and stable 
 
 The numbered phases run once per definition. The runtime `Scheduler` may later replace the order established in phase 3, but it does not repeat compilation or reassign the stable identities established in phase 4. Nor does it revisit the signatures from phase 1: which work can be accelerated is decided here and never re-decided at runtime.
 
+## Ordered specifications and typed guarantees
+
+The language layer separates parsing, semantic validation, and type checking.
+A parsed model remains available when semantic validation fails, which lets
+editor tooling report errors without losing syntax-based features. Compilation
+accepts only a model validated for local execution.
+
+| State | Owned information and guarantee |
+|---|---|
+| `DsrvSpecification` | Parsed statements and compact expression storage. It may still contain semantic errors such as conflicting declarations. |
+| `ValidatedDsrvSpecification<M>` | A specification that passed common checks and checks for language mode `M`. |
+| `CheckedDsrvSpecification<M>` | A validated specification plus checked expression types. |
+| `DataflowProgram` | Lowered and bound local meaning; language-mode evidence is no longer needed. |
+
+The supported language modes are `Local` and `Distributed`. Local validation
+rejects distributed-only expressions such as `Dist` and `MonitoredAt`;
+distributed validation permits them. Strict and gradual type checking are
+separate from this choice.
+
+The parsed specification retains declaration and assignment order in one
+semantic statement sequence. Membership sets and the expression map remain
+optimized for lookup. In particular, lookup order must not be used as source
+order or execution order. Keeping statement occurrences also lets validation
+diagnose repeated declarations precisely while preserving the parsed model for
+editor tooling.
+
+Three different orders coexist:
+
+| Order | Authority | Consequence |
+|---|---|---|
+| Statement order | Parsed semantic statements | Diagnostics, formatting, and positional declaration views |
+| Lookup order | Membership sets and expression map | Efficient name lookup |
+| Execution order | Dependency analysis and runtime scheduling | Producers run before current consumers |
+
+```mermaid
+flowchart TB
+    accTitle: Language proofs end at local compilation
+    accDescr: Parsed models undergo common and mode-specific validation. Local models can be checked and compiled. Distributed models are planned and localised into new parsed node models, which need fresh Local validation. Compilation erases the proof into a nongeneric program.
+    parsed["DsrvSpecification"]
+    local["ValidatedDsrvSpecification<Local>"]
+    checked["CheckedDsrvSpecification<Local>"]
+    dist["Validated or Checked specification<Distributed>"]
+    node["Fresh parsed node model"]
+    program["DataflowProgram"]
+    parsed -->|"common + Local validation"| local
+    parsed -->|"common + Distributed validation; optional checking"| dist
+    local -->|"strict or gradual checking"| checked
+    dist -->|"planning and fallible localisation"| node
+    node -->|"fresh common + Local validation"| local
+    local -->|"untyped compilation consumes proof"| program
+    checked -->|"typed compilation consumes proof"| program
+```
+
+Arrows show successful, fallible transitions rather than runtime execution.
+Distributed localisation rewrites a model, so each executable node model is
+validated again as `Local`; a distributed validation result is never treated as
+local automatically. Public compilation entry points that accept a parsed model
+perform local validation before lowering.
+
+Serialization keeps the existing set/map representation and does not preserve
+semantic statement order. Validation of an enclosing model also does not cover
+expression source supplied dynamically at runtime; those paths retain their
+existing failure behavior.
+
 ## AST lowering and operation order
 
 Typed and untyped ASTs lower to `EvaluationGraph<VarName>` values. Operands precede consumers, so `NodeId` identifies both an operation's position and its matching value/state slot within that graph. External references still use `VarName` until binding.

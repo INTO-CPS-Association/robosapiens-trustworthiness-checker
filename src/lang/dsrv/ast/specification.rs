@@ -3,6 +3,7 @@
 use contiguous_tree::TreeCursorExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use super::checked::{CheckedTypes, ExprTypes};
 use super::{
@@ -33,22 +34,112 @@ pub enum DsrvAstError {
     InvalidExpressionMap(#[from] contiguous_tree::ForestMapError),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct UnvalidatedAssignment {
-    pub(crate) name: VarName,
-    pub(crate) span: Span,
+#[derive(Clone, Debug)]
+pub enum SemanticEntry {
+    Input {
+        name: VarName,
+        annotation: Option<StreamType>,
+        span: Span,
+    },
+    Output {
+        name: VarName,
+        annotation: Option<StreamType>,
+        span: Span,
+    },
+    Aux {
+        name: VarName,
+        annotation: Option<StreamType>,
+        span: Span,
+    },
+    Assignment {
+        name: VarName,
+        span: Span,
+    },
 }
+
+impl SemanticEntry {
+    pub fn name(&self) -> &VarName {
+        match self {
+            Self::Input { name, .. }
+            | Self::Output { name, .. }
+            | Self::Aux { name, .. }
+            | Self::Assignment { name, .. } => name,
+        }
+    }
+
+    pub fn annotation(&self) -> Option<&StreamType> {
+        match self {
+            Self::Input { annotation, .. }
+            | Self::Output { annotation, .. }
+            | Self::Aux { annotation, .. } => annotation.as_ref(),
+            Self::Assignment { .. } => None,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Input { span, .. }
+            | Self::Output { span, .. }
+            | Self::Aux { span, .. }
+            | Self::Assignment { span, .. } => *span,
+        }
+    }
+}
+
+// Source coordinates diagnose an entry but are not part of its semantic identity.
+impl PartialEq for SemanticEntry {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Input {
+                    name: a,
+                    annotation: aa,
+                    ..
+                },
+                Self::Input {
+                    name: b,
+                    annotation: ba,
+                    ..
+                },
+            )
+            | (
+                Self::Output {
+                    name: a,
+                    annotation: aa,
+                    ..
+                },
+                Self::Output {
+                    name: b,
+                    annotation: ba,
+                    ..
+                },
+            )
+            | (
+                Self::Aux {
+                    name: a,
+                    annotation: aa,
+                    ..
+                },
+                Self::Aux {
+                    name: b,
+                    annotation: ba,
+                    ..
+                },
+            ) => a == b && aa == ba,
+            (Self::Assignment { name: a, .. }, Self::Assignment { name: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
+impl Eq for SemanticEntry {}
 
 /// A forest-backed specification whose declaration-level invariants are unchecked.
 pub(crate) struct UnvalidatedDsrvSpecification {
     input_vars: BTreeSet<VarName>,
     output_vars: BTreeSet<VarName>,
-    input_order: Vec<VarName>,
-    output_order: Vec<VarName>,
-    stream_order: Vec<VarName>,
     aux_vars: Vec<VarName>,
     expressions: ExprForest,
-    assignments: Vec<UnvalidatedAssignment>,
+    entries: Vec<SemanticEntry>,
     type_annotations: BTreeMap<VarName, StreamType>,
 }
 
@@ -56,54 +147,48 @@ impl UnvalidatedDsrvSpecification {
     pub(crate) fn new(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
-        input_order: Vec<VarName>,
-        output_order: Vec<VarName>,
-        stream_order: Vec<VarName>,
         aux_vars: Vec<VarName>,
         expressions: ExprForest,
-        assignments: Vec<UnvalidatedAssignment>,
+        entries: Vec<SemanticEntry>,
         type_annotations: BTreeMap<VarName, StreamType>,
     ) -> Self {
         assert_eq!(
-            assignments.len(),
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, SemanticEntry::Assignment { .. }))
+                .count(),
             expressions.len(),
             "each assignment declaration must describe one expression root"
         );
         Self {
             input_vars,
             output_vars,
-            input_order,
-            output_order,
-            stream_order,
             aux_vars,
             expressions,
-            assignments,
+            entries,
             type_annotations,
         }
     }
 
     pub(crate) fn validate(self) -> Result<DsrvSpecification, DsrvAstError> {
-        let assignment_order = self
-            .assignments
+        let assignments = self
+            .entries
             .iter()
-            .map(|assignment| assignment.name.clone())
+            .filter(|entry| matches!(entry, SemanticEntry::Assignment { .. }))
             .collect::<Vec<_>>();
-        let names = self
-            .assignments
-            .iter()
-            .map(|assignment| assignment.name.clone());
+        let names = assignments.iter().map(|entry| entry.name().clone());
         let exprs = match ExprForestMap::from_unsorted(names, self.expressions) {
             Ok(exprs) => exprs,
             Err(contiguous_tree::ForestMapError::DuplicateKey {
                 first_index,
                 duplicate_index,
             }) => {
-                let first = &self.assignments[first_index];
-                let duplicate = &self.assignments[duplicate_index];
+                let first = assignments[first_index];
+                let duplicate = assignments[duplicate_index];
                 return Err(DsrvAstError::DuplicateAssignment {
-                    variable: duplicate.name.clone(),
-                    first: first.span,
-                    duplicate: duplicate.span,
+                    variable: duplicate.name().clone(),
+                    first: first.span(),
+                    duplicate: duplicate.span(),
                 });
             }
             Err(error) => return Err(DsrvAstError::InvalidExpressionMap(error)),
@@ -116,22 +201,19 @@ impl UnvalidatedDsrvSpecification {
             return Err(DsrvAstError::DuplicateExpressionField { field });
         }
 
-        Ok(DsrvSpecification::from_expression_forest_with_orders(
+        Ok(DsrvSpecification::from_expression_forest_with_entries(
             self.input_vars,
             self.output_vars,
             exprs,
             self.type_annotations,
             self.aux_vars,
-            self.input_order,
-            self.output_order,
-            self.stream_order,
-            assignment_order,
+            self.entries,
         ))
     }
 }
 
 /// An unchecked DSRV specification.
-#[derive(Clone, PartialEq, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct DsrvSpecification {
     pub(crate) input_vars: BTreeSet<VarName>,
     pub(crate) output_vars: BTreeSet<VarName>,
@@ -139,19 +221,77 @@ pub struct DsrvSpecification {
     pub(crate) stream_vars: BTreeSet<VarName>,
     pub(crate) exprs: ExprForestMap<VarName>,
     pub(crate) type_annotations: BTreeMap<VarName, StreamType>,
-    /// Syntax-derived layout order. These fields are intentionally not serialized:
-    /// the set/map fields above remain the compatibility representation, while
-    /// parsed specifications retain the order required by positional runtimes.
+    /// Normalized statement order. Serialization intentionally retains the legacy
+    /// set/map projection rather than making this diagnostic sequence persistent.
     #[serde(skip)]
-    pub(crate) input_order: Vec<VarName>,
-    #[serde(skip)]
-    pub(crate) output_order: Vec<VarName>,
-    #[serde(skip)]
-    pub(crate) aux_order: Vec<VarName>,
-    #[serde(skip)]
-    pub(crate) stream_order: Vec<VarName>,
-    #[serde(skip)]
-    pub(crate) assignment_order: Vec<VarName>,
+    pub(crate) semantic_entries: Vec<SemanticEntry>,
+}
+
+mod language_mode_sealed {
+    pub trait Sealed {}
+}
+
+pub trait LanguageMode: language_mode_sealed::Sealed + Clone + Debug + 'static {
+    #[doc(hidden)]
+    fn validate_distribution_constraint(span: Span) -> Result<(), Span>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Local;
+impl language_mode_sealed::Sealed for Local {}
+impl LanguageMode for Local {
+    fn validate_distribution_constraint(span: Span) -> Result<(), Span> {
+        Err(span)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Distributed;
+impl language_mode_sealed::Sealed for Distributed {}
+impl LanguageMode for Distributed {
+    fn validate_distribution_constraint(_span: Span) -> Result<(), Span> {
+        Ok(())
+    }
+}
+
+impl PartialEq for DsrvSpecification {
+    fn eq(&self, other: &Self) -> bool {
+        self.input_vars == other.input_vars
+            && self.output_vars == other.output_vars
+            && self.aux_vars == other.aux_vars
+            && self.stream_vars == other.stream_vars
+            && self.type_annotations == other.type_annotations
+            && self.semantic_entries == other.semantic_entries
+            && self.exprs.len() == other.exprs.len()
+            && self.exprs.iter().zip(other.exprs.iter()).all(
+                |((left_name, left_expr), (right_name, right_expr))| {
+                    left_name == right_name && left_expr.structurally_eq(right_expr)
+                },
+            )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedDsrvSpecification<M: LanguageMode> {
+    spec: DsrvSpecification,
+    mode: PhantomData<M>,
+}
+
+impl<M: LanguageMode> ValidatedDsrvSpecification<M> {
+    pub(crate) fn new(spec: DsrvSpecification) -> Self {
+        Self {
+            spec,
+            mode: PhantomData,
+        }
+    }
+
+    pub fn specification(&self) -> &DsrvSpecification {
+        &self.spec
+    }
+
+    pub fn into_specification(self) -> DsrvSpecification {
+        self.spec
+    }
 }
 
 struct OrderedVars<'a>(&'a [VarName]);
@@ -169,9 +309,14 @@ impl Debug for OrderedExprs<'_> {
         f.debug_map()
             .entries(
                 self.0
-                    .assignment_order
+                    .semantic_entries
                     .iter()
-                    .filter_map(|name| self.0.exprs.get(name).map(|expression| (name, expression))),
+                    .filter_map(|entry| match entry {
+                        SemanticEntry::Assignment { name, .. } => {
+                            self.0.exprs.get(name).map(|expression| (name, expression))
+                        }
+                        _ => None,
+                    }),
             )
             .finish()
     }
@@ -181,12 +326,9 @@ struct OrderedAnnotations<'a>(&'a DsrvSpecification);
 
 impl Debug for OrderedAnnotations<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let declaration_order = self
-            .0
-            .input_order
-            .iter()
-            .chain(self.0.output_order.iter())
-            .chain(self.0.aux_order.iter());
+        let declaration_order = self.0.semantic_entries.iter().filter_map(|entry| {
+            (!matches!(entry, SemanticEntry::Assignment { .. })).then(|| entry.name())
+        });
         let mut seen = BTreeSet::new();
         let mut entries = Vec::new();
         for name in declaration_order {
@@ -208,10 +350,11 @@ impl Debug for OrderedAnnotations<'_> {
 impl Debug for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DsrvSpecification")
-            .field("input_vars", &OrderedVars(&self.input_order))
-            .field("output_vars", &OrderedVars(&self.output_order))
-            .field("aux_vars", &OrderedVars(&self.aux_order))
-            .field("stream_vars", &OrderedVars(&self.stream_order))
+            .field("semantic_entries", &self.semantic_entries)
+            .field("input_vars", &OrderedVars(&self.input_vars_in_order()))
+            .field("output_vars", &OrderedVars(&self.output_vars_in_order()))
+            .field("aux_vars", &OrderedVars(&self.aux_vars_in_order()))
+            .field("stream_vars", &OrderedVars(&self.stream_vars_in_order()))
             .field("exprs", &OrderedExprs(self))
             .field("type_annotations", &OrderedAnnotations(self))
             .finish()
@@ -220,16 +363,29 @@ impl Debug for DsrvSpecification {
 
 /// A specification paired with one immutable type for every reachable AST node.
 #[derive(Clone, Debug)]
-pub struct CheckedDsrvSpecification {
+pub struct CheckedDsrvSpecification<M: LanguageMode = Local> {
     pub(super) spec: DsrvSpecification,
     checked: AstShared<CheckedTypes>,
+    mode: PhantomData<M>,
 }
 
-impl CheckedDsrvSpecification {
+impl<M: LanguageMode> CheckedDsrvSpecification<M> {
     pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
         let environment = AstShared::new(spec.type_annotations().clone());
         let checked = AstShared::new(CheckedTypes::new(expr_types, environment));
-        Self { spec, checked }
+        Self {
+            spec,
+            checked,
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) fn into_mode<N: LanguageMode>(self) -> CheckedDsrvSpecification<N> {
+        CheckedDsrvSpecification {
+            spec: self.spec,
+            checked: self.checked,
+            mode: PhantomData,
+        }
     }
 
     pub fn unchecked(&self) -> &DsrvSpecification {
@@ -282,7 +438,7 @@ impl CheckedDsrvSpecification {
     }
 }
 
-impl Specification for CheckedDsrvSpecification {
+impl<M: LanguageMode> Specification for CheckedDsrvSpecification<M> {
     type Expr = CheckedExpr;
 
     fn input_vars(&self) -> BTreeSet<VarName> {
@@ -317,7 +473,10 @@ impl Specification for CheckedDsrvSpecification {
     }
 }
 
-fn complete_order(order: Vec<VarName>, members: &BTreeSet<VarName>) -> Vec<VarName> {
+fn complete_order(
+    order: impl IntoIterator<Item = VarName>,
+    members: &BTreeSet<VarName>,
+) -> Vec<VarName> {
     let mut seen = BTreeSet::new();
     let mut ordered = Vec::with_capacity(members.len());
     for name in order {
@@ -330,6 +489,10 @@ fn complete_order(order: Vec<VarName>, members: &BTreeSet<VarName>) -> Vec<VarNa
 }
 
 impl DsrvSpecification {
+    pub fn semantic_entries(&self) -> &[SemanticEntry] {
+        &self.semantic_entries
+    }
+
     pub fn roots(&self) -> impl DoubleEndedIterator<Item = (&VarName, ExprRef<'_>)> {
         self.exprs.iter()
     }
@@ -346,64 +509,61 @@ impl DsrvSpecification {
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
     ) -> Self {
-        let input_order = input_vars.iter().cloned().collect();
-        let output_order: Vec<VarName> = output_vars.iter().cloned().collect();
+        let input_order = input_vars.iter().cloned().collect::<Vec<_>>();
+        let output_order = output_vars.iter().cloned().collect::<Vec<_>>();
         let aux_vars = aux_vars.into_iter().collect::<Vec<_>>();
-        let stream_order = output_order
-            .iter()
-            .chain(aux_vars.iter())
-            .cloned()
-            .collect();
-        let assignment_order = exprs.keys().cloned().collect();
-        Self::from_expression_forest_with_orders(
+        let mut entries = Vec::new();
+        entries.extend(input_order.iter().map(|name| SemanticEntry::Input {
+            name: name.clone(),
+            annotation: type_annotations.get(name).cloned(),
+            span: Span::default(),
+        }));
+        entries.extend(output_order.iter().map(|name| SemanticEntry::Output {
+            name: name.clone(),
+            annotation: type_annotations.get(name).cloned(),
+            span: Span::default(),
+        }));
+        entries.extend(aux_vars.iter().map(|name| SemanticEntry::Aux {
+            name: name.clone(),
+            annotation: type_annotations.get(name).cloned(),
+            span: Span::default(),
+        }));
+        entries.extend(exprs.keys().map(|name| SemanticEntry::Assignment {
+            name: name.clone(),
+            span: Span::default(),
+        }));
+        Self::from_expression_forest_with_entries(
             input_vars,
             output_vars,
             exprs,
             type_annotations,
             aux_vars,
-            input_order,
-            output_order,
-            stream_order,
-            assignment_order,
+            entries,
         )
     }
 
-    pub(crate) fn from_expression_forest_with_orders(
+    pub(crate) fn from_expression_forest_with_entries(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
         exprs: ExprForestMap<VarName>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
-        input_order: Vec<VarName>,
-        output_order: Vec<VarName>,
-        stream_order: Vec<VarName>,
-        assignment_order: Vec<VarName>,
+        semantic_entries: Vec<SemanticEntry>,
     ) -> Self {
-        let aux_order = aux_vars.into_iter().collect::<Vec<_>>();
-        let aux_vars = aux_order.iter().cloned().collect::<BTreeSet<_>>();
-        let input_order = complete_order(input_order, &input_vars);
-        let output_order = complete_order(output_order, &output_vars);
-        let aux_order = complete_order(aux_order, &aux_vars);
-        let stream_members = output_vars
+        let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
+        let stream_vars = output_vars
             .iter()
             .chain(aux_vars.iter())
             .cloned()
             .collect::<BTreeSet<_>>();
-        let stream_order = complete_order(stream_order, &stream_members);
-        let expr_names = exprs.keys().cloned().collect::<BTreeSet<_>>();
-        let assignment_order = complete_order(assignment_order, &expr_names);
         Self {
             input_vars,
             output_vars,
             aux_vars,
-            stream_vars: stream_order.iter().cloned().collect(),
+            stream_vars,
             exprs,
             type_annotations,
-            input_order,
-            output_order,
-            aux_order,
-            stream_order,
-            assignment_order,
+            semantic_entries,
         }
     }
 
@@ -444,25 +604,59 @@ impl DsrvSpecification {
         &self.input_vars
     }
     pub fn input_vars_in_order(&self) -> Vec<VarName> {
-        self.input_order.clone()
+        complete_order(
+            self.semantic_entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    SemanticEntry::Input { name, .. } => Some(name.clone()),
+                    _ => None,
+                }),
+            &self.input_vars,
+        )
     }
     pub fn output_vars(&self) -> &BTreeSet<VarName> {
         &self.output_vars
     }
     pub fn output_vars_in_order(&self) -> Vec<VarName> {
-        self.output_order.clone()
+        complete_order(
+            self.semantic_entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    SemanticEntry::Output { name, .. } => Some(name.clone()),
+                    _ => None,
+                }),
+            &self.output_vars,
+        )
     }
     pub fn aux_vars(&self) -> &BTreeSet<VarName> {
         &self.aux_vars
     }
     pub fn aux_vars_in_order(&self) -> Vec<VarName> {
-        self.aux_order.clone()
+        complete_order(
+            self.semantic_entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    SemanticEntry::Aux { name, .. } => Some(name.clone()),
+                    _ => None,
+                }),
+            &self.aux_vars,
+        )
     }
     pub fn stream_vars(&self) -> &BTreeSet<VarName> {
         &self.stream_vars
     }
     pub fn stream_vars_in_order(&self) -> Vec<VarName> {
-        self.stream_order.clone()
+        complete_order(
+            self.semantic_entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    SemanticEntry::Output { name, .. } | SemanticEntry::Aux { name, .. } => {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                }),
+            &self.stream_vars,
+        )
     }
     pub fn type_annotations(&self) -> &BTreeMap<VarName, StreamType> {
         &self.type_annotations
@@ -524,30 +718,72 @@ mod tests {
     use proptest::prelude::*;
     use tracing::info;
 
+    #[cfg(feature = "thread-safe-ast")]
+    use crate::TypeCheckMode;
     use crate::TypeCheckOptions;
     use crate::VarName;
     use crate::core::BinaryOperator;
-    use crate::core::{StreamType, StreamTypeAscription};
+    use crate::core::{Specification, StreamType, StreamTypeAscription};
     use crate::dsrv_fixtures::{
         spec_simple_add_aux_monitor, spec_simple_add_aux_typed_monitor, spec_simple_add_monitor,
         spec_simple_add_monitor_typed,
     };
     use crate::lang::dsrv::ast::{
-        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, ExprBuilder, ExprKind,
-        ReconfigurableExprScope,
+        CheckedDsrvSpecification, CheckedExpr, Distributed, DsrvSpecification, ExprBuilder,
+        ExprKind, LanguageMode, Local, ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
     use crate::lang::dsrv::test_support::{
-        arb_boolean_sexpr, arb_float_sexpr, arb_int_sexpr, arb_mixed_sexpr, arb_string_sexpr,
+        SemanticEntryOracle, arb_boolean_sexpr, arb_duplicate_declaration_case, arb_float_sexpr,
+        arb_int_sexpr, arb_mixed_sexpr, arb_ordered_specification_case, arb_string_sexpr,
     };
-    use crate::lang::dsrv::type_checker::TCType;
+    use crate::lang::dsrv::type_checker::{SemanticError, TCType, TypeErrorKind};
 
     fn checked_expression(source: &str) -> CheckedExpr {
         CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
             .unwrap()
             .var_expr(&VarName::new("y"))
             .unwrap()
+    }
+
+    fn assert_checked_views<M: LanguageMode>(checked: &CheckedDsrvSpecification<M>) {
+        assert_eq!(
+            checked.input_vars(),
+            &<CheckedDsrvSpecification<M> as Specification>::input_vars(checked)
+        );
+        assert_eq!(
+            checked.output_vars(),
+            &<CheckedDsrvSpecification<M> as Specification>::output_vars(checked)
+        );
+        assert_eq!(
+            checked.aux_vars(),
+            &<CheckedDsrvSpecification<M> as Specification>::aux_vars(checked)
+        );
+        assert_eq!(
+            checked.stream_vars(),
+            &<CheckedDsrvSpecification<M> as Specification>::stream_vars(checked)
+        );
+        assert_eq!(
+            checked.aux_vars_in_order(),
+            <CheckedDsrvSpecification<M> as Specification>::aux_vars_in_order(checked)
+        );
+        assert_eq!(
+            checked.input_vars_in_order(),
+            <CheckedDsrvSpecification<M> as Specification>::input_vars_in_order(checked)
+        );
+        assert_eq!(
+            checked.output_vars_in_order(),
+            <CheckedDsrvSpecification<M> as Specification>::output_vars_in_order(checked)
+        );
+        assert_eq!(
+            checked.stream_vars_in_order(),
+            <CheckedDsrvSpecification<M> as Specification>::stream_vars_in_order(checked)
+        );
+        assert_eq!(
+            checked.type_annotations(),
+            &<CheckedDsrvSpecification<M> as Specification>::type_annotations(checked)
+        );
     }
 
     #[cfg(feature = "thread-safe-ast")]
@@ -575,6 +811,52 @@ mod tests {
             assert_eq!(expression.free_variables(), BTreeSet::from([input]));
         });
 
+        joined.join().unwrap();
+    }
+
+    #[cfg(feature = "thread-safe-ast")]
+    #[test]
+    fn both_proof_modes_move_across_threads_with_read_only_views() {
+        let source = "in thread_mode_input: Int\n\
+                      out thread_mode_output: Int\n\
+                      thread_mode_output = thread_mode_input + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let validated_local = source.clone().validate::<Local>().unwrap();
+        let validated_distributed = source.clone().validate::<Distributed>().unwrap();
+        let checked_local = source.clone().type_check(TypeCheckOptions::STRICT).unwrap();
+        let checked_distributed = source
+            .validate::<Distributed>()
+            .unwrap()
+            .type_check(TypeCheckMode::Strict)
+            .unwrap();
+
+        let joined = std::thread::spawn(move || {
+            assert_eq!(
+                validated_local.specification().output_vars_in_order(),
+                [VarName::new("thread_mode_output")]
+            );
+            assert_eq!(
+                validated_distributed.specification().input_vars_in_order(),
+                [VarName::new("thread_mode_input")]
+            );
+            assert_checked_views(&checked_local);
+            assert_checked_views(&checked_distributed);
+            assert_eq!(
+                checked_local
+                    .var_expr_ref(&VarName::new("thread_mode_output"))
+                    .unwrap()
+                    .typ(),
+                &TCType::Int
+            );
+            assert_eq!(
+                checked_distributed
+                    .var_expr_ref(&VarName::new("thread_mode_output"))
+                    .unwrap()
+                    .typ(),
+                &TCType::Int
+            );
+        });
         joined.join().unwrap();
     }
 
@@ -608,6 +890,19 @@ mod tests {
             ranges.iter().map(BTreeSet::len).sum::<usize>(),
             specification.nodes().count()
         );
+        for (name, root) in specification.roots() {
+            assert!(
+                specification
+                    .semantic_entries()
+                    .iter()
+                    .any(|entry| matches!(entry, SemanticEntry::Assignment { name: entry_name, .. } if entry_name == name)),
+                "each root must have an assignment entry"
+            );
+            assert!(
+                root.shares_storage_with(specification.var_expr_ref(name).unwrap()),
+                "assignment entries must resolve into the shared forest"
+            );
+        }
     }
 
     #[test]
@@ -663,16 +958,19 @@ mod tests {
         let expr = Expr::Map([("x".into(), Expr::Val(1)), ("x".into(), Expr::Val(2))]);
         let mut context = BTreeMap::new();
 
-        assert!(
-            crate::lang::dsrv::type_checker::type_check_expression(
-                &expr,
-                &StreamType::Map(Box::new(StreamType::Int)),
-                &mut context,
-            )
-            .is_err()
-        );
+        let errors = crate::lang::dsrv::type_checker::type_check_expression(
+            &expr,
+            &StreamType::Map(Box::new(StreamType::Int)),
+            &mut context,
+        )
+        .expect_err("programmatic duplicate fields must remain a checking error");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::TypeError(type_error)
+                if type_error.kind() == &TypeErrorKind::DuplicateField
+        )));
     }
-    use crate::lang::dsrv::span::{Span, strip_span};
+    use crate::lang::dsrv::span::{Span, strip_span, strip_span_ref};
     use ecow::{EcoVec, eco_vec};
 
     #[test]
@@ -785,6 +1083,601 @@ mod tests {
         let encoded = json.to_string();
         assert!(!encoded.contains("ExprId"));
         assert!(!encoded.contains("nodes"));
+    }
+
+    fn assert_oracle_entries(specification: &DsrvSpecification, expected: &[SemanticEntryOracle]) {
+        assert_eq!(
+            specification.semantic_entries().len(),
+            expected.len(),
+            "semantic entry count differs for source:\n{}",
+            specification
+        );
+        for (actual, expected) in specification.semantic_entries().iter().zip(expected) {
+            match (actual, expected) {
+                (
+                    SemanticEntry::Input {
+                        name, annotation, ..
+                    },
+                    SemanticEntryOracle::Input {
+                        name: expected_name,
+                        annotation: expected_annotation,
+                    },
+                )
+                | (
+                    SemanticEntry::Output {
+                        name, annotation, ..
+                    },
+                    SemanticEntryOracle::Output {
+                        name: expected_name,
+                        annotation: expected_annotation,
+                    },
+                )
+                | (
+                    SemanticEntry::Aux {
+                        name, annotation, ..
+                    },
+                    SemanticEntryOracle::Aux {
+                        name: expected_name,
+                        annotation: expected_annotation,
+                    },
+                ) => {
+                    assert_eq!(name.name(), *expected_name);
+                    assert_eq!(
+                        annotation,
+                        &expected_annotation.map(|annotation| match annotation {
+                            "Int" => StreamType::Int,
+                            "Bool" => StreamType::Bool,
+                            other => panic!("unsupported test annotation {other}"),
+                        })
+                    );
+                }
+                (
+                    SemanticEntry::Assignment { name, .. },
+                    SemanticEntryOracle::Assignment {
+                        name: expected_name,
+                        ..
+                    },
+                ) => assert_eq!(name.name(), *expected_name),
+                (actual, expected) => panic!("entry mismatch: {actual:?} versus {expected:?}"),
+            }
+        }
+    }
+
+    fn stable_filter(
+        entries: &[SemanticEntryOracle],
+        predicate: impl Fn(&SemanticEntryOracle) -> bool,
+    ) -> Vec<VarName> {
+        entries
+            .iter()
+            .filter(|entry| predicate(entry))
+            .map(|entry| VarName::new(entry.name()))
+            .collect()
+    }
+
+    #[test]
+    fn semantic_entries_authorize_interleaved_display_and_debug() {
+        let source = "in z: Int\n\
+                      out b: Int\n\
+                      b = a + z\n\
+                      in q: Int\n\
+                      aux a: Int\n\
+                      a = q + 1\n\
+                      out c: Int\n\
+                      c = z - q";
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        let entries = specification.semantic_entries();
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.name().name())
+                .collect::<Vec<_>>(),
+            ["z", "b", "b", "q", "a", "a", "c", "c"]
+        );
+        assert!(matches!(
+            entries[0],
+            SemanticEntry::Input {
+                annotation: Some(StreamType::Int),
+                ..
+            }
+        ));
+        assert_eq!(
+            specification.input_vars_in_order(),
+            [VarName::new("z"), VarName::new("q")]
+        );
+        assert_eq!(
+            specification.output_vars_in_order(),
+            [VarName::new("b"), VarName::new("c")]
+        );
+        assert_eq!(specification.aux_vars_in_order(), [VarName::new("a")]);
+        assert_eq!(
+            specification.stream_vars_in_order(),
+            [VarName::new("b"), VarName::new("a"), VarName::new("c")]
+        );
+        let assignment_order = entries
+            .iter()
+            .filter_map(|entry| {
+                matches!(entry, SemanticEntry::Assignment { .. }).then(|| entry.name().clone())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            assignment_order,
+            [VarName::new("b"), VarName::new("a"), VarName::new("c")]
+        );
+        assert_eq!(
+            specification.to_string(),
+            "in z: Int\n\
+             out b: Int\n\
+             b = (a + z)\n\
+             in q: Int\n\
+             aux a: Int\n\
+             a = (q + 1)\n\
+             out c: Int\n\
+             c = (z - q)\n"
+        );
+
+        let debug = format!("{specification:?}");
+        let ordered_markers = [
+            "Input { name: VarName::new(\"z\")",
+            "Output { name: VarName::new(\"b\")",
+            "Assignment { name: VarName::new(\"b\")",
+            "Input { name: VarName::new(\"q\")",
+            "Aux { name: VarName::new(\"a\")",
+            "Assignment { name: VarName::new(\"a\")",
+            "Output { name: VarName::new(\"c\")",
+            "Assignment { name: VarName::new(\"c\")",
+        ];
+        let mut previous = 0;
+        for marker in ordered_markers {
+            let position = debug[previous..]
+                .find(marker)
+                .unwrap_or_else(|| panic!("debug output lacks ordered marker {marker:?}: {debug}"));
+            previous += position + marker.len();
+        }
+    }
+
+    #[test]
+    fn semantic_order_is_independent_of_unrelated_preinterning() {
+        let source = "in z: Int\nout b: Int\nb = z + 1\nin q: Int\nout c: Int\nc = q + 2";
+        for name in ["c", "q", "b", "z", "unrelated_2", "unrelated_1"] {
+            let _ = VarName::new(name);
+        }
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        assert_eq!(
+            specification.input_vars_in_order(),
+            [VarName::new("z"), VarName::new("q")]
+        );
+        assert_eq!(
+            specification.output_vars_in_order(),
+            [VarName::new("b"), VarName::new("c")]
+        );
+        assert_eq!(
+            specification.to_string(),
+            "in z: Int\nout b: Int\nb = (z + 1)\nin q: Int\nout c: Int\nc = (q + 2)\n"
+        );
+    }
+
+    #[test]
+    fn semantic_equality_ignores_spans_but_observes_meaning_and_order() {
+        let compact = "in x: Int\nout y: Int\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let commented = "(* non-ASCII: робо 🤖 *)\r\n\
+                         in x: Int\r\n\
+                         // output follows\r\n\
+                         out y: Int\r\n\
+                         y = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        assert_eq!(compact.semantic_entries(), commented.semantic_entries());
+        assert_eq!(compact.input_vars(), commented.input_vars());
+        assert_eq!(compact.output_vars(), commented.output_vars());
+        assert_eq!(compact, commented);
+        assert_eq!(compact, compact.clone());
+
+        let reordered = "in x: Int\nout y: Int\ny = x + 1\nout z: Int\nz = x + 2"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let reordered_again = "in x: Int\nout z: Int\nz = x + 2\nout y: Int\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        assert_eq!(reordered.input_vars(), reordered_again.input_vars());
+        assert_eq!(reordered.output_vars(), reordered_again.output_vars());
+        assert_ne!(reordered, reordered_again);
+
+        let changed_role = "in x: Int\naux y: Int\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let changed_annotation = "in x: Int\nout y: Bool\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let changed_expression = "in x: Int\nout y: Int\ny = x + 2"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let changed_operator = "in x: Int\nout y: Int\ny = x - 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        assert_ne!(compact, changed_role);
+        assert_ne!(compact, changed_annotation);
+        assert_ne!(compact, changed_expression);
+        assert_ne!(compact, changed_operator);
+    }
+
+    #[test]
+    fn annotation_projection_retains_occurrences_but_lookup_is_lossy() {
+        let source = "in z: Int\nout a: Int\nin z: Bool\na = z";
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        let z_entries = specification
+            .semantic_entries()
+            .iter()
+            .filter(|entry| entry.name() == &VarName::new("z"))
+            .collect::<Vec<_>>();
+        assert_eq!(z_entries.len(), 2);
+        assert_eq!(
+            z_entries
+                .iter()
+                .map(|entry| entry.annotation().cloned())
+                .collect::<Vec<_>>(),
+            [Some(StreamType::Int), Some(StreamType::Bool)]
+        );
+        assert_eq!(&source[z_entries[0].span().to_range()], "in z: Int");
+        assert_eq!(&source[z_entries[1].span().to_range()], "in z: Bool");
+        assert_eq!(
+            specification.type_annotation(&VarName::new("z")),
+            Some(&StreamType::Bool)
+        );
+        for errors in [
+            specification.clone().validate::<Local>().unwrap_err(),
+            specification.clone().validate::<Distributed>().unwrap_err(),
+        ] {
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                SemanticError::DuplicateDeclaration { variable, first, duplicate }
+                    if *variable == VarName::new("z")
+                        && &source[first.to_range()] == "in z: Int"
+                        && &source[duplicate.to_range()] == "in z: Bool"
+            )));
+        }
+        assert_eq!(
+            specification.to_string(),
+            "in z: Int\nout a: Int\nin z: Bool\na = z\n"
+        );
+    }
+
+    #[test]
+    fn declaration_spans_remain_byte_ranges_after_unicode_comments_and_crlf() {
+        let source = "(* комментарий 🤖 *)\r\n\
+                      in z: Int\r\n\
+                      out a: Int\r\n\
+                      in z: Bool\r\n\
+                      a = z";
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        let z_entries = specification
+            .semantic_entries()
+            .iter()
+            .filter(|entry| entry.name() == &VarName::new("z"))
+            .collect::<Vec<_>>();
+        assert_eq!(z_entries.len(), 2);
+        assert_eq!(&source[z_entries[0].span().to_range()], "in z: Int");
+        assert_eq!(&source[z_entries[1].span().to_range()], "in z: Bool");
+        for entry in z_entries {
+            let span = entry.span();
+            assert!(span.start <= span.end);
+            assert!(usize::try_from(span.end).unwrap() <= source.len());
+        }
+        let errors = specification.validate::<Local>().unwrap_err();
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::DuplicateDeclaration { first, duplicate, .. }
+                if &source[first.to_range()] == "in z: Int"
+                    && &source[duplicate.to_range()] == "in z: Bool"
+        )));
+    }
+
+    #[test]
+    fn programmatic_constructors_keep_storage_and_distinguish_missing_equations() {
+        let annotation_only = DsrvSpecification::new(
+            BTreeSet::from([VarName::new("input")]),
+            BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::from([(VarName::new("input"), StreamType::Int)]),
+            [],
+        );
+        assert_eq!(annotation_only.to_string(), "in input: Int\n");
+        assert_eq!(
+            annotation_only.semantic_entries(),
+            &[SemanticEntry::Input {
+                name: VarName::new("input"),
+                annotation: Some(StreamType::Int),
+                span: Span::default(),
+            }]
+        );
+        annotation_only
+            .clone()
+            .validate::<Local>()
+            .expect("annotation-only input is structurally valid");
+
+        let missing_equation = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([VarName::new("output")]),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            [],
+        );
+        assert_eq!(missing_equation.to_string(), "out output\n");
+        missing_equation
+            .clone()
+            .validate::<Local>()
+            .expect("missing equations are a compiler boundary");
+
+        let repeated_aux = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([VarName::new("output")]),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            [VarName::new("helper"), VarName::new("helper")],
+        );
+        assert_eq!(
+            repeated_aux.aux_vars(),
+            &BTreeSet::from([VarName::new("helper")])
+        );
+        assert_eq!(
+            repeated_aux
+                .semantic_entries()
+                .iter()
+                .filter(|entry| matches!(entry, SemanticEntry::Aux { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            repeated_aux
+                .validate::<Local>()
+                .unwrap_err()
+                .iter()
+                .any(|error| matches!(
+                    error,
+                    SemanticError::DuplicateDeclaration { variable, .. }
+                        if *variable == VarName::new("helper")
+                ))
+        );
+    }
+
+    #[test]
+    fn specification_serialization_is_the_legacy_lossy_projection() {
+        let specification = "in z: Int\nout b: Int\nb = z + 1\nin q: Int\naux a: Int\na = q + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let serialized = serde_json::to_value(&specification).unwrap();
+        let object = serialized
+            .as_object()
+            .expect("specification is a JSON object");
+        assert_eq!(
+            object.keys().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "aux_vars".to_owned(),
+                "exprs".to_owned(),
+                "input_vars".to_owned(),
+                "output_vars".to_owned(),
+                "stream_vars".to_owned(),
+                "type_annotations".to_owned(),
+            ])
+        );
+        assert!(!object.contains_key("semantic_entries"));
+        assert!(!serialized.to_string().contains("Span"));
+        let serialized_names =
+            |variables: &BTreeSet<VarName>| variables.iter().map(VarName::name).collect::<Vec<_>>();
+        assert_eq!(
+            serialized["input_vars"],
+            serde_json::json!(serialized_names(specification.input_vars()))
+        );
+        assert_eq!(
+            serialized["output_vars"],
+            serde_json::json!(serialized_names(specification.output_vars()))
+        );
+        assert_eq!(
+            serialized["aux_vars"],
+            serde_json::json!(serialized_names(specification.aux_vars()))
+        );
+        assert_eq!(
+            serialized["stream_vars"],
+            serde_json::json!(serialized_names(specification.stream_vars()))
+        );
+        assert_eq!(
+            serialized["exprs"],
+            serde_json::json!({
+                "a": "(q + 1)",
+                "b": "(z + 1)"
+            })
+        );
+        assert_eq!(
+            serialized["type_annotations"],
+            serde_json::json!({
+                "a": "Int",
+                "b": "Int",
+                "q": "Int",
+                "z": "Int"
+            })
+        );
+
+        let same_projection_different_order =
+            "in q: Int\naux a: Int\na = q + 1\nin z: Int\nout b: Int\nb = z + 1"
+                .parse::<DsrvSpecification>()
+                .unwrap();
+        assert_ne!(specification, same_projection_different_order);
+        assert_eq!(
+            serde_json::to_value(&specification).unwrap(),
+            serde_json::to_value(&same_projection_different_order).unwrap()
+        );
+    }
+
+    #[test]
+    fn checked_specification_forwards_views_and_keeps_checked_storage_alive() {
+        let checked = "in z: Int\nout b: Int\nb = z + 1"
+            .parse::<CheckedDsrvSpecification>()
+            .unwrap();
+        let b = VarName::new("b");
+        assert_checked_views(&checked);
+        assert_eq!(checked.var_expr_ref(&b).unwrap().typ(), &TCType::Int);
+        assert_eq!(
+            checked.var_expr(&b).unwrap(),
+            <CheckedDsrvSpecification as Specification>::var_expr(&checked, &b).unwrap()
+        );
+        assert!(checked.var_expr_ref(&VarName::new("missing")).is_none());
+        assert!(checked.var_expr(&VarName::new("missing")).is_none());
+        let expression = checked.var_expr(&b).unwrap();
+        let clone = checked.clone();
+        drop(checked);
+        assert_eq!(expression.typ(), &TCType::Int);
+        assert_eq!(clone.var_expr_ref(&b).unwrap().typ(), &TCType::Int);
+    }
+
+    #[test]
+    fn empty_checked_specification_has_empty_views_and_missing_lookups() {
+        let checked = "".parse::<CheckedDsrvSpecification>().unwrap();
+        assert!(checked.input_vars().is_empty());
+        assert!(checked.output_vars().is_empty());
+        assert!(checked.aux_vars().is_empty());
+        assert!(checked.stream_vars().is_empty());
+        assert!(checked.input_vars_in_order().is_empty());
+        assert!(checked.output_vars_in_order().is_empty());
+        assert!(checked.aux_vars_in_order().is_empty());
+        assert!(checked.stream_vars_in_order().is_empty());
+        assert!(checked.type_annotations().is_empty());
+        assert!(checked.var_expr(&VarName::new("missing")).is_none());
+    }
+
+    #[test]
+    fn programmatic_no_val_is_rejected_at_semantic_admission() {
+        let output = VarName::new("output");
+        let specification = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([output.clone()]),
+            BTreeMap::from([(output, Expr::Val(SyntaxLiteral::NoVal))]),
+            BTreeMap::new(),
+            [],
+        );
+        let errors = specification
+            .validate::<Local>()
+            .expect_err("runtime NoVal must not be source syntax");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::UnsupportedLiteral(message, Some(_))
+                if message.contains("runtime states")
+        )));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn ordered_specification_properties_follow_an_independent_entry_oracle(
+            case in arb_ordered_specification_case()
+        ) {
+            let specification = case.source.parse::<DsrvSpecification>()
+                .expect("ordered generator emits parser-valid source");
+            assert_oracle_entries(&specification, &case.entries);
+
+            let expected_inputs = stable_filter(&case.entries, |entry| {
+                matches!(entry, SemanticEntryOracle::Input { .. })
+            });
+            let expected_outputs = stable_filter(&case.entries, |entry| {
+                matches!(entry, SemanticEntryOracle::Output { .. })
+            });
+            let expected_aux = stable_filter(&case.entries, |entry| {
+                matches!(entry, SemanticEntryOracle::Aux { .. })
+            });
+            let expected_streams = case.entries.iter().filter_map(|entry| {
+                matches!(entry, SemanticEntryOracle::Output { .. } | SemanticEntryOracle::Aux { .. })
+                    .then(|| VarName::new(entry.name()))
+            }).collect::<Vec<_>>();
+            let expected_assignments = case.entries.iter().filter_map(|entry| {
+                matches!(entry, SemanticEntryOracle::Assignment { .. })
+                    .then(|| VarName::new(entry.name()))
+            }).collect::<Vec<_>>();
+            prop_assert_eq!(specification.input_vars_in_order(), expected_inputs);
+            prop_assert_eq!(specification.output_vars_in_order(), expected_outputs);
+            prop_assert_eq!(specification.aux_vars_in_order(), expected_aux);
+            prop_assert_eq!(specification.stream_vars_in_order(), expected_streams);
+            prop_assert_eq!(
+                specification.semantic_entries().iter().filter_map(|entry| {
+                    matches!(entry, SemanticEntry::Assignment { .. })
+                        .then(|| entry.name().clone())
+                }).collect::<Vec<_>>(),
+                expected_assignments
+            );
+
+            let permuted_source = case
+                .entries
+                .iter()
+                .rev()
+                .map(SemanticEntryOracle::source_line)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let permuted = permuted_source
+                .parse::<DsrvSpecification>()
+                .expect("permuting parser-valid statements must remain parser-valid");
+            prop_assert_eq!(permuted.input_vars(), specification.input_vars());
+            prop_assert_eq!(permuted.output_vars(), specification.output_vars());
+            prop_assert_eq!(permuted.aux_vars(), specification.aux_vars());
+            for entry in &case.entries {
+                if let SemanticEntryOracle::Assignment { name, .. } = entry {
+                    let name = VarName::new(name);
+                    prop_assert_eq!(
+                        format!("{}", permuted.var_expr_ref(&name).unwrap()),
+                        format!("{}", specification.var_expr_ref(&name).unwrap())
+                    );
+                }
+            }
+
+            let displayed = specification.to_string();
+            let reparsed = displayed.parse::<DsrvSpecification>()
+                .expect("Display output should be parser-valid");
+            prop_assert_eq!(reparsed.semantic_entries(), specification.semantic_entries());
+            prop_assert_eq!(reparsed.input_vars(), specification.input_vars());
+            prop_assert_eq!(reparsed.output_vars(), specification.output_vars());
+            let reparsed_roots = reparsed
+                .roots()
+                .map(|(name, expression)| (name.clone(), strip_span_ref(expression)))
+                .collect::<BTreeMap<_, _>>();
+            let original_roots = specification
+                .roots()
+                .map(|(name, expression)| (name.clone(), strip_span_ref(expression)))
+                .collect::<BTreeMap<_, _>>();
+            prop_assert_eq!(reparsed_roots, original_roots);
+            for entry in &case.entries {
+                let name = VarName::new(entry.name());
+                if matches!(entry, SemanticEntryOracle::Assignment { .. }) {
+                    prop_assert!(specification.var_expr_ref(&name).is_some());
+                }
+            }
+        }
+
+        #[test]
+        fn injected_declaration_duplicates_retain_evidence_and_fail_both_modes(
+            case in arb_duplicate_declaration_case()
+        ) {
+            let specification = case.source.parse::<DsrvSpecification>()
+                .expect("duplicate generator changes declarations only");
+            assert_oracle_entries(&specification, &case.entries);
+            let occurrences = specification.semantic_entries().iter().filter(|entry| {
+                entry.name() == &VarName::new(&case.duplicate_name)
+            }).count();
+            prop_assert!(occurrences >= 2);
+
+            for errors in [
+                specification.clone().validate::<Local>().unwrap_err(),
+                specification.clone().validate::<Distributed>().unwrap_err(),
+            ] {
+                let duplicate_found = errors.iter().any(|error| matches!(
+                    error,
+                    SemanticError::DuplicateDeclaration { variable, .. }
+                        if *variable == VarName::new(&case.duplicate_name)
+                ));
+                prop_assert!(duplicate_found);
+            }
+            assert_oracle_entries(&specification, &case.entries);
+            prop_assert!(!specification.to_string().is_empty());
+        }
     }
 
     proptest! {

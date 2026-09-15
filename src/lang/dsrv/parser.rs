@@ -10,7 +10,28 @@ lalrpop_mod!(lalr, "/lang/dsrv/lalr.rs");
 
 #[cfg(test)]
 fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
-    format!("{result:?}")
+    let rendered = format!("{result:?}");
+    let Some(start) = rendered.find("semantic_entries: [") else {
+        return rendered;
+    };
+    let mut depth = 0usize;
+    let mut end = start;
+    for (offset, character) in rendered[start..].char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + offset + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut compatible = rendered;
+    compatible.replace_range(start..end + 2, "");
+    compatible
 }
 
 use self::lalr::{DeclarationsParser, ExprParser};
@@ -23,8 +44,7 @@ use crate::{
     core::{StreamType, VarName},
     lang::dsrv::{
         ast::{
-            DsrvAstError, Expr, ExprBuilder, ExprId, UnvalidatedAssignment,
-            UnvalidatedDsrvSpecification,
+            DsrvAstError, Expr, ExprBuilder, ExprId, SemanticEntry, UnvalidatedDsrvSpecification,
         },
         span::Span,
     },
@@ -104,47 +124,51 @@ pub(crate) fn create_dsrv_spec(
 ) -> Result<DsrvSpecification, DsrvAstError> {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
-    let mut input_order = Vec::with_capacity(stmts.len());
-    let mut output_order = Vec::with_capacity(stmts.len());
-    let mut stream_order = Vec::with_capacity(stmts.len());
     let mut stream_names = BTreeSet::new();
     let mut aux_vars = Vec::with_capacity(stmts.len());
-    let mut assignments = Vec::with_capacity(stmts.len());
+    let mut entries = Vec::with_capacity(stmts.len());
     let mut roots = Vec::with_capacity(stmts.len());
     let mut type_annotations = BTreeMap::new();
 
     for stmt in stmts {
         match stmt {
-            Declaration::Input(var, typ, _) => {
-                if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ);
+            Declaration::Input(var, typ, span) => {
+                if let Some(typ) = &typ {
+                    type_annotations.insert(var.clone(), typ.clone());
                 }
-                if inputs.insert(var.clone()) {
-                    input_order.push(var);
-                }
+                inputs.insert(var.clone());
+                entries.push(SemanticEntry::Input {
+                    name: var,
+                    annotation: typ,
+                    span,
+                });
             }
-            Declaration::Output(var, typ, _) => {
-                if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ);
+            Declaration::Output(var, typ, span) => {
+                if let Some(typ) = &typ {
+                    type_annotations.insert(var.clone(), typ.clone());
                 }
-                if outputs.insert(var.clone()) {
-                    output_order.push(var.clone());
-                }
-                if stream_names.insert(var.clone()) {
-                    stream_order.push(var);
-                }
+                outputs.insert(var.clone());
+                stream_names.insert(var.clone());
+                entries.push(SemanticEntry::Output {
+                    name: var,
+                    annotation: typ,
+                    span,
+                });
             }
-            Declaration::Aux(var, typ, _) => {
-                if let Some(typ) = typ {
-                    type_annotations.insert(var.clone(), typ);
+            Declaration::Aux(var, typ, span) => {
+                if let Some(typ) = &typ {
+                    type_annotations.insert(var.clone(), typ.clone());
                 }
-                if stream_names.insert(var.clone()) {
-                    stream_order.push(var.clone());
-                }
-                aux_vars.push(var);
+                stream_names.insert(var.clone());
+                aux_vars.push(var.clone());
+                entries.push(SemanticEntry::Aux {
+                    name: var,
+                    annotation: typ,
+                    span,
+                });
             }
             Declaration::Assignment(name, root, span) => {
-                assignments.push(UnvalidatedAssignment { name, span });
+                entries.push(SemanticEntry::Assignment { name, span });
                 roots.push(root);
             }
         }
@@ -154,12 +178,9 @@ pub(crate) fn create_dsrv_spec(
     UnvalidatedDsrvSpecification::new(
         inputs,
         outputs,
-        input_order,
-        output_order,
-        stream_order,
         aux_vars,
         expressions,
-        assignments,
+        entries,
         type_annotations,
     )
     .validate()

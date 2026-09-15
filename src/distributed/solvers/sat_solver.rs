@@ -1445,6 +1445,28 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
     }
 
     #[test]
+    fn sat_solver_validates_before_localising_duplicate_declarations() {
+        let spec = "in x: Int\nin x: Bool\nout y\ny = x"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+
+        let result =
+            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
+                vec!["y".into()],
+                vec!["y".into()],
+                spec,
+                None,
+            );
+
+        assert!(matches!(
+            result,
+            Err(SatSolverConstructionError::Localisation(
+                DsrvLocalisationError::Validation(_)
+            ))
+        ));
+    }
+
+    #[test]
     fn sat_solver_lowers_constraints_at_the_localised_boundary() {
         let spec = ("in x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)").parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");

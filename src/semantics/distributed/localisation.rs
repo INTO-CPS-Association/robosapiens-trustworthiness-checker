@@ -3,12 +3,17 @@
 use static_assertions::assert_obj_safe;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Debug};
+use std::sync::Arc;
 
 use contiguous_tree::CloneTreeError;
 use tracing::debug;
 
-use crate::lang::dsrv::ast::{DependencyKind, DsrvSpecification, ExprView};
+use crate::lang::dsrv::ast::{
+    DependencyKind, Distributed, DsrvSpecification, ExprView, SemanticEntry,
+    ValidatedDsrvSpecification,
+};
 use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::type_checker::SemanticErrors;
 
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
@@ -61,9 +66,18 @@ pub trait Localisable {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self;
 }
 
+pub trait TryLocalisable: Localisable {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn try_localise(&self, locality_spec: &impl LocalitySpec) -> Result<Self, Self::Error>
+    where
+        Self: Sized;
+}
+
 /// A failure while localising a DSRV specification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DsrvLocalisationError {
+    Validation(Arc<SemanticErrors>),
     Locality(LocalitySpecError),
     MissingAuxDefinition { variable: VarName },
     MonitoredAtAux { variable: VarName, node: NodeName },
@@ -74,6 +88,12 @@ pub enum DsrvLocalisationError {
 impl fmt::Display for DsrvLocalisationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Validation(errors) => {
+                write!(
+                    formatter,
+                    "distributed specification failed validation: {errors:?}"
+                )
+            }
             Self::Locality(error) => fmt::Display::fmt(error, formatter),
             Self::MissingAuxDefinition { variable } => {
                 write!(
@@ -97,6 +117,7 @@ impl fmt::Display for DsrvLocalisationError {
 impl std::error::Error for DsrvLocalisationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Validation(_) => None,
             Self::Locality(error) => Some(error),
             _ => None,
         }
@@ -143,15 +164,18 @@ fn prune_to_dependency_closure(
     spec.exprs.retain(|var| reachable.contains(var));
     spec.type_annotations
         .retain(|var, _| reachable.contains(var));
-    spec.input_order.retain(|var| spec.input_vars.contains(var));
-    spec.output_order
-        .retain(|var| spec.output_vars.contains(var));
-    spec.aux_order.retain(|var| spec.aux_vars.contains(var));
-    spec.stream_order
-        .retain(|var| spec.output_vars.contains(var) || spec.aux_vars.contains(var));
-    spec.stream_vars = spec.stream_order.iter().cloned().collect();
-    spec.assignment_order
-        .retain(|var| spec.exprs.contains_key(var));
+    spec.stream_vars = spec
+        .output_vars
+        .iter()
+        .chain(spec.aux_vars.iter())
+        .cloned()
+        .collect();
+    spec.semantic_entries.retain(|entry| match entry {
+        SemanticEntry::Input { name, .. } => spec.input_vars.contains(name),
+        SemanticEntry::Output { name, .. } => spec.output_vars.contains(name),
+        SemanticEntry::Aux { name, .. } => spec.aux_vars.contains(name),
+        SemanticEntry::Assignment { name, .. } => spec.exprs.contains_key(name),
+    });
     spec
 }
 
@@ -196,31 +220,24 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         .into_iter()
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
-    let input_order = spec.input_order.clone();
-    let output_order: Vec<VarName> = spec
-        .output_order
-        .iter()
-        .filter(|name| !aux_vars.contains(*name))
-        .cloned()
-        .collect();
-    let stream_order = output_order.clone();
-    let assignment_order = spec
-        .assignment_order
-        .iter()
-        .filter(|name| exprs.contains_key(*name))
-        .cloned()
+    let semantic_entries = spec
+        .semantic_entries
+        .into_iter()
+        .filter(|entry| match entry {
+            SemanticEntry::Aux { .. } => false,
+            SemanticEntry::Output { name, .. } => !aux_vars.contains(name),
+            SemanticEntry::Assignment { name, .. } => exprs.contains_key(name),
+            SemanticEntry::Input { .. } => true,
+        })
         .collect();
 
-    Ok(DsrvSpecification::from_expression_forest_with_orders(
+    Ok(DsrvSpecification::from_expression_forest_with_entries(
         spec.input_vars,
         output_vars,
         exprs,
         type_annotations,
         std::iter::empty(),
-        input_order,
-        output_order,
-        stream_order,
-        assignment_order,
+        semantic_entries,
     ))
 }
 
@@ -241,42 +258,98 @@ fn finish_localisation(
         .flat_map(|expression| expression.stream_dependencies())
         .collect::<HashSet<_>>();
     let input_order = original
-        .input_order
+        .semantic_entries()
         .iter()
-        .chain(original.output_order.iter())
-        .chain(original.aux_order.iter())
+        .filter_map(|entry| match entry {
+            SemanticEntry::Input { name, .. }
+            | SemanticEntry::Output { name, .. }
+            | SemanticEntry::Aux { name, .. } => Some(name),
+            SemanticEntry::Assignment { .. } => None,
+        })
         .filter(|var| !local_set.contains(*var))
         .filter(|var| needed_inputs.contains(var))
         .cloned()
         .collect::<Vec<_>>();
     spec.input_vars = input_order.iter().cloned().collect();
-    spec.input_order = input_order;
 
     spec.output_vars.retain(|var| local_set.contains(var));
-    spec.output_order
-        .retain(|var| spec.output_vars.contains(var));
     spec.aux_vars.retain(|var| local_set.contains(var));
-    spec.aux_order.retain(|var| spec.aux_vars.contains(var));
-    spec.stream_order
-        .retain(|var| spec.output_vars.contains(var) || spec.aux_vars.contains(var));
-    spec.stream_vars = spec.stream_order.iter().cloned().collect();
-    spec.assignment_order
-        .retain(|var| spec.exprs.contains_key(var));
+    spec.stream_vars = spec
+        .output_vars
+        .iter()
+        .chain(spec.aux_vars.iter())
+        .cloned()
+        .collect();
+    let mut declared_inputs = BTreeSet::new();
+    spec.semantic_entries = original
+        .semantic_entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            SemanticEntry::Input {
+                name,
+                annotation,
+                span,
+            }
+            | SemanticEntry::Output {
+                name,
+                annotation,
+                span,
+            }
+            | SemanticEntry::Aux {
+                name,
+                annotation,
+                span,
+            } if spec.input_vars.contains(name) && declared_inputs.insert(name.clone()) => {
+                Some(SemanticEntry::Input {
+                    name: name.clone(),
+                    annotation: annotation.clone(),
+                    span: *span,
+                })
+            }
+            SemanticEntry::Output { name, .. } if spec.output_vars.contains(name) => {
+                Some(entry.clone())
+            }
+            SemanticEntry::Aux { name, .. } if spec.aux_vars.contains(name) => Some(entry.clone()),
+            SemanticEntry::Assignment { name, .. } if spec.exprs.contains_key(name) => {
+                Some(entry.clone())
+            }
+            _ => None,
+        })
+        .collect();
 
     debug!("Local expression inputs: {:?}", needed_inputs);
     spec
 }
 
 impl DsrvSpecification {
-    /// Localise this specification without panicking on unsupported aux expansion.
+    /// Validate this distributed specification, then localise it.
+    ///
+    /// Admission deliberately happens before dependency pruning or auxiliary expansion so those
+    /// rewrites cannot erase duplicate or conflicting declarations.
     pub fn try_localise(
         &self,
         locality_spec: &impl LocalitySpec,
     ) -> Result<Self, DsrvLocalisationError> {
+        let validated = self
+            .clone()
+            .validate::<Distributed>()
+            .map_err(Arc::new)
+            .map_err(DsrvLocalisationError::Validation)?;
+        validated.try_localise(locality_spec)
+    }
+}
+
+impl ValidatedDsrvSpecification<Distributed> {
+    /// Localise an already admitted distributed specification.
+    pub(crate) fn try_localise(
+        &self,
+        locality_spec: &impl LocalitySpec,
+    ) -> Result<DsrvSpecification, DsrvLocalisationError> {
         let local_vars = locality_spec.local_vars()?;
-        let spec = try_inline_aux(prune_to_dependency_closure(self.clone(), &local_vars))?;
+        let original = self.specification();
+        let spec = try_inline_aux(prune_to_dependency_closure(original.clone(), &local_vars))?;
         let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
-        Ok(finish_localisation(spec, self, &local_set))
+        Ok(finish_localisation(spec, original, &local_set))
     }
 }
 
@@ -284,6 +357,14 @@ impl Localisable for DsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
         self.try_localise(locality_spec)
             .unwrap_or_else(|error| panic!("Failed to localise DSRV specification: {error}"))
+    }
+}
+
+impl TryLocalisable for DsrvSpecification {
+    type Error = DsrvLocalisationError;
+
+    fn try_localise(&self, locality_spec: &impl LocalitySpec) -> Result<Self, Self::Error> {
+        DsrvSpecification::try_localise(self, locality_spec)
     }
 }
 #[cfg(test)]
@@ -296,10 +377,12 @@ mod tests {
     use petgraph::graph::DiGraph;
 
     use crate::core::BinaryOperator;
+    use crate::dataflow::DataflowMonitor;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::Expr;
+    use crate::lang::dsrv::ast::{Expr, Local, SemanticEntry};
     use crate::lang::dsrv::span::strip_span_ref;
+    use crate::{TypeCheckMode, Value};
     use proptest::prelude::*;
     use test_log::test;
 
@@ -350,6 +433,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn raw_localisation_validates_before_duplicate_declarations_can_be_pruned() {
+        let spec = "in x: Int\nin x: Bool\nout y\ny = x"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+
+        assert!(spec.clone().validate::<Distributed>().is_err());
+        assert!(matches!(
+            spec.try_localise(&vec![VarName::new("y")]),
+            Err(DsrvLocalisationError::Validation(_))
+        ));
+    }
+
     fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
         assert_eq!(actual.input_vars, expected.input_vars);
         assert_eq!(actual.output_vars, expected.output_vars);
@@ -387,9 +483,9 @@ mod tests {
         );
         let restricted_vars = vec!["c".into(), "e".into()];
         let localised_spec = spec.localise(&restricted_vars);
-        assert_eq!(
-            localised_spec,
-            DsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &localised_spec,
+            &DsrvSpecification::new(
                 BTreeSet::from(["a".into(), "d".into()]),
                 BTreeSet::from(["c".into(), "e".into()]),
                 vec![
@@ -400,7 +496,7 @@ mod tests {
                 .collect(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         )
     }
 
@@ -535,6 +631,68 @@ mod tests {
                 vec![],
             ),
         );
+    }
+
+    #[test]
+    fn localisation_preserves_entry_order_and_builds_a_fresh_local_boundary() {
+        let source = "in remote\n\
+                      out b\n\
+                      b = helper + remote\n\
+                      in other\n\
+                      aux helper\n\
+                      helper = other\n\
+                      out c\n\
+                      c = remote";
+        let specification = source.parse::<DsrvSpecification>().unwrap();
+        let localised = specification
+            .try_localise(&vec![VarName::new("b"), VarName::new("c")])
+            .expect("localisation should inline the helper");
+
+        assert_eq!(
+            localised.input_vars_in_order(),
+            [VarName::new("remote"), VarName::new("other")]
+        );
+        assert_eq!(
+            localised.output_vars_in_order(),
+            [VarName::new("b"), VarName::new("c")]
+        );
+        assert_eq!(localised.aux_vars_in_order(), []);
+        assert_eq!(
+            localised
+                .semantic_entries()
+                .iter()
+                .map(|entry| entry.name().name())
+                .collect::<Vec<_>>(),
+            ["remote", "b", "b", "other", "c", "c"]
+        );
+        assert!(
+            localised
+                .semantic_entries()
+                .iter()
+                .all(|entry| !matches!(entry, SemanticEntry::Aux { .. }))
+        );
+        let b = localised.var_expr(&VarName::new("b")).unwrap();
+        assert_eq!(b.to_string(), "(other + remote)");
+
+        let validated = localised
+            .clone()
+            .validate::<Local>()
+            .expect("rewritten node must obtain a fresh local proof");
+        let checked = validated
+            .type_check(TypeCheckMode::Gradual)
+            .expect("rewritten node must obtain fresh checked types");
+        let mut monitor = DataflowMonitor::compile_untyped(localised).unwrap();
+        let mut output = [Value::NoVal, Value::NoVal];
+        monitor
+            .evaluate(&[Value::Int(10), Value::Int(2)], &mut output)
+            .unwrap();
+        assert_eq!(output, [Value::Int(12), Value::Int(10)]);
+        let mut checked_monitor = DataflowMonitor::compile_checked(checked).unwrap();
+        let mut checked_output = [Value::NoVal, Value::NoVal];
+        checked_monitor
+            .evaluate(&[Value::Int(10), Value::Int(2)], &mut checked_output)
+            .unwrap();
+        assert_eq!(checked_output, output);
     }
 
     #[test]
@@ -692,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn try_localise_reports_missing_aux_definition() {
+    fn try_localise_rejects_missing_aux_definition_during_admission() {
         let missing: VarName = "missing".into();
         let output: VarName = "output".into();
         let spec = DsrvSpecification::new(
@@ -703,10 +861,10 @@ mod tests {
             [missing.clone()],
         );
 
-        assert_eq!(
-            spec.try_localise(&vec![output]).unwrap_err(),
-            DsrvLocalisationError::MissingAuxDefinition { variable: missing }
-        );
+        assert!(matches!(
+            spec.try_localise(&vec![output]),
+            Err(DsrvLocalisationError::Validation(_))
+        ));
     }
 
     #[test]
@@ -737,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn try_localise_reports_cyclic_aux_replacement() {
+    fn try_localise_rejects_cyclic_aux_during_admission() {
         let first: VarName = "first".into();
         let second: VarName = "second".into();
         let output: VarName = "output".into();
@@ -755,7 +913,7 @@ mod tests {
 
         assert!(matches!(
             spec.try_localise(&vec![output]),
-            Err(DsrvLocalisationError::CyclicReplacement { .. })
+            Err(DsrvLocalisationError::Validation(_))
         ));
     }
 
@@ -827,7 +985,10 @@ mod tests {
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
             let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
-            let localised_spec = spec.localise(&restricted_vars);
+            let Ok(validated) = spec.clone().validate::<Distributed>() else {
+                return Ok(());
+            };
+            let localised_spec = validated.try_localise(&restricted_vars).unwrap();
 
             for var in localised_spec.output_vars.iter() {
                 assert!(restricted_vars.contains(var));

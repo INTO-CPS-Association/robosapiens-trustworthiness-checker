@@ -7,7 +7,8 @@ use contiguous_tree::TreeCursorExt;
 use super::{SemanticError, SemanticResult, TCType, TypeErrorKind};
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
-    DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope, SyntaxLiteral,
+    DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, LanguageMode, ReconfigurableExprScope,
+    SemanticEntry, SyntaxLiteral, ValidatedDsrvSpecification,
 };
 use crate::{Value, VarName};
 use ecow::EcoVec;
@@ -16,7 +17,6 @@ struct AstValidationContext<'spec> {
     globals: &'spec BTreeSet<VarName>,
     bindings: Vec<VarName>,
     owner: &'spec VarName,
-    distributed: bool,
 }
 
 impl AstValidationContext<'_> {
@@ -26,9 +26,8 @@ impl AstValidationContext<'_> {
 }
 
 /// Validate invariants that gradual type fallback must never suppress.
-pub(crate) fn validate_specification(
+pub(crate) fn validate_specification<M: LanguageMode>(
     spec: &DsrvSpecification,
-    distributed: bool,
 ) -> SemanticResult<()> {
     let globals = spec
         .input_vars
@@ -38,15 +37,29 @@ pub(crate) fn validate_specification(
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut errors = Vec::new();
+    let mut declarations = std::collections::BTreeMap::new();
+    for entry in spec.semantic_entries() {
+        if matches!(entry, SemanticEntry::Assignment { .. }) {
+            continue;
+        }
+        if let Some(first) = declarations.get(entry.name()) {
+            errors.push(SemanticError::DuplicateDeclaration {
+                variable: entry.name().clone(),
+                first: *first,
+                duplicate: entry.span(),
+            });
+        } else {
+            declarations.insert(entry.name().clone(), entry.span());
+        }
+    }
 
     for (owner, expression) in spec.roots() {
         let mut context = AstValidationContext {
             globals: &globals,
             bindings: Vec::new(),
             owner,
-            distributed,
         };
-        if let Err(error) = validate_expression(expression, &mut context) {
+        if let Err(error) = validate_expression::<M>(expression, &mut context) {
             errors.push(error);
         }
     }
@@ -58,7 +71,14 @@ pub(crate) fn validate_specification(
     }
 }
 
-fn validate_expression(
+pub fn validate<M: LanguageMode>(
+    spec: DsrvSpecification,
+) -> SemanticResult<ValidatedDsrvSpecification<M>> {
+    validate_specification::<M>(&spec)?;
+    Ok(ValidatedDsrvSpecification::new(spec))
+}
+
+fn validate_expression<M: LanguageMode>(
     expression: ExprRef<'_>,
     context: &mut AstValidationContext<'_>,
 ) -> Result<(), SemanticError> {
@@ -78,19 +98,21 @@ fn validate_expression(
             context
                 .bindings
                 .extend(parameters.iter().map(|(name, _)| name.clone()));
-            let result = validate_expression(body, context);
+            let result = validate_expression::<M>(body, context);
             context.bindings.truncate(frame_start);
             result
         }
         Dynamic(source, _, scope) | Defer(source, _, scope) => {
             validate_runtime_scope(expression, scope, context)?;
-            validate_expression(source, context)
+            validate_expression::<M>(source, context)
         }
         Map(fields) | Struct(fields) | ObjectLiteral(fields) => {
             validate_unique_fields(expression, &fields)?;
-            validate_children(expression, context)
+            validate_children::<M>(expression, context)
         }
-        Dist(_, _) | MonitoredAt(_, _) if !context.distributed => {
+        Dist(_, _) | MonitoredAt(_, _)
+            if M::validate_distribution_constraint(expression.span()).is_err() =>
+        {
             // TODO: do we want to handle distribution constraint this way, or
             // silently ignore them outside of the distributed runtime
             return Err(SemanticError::UnsupportedDistributionConstraint(
@@ -98,16 +120,16 @@ fn validate_expression(
                 Some(expression.span()),
             ));
         }
-        _ => validate_children(expression, context),
+        _ => validate_children::<M>(expression, context),
     }
 }
 
-fn validate_children(
+fn validate_children<M: LanguageMode>(
     expression: ExprRef<'_>,
     context: &mut AstValidationContext<'_>,
 ) -> Result<(), SemanticError> {
     for child in expression.children() {
-        validate_expression(child, context)?;
+        validate_expression::<M>(child, context)?;
     }
     Ok(())
 }
@@ -241,6 +263,7 @@ pub fn extract_value_type(value: Value) -> TCType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lang::dsrv::ast::Local;
     use crate::lang::dsrv::type_checker::{SemanticError, type_check_gradual};
     use std::collections::BTreeMap;
     use test_log::test;
@@ -252,7 +275,7 @@ mod tests {
             .parse()
             .unwrap();
 
-        let errors = type_check_gradual(specification, false)
+        let errors = type_check_gradual(specification)
             .expect_err("an unresolved type cycle must not bypass AST validation");
 
         assert!(errors.iter().any(|error| matches!(
@@ -266,7 +289,8 @@ mod tests {
     fn validation_respects_lambda_bindings() {
         let specification = "out z: Int\nz = (\\x: Int -> x)(1)".parse().unwrap();
 
-        validate_specification(&specification, false).expect("lambda parameter should be in scope");
+        validate_specification::<Local>(&specification)
+            .expect("lambda parameter should be in scope");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use super::super::stream_id::StreamSlots;
 use super::super::*;
 use super::lower::*;
 use crate::lang::core::DepGraph as NamedDependencyGraph;
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::ast::{CheckedDsrvSpecification, Local, ValidatedDsrvSpecification};
 
 impl TryFrom<DsrvSpecification> for DataflowProgram {
     type Error = DataflowCompilationError;
@@ -54,9 +54,19 @@ impl DataflowProgram {
     pub fn compile_untyped(
         specification: DsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
+        let specification = specification
+            .validate::<Local>()
+            .map_err(DataflowCompilationError::Semantic)?;
+        Self::compile_validated(specification)
+    }
+
+    /// Compile a specification whose common and local admission checks have succeeded.
+    pub fn compile_validated(
+        specification: ValidatedDsrvSpecification<Local>,
+    ) -> Result<Self, DataflowCompilationError> {
         #[cfg(test)]
         DataflowProgram::record_root_compile(false);
-        Self::compile_specification(specification, build_expression_graph)
+        Self::compile_specification(specification.into_specification(), build_expression_graph)
     }
 
     fn compile_specification<S>(

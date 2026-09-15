@@ -115,7 +115,7 @@ fn compilation_phases(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| black_box(type_check(spec, false).unwrap()),
+                |spec| black_box(type_check(spec).unwrap()),
                 BatchSize::SmallInput,
             )
         });
@@ -165,7 +165,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = type_check(parsed, false).unwrap();
+                    let typed = type_check(parsed).unwrap();
                     black_box(DataflowMonitor::compile_checked(typed).unwrap())
                 })
             },
@@ -176,7 +176,7 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = type_check(parsed, false).unwrap();
+                    let typed = type_check(parsed).unwrap();
                     black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
                     black_box(DataflowMonitor::compile_checked(typed).unwrap())
                 })
@@ -217,7 +217,7 @@ fn compilation_phases(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(bindings), |b| {
             b.iter_batched(
                 || parsed.clone(),
-                |spec| black_box(type_check(spec, false).unwrap()),
+                |spec| black_box(type_check(spec).unwrap()),
                 BatchSize::SmallInput,
             )
         });
@@ -266,7 +266,7 @@ fn indexed_arena_comparison(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| black_box(type_check(spec, false).unwrap()),
+                |spec| black_box(type_check(spec).unwrap()),
                 BatchSize::SmallInput,
             )
         });
