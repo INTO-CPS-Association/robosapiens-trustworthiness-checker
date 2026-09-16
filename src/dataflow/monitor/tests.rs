@@ -3300,3 +3300,157 @@ fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
         JitPlan::Unavailable
     );
 }
+
+/// Monitors of one specification in every execution configuration.
+fn branch_recursion_monitors(specification: &str) -> Vec<(String, DataflowMonitor)> {
+    let mut monitors = Vec::new();
+    for quickening in [false, true] {
+        let mut untyped = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+        untyped.set_quickening(quickening);
+        monitors.push((format!("untyped, quickening {quickening}"), untyped));
+        let checked = specification.parse::<CheckedDsrvSpecification>().unwrap();
+        let mut typed = DataflowMonitor::compile_checked(checked).unwrap();
+        typed.set_quickening(quickening);
+        monitors.push((format!("typed, quickening {quickening}"), typed));
+    }
+    #[cfg(feature = "jit")]
+    {
+        let checked = specification.parse::<CheckedDsrvSpecification>().unwrap();
+        monitors.push((
+            "typed, eager JIT".to_owned(),
+            DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager()).unwrap(),
+        ));
+    }
+    monitors
+}
+
+fn int_rows(values: &[i64]) -> Vec<Vec<Value>> {
+    values
+        .iter()
+        .map(|value| vec![Value::Int(*value)])
+        .collect()
+}
+
+#[test]
+fn a_recursive_delay_inside_a_branch_reads_the_stream_history() {
+    // `held[1]` is the stream's previous output, whichever branch produced
+    // it; the branch that did not run at that tick contributes nothing.
+    let inputs = [-1, 5, -1, -1, 7, -1];
+    for (equation, expected) in [
+        (
+            "if x >= 0 then x else default(held[1], -1)",
+            [-1, 5, 5, 5, 7, 7],
+        ),
+        (
+            "if x >= 0 then x else default(held[1], 0) + 100",
+            [100, 5, 105, 205, 7, 107],
+        ),
+        (
+            "if x >= 0 then 1 else default(held[1], 0) + 1",
+            [1, 1, 2, 3, 1, 2],
+        ),
+        (
+            "if x < 0 then default(held[1], -1) else x",
+            [-1, 5, 5, 5, 7, 7],
+        ),
+        (
+            "if x >= 0 then x else if x < -5 then 0 else default(held[1], -1)",
+            [-1, 5, 5, 5, 7, 7],
+        ),
+        (
+            "if x >= 0 then default(held[1], 0) + x else default(held[1], 0) - 1",
+            [-1, 4, 3, 2, 9, 8],
+        ),
+    ] {
+        let specification = format!("in x: Int\nout held: Int\nheld = {equation}");
+        for (label, mut monitor) in branch_recursion_monitors(&specification) {
+            let mut rows = Vec::new();
+            monitor
+                .evaluate_trace(int_rows(&inputs), &mut rows)
+                .unwrap();
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|value| vec![Value::Int(*value)])
+                .collect();
+            assert_eq!(rows, expected, "{equation} ({label})");
+        }
+    }
+}
+
+#[test]
+fn a_latched_branch_verdict_stays_latched() {
+    // The shape of a sticky trustworthiness verdict written with a branch.
+    let specification = "in x: Int\nout ok: Bool\n\
+        ok = if x < 0 then false else default(ok[1], true)";
+    for (label, mut monitor) in branch_recursion_monitors(specification) {
+        let mut rows = Vec::new();
+        monitor
+            .evaluate_trace(int_rows(&[1, 2, -1, 3, 4]), &mut rows)
+            .unwrap();
+        let verdicts: Vec<_> = rows.into_iter().map(|row| row[0].clone()).collect();
+        assert_eq!(
+            verdicts,
+            [true, true, false, false, false].map(Value::Bool),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn branch_recursion_restarts_cold_and_transfers_with_its_stream() {
+    let specification = "in x: Int\nout held: Int\n\
+        held = if x >= 0 then x else default(held[1], -1)";
+    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut rows = Vec::new();
+    monitor
+        .evaluate_trace(int_rows(&[4, -1]), &mut rows)
+        .unwrap();
+    assert_eq!(rows[1], [Value::Int(4)]);
+    monitor.reset();
+    rows.clear();
+    monitor.evaluate_trace(int_rows(&[-1]), &mut rows).unwrap();
+    assert_eq!(rows[0], [Value::Int(-1)]);
+
+    // A compatible replacement keeps the held value.
+    monitor.evaluate_trace(int_rows(&[9]), &mut rows).unwrap();
+    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    monitor
+        .reconfigure(
+            candidate.program,
+            ContextTransferPolicy::MatchingStreamState,
+        )
+        .unwrap();
+    rows.clear();
+    monitor.evaluate_trace(int_rows(&[-1]), &mut rows).unwrap();
+    assert_eq!(rows[0], [Value::Int(9)]);
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn branch_recursion_matches_a_reference_hold(
+        inputs in proptest::collection::vec(-3i64..4, 1..40),
+    ) {
+        let specification = "in x: Int\nout held: Int\nout count: Int\n\
+            held = if x >= 0 then x else default(held[1], -1)\n\
+            count = if x == 0 then 0 else default(count[1], 0) + 1";
+        let mut last = -1;
+        let mut count = 0;
+        let expected: Vec<_> = inputs
+            .iter()
+            .map(|&x| {
+                if x >= 0 {
+                    last = x;
+                }
+                count = if x == 0 { 0 } else { count + 1 };
+                vec![Value::Int(last), Value::Int(count)]
+            })
+            .collect();
+        for (label, mut monitor) in branch_recursion_monitors(specification) {
+            let mut rows = Vec::new();
+            monitor.evaluate_trace(int_rows(&inputs), &mut rows).unwrap();
+            proptest::prop_assert_eq!(&rows, &expected, "{}", label);
+        }
+    }
+}

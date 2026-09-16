@@ -109,7 +109,7 @@ impl Evaluator {
         };
         evaluate_nodes_with_history(&body.nodes, state, context, history_access);
         let value = context.read_value(state, &body.output);
-        stage_recursive_delays(&body.recursive_delays, state, &value);
+        stage_recursive_delays(body, state, &value);
         value
     }
 
@@ -161,7 +161,7 @@ impl Evaluator {
             recursive_call: None,
         };
         let value = context.read_value(state, &body.output);
-        stage_recursive_delays(&body.recursive_delays, state, &value);
+        stage_recursive_delays(body, state, &value);
         value
     }
 
@@ -190,7 +190,7 @@ impl Evaluator {
             try_evaluate_nodes_with_history(&body.nodes, state, context, history_access)?;
         }
         let value = context.read_value(state, &body.output);
-        stage_recursive_delays(&body.recursive_delays, state, &value);
+        stage_recursive_delays(body, state, &value);
         Ok(value)
     }
 

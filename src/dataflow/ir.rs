@@ -143,6 +143,9 @@ pub(super) struct EvaluationGraph<E: GraphReference> {
     pub(super) scalar_signatures: Vec<Option<ScalarSignature>>,
     pub(super) output: DataRef<E>,
     pub(super) recursive_delays: Vec<NodeId>,
+    /// `if` nodes whose branches, at any depth, hold recursive delays of the
+    /// same stream. Their delays are staged with this graph's output.
+    pub(super) recursive_branches: Vec<NodeId>,
 }
 
 impl<E: GraphReference> EvaluationGraph<E> {
@@ -157,7 +160,13 @@ impl<E: GraphReference> EvaluationGraph<E> {
             scalar_signatures,
             output,
             recursive_delays: Vec::new(),
+            recursive_branches: Vec::new(),
         }
+    }
+
+    /// Whether completing this graph stages any recursive delay.
+    pub(super) fn stages_recursive_output(&self) -> bool {
+        !self.recursive_delays.is_empty() || !self.recursive_branches.is_empty()
     }
 
     pub(super) fn contains_reconfigurable_expression(&self) -> bool {
@@ -239,6 +248,24 @@ impl BoundEvaluationGraph {
             .filter_map(|(index, op)| op.is_recursive_delay().then(|| NodeId::new(index)))
             .collect::<Vec<_>>();
         debug_assert_eq!(self.recursive_delays, recursive_nodes);
+        let recursive_branches = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| match op {
+                StreamOp::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } if then_branch.stages_recursive_output()
+                    || else_branch.stages_recursive_output() =>
+                {
+                    Some(NodeId::new(index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        debug_assert_eq!(self.recursive_branches, recursive_branches);
     }
 }
 

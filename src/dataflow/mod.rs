@@ -246,7 +246,8 @@
 //! lowered form of `sindex`); `compiler::bind::bind_op` replaces that operation with
 //! `RecursiveDelay`. Direct or zero-delay recursion returns a [`StreamProgramError`], so a bound
 //! recursive delay stores a `NonZeroU64`. Binding also resolves reconfigurable scopes, prepares function
-//! capture layouts, and records the exact recursive-delay node IDs used by the post-output commit.
+//! capture layouts, and records the exact recursive-delay node IDs used by the post-output commit,
+//! including the `if` nodes whose branches hold recursive delays of the same stream.
 //!
 //! The program figure shows the bound body for `total`. The semantic contents of an
 //! `EvaluationGraph` are an ordered
@@ -380,8 +381,10 @@
 //! A direct top-level external delay reads `HistoryStore`; monitor commit records the completed
 //! environment value centrally, and the delay's local commit is a no-op. A local positive ordinary
 //! delay reads its `DelayState` ring and stages its completed operand. A `RecursiveDelay` reads its
-//! local ring during the forward pass and stages the enclosing stream's completed output. The common
-//! post-row traversal commits both monitor history and local staged values.
+//! local ring during the forward pass and stages the enclosing stream's completed output. This holds
+//! inside `if` branches too: a branch's recursive delay records the stream's output, whichever
+//! branch produced it, never the branch's own result. The common post-row traversal commits both
+//! monitor history and local staged values.
 //!
 //! If a tick fails before temporal commit, monitor history and pending local writes are not committed. Other node state
 //! may already have changed because evaluation errors are terminal and the complete evaluator is not

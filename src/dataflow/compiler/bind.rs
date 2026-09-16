@@ -276,11 +276,21 @@ fn bind_graph(
         .filter(|(_, op)| op.is_recursive_delay())
         .map(|(index, _)| NodeId::new(index))
         .collect();
+    let recursive_branches = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| {
+            matches!(op, BoundOp::If { then_branch, else_branch, .. }
+                if then_branch.stages_recursive_output() || else_branch.stages_recursive_output())
+        })
+        .map(|(index, _)| NodeId::new(index))
+        .collect();
     Ok(BoundEvaluationGraph {
         nodes,
         scalar_signatures,
         output,
         recursive_delays,
+        recursive_branches,
     })
 }
 

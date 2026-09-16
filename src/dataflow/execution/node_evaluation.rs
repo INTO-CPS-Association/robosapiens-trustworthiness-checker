@@ -18,7 +18,6 @@ use super::functions::*;
 use super::lifting::*;
 use super::quickening::{ScalarValue, retain_last};
 use super::reconfigurable_expressions::*;
-use super::temporal_commit::stage_recursive_delays;
 use crate::core::values::operations as value_operations;
 
 pub(in crate::dataflow) fn evaluate_node_with_history(
@@ -567,9 +566,8 @@ fn evaluate_branch_with_history(
     history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     evaluate_nodes_with_history(&branch.nodes, state, context, history_access);
-    let output = context.read_value(state, &branch.output);
-    stage_recursive_delays(&branch.recursive_delays, state, &output);
-    output
+    // The enclosing stream stages this branch's recursive delays.
+    context.read_value(state, &branch.output)
 }
 
 pub(in crate::dataflow) fn try_evaluate_nodes_with_history(
@@ -735,9 +733,8 @@ fn try_evaluate_branch(
         *state = snapshot;
         return Err(error);
     }
-    let output = context.read_value(state, &branch.output);
-    stage_recursive_delays(&branch.recursive_delays, state, &output);
-    Ok(output)
+    // The enclosing stream stages this branch's recursive delays.
+    Ok(context.read_value(state, &branch.output))
 }
 
 fn evaluate_direct_apply_with_history(

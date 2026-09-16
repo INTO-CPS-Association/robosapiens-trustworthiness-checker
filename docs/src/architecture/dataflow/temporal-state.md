@@ -14,6 +14,8 @@ A top-level direct delay of another environment variable—for example, `prior_t
 
 A delay inside a runtime-defined body, function body, or other internal graph owns a `NodeState::Delay(DelayState)` ring in its containing `EvaluatorState`. It reads that ring during evaluation and stages its completed current operand. A `RecursiveDelay` uses the same local storage type but stages the enclosing stream's completed output.
 
+A recursive delay inside an `if` branch belongs to the branch's evaluator state, but it still records the enclosing stream. For `held = if x >= 0 then x else default(held[1], -1)`, the else branch reads the previous value of `held`, including a value the then branch produced; both branches are evaluated every tick, and the value the unselected branch computed never becomes history. The stream stages its output into every such delay once the whole `if` has produced it.
+
 ## The running example
 
 For `total = default(total[1], 0) + scaled`, `total[1]` is a `RecursiveDelay` because it reads the enclosing stream's own prior output. Tick 1 finds no committed local sample, so the delay produces `Value::Deferred` and `default` selects `0`; `total` then produces `8`. After the complete row succeeds, the recursive delay commits `total = 8` to its local `DelayState` ring. Tick 2 reads `8`, never the partially computed tick-2 value.

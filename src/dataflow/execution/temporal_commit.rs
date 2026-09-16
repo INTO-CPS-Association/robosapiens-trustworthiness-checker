@@ -5,7 +5,7 @@
 //! the row has produced its value. That is what lets mutually delayed streams read each other's
 //! completed values without a same-tick scheduling cycle.
 //!
-//! [`stage_recursive_delays`] runs during the forward pass; [`commit_staged_temporal_state_with_history`]
+//! [`stage_recursive_delays`] runs once the stream's output is known; [`commit_staged_temporal_state_with_history`]
 //! runs once after the row. [`discard_staged_temporal_state`] is the failure path — a tick that
 //! fails commits nothing, so staged writes are dropped rather than applied.
 
@@ -17,11 +17,37 @@ use super::evaluator_state::*;
 use super::node_evaluation::function_history_bindings;
 use super::quickening::ScalarValue;
 
+/// Stage the enclosing stream's completed output for every recursive delay of
+/// `body`, including those inside `if` branches.
+///
+/// A branch graph binds the enclosing stream's self-reference too, so its
+/// recursive delays record the stream's output, never the branch's own result.
+/// Both branches are staged every tick, whichever was selected, because each
+/// delay's ring is that stream's history.
 pub(in crate::dataflow) fn stage_recursive_delays(
-    delays: &[NodeId],
+    body: &BoundEvaluationGraph,
     state: &mut EvaluatorState,
     output: &Value,
 ) {
+    stage_recursive_nodes(&body.recursive_delays, state, output);
+    for node in &body.recursive_branches {
+        let StreamOp::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &body.nodes[node.index()]
+        else {
+            unreachable!("a recursive branch node is an if")
+        };
+        let NodeState::LazyIf(lazy_if) = &mut state.node_states[node.index()] else {
+            unreachable!("if node has incompatible runtime state")
+        };
+        stage_recursive_delays(then_branch, lazy_if.then_state.as_mut(), output);
+        stage_recursive_delays(else_branch, lazy_if.else_state.as_mut(), output);
+    }
+}
+
+fn stage_recursive_nodes(delays: &[NodeId], state: &mut EvaluatorState, output: &Value) {
     for delay in delays {
         match &mut state.node_states[delay.index()] {
             NodeState::Delay(history) => history.stage_recursive_value(output.clone()),
