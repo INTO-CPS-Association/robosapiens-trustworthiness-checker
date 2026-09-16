@@ -1,8 +1,17 @@
+//! Shared runtime helpers for feeding and finishing an [`OutputWriter`].
+//!
+//! Used by the asynchronous (and, through it, distributed), semi-sync,
+//! reconfigurable semi-sync, dataflow, and MSTLO runtimes. Destination
+//! selection, routing, and queuing belong to `crate::io::output`.
+
 use std::{collections::BTreeMap, pin::Pin};
 
 use futures::{Sink, StreamExt, stream::FuturesUnordered};
 
-use crate::{LocalStream, OutputBatch, OutputUpdate, OutputWriter, VarName, io::ShutdownDeadline};
+use crate::{
+    LocalStream, OutputBatch, OutputError, OutputUpdate, OutputWriter, VarName,
+    io::ShutdownDeadline,
+};
 
 pub(crate) type NamedOutputStreams<V> = BTreeMap<VarName, LocalStream<V>>;
 
@@ -11,7 +20,7 @@ pub(crate) type NamedOutputStreams<V> = BTreeMap<VarName, LocalStream<V>>;
 pub(crate) async fn submit_batch<V: 'static>(
     writer: &mut OutputWriter<V>,
     batch: OutputBatch<V>,
-) -> Result<(), crate::OutputError> {
+) -> Result<(), OutputError> {
     writer.feed(batch).await?;
     match futures::future::poll_fn(|cx| Pin::new(&mut *writer).poll_ready(cx)).await {
         Err(error) if error.is_closed() => Ok(()),
@@ -24,18 +33,6 @@ pub(crate) async fn submit_batch<V: 'static>(
 /// This is the native representation for asynchronous and distributed
 /// monitors: whichever producer yields next becomes one width-one tick. The
 /// sink remains the only output boundary.
-#[cfg(test)]
-pub(crate) async fn drive_singleton_streams<V: 'static>(
-    streams: NamedOutputStreams<V>,
-    writer: &mut OutputWriter<V>,
-) -> anyhow::Result<()> {
-    let result = consume_singleton_streams(streams, writer).await;
-    match result {
-        Ok(()) => finish_writer(writer).await,
-        Err(primary) => finish_writer_with_primary(writer, primary).await,
-    }
-}
-
 pub(crate) async fn consume_singleton_streams<V: 'static>(
     streams: NamedOutputStreams<V>,
     writer: &mut OutputWriter<V>,
@@ -79,18 +76,6 @@ pub(crate) async fn consume_singleton_streams<V: 'static>(
 /// Semi-sync output subscriptions advance together, so the driver preserves
 /// that row boundary with `OutputBatch::tick` rather than flattening values
 /// into independent updates.
-#[cfg(test)]
-pub(crate) async fn drive_row_streams<V: 'static>(
-    streams: NamedOutputStreams<V>,
-    writer: &mut OutputWriter<V>,
-) -> anyhow::Result<()> {
-    let result = consume_row_streams(streams, writer).await;
-    match result {
-        Ok(()) => finish_writer(writer).await,
-        Err(primary) => finish_writer_with_primary(writer, primary).await,
-    }
-}
-
 pub(crate) async fn consume_row_streams<V: 'static>(
     streams: NamedOutputStreams<V>,
     writer: &mut OutputWriter<V>,
@@ -162,51 +147,39 @@ pub(crate) async fn consume_row_streams<V: 'static>(
     }
 }
 
-pub(crate) async fn finish_writer<V: 'static>(writer: &mut OutputWriter<V>) -> anyhow::Result<()> {
+pub(crate) async fn finish_writer<V: 'static>(
+    writer: &mut OutputWriter<V>,
+) -> Result<(), OutputError> {
     let deadline = writer.shutdown_deadline();
     finish_writer_with_deadline(writer, deadline).await
 }
 
+/// Flush and then close `writer` within `deadline`, treating a closed writer as
+/// finished and reporting a failure seen by both steps once.
 pub(crate) async fn finish_writer_with_deadline<V: 'static>(
     writer: &mut OutputWriter<V>,
     deadline: ShutdownDeadline,
-) -> anyhow::Result<()> {
+) -> Result<(), OutputError> {
     let flush = match deadline.timeout(writer.flush()).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) if error.is_closed() => Ok(()),
-        Ok(Err(error)) => Err(anyhow::Error::new(error)),
-        Err(timeout) => Err(anyhow::Error::new(timeout)),
+        Ok(result) => result,
+        Err(timeout) => Err(OutputError::backend(timeout)),
     };
-    let close = match writer.close_with_deadline(deadline).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.is_closed() => Ok(()),
-        Err(error) => Err(anyhow::Error::new(error)),
-    };
-    match (flush, close) {
+    // The writer retains flush failures and reports them again, with any
+    // cleanup failure attached, when it closes.
+    let flush_retained = matches!(&flush, Err(error) if writer.error() == Some(error));
+    let close = writer.close_with_deadline(deadline).await;
+    match (ignore_closed(flush), ignore_closed(close)) {
         (Ok(()), close) => close,
         (Err(primary), Ok(())) => Err(primary),
-        (Err(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
+        (Err(_), Err(close)) if flush_retained => Err(close),
+        (Err(primary), Err(cleanup)) => Err(crate::io::output::combine_errors(primary, cleanup)),
     }
 }
 
-#[cfg(test)]
-async fn finish_writer_with_primary<V: 'static>(
-    writer: &mut OutputWriter<V>,
-    primary: anyhow::Error,
-) -> anyhow::Result<()> {
-    match finish_writer(writer).await {
-        Ok(()) => Err(primary),
-        Err(cleanup) => Err(combine_errors(primary, cleanup)),
-    }
-}
-
-fn combine_errors(primary: anyhow::Error, additional: anyhow::Error) -> anyhow::Error {
-    let primary_message = primary.to_string();
-    let additional_message = additional.to_string();
-    if primary_message == additional_message {
-        primary
-    } else {
-        anyhow::anyhow!("{primary_message}; additionally: {additional_message}")
+fn ignore_closed(result: Result<(), OutputError>) -> Result<(), OutputError> {
+    match result {
+        Err(error) if error.is_closed() => Ok(()),
+        result => result,
     }
 }
 
@@ -225,6 +198,38 @@ mod tests {
     use crate::OutputError;
 
     use super::*;
+
+    async fn drive_singleton_streams<V: 'static>(
+        streams: NamedOutputStreams<V>,
+        writer: &mut OutputWriter<V>,
+    ) -> anyhow::Result<()> {
+        let result = consume_singleton_streams(streams, writer).await;
+        match result {
+            Ok(()) => Ok(finish_writer(writer).await?),
+            Err(primary) => finish_writer_with_primary(writer, primary).await,
+        }
+    }
+
+    async fn drive_row_streams<V: 'static>(
+        streams: NamedOutputStreams<V>,
+        writer: &mut OutputWriter<V>,
+    ) -> anyhow::Result<()> {
+        let result = consume_row_streams(streams, writer).await;
+        match result {
+            Ok(()) => Ok(finish_writer(writer).await?),
+            Err(primary) => finish_writer_with_primary(writer, primary).await,
+        }
+    }
+
+    async fn finish_writer_with_primary<V: 'static>(
+        writer: &mut OutputWriter<V>,
+        primary: anyhow::Error,
+    ) -> anyhow::Result<()> {
+        match finish_writer(writer).await {
+            Ok(()) => Err(primary),
+            Err(cleanup) => Err(anyhow::anyhow!("{primary}; additionally: {cleanup}")),
+        }
+    }
 
     struct RecordingSink {
         batches: Rc<RefCell<Vec<OutputBatch<i32>>>>,

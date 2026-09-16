@@ -712,11 +712,12 @@ impl Runtime for DataflowRuntime {
                                 }
                             }
                         }
-                        let cleanup = crate::runtime::output::finish_writer_with_deadline(
+                        let cleanup = crate::runtime::output_utils::finish_writer_with_deadline(
                             &mut output_writer,
                             deadline,
                         )
-                        .await;
+                        .await
+                        .map_err(anyhow::Error::from);
                         return match cleanup {
                             Ok(()) => Err(error),
                             Err(cleanup) => Err(combine_errors(error, cleanup)),
@@ -747,7 +748,7 @@ trait DataflowOutput {
 
 impl DataflowOutput for OutputWriter<Value> {
     async fn send_output(&mut self, batch: OutputBatch<Value>) -> Result<(), OutputError> {
-        crate::runtime::output::submit_batch(self, batch).await
+        crate::runtime::output_utils::submit_batch(self, batch).await
     }
 
     async fn flush_output(&mut self) -> Result<(), OutputError> {
@@ -768,7 +769,7 @@ impl DataflowOutput for OutputPipelineSession<Value> {
         if let Some(error) = self.error() {
             return Err(error.clone());
         }
-        crate::runtime::output::submit_batch(self.writer_mut(), batch).await
+        crate::runtime::output_utils::submit_batch(self.writer_mut(), batch).await
     }
 
     async fn flush_output(&mut self) -> Result<(), OutputError> {
@@ -871,7 +872,9 @@ async fn run_direct_dataflow_engine(
     }
 
     let cleanup =
-        crate::runtime::output::finish_writer_with_deadline(&mut engine.output, deadline).await;
+        crate::runtime::output_utils::finish_writer_with_deadline(&mut engine.output, deadline)
+            .await
+            .map_err(anyhow::Error::from);
     match (error, cleanup) {
         (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
         (Some(primary), Ok(())) => Err(primary),
@@ -1018,7 +1021,9 @@ async fn finish_reconfigurable_output_session(
 ) -> anyhow::Result<()> {
     let deadline = output.writer().shutdown_deadline();
     let cleanup =
-        crate::runtime::output::finish_writer_with_deadline(output.writer_mut(), deadline).await;
+        crate::runtime::output_utils::finish_writer_with_deadline(output.writer_mut(), deadline)
+            .await
+            .map_err(anyhow::Error::from);
     match (primary, cleanup) {
         (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
         (Some(primary), Ok(())) => Err(primary),
@@ -1044,9 +1049,12 @@ async fn finish_reconfigurable_engine(
             });
         }
     }
-    if let Err(cleanup) =
-        crate::runtime::output::finish_writer_with_deadline(engine.output.writer_mut(), deadline)
-            .await
+    if let Err(cleanup) = crate::runtime::output_utils::finish_writer_with_deadline(
+        engine.output.writer_mut(),
+        deadline,
+    )
+    .await
+    .map_err(anyhow::Error::from)
     {
         error = Some(match error {
             Some(primary) => combine_errors(primary, cleanup),
@@ -1101,9 +1109,12 @@ async fn reconfiguration_failure(
             error = combine_errors(error, flush_error);
         }
     }
-    if let Err(cleanup) =
-        crate::runtime::output::finish_writer_with_deadline(engine.output.writer_mut(), deadline)
-            .await
+    if let Err(cleanup) = crate::runtime::output_utils::finish_writer_with_deadline(
+        engine.output.writer_mut(),
+        deadline,
+    )
+    .await
+    .map_err(anyhow::Error::from)
     {
         error = combine_errors(error, cleanup);
     }

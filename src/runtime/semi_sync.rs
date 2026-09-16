@@ -3,7 +3,7 @@ use crate::{
     core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input, retain_stream},
     lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
     runtime::RuntimeBuilder,
-    runtime::output::{consume_row_streams, finish_writer, finish_writer_with_deadline},
+    runtime::output_utils::{consume_row_streams, finish_writer, finish_writer_with_deadline},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
     stream_utils,
     utils::cancellation_token::CancellationToken,

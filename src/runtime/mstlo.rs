@@ -941,7 +941,7 @@ where
         }
         let ticks = events.into_iter().map(|event| vec![event]).collect();
         let batch = OutputBatch::from_ticks(ticks)?;
-        crate::runtime::output::submit_batch(writer, batch).await
+        crate::runtime::output_utils::submit_batch(writer, batch).await
     }
 }
 
@@ -1055,7 +1055,9 @@ where
             }
 
             let cleanup =
-                crate::runtime::output::finish_writer_with_deadline(&mut writer, deadline).await;
+                crate::runtime::output_utils::finish_writer_with_deadline(&mut writer, deadline)
+                    .await
+                    .map_err(anyhow::Error::from);
             match first_error {
                 Some(primary) => match cleanup {
                     Ok(()) => Err(primary.context("Input stream/MSTLO processing failed")),

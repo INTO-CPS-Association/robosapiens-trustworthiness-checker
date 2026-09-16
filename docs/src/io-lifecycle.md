@@ -77,4 +77,4 @@ Destination owners remain fixed throughout an output session. Supported route an
 - Output admission, completion, and close: `src/core/output.rs`; delivery workers and completion credits: `src/io/output/delivery.rs`.
 - Retry timing and limits: `src/io/retry.rs`; transport implementations classify recoverable failures.
 - Pipeline/session identities and the absolute shutdown deadline: `src/io/lifecycle.rs`.
-- Coordinated runtime cleanup: `src/runtime/dataflow.rs`, `src/runtime/reconfigurable_semi_sync.rs`, and `src/runtime/output.rs`.
+- Coordinated runtime cleanup: `src/runtime/dataflow.rs`, `src/runtime/reconfigurable_semi_sync.rs`, and `src/runtime/output_utils.rs`.

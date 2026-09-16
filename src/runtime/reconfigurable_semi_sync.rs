@@ -185,11 +185,12 @@ where
                     }
                     (Err(input_error), Ok(mut opened_output)) => {
                         let deadline = opened_output.writer().shutdown_deadline();
-                        let cleanup = crate::runtime::output::finish_writer_with_deadline(
+                        let cleanup = crate::runtime::output_utils::finish_writer_with_deadline(
                             opened_output.writer_mut(),
                             deadline,
                         )
-                        .await;
+                        .await
+                        .map_err(anyhow::Error::from);
                         drop(opened_output);
                         drop(input.take());
                         setup_error = Some(match cleanup {
@@ -545,7 +546,7 @@ where
             Ok((streams, mut context, mut expr_evals)) => {
                 let cancellation = context.cancellation_token();
                 let mut output_future = Box::pin(
-                    crate::runtime::output::consume_row_streams(streams, output.writer_mut())
+                    crate::runtime::output_utils::consume_row_streams(streams, output.writer_mut())
                         .fuse(),
                 );
                 let mut output_completed = false;
@@ -731,7 +732,9 @@ where
             }
         }
         if let Err(error) =
-            crate::runtime::output::finish_writer_with_deadline(output.writer_mut(), deadline).await
+            crate::runtime::output_utils::finish_writer_with_deadline(output.writer_mut(), deadline)
+                .await
+                .map_err(anyhow::Error::from)
         {
             pending_builder = Err(match pending_builder {
                 Ok(_) => error,

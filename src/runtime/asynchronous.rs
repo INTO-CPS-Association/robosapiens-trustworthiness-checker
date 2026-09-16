@@ -1447,7 +1447,7 @@ where
         let mut result = {
             let output_cancellation = cancellation_token.clone();
             let output_fut = async {
-                let drive = Box::pin(crate::runtime::output::consume_singleton_streams(
+                let drive = Box::pin(crate::runtime::output_utils::consume_singleton_streams(
                     output_streams,
                     &mut output_writer,
                 ));
@@ -1543,7 +1543,9 @@ where
             }
         }
         if let Err(cleanup) =
-            crate::runtime::output::finish_writer_with_deadline(&mut output_writer, deadline).await
+            crate::runtime::output_utils::finish_writer_with_deadline(&mut output_writer, deadline)
+                .await
+                .map_err(anyhow::Error::from)
         {
             result = Err(match result {
                 Ok(()) => cleanup,
