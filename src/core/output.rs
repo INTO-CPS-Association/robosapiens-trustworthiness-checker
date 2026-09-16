@@ -83,6 +83,7 @@ pub type OutputUpdate<V> = batch::Update<V>;
 /// A borrowed output update yielded while iterating a tick or batch.
 pub type OutputUpdateRef<'a, V> = batch::UpdateRef<'a, V>;
 
+// ANCHOR: output_segment
 /// A physical output segment. A segment is never itself a batch: it is one
 /// representation of an ordered range of logical output ticks.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +99,7 @@ enum OutputSegment<V> {
         values: Vec<V>,
     },
 }
+// ANCHOR_END: output_segment
 
 impl<V> SegmentAccess<V> for OutputSegment<V> {
     #[inline(always)]

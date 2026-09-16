@@ -1,0 +1,205 @@
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 370" width="100%" role="img" aria-labelledby="batch-segments-ticks-title batch-segments-ticks-desc" style="width:100%; max-width:900px; height:auto;">
+  <title id="batch-segments-ticks-title">Logical ticks and the segments that store them</title>
+  <desc id="batch-segments-ticks-desc">Read left to right along one shared baseline with logical ticks 0 to 3. The top row shows the logical ticks: tick 0 is x equals 1; tick 1 is simultaneous x equals 2 and y equals 20; tick 2 is x equals 3 and y equals 30; tick 3 is x equals 4 and y equals 40. The row below shows the physical segments of the same batch at the same positions: a SingletonTicks segment holding x equals 1 under tick 0, a Tick segment holding x equals 2 and y equals 20 under tick 1, and one PackedRows segment with layout x, y whose single flat value buffer 3, 30, 4, 40 spans ticks 2 and 3, one row per tick. A bracket under all three segments marks Storage::Segments, one flat list of segments. Dashed vertical guides only mark tick positions; there are no arrows.</desc>
+  <!--
+    Theme tokens. In the book these are overridden per theme by theme/diagram-theme.css; this block
+    is the fallback that keeps the figure readable standalone, as an image, and when rustdoc inlines
+    it with include_str!. Scoped to .tc-figure, never :root, so inlining cannot leak the names.
+  -->
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff;
+      --fig-edge: #d0d7de;
+      --fig-ink: #17212b;
+      --fig-ink-2: #52606d;
+      --fig-line: #65758b;
+      --fig-panel: #f7f9fb;
+      --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb;
+      --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0;
+      --fig-green-line: #147d64;
+      --fig-orange: #fff1e6;
+      --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8;
+      --fig-purple-line: #8055a3;
+      --fig-source: #eef6ff;
+      --fig-source-line: #3478b8;
+      --fig-redis: #fff5e8;
+      --fig-redis-line: #bc6b16;
+      --fig-checker: #f1ecff;
+      --fig-checker-line: #7254b3;
+      --fig-knowledge: #eaf8ee;
+      --fig-knowledge-line: #39834d;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26;
+        --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0;
+        --fig-ink-2: #a2acbd;
+        --fig-line: #8492a6;
+        --fig-panel: #1e2432;
+        --fig-panel-line: #3d465c;
+        --fig-blue: #16283d;
+        --fig-blue-line: #6aa9e0;
+        --fig-green: #123029;
+        --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f;
+        --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33;
+        --fig-purple-line: #b18fd4;
+        --fig-source: #14283c;
+        --fig-source-line: #6fa8db;
+        --fig-redis: #33260f;
+        --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34;
+        --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c;
+        --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="batch-segments-ticks-arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="9"
+            refY="5"
+            viewBox="0 0 10 10"
+            orient="auto"
+            markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fig-line)" />
+    </marker>
+  </defs>
+  <rect x="0.75" y="0.75" width="898.5" height="368.5" rx="6"
+        fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
+  <text x="24" y="31"
+        font-family="system-ui, sans-serif"
+        font-size="15"
+        font-weight="700"
+        fill="var(--fig-ink)">Logical ticks and the segments that store them</text>
+  <!-- Position guides sit behind the cells; they are not arrows. -->
+  <g stroke="var(--fig-panel-line)" stroke-width="1" stroke-dasharray="3 4">
+    <line x1="250" y1="100" x2="250" y2="180" />
+    <line x1="390" y1="100" x2="390" y2="180" />
+    <line x1="530" y1="100" x2="530" y2="180" />
+    <line x1="670" y1="100" x2="670" y2="180" />
+  </g>
+  <line x1="180" y1="92" x2="800" y2="92"
+        stroke="var(--fig-line)" stroke-width="1.5"
+        marker-end="url(#batch-segments-ticks-arrow)" />
+  <text x="808" y="96"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        fill="var(--fig-ink-2)">logical order</text>
+  <g fill="none" stroke="var(--fig-line)" stroke-width="1.5">
+    <line x1="250" y1="84" x2="250" y2="100" />
+    <line x1="390" y1="84" x2="390" y2="100" />
+    <line x1="530" y1="84" x2="530" y2="100" />
+    <line x1="670" y1="84" x2="670" y2="100" />
+  </g>
+  <g text-anchor="middle"
+     font-family="system-ui, sans-serif"
+     font-size="11"
+     fill="var(--fig-ink-2)">
+    <text x="250" y="76">tick 0</text>
+    <text x="390" y="76">tick 1</text>
+    <text x="530" y="76">tick 2</text>
+    <text x="670" y="76">tick 3</text>
+  </g>
+  <text x="24" y="150"
+        font-family="system-ui, sans-serif"
+        font-size="13"
+        font-weight="600"
+        fill="var(--fig-ink)">logical ticks</text>
+  <text x="24" y="226"
+        font-family="system-ui, sans-serif"
+        font-size="13"
+        font-weight="600"
+        fill="var(--fig-ink)">segments</text>
+  <text x="24" y="244"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        fill="var(--fig-ink-2)">physical storage</text>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="11.5"
+     font-weight="600"
+     fill="var(--fig-ink)">
+    <rect x="208" y="126" width="84" height="38" rx="5"
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+    <text x="250" y="150">{ x = 1 }</text>
+    <rect x="326" y="126" width="128" height="38" rx="5"
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+    <text x="390" y="150">{ x = 2, y = 20 }</text>
+    <rect x="466" y="126" width="128" height="38" rx="5"
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+    <text x="530" y="150">{ x = 3, y = 30 }</text>
+    <rect x="606" y="126" width="128" height="38" rx="5"
+          fill="var(--fig-blue)" stroke="var(--fig-blue-line)" stroke-width="1.5" />
+    <text x="670" y="150">{ x = 4, y = 40 }</text>
+  </g>
+  <g fill="var(--fig-green)" stroke="var(--fig-green-line)" stroke-width="1.5">
+    <rect x="190" y="180" width="120" height="100" rx="7" />
+    <rect x="340" y="180" width="100" height="100" rx="7" />
+    <rect x="452" y="180" width="296" height="100" rx="7" />
+  </g>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="13"
+     font-weight="600"
+     fill="var(--fig-ink)">
+    <text x="250" y="203">SingletonTicks</text>
+    <text x="390" y="203">Tick</text>
+    <text x="600" y="203">PackedRows</text>
+  </g>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="11.5"
+     fill="var(--fig-ink)">
+    <text x="250" y="247">[x=1]</text>
+    <text x="390" y="247">[x=2, y=20]</text>
+  </g>
+  <text x="600" y="222"
+        text-anchor="middle"
+        font-family="ui-monospace, monospace"
+        font-size="11"
+        fill="var(--fig-ink-2)">layout [x, y]</text>
+  <g fill="var(--fig-panel)" stroke="var(--fig-panel-line)" stroke-width="1.2">
+    <rect x="460" y="232" width="70" height="24" />
+    <rect x="530" y="232" width="70" height="24" />
+    <rect x="600" y="232" width="70" height="24" />
+    <rect x="670" y="232" width="70" height="24" />
+  </g>
+  <g text-anchor="middle"
+     font-family="ui-monospace, monospace"
+     font-size="11.5"
+     font-weight="600"
+     fill="var(--fig-ink)">
+    <text x="495" y="249">3</text>
+    <text x="565" y="249">30</text>
+    <text x="635" y="249">4</text>
+    <text x="705" y="249">40</text>
+  </g>
+  <g text-anchor="middle"
+     font-family="system-ui, sans-serif"
+     font-size="10.5"
+     fill="var(--fig-ink-2)">
+    <text x="250" y="268">one tick per update</text>
+    <text x="390" y="268">one tick</text>
+    <text x="530" y="271">row → tick 2</text>
+    <text x="670" y="271">row → tick 3</text>
+  </g>
+  <path d="M 190 292 V 300 H 748 V 292"
+        fill="none" stroke="var(--fig-line)" stroke-width="1.3" />
+  <text x="469" y="318"
+        text-anchor="middle"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        fill="var(--fig-ink-2)">Storage::Segments · one flat list of segments; a batch never nests batches</text>
+  <text x="24" y="352"
+        font-family="system-ui, sans-serif"
+        font-size="11"
+        fill="var(--fig-ink-2)">A cell under a tick mark is that tick; values inside one cell are simultaneous. Dashed guides only mark positions.</text>
+</svg>

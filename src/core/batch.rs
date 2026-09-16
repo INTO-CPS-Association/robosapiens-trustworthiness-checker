@@ -2,11 +2,13 @@ use std::{slice, vec};
 
 use super::VarName;
 
+// ANCHOR: batch_update
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Update<V> {
     pub variable: VarName,
     pub value: V,
 }
+// ANCHOR_END: batch_update
 impl<V> Update<V> {
     pub fn new(variable: VarName, value: V) -> Self {
         Self { variable, value }
@@ -92,11 +94,13 @@ pub(crate) enum OwnedSegment<V> {
     },
 }
 
+// ANCHOR: batch_storage
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Storage<S> {
     Single(S),
     Segments(Vec<S>),
 }
+// ANCHOR_END: batch_storage
 
 impl<S> Storage<S> {
     #[inline(always)]
@@ -166,6 +170,7 @@ impl<'a, S> Iterator for SegmentCursor<'a, S> {
 }
 impl<S> ExactSizeIterator for SegmentCursor<'_, S> {}
 
+// ANCHOR: batch_tick
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UpdateRef<'a, V> {
     pub variable: &'a VarName,
@@ -185,6 +190,7 @@ enum TickRepresentation<'a, V> {
 pub struct Tick<'a, V> {
     representation: TickRepresentation<'a, V>,
 }
+// ANCHOR_END: batch_tick
 impl<'a, V> Tick<'a, V> {
     pub fn len(&self) -> usize {
         match self.representation {

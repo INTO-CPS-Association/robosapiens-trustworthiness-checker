@@ -74,20 +74,7 @@ Output shape belongs to the producing runtime:
 | MSTLO runtime | sparse singleton ticks; a variable may appear in more than one tick |
 | asynchronous and distributed runtimes | singleton ticks in observed merge order |
 
-```mermaid
-flowchart TB
-    accTitle: Physical output segments preserve one logical tick sequence
-    accDescr: Singleton tick runs, simultaneous Tick segments, and fixed-layout PackedRows segments remain in their native forms inside OutputBatchStorage. OutputBatch exposes all of them as one ordered sequence of nonempty logical ticks to OutputWriter consumers.
-
-    singleton["SingletonTicks: independent width-one ticks"] --> storage["OutputBatchStorage"]
-    simultaneous["Tick: one simultaneous update set"] --> storage
-    packed["PackedRows: fixed-layout row sequence"] --> storage
-    storage --> batch["OutputBatch"]
-    batch --> ticks["Ordered logical ticks"]
-    ticks --> writer["OutputWriter consumer"]
-```
-
-**Reading rule.** Each storage form contributes ticks to the same ordered sequence consumed by a writer. Several forms may coexist in one batch, but converting or joining their storage does not merge distinct ticks or create additional model time. Packed rows can remain packed while consumers iterate over the common tick view.
+Several of these forms can coexist in one batch, and joining their storage never merges distinct ticks or adds model time. [Batch representation](io-batches.md) describes the storage forms, how batches are combined, and how consumers iterate ticks without expanding packed rows.
 
 A batch is not an external transaction. Successful admission to an `OutputWriter` also does not prove that a remote service has persisted or consumed the values.
 

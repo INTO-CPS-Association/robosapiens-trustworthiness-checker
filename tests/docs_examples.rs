@@ -9,8 +9,8 @@
 //! indentation and without the paths a reader needs. The `#[test]` wrappers at the end run them.
 //!
 //! Most examples use the guide's running example, so the values a reader sees on the page are the
-//! values these assertions check. `group_updates_into_ticks` does not: it needs two variables to
-//! show a tick, and the running example has one input.
+//! values these assertions check. `group_updates_into_ticks` and the batch-representation examples
+//! do not: they need two variables to show a tick, and the running example has one input.
 
 // ANCHOR: monitor_evaluate
 fn evaluate_two_ticks() -> anyhow::Result<()> {
@@ -167,6 +167,125 @@ fn collect_ticks_without_merging_them() -> anyhow::Result<()> {
     })
 }
 // ANCHOR_END: input_window_batch
+
+// ANCHOR: batch_representation
+fn build_a_mixed_batch() -> anyhow::Result<trustworthiness_checker::OutputBatch<i32>> {
+    use trustworthiness_checker::{OutputBatch, OutputUpdate, VarName};
+
+    // Ticks 0 and 1: one independent update, then one simultaneous pair.
+    let listed = OutputBatch::from_ticks(vec![
+        vec![OutputUpdate::new("x".into(), 1)],
+        vec![
+            OutputUpdate::new("x".into(), 2),
+            OutputUpdate::new("y".into(), 20),
+        ],
+    ])?;
+    // Ticks 2 and 3: two rows sharing the layout [x, y], stored as one flat buffer.
+    let layout: Vec<VarName> = vec!["x".into(), "y".into()];
+    let rows = OutputBatch::packed_rows(layout, [3, 30, 4, 40])?;
+
+    let batch = listed.concat(rows)?;
+
+    assert_eq!(batch.tick_count(), 4);
+    assert_eq!(batch.update_count(), 7);
+    assert_eq!(batch.len(), 7); // `len` counts updates, not ticks
+    Ok(batch)
+}
+// ANCHOR_END: batch_representation
+
+// ANCHOR: batch_iterate_ticks
+fn iterate_borrowed_ticks(batch: &trustworthiness_checker::OutputBatch<i32>) {
+    use trustworthiness_checker::VarName;
+
+    // Each item is one logical tick, whatever segment stores it.
+    let widths: Vec<usize> = batch.ticks().map(|tick| tick.len()).collect();
+    assert_eq!(widths, [1, 2, 2, 2]);
+
+    // `&OutputBatch` iterates the same borrowed ticks.
+    let mut updates = 0;
+    for tick in batch {
+        updates += tick.updates().count();
+    }
+    assert_eq!(updates, 7);
+
+    // Tick 3 is read directly from the packed value buffer.
+    let (x, y) = (VarName::from("x"), VarName::from("y"));
+    let last = batch.ticks().last().expect("four ticks");
+    let values: Vec<(&VarName, i32)> = last
+        .updates()
+        .map(|update| (update.variable, *update.value))
+        .collect();
+    assert_eq!(values, [(&x, 4), (&y, 40)]);
+}
+// ANCHOR_END: batch_iterate_ticks
+
+// ANCHOR: batch_iterate_updates
+fn iterate_flat_updates(batch: &trustworthiness_checker::OutputBatch<i32>) {
+    // `updates()` concatenates every tick, so it cannot show which values were simultaneous.
+    let names: Vec<String> = batch
+        .updates()
+        .map(|update| update.variable.name())
+        .collect();
+    let values: Vec<i32> = batch.updates().map(|update| *update.value).collect();
+    assert_eq!(names, ["x", "x", "y", "x", "y", "x", "y"]);
+    assert_eq!(values, [1, 2, 20, 3, 30, 4, 40]);
+}
+// ANCHOR_END: batch_iterate_updates
+
+// ANCHOR: batch_owned_ticks
+fn take_owned_ticks(batch: trustworthiness_checker::OutputBatch<i32>) {
+    use trustworthiness_checker::OutputUpdate;
+
+    // Consuming the batch builds one `Vec` per tick; packed rows are expanded here.
+    let ticks: Vec<Vec<OutputUpdate<i32>>> = batch.into_ticks().collect();
+    assert_eq!(ticks.len(), 4);
+    assert_eq!(
+        ticks[2],
+        [
+            OutputUpdate::new("x".into(), 3),
+            OutputUpdate::new("y".into(), 30),
+        ]
+    );
+}
+// ANCHOR_END: batch_owned_ticks
+
+// ANCHOR: batch_select_variables
+fn select_one_variable(batch: trustworthiness_checker::OutputBatch<i32>) -> anyhow::Result<()> {
+    use std::collections::BTreeSet;
+
+    // Tick 0 has no `y`, so it disappears; the other ticks keep only their `y` value.
+    let only_y = batch.select_variables(&BTreeSet::from(["y".into()]))?;
+    let widths: Vec<usize> = only_y.ticks().map(|tick| tick.len()).collect();
+    assert_eq!(widths, [1, 1, 1]);
+    let values: Vec<i32> = only_y.updates().map(|update| *update.value).collect();
+    assert_eq!(values, [20, 30, 40]);
+    Ok(())
+}
+// ANCHOR_END: batch_select_variables
+
+// ANCHOR: input_batch_iteration
+fn iterate_input_batch() -> anyhow::Result<()> {
+    use trustworthiness_checker::{InputBatch, InputUpdate, VarName};
+
+    let batch = InputBatch::update("x", 1).concat(InputBatch::tick(vec![
+        InputUpdate::new("x".into(), 2),
+        InputUpdate::new("y".into(), 20),
+    ])?)?;
+
+    // An input batch offers the same borrowed tick and update views.
+    let (x, y) = (VarName::from("x"), VarName::from("y"));
+    let ticks: Vec<Vec<(&VarName, i32)>> = batch
+        .ticks()
+        .map(|tick| {
+            tick.updates()
+                .map(|update| (update.variable, *update.value))
+                .collect()
+        })
+        .collect();
+    assert_eq!(ticks, [vec![(&x, 1)], vec![(&x, 2), (&y, 20)]]);
+    Ok(())
+}
+// ANCHOR_END: input_batch_iteration
 
 // ANCHOR: output_pipeline_open
 fn write_one_output_row() -> anyhow::Result<()> {
@@ -362,6 +481,26 @@ fn input_pipeline_yields_one_batch_per_configured_tick() {
 #[test]
 fn input_window_batches_ticks_without_merging_them() {
     collect_ticks_without_merging_them().expect("documented input-window example should run");
+}
+
+#[test]
+fn batch_representation_preserves_ticks_across_storage() {
+    build_a_mixed_batch().expect("documented batch representation example should run");
+}
+
+#[test]
+fn batch_iteration_exposes_ticks_updates_and_owned_ticks() {
+    let batch = build_a_mixed_batch().expect("documented batch should build");
+    iterate_borrowed_ticks(&batch);
+    iterate_flat_updates(&batch);
+    take_owned_ticks(batch);
+    iterate_input_batch().expect("documented input iteration example should run");
+}
+
+#[test]
+fn batch_selection_removes_only_empty_ticks() {
+    let batch = build_a_mixed_batch().expect("documented batch should build");
+    select_one_variable(batch).expect("documented selection example should run");
 }
 
 #[test]

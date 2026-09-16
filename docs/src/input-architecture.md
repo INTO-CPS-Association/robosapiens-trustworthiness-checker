@@ -196,7 +196,7 @@ sequenceDiagram
 
 **Reading rule.** Solid arrows are polls or local work; dashed arrows return stream items. The collector is the stream adapter built by `drive_window`. Batching returns the original ticks; reduction returns one simultaneous tick. The request follows that result on a separate poll. Lifecycle markers and source errors follow the same pending-data-first rule; EOF finishes the collection before the stream ends. A timer or count threshold can finish a collection without a request.
 
-Internally, `InputSegment` stores separate updates, simultaneous ticks, or fixed-layout rows. Batching can split storage between ticks to meet a threshold, but never splits a simultaneous tick. Reducing a window also consumes complete ticks before emitting its result.
+Internally, a batch stores separate updates, simultaneous ticks, or fixed-layout rows in segments; [Batch representation](io-batches.md) describes them. Batching can split storage between ticks to meet a threshold, but never splits a simultaneous tick. Reducing a window also consumes complete ticks before emitting its result.
 
 ## Persistent input sessions
 

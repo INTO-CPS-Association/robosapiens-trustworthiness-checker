@@ -66,6 +66,7 @@ Reconfiguration coordinates changes across input, output, and the model. Observa
 
 ## Further reading
 
+- [Batch representation](io-batches.md): how updates, ticks, and batches are stored in segments, and how to iterate them.
 - [Input architecture](input-architecture.md): source selection, observation ordering, input windows, and stopping or updating sources.
 - [Output architecture](output.md): destination selection, the Rust Sink interface, buffering, coalescing, and delivery completion.
 - [I/O ownership and lifecycle](io-lifecycle.md): shared implementation, explicit drain and close operations, retry boundaries, and shutdown deadlines.

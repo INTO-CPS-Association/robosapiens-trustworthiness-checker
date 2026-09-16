@@ -60,6 +60,7 @@ use super::{LocalStream, VarName};
 /// One variable update in a logical input tick.
 pub type InputUpdate<V> = batch::Update<V>;
 
+// ANCHOR: input_segment
 /// A physical segment in an [`InputBatch`]. A segment is never itself a
 /// batch: it is only one representation of an ordered range of logical ticks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +75,7 @@ pub(crate) enum InputSegment<V> {
         values: Vec<V>,
     },
 }
+// ANCHOR_END: input_segment
 
 impl<V> SegmentAccess<V> for InputSegment<V> {
     #[inline(always)]
@@ -157,11 +159,13 @@ impl<V> InputSegment<V> {
 /// `Segments` without recursively nesting batches.
 pub(crate) type InputBatchStorage<V> = batch::Storage<InputSegment<V>>;
 
+// ANCHOR: input_batch
 /// An ordered sequence of logical input ticks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputBatch<V> {
     storage: InputBatchStorage<V>,
 }
+// ANCHOR_END: input_batch
 
 impl<V> InputBatch<V> {
     /// Construct one independent width-one tick.

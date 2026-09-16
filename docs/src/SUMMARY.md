@@ -37,6 +37,7 @@
 # Architecture
 
 - [I/O architecture](./io.md)
+  - [Batch representation](./io-batches.md)
   - [Input architecture](./input-architecture.md)
   - [Output architecture](./output.md)
   - [I/O ownership and lifecycle](./io-lifecycle.md)
