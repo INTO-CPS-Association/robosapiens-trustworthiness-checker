@@ -10,6 +10,7 @@ mod keyword {
     syn::custom_keyword!(tree);
     syn::custom_keyword!(child);
     syn::custom_keyword!(children);
+    syn::custom_keyword!(children_with);
 
     syn::custom_keyword!(keyed_children);
     syn::custom_keyword!(data);
@@ -27,6 +28,7 @@ mod keyword {
 pub(super) enum FieldKind {
     Child,
     Children,
+    ChildrenWith(Type),
 
     KeyedChildren,
     Borrowed(Type),
@@ -40,7 +42,10 @@ impl FieldKind {
     }
 
     fn is_collection(&self) -> bool {
-        matches!(self, Self::Children | Self::KeyedChildren)
+        matches!(
+            self,
+            Self::Children | Self::ChildrenWith(_) | Self::KeyedChildren
+        )
     }
 }
 
@@ -60,6 +65,9 @@ impl Parse for Field {
         } else if input.peek(keyword::children) {
             input.parse::<keyword::children>()?;
             FieldKind::Children
+        } else if input.peek(keyword::children_with) {
+            input.parse::<keyword::children_with>()?;
+            FieldKind::ChildrenWith(parenthesized_type(input)?)
         } else if input.peek(keyword::keyed_children) {
             input.parse::<keyword::keyed_children>()?;
             FieldKind::KeyedChildren
@@ -74,7 +82,7 @@ impl Parse for Field {
             FieldKind::Copied(parenthesized_type(input)?)
         } else {
             return Err(input.error(
-                "expected child, children, keyed_children, data(T), into_data(T), or copy(T)",
+                "expected child, children, children_with(T), keyed_children, data(T), into_data(T), or copy(T)",
             ));
         };
         let owned_default = if input.peek(Token![=]) {

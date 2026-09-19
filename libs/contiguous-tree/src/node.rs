@@ -35,6 +35,30 @@ pub struct ChildIds<'node, Id: Copy, Key> {
 enum ChildIdTail<'node, Id, Key> {
     Slice(std::slice::Iter<'node, Id>),
     Keyed(std::slice::Iter<'node, (Key, Id)>),
+    Associated {
+        children: &'node dyn AssociatedChildIds<Id>,
+        remaining: std::ops::Range<usize>,
+    },
+}
+
+/// Type-erased access to edge-associated IDs, without allocating an iterator
+/// or requiring every variant in a schema to use the same edge data type.
+pub trait AssociatedChildIds<Id> {
+    fn child_id(&self, index: usize) -> Id;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<T, Id: Copy> AssociatedChildIds<Id> for crate::fields::ChildrenWith<T, Id> {
+    fn child_id(&self, index: usize) -> Id {
+        self.as_slice()[index].1
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
 }
 
 impl<'node, Id: Copy, Key> ChildIds<'node, Id, Key> {
@@ -75,6 +99,17 @@ impl<'node, Id: Copy, Key> ChildIds<'node, Id, Key> {
         );
         self.tail = Some(ChildIdTail::Keyed(fields.iter()));
     }
+
+    pub fn extend_associated(&mut self, children: &'node dyn AssociatedChildIds<Id>) {
+        debug_assert!(
+            self.tail.is_none(),
+            "a node has at most one child collection"
+        );
+        self.tail = Some(ChildIdTail::Associated {
+            children,
+            remaining: 0..children.len(),
+        });
+    }
 }
 
 impl<Id: Copy, Key> Iterator for ChildIds<'_, Id, Key> {
@@ -90,6 +125,10 @@ impl<Id: Copy, Key> Iterator for ChildIds<'_, Id, Key> {
         match &mut self.tail {
             Some(ChildIdTail::Slice(ids)) => ids.next().copied(),
             Some(ChildIdTail::Keyed(fields)) => fields.next().map(|(_, id)| *id),
+            Some(ChildIdTail::Associated {
+                children,
+                remaining,
+            }) => remaining.next().map(|index| children.child_id(index)),
             None => None,
         }
     }
@@ -98,6 +137,7 @@ impl<Id: Copy, Key> Iterator for ChildIds<'_, Id, Key> {
         let tail_len = match &self.tail {
             Some(ChildIdTail::Slice(ids)) => ids.len(),
             Some(ChildIdTail::Keyed(fields)) => fields.len(),
+            Some(ChildIdTail::Associated { remaining, .. }) => remaining.len(),
             None => 0,
         };
         let len = usize::from(self.fixed_len - self.fixed_position) + tail_len;
@@ -112,6 +152,10 @@ impl<Id: Copy, Key> DoubleEndedIterator for ChildIds<'_, Id, Key> {
         let tail = match &mut self.tail {
             Some(ChildIdTail::Slice(ids)) => ids.next_back().copied(),
             Some(ChildIdTail::Keyed(fields)) => fields.next_back().map(|(_, id)| *id),
+            Some(ChildIdTail::Associated {
+                children,
+                remaining,
+            }) => remaining.next_back().map(|index| children.child_id(index)),
             None => None,
         };
         if tail.is_some() {

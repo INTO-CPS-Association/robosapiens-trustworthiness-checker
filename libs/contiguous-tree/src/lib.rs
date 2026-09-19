@@ -18,6 +18,12 @@
 //! another, and in source order. A node ID represents one occurrence and cannot
 //! be shared by multiple parents; multiple independent roots may share storage.
 //!
+//! `children_with(T)` declares an ordered child collection whose edges carry
+//! data of type `T`. Its stored [`ChildrenWith`] entries keep data and IDs
+//! together; borrowed views yield [`ChildWith`] entries with resolved cursors.
+//! Unlike `keyed_children`, repeated edge data is allowed and has no lookup
+//! semantics. Fixed children precede either kind of collection.
+//!
 //! # Example
 //!
 //! ```
@@ -71,7 +77,9 @@ pub use annotations::{AnnotationError, NodeAnnotations, NodeAnnotationsBuilder};
 pub use arena::{Arena, ForestError};
 pub use builder::{BuildError, ForestBuilder};
 pub use cursor::{ContextCursor, StorageIdentity, TreeCursor};
-pub use fields::{KeyedFields, ResolvedFields, ResolvedIds};
+pub use fields::{
+    ChildWith, ChildrenWith, KeyedFields, ResolvedChildrenWith, ResolvedFields, ResolvedIds,
+};
 pub use forest::{Forest, ForestHandles, TreeHandle};
 pub use forest_map::{ForestMap, ForestMapError};
 pub use index::{ArenaId, IdRange};

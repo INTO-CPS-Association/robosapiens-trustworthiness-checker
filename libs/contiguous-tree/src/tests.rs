@@ -49,6 +49,88 @@ crate::tree_schema! {
 struct MinimalFields;
 
 crate::tree_schema! {
+    pub tree Associated {
+        schema: pub(crate),
+        serialize: display,
+        owned_constructors: #[cfg(test)] pub(crate),
+        metadata: meta: (u16, Option<u16>) = (0, None),
+        id: u32,
+        children: EcoVec,
+
+        Leaf(value: data(EcoString)),
+        Sequence(values: children),
+        AssocOnly(arms: children_with(u16)),
+        Arms(scrutinee: child, arms: children_with(u16)),
+    }
+}
+
+#[cfg(feature = "serde")]
+impl std::fmt::Display for AssociatedRef<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, formatter)
+    }
+}
+
+#[test]
+fn associated_children_preserve_edge_data_through_owned_merge_and_clone() {
+    let tree = Associated::Arms(
+        Box::new(Associated::Leaf("subject".into())),
+        [
+            (100, Associated::Leaf("first".into())),
+            (101, Associated::Leaf("second".into())),
+        ],
+    );
+    let AssociatedView::Arms(_, arms) = tree.as_ref().view() else {
+        panic!("expected arms");
+    };
+    assert_eq!(arms.iter().len(), 2);
+    let first = arms.iter().next().unwrap();
+    assert_eq!(*first.data, 100);
+    assert!(matches!(first.child.view(), AssociatedView::Leaf(value) if value == "first"));
+    let last = arms.iter().next_back().unwrap();
+    assert_eq!(*last.data, 101);
+    assert!(matches!(last.child.view(), AssociatedView::Leaf(value) if value == "second"));
+    let mut builder = AssociatedBuilder::with_capacity(4);
+    let cloned = builder.clone_subtree(tree.as_ref());
+    let cloned = builder.finish(cloned).unwrap();
+    assert!(
+        cloned
+            .as_ref()
+            .try_zip_with(tree.as_ref(), |left, right| {
+                Ok::<_, ()>(left.kind().same_payload(right.kind()))
+            })
+            .unwrap()
+    );
+}
+
+#[test]
+fn associated_owned_constructor_keeps_each_edge_metadata_with_its_child() {
+    let tree = Associated::AssocOnly([
+        (17, Associated::Leaf("first".into())),
+        (23, Associated::Leaf("second".into())),
+    ]);
+    let AssociatedView::AssocOnly(arms) = tree.as_ref().view() else {
+        panic!("expected associated arms");
+    };
+    let entries = arms
+        .iter()
+        .map(|entry| {
+            let AssociatedView::Leaf(value) = entry.child.view() else {
+                panic!("expected leaf child");
+            };
+            (*entry.data, value.clone())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        [
+            (17, EcoString::from("first")),
+            (23, EcoString::from("second"))
+        ]
+    );
+}
+
+crate::tree_schema! {
     pub tree SequenceOnly {
         schema: pub(crate),
         metadata: metadata: () = (),

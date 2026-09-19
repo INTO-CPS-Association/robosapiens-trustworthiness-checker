@@ -10,6 +10,7 @@ use super::schema::{FieldKind, TreeSchema, Variant};
 impl Variant {
     fn stored_definition(
         &self,
+        runtime: &proc_macro2::TokenStream,
         id: &Ident,
         children: &Type,
         keyed_fields: &Ident,
@@ -18,7 +19,7 @@ impl Variant {
         let fields = self
             .fields
             .iter()
-            .map(|field| stored_type(&field.kind, id, children, keyed_fields));
+            .map(|field| stored_type(runtime, &field.kind, id, children, keyed_fields));
         quote!(#name( #( #fields ),* ))
     }
 
@@ -115,6 +116,7 @@ impl Variant {
         let parameter_types = constructor_fields.iter().map(|field| match &field.kind {
             FieldKind::Child => quote!(Box<impl Into<#root>>),
             FieldKind::Children => quote!(#children<#root>),
+            FieldKind::ChildrenWith(typ) => quote!(impl IntoIterator<Item = (#typ, #root)>),
             FieldKind::KeyedChildren => quote!(impl IntoIterator<Item = (#key, #root)>),
             FieldKind::Borrowed(typ) => quote!(#typ),
             FieldKind::IntoOwned(typ) => quote!(impl Into<#typ>),
@@ -129,6 +131,11 @@ impl Variant {
                 FieldKind::Child => quote!(let #field_name: #root = (*#field_name).into();),
                 FieldKind::Children => quote!(
                     let #field_name: Vec<#root> = #field_name.into_iter().collect();
+                ),
+                FieldKind::ChildrenWith(typ) => quote!(
+                    let (#field_name, child_ids): (Vec<#typ>, Vec<#root>) =
+                        #field_name.into_iter().unzip();
+                    let #field_name = (#field_name, child_ids);
                 ),
                 FieldKind::KeyedChildren => quote!(
                     let (#field_name, children): (Vec<#key>, Vec<#root>) =
@@ -145,6 +152,7 @@ impl Variant {
             match field.kind {
                 FieldKind::Child => quote!(owned_children.push(#field_name);),
                 FieldKind::Children => quote!(owned_children.extend(#field_name);),
+                FieldKind::ChildrenWith(_) => quote!(owned_children.extend(#field_name.1);),
                 FieldKind::KeyedChildren => quote!(owned_children.extend(#field_name.1);),
                 FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => quote!(),
             }
@@ -154,6 +162,9 @@ impl Variant {
             match &field.kind {
                 FieldKind::Child => quote!(ids.next().expect("missing fixed child ID")),
                 FieldKind::Children => quote!(ids.by_ref().collect::<#children<_>>()),
+                FieldKind::ChildrenWith(_) => quote!(
+                    #field_name.0.into_iter().zip(ids.by_ref()).collect()
+                ),
                 FieldKind::KeyedChildren => quote!(#field_name.0.into_iter()
                     .zip(ids.by_ref())
                     .collect::<#keyed_children<_>>()
@@ -206,6 +217,9 @@ impl Variant {
             .zip(left.iter().zip(right.iter()))
             .filter_map(|(field, (left, right))| match &field.kind {
                 FieldKind::Child | FieldKind::Children => None,
+                FieldKind::ChildrenWith(_) => Some(quote!(
+                    #left.iter().map(|(data, _)| data).eq(#right.iter().map(|(data, _)| data))
+                )),
                 FieldKind::KeyedChildren => Some(quote!(
                     #left.iter().map(|(key, _)| key).eq(#right.iter().map(|(key, _)| key))
                 )),
@@ -310,7 +324,7 @@ pub(super) fn expand(
 
     let stored_variants = variants
         .iter()
-        .map(|variant| variant.stored_definition(&id, &children, &keyed_fields))
+        .map(|variant| variant.stored_definition(runtime, &id, &children, &keyed_fields))
         .collect::<Vec<_>>();
     let view_variants = variants
         .iter()
@@ -1172,6 +1186,7 @@ pub(super) fn expand(
 }
 
 fn stored_type(
+    runtime: &proc_macro2::TokenStream,
     kind: &FieldKind,
     id: &Ident,
     children: &Type,
@@ -1180,6 +1195,7 @@ fn stored_type(
     match kind {
         FieldKind::Child => quote!(#id),
         FieldKind::Children => quote!(#children<#id>),
+        FieldKind::ChildrenWith(typ) => quote!(#runtime::ChildrenWith<#typ, #id>),
 
         FieldKind::KeyedChildren => quote!(#keyed),
         FieldKind::Borrowed(typ) | FieldKind::IntoOwned(typ) | FieldKind::Copied(typ) => {
@@ -1201,6 +1217,9 @@ fn view_type(
             #cursor,
             std::iter::Copied<std::slice::Iter<'arena, #id>>
         >),
+        FieldKind::ChildrenWith(typ) => quote!(
+            #runtime::ResolvedChildrenWith<'arena, #typ, #cursor>
+        ),
 
         FieldKind::KeyedChildren => {
             quote!(#runtime::ResolvedFields<'arena, #cursor, #key>)
@@ -1221,6 +1240,9 @@ fn resolve(
         FieldKind::Children => {
             quote!(#runtime::ResolvedIds::new(#cursor, #field.iter().copied()))
         }
+        FieldKind::ChildrenWith(_) => {
+            quote!(#runtime::ResolvedChildrenWith::new(#cursor, #field.as_slice()))
+        }
 
         FieldKind::KeyedChildren => {
             quote!(#runtime::ResolvedFields::new(#cursor, #field.as_slice()))
@@ -1234,6 +1256,7 @@ fn record(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(ids.push(*#field);),
         FieldKind::Children => quote!(ids.extend_slice(#field);),
+        FieldKind::ChildrenWith(_) => quote!(ids.extend_associated(#field);),
         FieldKind::KeyedChildren => quote!(ids.extend_keyed(#field.as_slice());),
         FieldKind::Borrowed(_) | FieldKind::IntoOwned(_) | FieldKind::Copied(_) => {
             quote!(let _ = #field;)
@@ -1245,6 +1268,11 @@ fn visit(kind: &FieldKind, field: &Ident) -> proc_macro2::TokenStream {
     match kind {
         FieldKind::Child => quote!(visit(#field);),
         FieldKind::Children => quote!(#field.make_mut().iter_mut().for_each(&mut visit);),
+        FieldKind::ChildrenWith(_) => quote!(
+            for (_, child) in #field.iter_mut() {
+                visit(child);
+            }
+        ),
         FieldKind::KeyedChildren => quote!(
             for (_, child) in #field.child_ids_mut() {
                 visit(child);
