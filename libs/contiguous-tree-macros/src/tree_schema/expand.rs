@@ -244,6 +244,7 @@ struct GeneratedNames {
     reference: Ident,
     view: Ident,
     builder: Ident,
+    rewrite_node: Ident,
     forest: Ident,
     forest_map: Ident,
     handle: Ident,
@@ -262,6 +263,7 @@ impl GeneratedNames {
             reference: format_ident!("{root}Ref"),
             view: format_ident!("{root}View"),
             builder: format_ident!("{root}Builder"),
+            rewrite_node: format_ident!("{root}RewriteNode"),
             forest: format_ident!("{root}Forest"),
             forest_map: format_ident!("{root}ForestMap"),
             handle: format_ident!("{root}Handle"),
@@ -300,6 +302,7 @@ pub(super) fn expand(
         reference,
         view,
         builder,
+        rewrite_node,
         forest,
         forest_map,
         handle,
@@ -319,6 +322,7 @@ pub(super) fn expand(
     let handle_doc = format!("Shared owning handle for a `{root_name}` root.");
     let root_doc = format!("Owning root of a `{root_name}` tree.");
     let builder_doc = format!("Bottom-up builder for `{root_name}` trees and forests.");
+    let rewrite_node_doc = format!("One source node being rewritten into a `{root_name}` subtree.");
     let forest_doc = format!("Ordered owning forest of `{root_name}` roots in shared storage.");
     let forest_map_doc = format!("Sorted unique keys associated with `{root_name}` forest roots.");
 
@@ -1025,6 +1029,47 @@ pub(super) fn expand(
                     .clone_tree_from(root, |cursor| cursor.node().clone())
             }
 
+            /// Transcode a different generated family, retaining ordered child edges.
+            #schema_visibility fn try_transcode<Source: #runtime::TreeCursor, Error>(
+                &mut self,
+                root: Source,
+                mut convert: impl FnMut(#runtime::FoldNode<'_, Source, #id>)
+                    -> Result<(#kind, #metadata), Error>,
+            ) -> Result<#id, #runtime::TranscodeError<Error, #id>> {
+                self.builder.try_transcode(root, |folded| {
+                    let (node, metadata) = convert(folded)?;
+                    Ok(#node { node, #metadata_name: metadata })
+                })
+            }
+
+            /// Transcode an ordered forest atomically, including its root frontier.
+            #schema_visibility fn try_transcode_forest<Source: #runtime::TreeCursor, Error>(
+                &mut self,
+                roots: impl IntoIterator<Item = Source>,
+                mut convert: impl FnMut(#runtime::FoldNode<'_, Source, #id>)
+                    -> Result<(#kind, #metadata), Error>,
+            ) -> Result<Vec<#id>, #runtime::TranscodeError<Error, #id>> {
+                self.builder.try_transcode_forest(roots, |folded| {
+                    let (node, metadata) = convert(folded)?;
+                    Ok(#node { node, #metadata_name: metadata })
+                })
+            }
+
+            /// Rewrite an ordered forest atomically, one destination subtree per source
+            /// node. See [`ForestBuilder::try_rewrite_forest`](#runtime::ForestBuilder::try_rewrite_forest).
+            #schema_visibility fn try_rewrite_forest<Source: #runtime::TreeCursor, Error>(
+                &mut self,
+                roots: impl IntoIterator<Item = Source>,
+                mut rewrite: impl FnMut(#rewrite_node<'_, '_, Source>) -> Result<#id, Error>,
+            ) -> Result<Vec<#id>, #runtime::RewriteError<Error, #id>> {
+                self.builder.try_rewrite_forest(
+                    roots,
+                    &mut |node: #runtime::RewriteNode<'_, '_, Source, #arena, #node>| {
+                        rewrite(#rewrite_node { node })
+                    },
+                )
+            }
+
             /// Clone a subtree while recursively replacing selected source subtrees.
             #schema_visibility fn try_clone_subtree_with<'source, Error>(
                 &mut self,
@@ -1036,6 +1081,45 @@ pub(super) fn expand(
                     replace,
                     |cursor| cursor.node().clone(),
                 )
+            }
+        }
+
+        #[doc = #rewrite_node_doc]
+        #schema_visibility struct #rewrite_node<'fold, 'builder, Source: #runtime::TreeCursor> {
+            node: #runtime::RewriteNode<'fold, 'builder, Source, #arena, #node>,
+        }
+
+        impl<'fold, 'builder, Source: #runtime::TreeCursor> #rewrite_node<'fold, 'builder, Source> {
+            /// The source node being rewritten.
+            #schema_visibility fn source(&self) -> Source {
+                self.node.source()
+            }
+
+            /// The source node with its converted child IDs.
+            #schema_visibility fn source_node(&self) -> #runtime::FoldNode<'fold, Source, #id> {
+                self.node.source_node()
+            }
+
+            /// The destination root of one direct source child.
+            #schema_visibility fn child(&self, source_child: Source::Id) -> #id {
+                self.node.child(source_child)
+            }
+
+            /// Allocate one destination node, consuming the trailing roots it names.
+            #schema_visibility fn alloc(
+                &mut self,
+                node: #kind,
+                metadata: #metadata,
+            ) -> Result<#id, #runtime::BuildError<#id>> {
+                self.node.alloc(#node {
+                    node,
+                    #metadata_name: metadata,
+                })
+            }
+
+            /// Drop the converted children, so a replacement subtree can be built.
+            #schema_visibility fn discard_children(&mut self) {
+                self.node.discard_children()
             }
         }
 

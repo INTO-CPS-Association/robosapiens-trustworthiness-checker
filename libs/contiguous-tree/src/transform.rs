@@ -13,6 +13,41 @@ pub enum CloneTreeError<Cursor, PolicyError> {
     ReplacementCycle { cursors: Vec<Cursor> },
 }
 
+/// A conversion failure, or a converter that did not preserve ordered child edges.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranscodeError<Error, Id> {
+    Convert(Error),
+    ChildrenChanged { expected: Vec<Id>, actual: Vec<Id> },
+    Build(crate::BuildError<Id>),
+}
+
+impl<Error: std::fmt::Display, Id: std::fmt::Debug> std::fmt::Display
+    for TranscodeError<Error, Id>
+{
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Convert(error) => write!(formatter, "tree conversion failed: {error}"),
+            Self::ChildrenChanged { expected, actual } => write!(
+                formatter,
+                "tree conversion changed child edges: expected {expected:?}, got {actual:?}"
+            ),
+            Self::Build(error) => std::fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl<Error: std::error::Error + 'static, Id: std::fmt::Debug + 'static> std::error::Error
+    for TranscodeError<Error, Id>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Convert(error) => Some(error),
+            Self::Build(error) => Some(error),
+            Self::ChildrenChanged { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeIdentity {
     storage: StorageIdentity,

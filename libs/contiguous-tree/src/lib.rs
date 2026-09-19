@@ -24,6 +24,21 @@
 //! Unlike `keyed_children`, repeated edge data is allowed and has no lookup
 //! semantics. Fixed children precede either kind of collection.
 //!
+//! [`ForestBuilder::try_transcode`] and
+//! [`ForestBuilder::try_transcode_forest`] convert between tree families with
+//! distinct ID types. A converter receives a [`FoldNode`] containing source
+//! cursors and converted destination child IDs, and supplies destination node
+//! data and metadata. Generated builders expose the same operations. Errors
+//! restore the destination storage and root frontier; child edges must retain
+//! their order and association.
+//!
+//! [`ForestBuilder::try_rewrite`] and [`ForestBuilder::try_rewrite_forest`]
+//! generalise that to one destination *subtree* per source node: a
+//! [`Rewriter`] may allocate several nodes, or discard the children it was
+//! given, as long as it leaves exactly one new root on the frontier.
+//! Transcoding is the one-node case, and rewriting keeps the same rollback
+//! guarantee.
+//!
 //! # Example
 //!
 //! ```
@@ -69,6 +84,7 @@ mod forest;
 mod forest_map;
 mod index;
 mod node;
+mod rewrite;
 mod storage;
 mod transform;
 mod traversal;
@@ -84,8 +100,9 @@ pub use forest::{Forest, ForestHandles, TreeHandle};
 pub use forest_map::{ForestMap, ForestMapError};
 pub use index::{ArenaId, IdRange};
 pub use node::{TreeNode, TreeNodeMut};
+pub use rewrite::{RewriteError, RewriteNode, Rewriter};
 pub use storage::{PostorderStorage, TreeStorage};
-pub use transform::CloneTreeError;
+pub use transform::{CloneTreeError, TranscodeError};
 pub use traversal::{Children, FoldNode, Postorder, TreeCursorExt, fold, try_fold, try_zip_with};
 
 pub use contiguous_tree_macros::{TreeCursor, tree_schema};
@@ -113,5 +130,7 @@ pub mod __private {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;

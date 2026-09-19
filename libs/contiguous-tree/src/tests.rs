@@ -1,10 +1,12 @@
 use super::{
-    __private::ChildIds, AnnotationError, Arena, ArenaId, CloneTreeError, ContextCursor, Forest,
-    ForestBuilder, ForestError, ForestMap, ForestMapError, IdRange, PostorderStorage,
-    ResolvedFields, ResolvedIds, StorageIdentity, TreeCursor, TreeCursorExt, TreeHandle, TreeNode,
-    TreeNodeMut, TreeStorage,
+    __private::ChildIds, AnnotationError, Arena, ArenaId, ChildrenWith, CloneTreeError,
+    ContextCursor, Forest, ForestBuilder, ForestError, ForestMap, ForestMapError, IdRange,
+    PostorderStorage, ResolvedFields, ResolvedIds, RewriteError, RewriteNode, StorageIdentity,
+    TranscodeError, TreeCursor, TreeCursorExt, TreeHandle, TreeNode, TreeNodeMut, TreeStorage,
 };
 use ecow::{EcoString, EcoVec, eco_vec};
+use proptest::prelude::*;
+use proptest::test_runner::{Config, TestRunner};
 
 crate::tree_schema! {
     pub tree Fixture {
@@ -130,6 +132,215 @@ fn associated_owned_constructor_keeps_each_edge_metadata_with_its_child() {
     );
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AssociatedChildren {
+    None,
+    Ordinary(Vec<AssociatedModelSnapshot>),
+    Associated(Vec<(u16, AssociatedModelSnapshot)>),
+    Mixed {
+        first: Box<AssociatedModelSnapshot>,
+        rest: Vec<(u16, AssociatedModelSnapshot)>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssociatedModelSnapshot {
+    meta: (u16, Option<u16>),
+    children: AssociatedChildren,
+}
+
+fn encoded_model(model: &crate::test_support::AssociatedNodeModel) -> AssociatedModelSnapshot {
+    let ordinary = model.ordinary.iter().map(encoded_model).collect::<Vec<_>>();
+    let associated = model
+        .associated
+        .iter()
+        .map(|(data, child)| (*data, encoded_model(child)))
+        .collect::<Vec<_>>();
+    let children = match (ordinary.as_slice(), associated.is_empty()) {
+        ([], true) => AssociatedChildren::None,
+        (ordinary, true) => AssociatedChildren::Ordinary(ordinary.to_vec()),
+        ([], false) => AssociatedChildren::Associated(associated),
+        ([first, rest @ ..], false) => AssociatedChildren::Mixed {
+            first: Box::new(first.clone()),
+            rest: rest
+                .iter()
+                .enumerate()
+                .map(|(index, child)| (0x8000 + index as u16, child.clone()))
+                .chain(associated)
+                .collect(),
+        },
+    };
+    AssociatedModelSnapshot {
+        meta: (model.label, model.annotation),
+        children,
+    }
+}
+
+fn build_associated(
+    builder: &mut AssociatedBuilder,
+    model: &crate::test_support::AssociatedNodeModel,
+) -> AssociatedId {
+    let ordinary = model
+        .ordinary
+        .iter()
+        .map(|child| build_associated(builder, child))
+        .collect::<Vec<_>>();
+    let associated = model
+        .associated
+        .iter()
+        .map(|(data, child)| (*data, build_associated(builder, child)))
+        .collect::<Vec<_>>();
+    let kind = match (ordinary.as_slice(), associated.as_slice()) {
+        ([], []) => AssociatedKind::Leaf(model.label.to_string().into()),
+        (ordinary, []) => AssociatedKind::Sequence(ordinary.to_vec().into()),
+        ([], associated) => {
+            AssociatedKind::AssocOnly(associated.iter().copied().collect::<ChildrenWith<_, _>>())
+        }
+        ([first, rest @ ..], associated) => AssociatedKind::Arms(
+            *first,
+            rest.iter()
+                .enumerate()
+                .map(|(index, child)| (0x8000 + index as u16, *child))
+                .chain(associated.iter().copied())
+                .collect::<ChildrenWith<_, _>>(),
+        ),
+    };
+    builder.alloc(kind, (model.label, model.annotation))
+}
+
+fn snapshot_associated(cursor: AssociatedRef<'_>) -> AssociatedModelSnapshot {
+    let children = match cursor.view() {
+        AssociatedView::Leaf(_) => AssociatedChildren::None,
+        AssociatedView::Sequence(values) => {
+            AssociatedChildren::Ordinary(values.map(snapshot_associated).collect())
+        }
+        AssociatedView::AssocOnly(arms) => AssociatedChildren::Associated(
+            arms.iter()
+                .map(|entry| (*entry.data, snapshot_associated(entry.child)))
+                .collect(),
+        ),
+        AssociatedView::Arms(first, arms) => AssociatedChildren::Mixed {
+            first: Box::new(snapshot_associated(first)),
+            rest: arms
+                .iter()
+                .map(|entry| (*entry.data, snapshot_associated(entry.child)))
+                .collect(),
+        },
+    };
+    AssociatedModelSnapshot {
+        meta: *cursor.metadata(),
+        children,
+    }
+}
+
+/// The recursive model is independently encoded into the generated
+/// associated-child schema. IDs are intentionally absent from the
+/// oracle; edge metadata and body labels are compared recursively.
+#[test]
+fn generated_associated_forests_preserve_metadata_through_clone_and_transcode() {
+    let mut runner = TestRunner::new(Config {
+        cases: 64,
+        failure_persistence: None,
+        ..Config::default()
+    });
+    runner
+        .run(&crate::test_support::arb_associated_forest(), |case| {
+            let mut builder = AssociatedBuilder::with_capacities(64, case.roots.len());
+            let roots = case
+                .roots
+                .iter()
+                .map(|root| build_associated(&mut builder, root))
+                .collect::<Vec<_>>();
+            let forest = builder.finish_forest(roots).unwrap();
+            let expected = case.roots.iter().map(encoded_model).collect::<Vec<_>>();
+            let actual = forest.roots().map(snapshot_associated).collect::<Vec<_>>();
+            prop_assert_eq!(actual, expected.clone());
+
+            // A second builder deliberately receives a different allocation
+            // history. Fold results, rather than source IDs, are installed in
+            // each destination edge.
+            let mut transcode_builder = AssociatedBuilder::with_capacities(64, case.roots.len());
+            let prefix = transcode_builder.alloc_default(AssociatedKind::Leaf("prefix".into()));
+            let destination_roots = transcode_builder
+                .try_transcode_forest(forest.roots(), |folded| {
+                    let node = folded.rebuild(folded.cursor().kind().clone());
+                    Ok::<_, std::convert::Infallible>((node, *folded.cursor().metadata()))
+                })
+                .unwrap();
+            let mut all_destination_roots = vec![prefix];
+            all_destination_roots.extend(destination_roots);
+            let destination = transcode_builder
+                .finish_forest(all_destination_roots)
+                .unwrap();
+            prop_assert_eq!(
+                destination
+                    .roots()
+                    .skip(1)
+                    .map(snapshot_associated)
+                    .collect::<Vec<_>>(),
+                expected.clone()
+            );
+
+            // An injected conversion failure is atomic. The
+            // prefix root remains finishable, while no partially converted
+            // destination can escape.
+            if let Some(label) = case.injected_label {
+                let mut failing_builder =
+                    AssociatedBuilder::with_capacities(64, case.roots.len() + 1);
+                let prefix = failing_builder.alloc_default(AssociatedKind::Leaf("prefix".into()));
+                let token = format!("E{label}");
+                let result = failing_builder.try_transcode_forest(forest.roots(), |folded| {
+                    if folded.cursor().metadata().0 == label {
+                        return Err(token.clone());
+                    }
+                    let node = folded.rebuild(folded.cursor().kind().clone());
+                    Ok::<_, String>((node, *folded.cursor().metadata()))
+                });
+                prop_assert_eq!(
+                    result,
+                    Err(TranscodeError::Convert(token)),
+                    "fault identity must survive traversal order"
+                );
+                prop_assert!(failing_builder.finish_forest([prefix]).is_ok());
+            }
+
+            // Clone through the generated builder and compare with the same
+            // model. This also exercises collection entries, not just nodes.
+            for (root, expected) in forest.roots().zip(expected) {
+                let mut clone_builder = AssociatedBuilder::with_capacity(64);
+                let cloned = clone_builder.clone_subtree(root);
+                let cloned = clone_builder.finish(cloned).unwrap();
+                prop_assert_eq!(snapshot_associated(cloned.as_ref()), expected);
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn cross_family_transcode_maps_children_and_rolls_back() {
+    let source = Fixture::Unary(Box::new(Fixture::Leaf("child".into())));
+    let mut target = MinimalBuilder::with_capacity(3);
+    let existing = target.alloc_default(MinimalKind::Leaf("existing".into()));
+    let failure = target.try_transcode(source.as_ref(), |node| match node.cursor().kind() {
+        FixtureKind::Leaf(value) => Ok((MinimalKind::Leaf(value.clone()), ())),
+        _ => Err("stop"),
+    });
+    assert_eq!(failure, Err(crate::TranscodeError::Convert("stop")));
+    let converted = target
+        .try_transcode(source.as_ref(), |node| {
+            let kind = match node.cursor().kind() {
+                FixtureKind::Leaf(value) => MinimalKind::Leaf(value.clone()),
+                FixtureKind::Unary(child) => MinimalKind::Unary(*node.child(*child)),
+                _ => return Err("unsupported"),
+            };
+            Ok((kind, ()))
+        })
+        .unwrap();
+    let forest = target.finish_forest([existing, converted]).unwrap();
+    assert_eq!(forest.into_roots().count(), 2);
+}
+
 crate::tree_schema! {
     pub tree SequenceOnly {
         schema: pub(crate),
@@ -153,6 +364,19 @@ fn generated_serialization_uses_display_and_preserves_forest_map_entries() {
     assert_eq!(
         serde_json::to_value(tree.as_ref()).unwrap(),
         serde_json::Value::String(tree.as_ref().to_string())
+    );
+    let associated = Associated::Arms(
+        Box::new(Associated::Leaf("subject".into())),
+        [
+            (100, Associated::Leaf("first".into())),
+            (101, Associated::Leaf("second".into())),
+        ],
+    );
+    let encoded = serde_json::to_value(&associated).unwrap();
+    let encoded = encoded.as_str().unwrap();
+    assert!(
+        encoded.contains("100") && encoded.contains("101"),
+        "{encoded}"
     );
 
     let mut builder = FixtureBuilder::with_capacity(1);
@@ -1047,4 +1271,176 @@ fn keyed_children_yield_values_in_source_order() {
     children.extend_keyed(&fields);
 
     assert_eq!(children.collect::<Vec<_>>(), vec![1, 2]);
+}
+
+// ---------------------------------------------------------------------------
+// Rewriting: one destination subtree per source node
+// ---------------------------------------------------------------------------
+
+/// A source forest of one parent over `count` leaves.
+fn test_source(count: usize) -> Forest<TestStorage> {
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let leaves = (0..count)
+        .map(|_| builder.try_alloc(TestNode(vec![])).unwrap())
+        .collect::<Vec<_>>();
+    let root = builder.try_alloc(TestNode(leaves)).unwrap();
+    builder.finish([root]).unwrap()
+}
+
+#[test]
+fn an_identity_rewrite_equals_transcoding_the_same_forest() {
+    let source = test_source(3);
+
+    let mut rewritten = ForestBuilder::new(TestStorage::default());
+    let rewrite_roots = rewritten
+        .try_rewrite_forest(source.cursors(), &mut |mut node: RewriteNode<
+            '_,
+            '_,
+            TestCursor<'_>,
+            TestStorage,
+            TestNode,
+        >| {
+            let children = node.children().collect::<Vec<_>>();
+            node.alloc(TestNode(children))
+        })
+        .unwrap();
+    let rewritten = rewritten.finish(rewrite_roots.clone()).unwrap();
+
+    let mut transcoded = ForestBuilder::new(TestStorage::default());
+    let transcode_roots = transcoded
+        .try_transcode_forest(source.cursors(), |folded| {
+            Ok::<_, std::convert::Infallible>(TestNode(folded.children().copied().collect()))
+        })
+        .unwrap();
+    let transcoded = transcoded.finish(transcode_roots.clone()).unwrap();
+
+    assert_eq!(rewrite_roots, transcode_roots);
+    assert_eq!(rewritten.nodes().count(), transcoded.nodes().count());
+    assert_eq!(rewritten.nodes().count(), 4);
+}
+
+#[test]
+fn a_rewrite_may_emit_extra_nodes_below_its_own_root() {
+    let source = test_source(2);
+
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let built = builder
+        .try_rewrite_forest(source.cursors(), &mut |mut node: RewriteNode<
+            '_,
+            '_,
+            TestCursor<'_>,
+            TestStorage,
+            TestNode,
+        >| {
+            // One extra leaf per node, then a parent over the children and it.
+            let extra = node.alloc(TestNode(vec![]))?;
+            let mut children = node.children().collect::<Vec<_>>();
+            children.push(extra);
+            node.alloc(TestNode(children))
+        })
+        .unwrap();
+    let forest = builder.finish(built).unwrap();
+
+    // Three source nodes, each becoming an extra leaf plus a parent.
+    assert_eq!(forest.nodes().count(), 6);
+    assert!(forest.root_ids().len() == 1);
+}
+
+#[test]
+fn a_rewrite_may_discard_its_children_and_replace_them() {
+    let source = test_source(3);
+
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let built = builder
+        .try_rewrite_forest(source.cursors(), &mut |mut node: RewriteNode<
+            '_,
+            '_,
+            TestCursor<'_>,
+            TestStorage,
+            TestNode,
+        >| {
+            if node.children().len() > 0 {
+                node.discard_children();
+                assert!(node.children_discarded());
+            }
+            node.alloc(TestNode(vec![]))
+        })
+        .unwrap();
+    let forest = builder.finish(built).unwrap();
+
+    // The three leaves are dropped again, leaving only the replacement root.
+    assert_eq!(forest.nodes().count(), 1);
+}
+
+#[test]
+fn a_failing_rewrite_restores_storage_and_the_root_frontier() {
+    let source = test_source(2);
+
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let kept = builder.try_alloc(TestNode(vec![])).unwrap();
+    let before = builder.storage().node_count();
+
+    let result = builder.try_rewrite_forest(source.cursors(), &mut |mut node: RewriteNode<
+        '_,
+        '_,
+        TestCursor<'_>,
+        TestStorage,
+        TestNode,
+    >| {
+        if node.children().len() > 0 {
+            return Err("stop");
+        }
+        node.alloc(TestNode(vec![])).map_err(|_| "build")
+    });
+
+    assert_eq!(result, Err(RewriteError::Convert("stop")));
+    assert_eq!(builder.storage().node_count(), before);
+    let forest = builder.finish([kept]).unwrap();
+    assert_eq!(forest.nodes().count(), 1);
+}
+
+#[test]
+fn a_rewrite_that_leaves_no_root_is_reported() {
+    let source = test_source(1);
+
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let result = builder.try_rewrite_forest(source.cursors(), &mut |node: RewriteNode<
+        '_,
+        '_,
+        TestCursor<'_>,
+        TestStorage,
+        TestNode,
+    >| {
+        // Returning a child ID without allocating leaves the frontier short.
+        Ok::<_, std::convert::Infallible>(node.children().next().unwrap_or(TestId(0)))
+    });
+
+    assert!(matches!(result, Err(RewriteError::NotOneRoot { .. })));
+    assert_eq!(builder.storage().node_count(), 0);
+}
+
+#[test]
+fn a_rewrite_that_leaves_two_roots_is_reported() {
+    let source = test_source(0);
+
+    let mut builder = ForestBuilder::new(TestStorage::default());
+    let result = builder.try_rewrite_forest(source.cursors(), &mut |mut node: RewriteNode<
+        '_,
+        '_,
+        TestCursor<'_>,
+        TestStorage,
+        TestNode,
+    >| {
+        node.alloc(TestNode(vec![]))?;
+        node.alloc(TestNode(vec![]))
+    });
+
+    assert!(matches!(
+        result,
+        Err(RewriteError::NotOneRoot {
+            expected_roots: 1,
+            actual_roots: 2
+        })
+    ));
+    assert_eq!(builder.storage().node_count(), 0);
 }
