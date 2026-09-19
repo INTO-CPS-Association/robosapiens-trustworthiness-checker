@@ -10,7 +10,7 @@ use std::str::FromStr;
 use ecow::EcoString;
 
 use crate::core::StreamType;
-use crate::lang::dsrv::ast::{DsrvSpecification, ExprKind, ExprRef, SemanticEntry};
+use crate::lang::dsrv::ast::{Declaration, DsrvSpecification, ExprKind, ExprRef};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
@@ -295,27 +295,33 @@ impl CoreDsrvSpecification {
         for node in specification.nodes() {
             check_core_node(node)?;
         }
-        for entry in specification.semantic_entries() {
+        for entry in specification.declarations() {
             match entry {
-                SemanticEntry::Input {
+                Declaration::Input {
                     annotation: Some(ty),
                     span,
                     ..
                 }
-                | SemanticEntry::Output {
+                | Declaration::Output {
                     annotation: Some(ty),
                     span,
                     ..
                 }
-                | SemanticEntry::Aux {
+                | Declaration::Aux {
                     annotation: Some(ty),
                     span,
                     ..
                 } => check_core_type(ty, *span)?,
-                SemanticEntry::Input { .. }
-                | SemanticEntry::Output { .. }
-                | SemanticEntry::Aux { .. }
-                | SemanticEntry::Assignment { .. } => {}
+                Declaration::TypeAlias { span, .. } => {
+                    return Err(LanguageError::NotCore {
+                        construct: "a type alias",
+                        span: *span,
+                    });
+                }
+                Declaration::Input { .. }
+                | Declaration::Output { .. }
+                | Declaration::Aux { .. }
+                | Declaration::Equation { .. } => {}
             }
         }
         Ok(Self(specification))

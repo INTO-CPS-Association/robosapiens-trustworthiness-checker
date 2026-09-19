@@ -4,6 +4,36 @@ This page records DSRV expression syntax and its boundary behavior. Start with
 the [DSRV tutorial](../tutorials/write-dsrv-monitor.md) if you are writing your
 first monitor.
 
+## Declarations and equations
+
+A specification is a sequence of declarations. `in x`, `out y` and `aux a`
+declare an input, an output and an auxiliary stream, optionally with a type
+(`out y: Int`); `var` is an older spelling of `aux`. An *equation* `y = e`
+defines an output or auxiliary stream. Inputs have no equation, and a stream
+has at most one: a second equation for the same stream is an error.
+
+An output or auxiliary stream can be declared and defined on one line:
+
+```dsrv
+in x: Int
+out y: Int = x + 1
+aux a = default(y[1], 0)
+```
+
+This is the same specification as declaring each stream and writing its
+equation separately. The checker prints specifications in that separate
+form.
+
+## The dynamic type `Any`
+
+A stream without a type annotation is checked as `Any` under the default
+`gradual-typed-untimed` semantics, and `Any` can also be written. A value of
+type `Any` is checked when it is used, not in advance: reading a field or a
+map key, indexing a list or calling it as a function is accepted, and gives
+`Any` again; `List.len` gives `Int` and `Map.has_key` gives `Bool`. A value
+whose type is known is still checked in advance, so `List.len` of an `Int`
+is a type error.
+
 ## Type aliases
 
 `type State = Struct<speed: Int, stopped: Bool>` declares a structural alias.
@@ -41,6 +71,13 @@ exponent must be non-negative. Power promotes mixed `Int`/`Float` operands to
 `Float`, so `4 ** 0.5` is `2.0`. It is right-associative and binds above unary
 minus: `2 ** 3 ** 2` is 512, while `-2 ** 2` is -4.
 
+`==` and `!=` compare whole values, including structs:
+`{x: 1, label: "p"} == {label: "p", x: 1}` is `true`, since field order does
+not matter, and nested structs compare field by field. Both operands must
+have the same type, so comparing structs with different fields or field
+types is a type error. A value of a permissive struct type
+(`Struct<x: Int, ...>`) is compared with all its fields, the extra ones too.
+
 This complete fixture parses and evaluates first-class `!=`, `**`, and the
 keyword spelling `and`:
 
@@ -66,6 +103,21 @@ complete parser example:
 {{#include ../../../tests/docs_examples.rs:dsrv_numeric_literals}}
 ```
 
+## Object literals
+
+`{x: 1, label: "p"}` builds a struct value. A field name is an identifier
+or, for any other name, a quoted string. A field whose value is the stream or
+binder of the same name can be written by its name alone:
+
+```dsrv
+in x: Int
+in label: Str
+out reading: Struct<x: Int, label: Str, "unit name": Str> = {x, label, "unit name": "mm"}
+```
+
+Here `{x, label, …}` is `{x: x, label: label, …}`. A quoted field name has no
+short form, and naming the same field twice is an error.
+
 ## Delimited lists
 
 One trailing comma is allowed in delimited value, call, variable-set, and
@@ -84,6 +136,29 @@ Use nested `else if` for a conditional chain. There is no `elif` keyword:
 ```rust
 {{#include ../../../tests/docs_examples.rs:dsrv_else_if_chain}}
 ```
+
+## Functions
+
+`\x: Int -> x + 1` is a function of one parameter; `\acc: Int, x: Int -> acc + x`
+takes two. A function can be called in place, as in `(\n: Int -> n * 2)(s)`,
+or passed to `List.map`, `List.filter` and `List.fold`.
+
+A parameter's type can be left out when the context determines it: in a
+list callback, from the list's element type (and, for `List.fold`, the
+initial value), and in a function called in place, from its arguments.
+
+```dsrv
+in xs: List<Int>
+out ys: List<Int> = List.map(\x -> x + 1, xs)
+out s: Int = List.fold(\acc, x -> acc + x, 0, xs)
+out d: Int = (\n -> n * 2)(s)
+```
+
+A parameter written with a type keeps that type, and the context must agree
+with it. Where nothing determines a missing type, for instance a function
+stored in a list, strict type checking reports `cannot infer the type of
+lambda parameter`, and gradual checking gives the parameter the dynamic type
+`Any`.
 
 ## History and collection access
 

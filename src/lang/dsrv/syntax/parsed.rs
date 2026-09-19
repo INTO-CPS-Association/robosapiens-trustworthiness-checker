@@ -44,7 +44,7 @@ contiguous_tree::tree_schema! {
         Init(value: child, initial: child),
         Not(value: child),
         Neg(value: child),
-        Lambda(parameters: data(EcoVec<(VarName, SourceType)>), body: child),
+        Lambda(parameters: data(EcoVec<(VarName, Option<SourceType>)>), body: child),
         Apply(function: child, arguments: children),
         Fix(function: child),
         Partial(function: child, arguments: children),
@@ -79,9 +79,11 @@ contiguous_tree::tree_schema! {
 #[derive(Clone, Debug)]
 pub(crate) enum ParsedDeclaration {
     Input(VarName, Option<SourceType>, Span),
-    Output(VarName, Option<SourceType>, Span),
-    Aux(VarName, Option<SourceType>, Span),
-    Assignment(VarName, ParsedExprId, Span),
+    /// `out x`, `out x: T`, or a one-line definition `out x: T = e`.
+    Output(VarName, Option<SourceType>, Option<ParsedExprId>, Span),
+    /// `aux x`, `aux x: T`, or a one-line definition `aux x: T = e`.
+    Aux(VarName, Option<SourceType>, Option<ParsedExprId>, Span),
+    Equation(VarName, ParsedExprId, Span),
     Alias(AliasDeclaration),
     /// `language <name>`, with the name unchecked.
     Language(EcoString, Span),
@@ -103,7 +105,9 @@ impl ParsedSpecification {
         let roots = declarations
             .iter()
             .filter_map(|declaration| match declaration {
-                ParsedDeclaration::Assignment(_, root, _) => Some(*root),
+                ParsedDeclaration::Equation(_, root, _)
+                | ParsedDeclaration::Output(_, _, Some(root), _)
+                | ParsedDeclaration::Aux(_, _, Some(root), _) => Some(*root),
                 _ => None,
             });
         let expressions = builder

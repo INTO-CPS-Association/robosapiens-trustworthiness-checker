@@ -18,7 +18,7 @@ called `core` or `distributed`.
 
 | Dialect | Declared by | Contents |
 |---|---|---|
-| Core DSRV | `language core` | The basic temporal language: literals, variables, operators, `if`, `x[n]`, `default`, `when`, `update`, `is_defined`, `latch`, `init`, `dynamic`, `defer`, and scalar types (`Int`, `Float`, `Str`, `Bool`, `Unit`). |
+| Core DSRV | `language core` | The basic temporal language: literals, variables, operators, `if`, `x[n]`, `default`, `when`, `update`, `is_defined`, `latch`, `init`, `dynamic`, `defer`, one-line definitions (`out y: Int = x`), and scalar types (`Int`, `Float`, `Str`, `Bool`, `Unit`). |
 | Full DSRV | the default | Core plus maths functions, type aliases, collections, structs, lambdas and calls. |
 | Distributed DSRV | `language distributed` | Full plus the distribution primitives `dist` and `monitored_at`, for specifications placed across nodes. |
 

@@ -384,6 +384,49 @@ always_x = (x > 3.0) && (x[1] > 3.0) && (x[2] > 3.0)
     Ok(())
 }
 
+/// Struct equality compares values field by field, extra fields of a
+/// permissive struct type included, in every first-class runtime.
+#[apply(async_test)]
+async fn test_struct_equality_compares_whole_values_in_every_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = "in a: Struct<x: Int, ...>\nin b: Struct<x: Int, ...>\nout same: Bool = a == b";
+    let value = |x: i64, extra: i64| {
+        Value::Map(BTreeMap::from([
+            ("x".into(), Value::Int(x)),
+            ("extra".into(), Value::Int(extra)),
+        ]))
+    };
+    let input = BTreeMap::from([
+        ("a".into(), vec![value(1, 0), value(1, 0), value(1, 0)]),
+        ("b".into(), vec![value(1, 0), value(2, 0), value(1, 9)]),
+    ]);
+    for runtime in [
+        RuntimeSpec::Async,
+        RuntimeSpec::SemiSync,
+        RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+    ] {
+        let outputs = run_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            spec,
+            input.clone(),
+            "struct equality outputs.collect()",
+        )
+        .await?;
+        let same: Vec<_> = outputs
+            .into_iter()
+            .map(|(_, row)| row[&VarName::new("same")].clone())
+            .collect();
+        assert_eq!(
+            same,
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(false)],
+            "unexpected struct equality for runtime {runtime:?}",
+        );
+    }
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_gradual_typed_runtime_infers_unannotated_output(
     executor: Rc<LocalExecutor<'static>>,

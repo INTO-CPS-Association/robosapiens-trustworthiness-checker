@@ -11,11 +11,11 @@ use crate::{DsrvSpecification, VarName, core::BinaryOperator, lang::dsrv::ast::E
 
 /// Span-free semantic-entry oracle for ordered-specification properties.
 ///
-/// The oracle is deliberately independent of `SemanticEntry`: properties should
+/// The oracle is deliberately independent of `Declaration`: properties should
 /// derive the expected projections from this vector rather than from the AST's
 /// own projection methods.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SemanticEntryOracle {
+pub(crate) enum DeclarationOracle {
     Input {
         name: String,
         annotation: Option<&'static str>,
@@ -28,18 +28,14 @@ pub(crate) enum SemanticEntryOracle {
         name: String,
         annotation: Option<&'static str>,
     },
-    Assignment {
+    Equation {
         name: String,
         expression: String,
     },
 }
 
-impl SemanticEntryOracle {
-    fn declaration(
-        role: u8,
-        name: String,
-        annotation: Option<&'static str>,
-    ) -> SemanticEntryOracle {
+impl DeclarationOracle {
+    fn declaration(role: u8, name: String, annotation: Option<&'static str>) -> DeclarationOracle {
         match role {
             0 => Self::Input { name, annotation },
             1 => Self::Output { name, annotation },
@@ -56,14 +52,14 @@ impl SemanticEntryOracle {
                     Self::Input { .. } => "in",
                     Self::Output { .. } => "out",
                     Self::Aux { .. } => "aux",
-                    Self::Assignment { .. } => unreachable!(),
+                    Self::Equation { .. } => unreachable!(),
                 };
                 annotation.map_or_else(
                     || format!("{role} {name}"),
                     |annotation| format!("{role} {name}: {annotation}"),
                 )
             }
-            Self::Assignment { name, expression } => format!("{name} = {expression}"),
+            Self::Equation { name, expression } => format!("{name} = {expression}"),
         }
     }
 
@@ -72,7 +68,7 @@ impl SemanticEntryOracle {
             Self::Input { name, .. }
             | Self::Output { name, .. }
             | Self::Aux { name, .. }
-            | Self::Assignment { name, .. } => name,
+            | Self::Equation { name, .. } => name,
         }
     }
 
@@ -81,7 +77,7 @@ impl SemanticEntryOracle {
             Self::Input { .. } => Some(0),
             Self::Output { .. } => Some(1),
             Self::Aux { .. } => Some(2),
-            Self::Assignment { .. } => None,
+            Self::Equation { .. } => None,
         }
     }
 }
@@ -89,13 +85,13 @@ impl SemanticEntryOracle {
 #[derive(Clone, Debug)]
 pub(crate) struct OrderedSpecificationCase {
     pub(crate) source: String,
-    pub(crate) entries: Vec<SemanticEntryOracle>,
+    pub(crate) entries: Vec<DeclarationOracle>,
 }
 
-fn render_ordered_case(entries: Vec<SemanticEntryOracle>) -> OrderedSpecificationCase {
+fn render_ordered_case(entries: Vec<DeclarationOracle>) -> OrderedSpecificationCase {
     let source = entries
         .iter()
-        .map(SemanticEntryOracle::source_line)
+        .map(DeclarationOracle::source_line)
         .collect::<Vec<_>>()
         .join("\n");
     OrderedSpecificationCase { source, entries }
@@ -113,29 +109,29 @@ pub(crate) fn arb_ordered_specification_case() -> impl Strategy<Value = OrderedS
         |(input_count, output_count, aux_count)| {
             let mut entries = Vec::new();
             for index in 0..input_count {
-                entries.push(SemanticEntryOracle::Input {
+                entries.push(DeclarationOracle::Input {
                     name: format!("input_{index}"),
                     annotation: (index % 2 == 0).then_some("Int"),
                 });
             }
             for index in 0..output_count {
                 let name = format!("output_{index}");
-                entries.push(SemanticEntryOracle::Output {
+                entries.push(DeclarationOracle::Output {
                     name: name.clone(),
                     annotation: Some("Int"),
                 });
-                entries.push(SemanticEntryOracle::Assignment {
+                entries.push(DeclarationOracle::Equation {
                     name,
                     expression: format!("input_0 + {}", index + 1),
                 });
             }
             for index in 0..aux_count {
                 let name = format!("aux_{index}");
-                entries.push(SemanticEntryOracle::Aux {
+                entries.push(DeclarationOracle::Aux {
                     name: name.clone(),
                     annotation: Some("Int"),
                 });
-                entries.push(SemanticEntryOracle::Assignment {
+                entries.push(DeclarationOracle::Equation {
                     name,
                     expression: format!("input_0 + {}", output_count + index + 1),
                 });
@@ -158,7 +154,7 @@ pub(crate) fn arb_ordered_specification_case() -> impl Strategy<Value = OrderedS
 #[derive(Clone, Debug)]
 pub(crate) struct DuplicateDeclarationCase {
     pub(crate) source: String,
-    pub(crate) entries: Vec<SemanticEntryOracle>,
+    pub(crate) entries: Vec<DeclarationOracle>,
     pub(crate) duplicate_name: String,
 }
 
@@ -185,7 +181,7 @@ pub(crate) fn arb_duplicate_declaration_case() -> impl Strategy<Value = Duplicat
             .prop_map(move |(base, target, role, annotation, insertion)| {
                 let duplicate_name = declarations[target].name().to_owned();
                 let duplicate =
-                    SemanticEntryOracle::declaration(role, duplicate_name.clone(), annotation);
+                    DeclarationOracle::declaration(role, duplicate_name.clone(), annotation);
                 let mut entries = base.entries;
                 let insertion = insertion.min(entries.len());
                 entries.insert(insertion, duplicate);

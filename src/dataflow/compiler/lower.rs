@@ -377,10 +377,13 @@ fn lower_reconfigurable_expression(
     ))
 }
 
-fn lower_function(params: EcoVec<(VarName, StreamType)>, body: ExprCursor<'_>) -> UnboundFunction {
+fn lower_function(
+    params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
+    body: ExprCursor<'_>,
+) -> UnboundFunction {
     let params_display = params
         .iter()
-        .map(|(name, typ)| format!("{}: {}", name, typ))
+        .map(|(name, ascription)| ascription.parameter_display(name))
         .collect::<Vec<_>>()
         .join(", ");
     let display = format!("\\{} -> {}", params_display, body.expr()).into();

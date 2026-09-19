@@ -6,7 +6,6 @@ use super::shared_output::SharedOutput;
 use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::RuntimeFunction;
-use crate::core::StreamType;
 use crate::core::Value;
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView};
 use crate::semantics::{AsyncConfig, StreamContext};
@@ -46,7 +45,7 @@ struct UntimedFunctionDef<AC>
 where
     AC: AsyncConfig<Val = Value>,
 {
-    params: EcoVec<(VarName, StreamType)>,
+    params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: ScopedExpr,
     captures: EcoVec<(VarName, SharedOutput<Value>)>,
     temporal: bool,
@@ -181,7 +180,7 @@ impl ScopedExpr {
 
     pub(super) fn bind(
         self,
-        params: &EcoVec<(VarName, StreamType)>,
+        params: &EcoVec<(VarName, crate::core::StreamTypeAscription)>,
         args: EcoVec<ScopedExpr>,
     ) -> anyhow::Result<Self> {
         if params.len() != args.len() {
@@ -209,7 +208,7 @@ impl ScopedExpr {
 
     pub(super) fn bind_values(
         self,
-        params: &EcoVec<(VarName, StreamType)>,
+        params: &EcoVec<(VarName, crate::core::StreamTypeAscription)>,
         values: EcoVec<Value>,
     ) -> anyhow::Result<Self> {
         if params.len() != values.len() {
@@ -306,7 +305,7 @@ impl ScopedExpr {
 
 pub(crate) fn bind_expression_for_benchmark(
     body: Expr,
-    params: &EcoVec<(VarName, StreamType)>,
+    params: &EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     args: EcoVec<Expr>,
 ) -> usize {
     let framed = ScopedExpr::unchecked(body)
@@ -331,7 +330,7 @@ fn eval_function_once(
 
 pub(super) fn make_function<AC>(
     display: EcoString,
-    params: EcoVec<(VarName, StreamType)>,
+    params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: ScopedExpr,
     ctx: &AC::Ctx,
 ) -> Value

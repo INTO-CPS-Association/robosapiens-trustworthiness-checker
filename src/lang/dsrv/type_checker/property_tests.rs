@@ -179,7 +179,10 @@ fn arb_type_directed_case() -> impl Strategy<Value = TypeDirectedCase> {
         .prop_map(|argument| TypeDirectedCase {
             expr: Expr::Apply(
                 Box::new(Expr::Lambda(
-                    eco_vec![(VarName::new("x"), StreamType::Int)],
+                    eco_vec![(
+                        VarName::new("x"),
+                        crate::core::StreamTypeAscription::Ascribed(StreamType::Int)
+                    )],
                     Box::new(Expr::Var(VarName::new("x"))),
                 )),
                 eco_vec![Expr::Val(i64::from(argument)).into()],

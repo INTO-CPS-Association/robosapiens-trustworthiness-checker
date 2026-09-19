@@ -69,7 +69,7 @@ where
         Lambda(params, body) => {
             let params = params
                 .iter()
-                .map(|(name, typ)| format!("{}: {}", name, typ))
+                .map(|(name, ascription)| ascription.parameter_display(name))
                 .collect::<Vec<_>>()
                 .join(", ");
             mc::val(Value::Function(RuntimeFunction::opaque(format!(

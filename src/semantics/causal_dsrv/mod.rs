@@ -392,6 +392,38 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn struct_equality_compares_values_and_depends_on_both_operands(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let point = |x: i64, label: &str| {
+            Value::Map(BTreeMap::from([
+                ("x".into(), Value::Int(x)),
+                ("label".into(), Value::Str(label.into())),
+            ]))
+        };
+        let source = "in a: Struct<x: Int, label: Str>\n\
+                      in b: Struct<x: Int, label: Str>\n\
+                      out result: Bool = a == b";
+        for (b, expected) in [(point(1, "p"), true), (point(2, "p"), false)] {
+            let input = BTreeMap::from([("a".into(), vec![point(1, "p")]), ("b".into(), vec![b])]);
+            let role = unchecked_output::<RoleCausalSet, RoleCausalDsrvSemantics<RoleCausalSet>>(
+                source,
+                input,
+                executor.clone(),
+            )
+            .await;
+            assert_eq!(role.value, Value::Bool(expected));
+            assert_eq!(
+                canonical_causes(role.explanation.causes()),
+                vec![
+                    ("a".to_owned(), 0, vec![CausalRole::Direct]),
+                    ("b".to_owned(), 0, vec![CausalRole::Direct]),
+                ]
+            );
+        }
+    }
+
+    #[apply(async_test)]
     async fn identity_preserves_non_finite_float_values(executor: Rc<LocalExecutor<'static>>) {
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let result = unchecked_output::<CausalSet, CausalDsrvSemantics>(

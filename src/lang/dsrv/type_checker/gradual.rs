@@ -53,6 +53,14 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
                     .all(|(e, a)| gradual_consistent(e, a))
         }
         (StreamType::Map(e), TCType::Map(a)) => gradual_consistent(e, a),
+        (StreamType::Function(eargs, eret), TCType::Function(aargs, aret)) => {
+            eargs.len() == aargs.len()
+                && eargs
+                    .iter()
+                    .zip(aargs.iter())
+                    .all(|(e, a)| gradual_consistent(e, a))
+                && gradual_consistent(eret, aret)
+        }
         (StreamType::Expr(e), TCType::Expr(a)) => gradual_consistent(e, a),
         (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
             ef.len() == af.len()
@@ -188,6 +196,20 @@ mod tests {
         assert_eq!(
             checked.type_annotations().get(&VarName::new("z")),
             Some(&StreamType::Int)
+        );
+    }
+
+    #[test]
+    fn gradual_type_check_accepts_a_function_typed_annotation() {
+        let source = "in x: Int\naux f: (Int -> Int)\nout z: Int\nf = \\v: Int -> v + 1\nz = f(x)";
+        let checked = type_check_gradual(source.parse().unwrap())
+            .unwrap_or_else(|errors| panic!("function annotation should check: {errors:?}"));
+        assert_eq!(
+            checked.type_annotations().get(&VarName::new("f")),
+            Some(&StreamType::Function(
+                EcoVec::from([StreamType::Int]),
+                Box::new(StreamType::Int)
+            ))
         );
     }
 

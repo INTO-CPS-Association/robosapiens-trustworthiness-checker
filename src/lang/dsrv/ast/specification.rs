@@ -10,16 +10,16 @@ use super::{
 };
 use crate::core::{Capabilities, Requirement};
 use crate::core::{Specification, StreamType, VarName};
-use crate::lang::dsrv::source::SourceContext;
+use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::span::Span;
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DsrvAstError {
     #[error(
-        "stream {variable} is assigned more than once (first assignment at {first:?}, duplicate at {duplicate:?})"
+        "stream {variable} has more than one equation (the first at {first:?}, another at {duplicate:?})"
     )]
-    DuplicateAssignment {
+    DuplicateEquation {
         variable: VarName,
         first: Span,
         duplicate: Span,
@@ -35,8 +35,14 @@ pub enum DsrvAstError {
     InvalidExpressionMap(#[from] contiguous_tree::ForestMapError),
 }
 
+/// One top-level form of a specification, in source order, as far as the
+/// expanded specification keeps it. Stream declarations say what a stream is;
+/// an equation `x = e` defines it, with its expression kept in the
+/// specification's forest; a type alias names a type kept in the source
+/// context. Forms that expansion removes, such as the language header, are
+/// not declarations of the expanded specification.
 #[derive(Clone, Debug)]
-pub enum SemanticEntry {
+pub enum Declaration {
     Input {
         name: VarName,
         annotation: Option<StreamType>,
@@ -52,19 +58,25 @@ pub enum SemanticEntry {
         annotation: Option<StreamType>,
         span: Span,
     },
-    Assignment {
+    Equation {
         name: VarName,
+        span: Span,
+    },
+    TypeAlias {
+        name: TypeName,
         span: Span,
     },
 }
 
-impl SemanticEntry {
-    pub fn name(&self) -> &VarName {
+impl Declaration {
+    /// The stream this declaration is about; `None` for a type alias.
+    pub fn stream(&self) -> Option<&VarName> {
         match self {
             Self::Input { name, .. }
             | Self::Output { name, .. }
             | Self::Aux { name, .. }
-            | Self::Assignment { name, .. } => name,
+            | Self::Equation { name, .. } => Some(name),
+            Self::TypeAlias { .. } => None,
         }
     }
 
@@ -73,7 +85,7 @@ impl SemanticEntry {
             Self::Input { annotation, .. }
             | Self::Output { annotation, .. }
             | Self::Aux { annotation, .. } => annotation.as_ref(),
-            Self::Assignment { .. } => None,
+            Self::Equation { .. } | Self::TypeAlias { .. } => None,
         }
     }
 
@@ -82,13 +94,15 @@ impl SemanticEntry {
             Self::Input { span, .. }
             | Self::Output { span, .. }
             | Self::Aux { span, .. }
-            | Self::Assignment { span, .. } => *span,
+            | Self::Equation { span, .. }
+            | Self::TypeAlias { span, .. } => *span,
         }
     }
 }
 
-// Source coordinates diagnose an entry but are not part of its semantic identity.
-impl PartialEq for SemanticEntry {
+// Source coordinates diagnose a declaration but are not part of its semantic
+// identity.
+impl PartialEq for Declaration {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
@@ -127,12 +141,13 @@ impl PartialEq for SemanticEntry {
                     ..
                 },
             ) => a == b && aa == ba,
-            (Self::Assignment { name: a, .. }, Self::Assignment { name: b, .. }) => a == b,
+            (Self::Equation { name: a, .. }, Self::Equation { name: b, .. }) => a == b,
+            (Self::TypeAlias { name: a, .. }, Self::TypeAlias { name: b, .. }) => a == b,
             _ => false,
         }
     }
 }
-impl Eq for SemanticEntry {}
+impl Eq for Declaration {}
 
 /// A forest-backed specification whose declaration-level invariants are unchecked.
 pub(crate) struct UnvalidatedDsrvSpecification {
@@ -140,7 +155,7 @@ pub(crate) struct UnvalidatedDsrvSpecification {
     output_vars: BTreeSet<VarName>,
     aux_vars: Vec<VarName>,
     expressions: ExprForest,
-    entries: Vec<SemanticEntry>,
+    entries: Vec<Declaration>,
     type_annotations: BTreeMap<VarName, StreamType>,
 }
 
@@ -150,16 +165,16 @@ impl UnvalidatedDsrvSpecification {
         output_vars: BTreeSet<VarName>,
         aux_vars: Vec<VarName>,
         expressions: ExprForest,
-        entries: Vec<SemanticEntry>,
+        entries: Vec<Declaration>,
         type_annotations: BTreeMap<VarName, StreamType>,
     ) -> Self {
         assert_eq!(
             entries
                 .iter()
-                .filter(|entry| matches!(entry, SemanticEntry::Assignment { .. }))
+                .filter(|entry| matches!(entry, Declaration::Equation { .. }))
                 .count(),
             expressions.len(),
-            "each assignment declaration must describe one expression root"
+            "each equation must describe one expression root"
         );
         Self {
             input_vars,
@@ -172,22 +187,30 @@ impl UnvalidatedDsrvSpecification {
     }
 
     pub(crate) fn validate(self) -> Result<DsrvSpecification, DsrvAstError> {
-        let assignments = self
+        let equations = self
             .entries
             .iter()
-            .filter(|entry| matches!(entry, SemanticEntry::Assignment { .. }))
+            .filter(|entry| matches!(entry, Declaration::Equation { .. }))
             .collect::<Vec<_>>();
-        let names = assignments.iter().map(|entry| entry.name().clone());
+        let names = equations.iter().map(|declaration| {
+            declaration
+                .stream()
+                .expect("an equation defines a stream")
+                .clone()
+        });
         let exprs = match ExprForestMap::from_unsorted(names, self.expressions) {
             Ok(exprs) => exprs,
             Err(contiguous_tree::ForestMapError::DuplicateKey {
                 first_index,
                 duplicate_index,
             }) => {
-                let first = assignments[first_index];
-                let duplicate = assignments[duplicate_index];
-                return Err(DsrvAstError::DuplicateAssignment {
-                    variable: duplicate.name().clone(),
+                let first = equations[first_index];
+                let duplicate = equations[duplicate_index];
+                return Err(DsrvAstError::DuplicateEquation {
+                    variable: duplicate
+                        .stream()
+                        .expect("an equation defines a stream")
+                        .clone(),
                     first: first.span(),
                     duplicate: duplicate.span(),
                 });
@@ -225,7 +248,7 @@ pub struct DsrvSpecification {
     /// Normalized statement order. Serialization intentionally retains the legacy
     /// set/map projection rather than making this diagnostic sequence persistent.
     #[serde(skip)]
-    pub(crate) semantic_entries: Vec<SemanticEntry>,
+    pub(crate) declarations: Vec<Declaration>,
     #[serde(skip)]
     pub(crate) source_context: AstShared<SourceContext>,
 }
@@ -237,7 +260,7 @@ impl PartialEq for DsrvSpecification {
             && self.aux_vars == other.aux_vars
             && self.stream_vars == other.stream_vars
             && self.type_annotations == other.type_annotations
-            && self.semantic_entries == other.semantic_entries
+            && self.declarations == other.declarations
             && self.exprs.len() == other.exprs.len()
             && self.exprs.iter().zip(other.exprs.iter()).all(
                 |((left_name, left_expr), (right_name, right_expr))| {
@@ -279,17 +302,12 @@ struct OrderedExprs<'a>(&'a DsrvSpecification);
 impl Debug for OrderedExprs<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
-            .entries(
-                self.0
-                    .semantic_entries
-                    .iter()
-                    .filter_map(|entry| match entry {
-                        SemanticEntry::Assignment { name, .. } => {
-                            self.0.exprs.get(name).map(|expression| (name, expression))
-                        }
-                        _ => None,
-                    }),
-            )
+            .entries(self.0.declarations.iter().filter_map(|entry| match entry {
+                Declaration::Equation { name, .. } => {
+                    self.0.exprs.get(name).map(|expression| (name, expression))
+                }
+                _ => None,
+            }))
             .finish()
     }
 }
@@ -298,8 +316,11 @@ struct OrderedAnnotations<'a>(&'a DsrvSpecification);
 
 impl Debug for OrderedAnnotations<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let declaration_order = self.0.semantic_entries.iter().filter_map(|entry| {
-            (!matches!(entry, SemanticEntry::Assignment { .. })).then(|| entry.name())
+        let declaration_order = self.0.declarations.iter().filter_map(|entry| match entry {
+            Declaration::Input { name, .. }
+            | Declaration::Output { name, .. }
+            | Declaration::Aux { name, .. } => Some(name),
+            Declaration::Equation { .. } | Declaration::TypeAlias { .. } => None,
         });
         let mut seen = BTreeSet::new();
         let mut entries = Vec::new();
@@ -322,7 +343,7 @@ impl Debug for OrderedAnnotations<'_> {
 impl Debug for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DsrvSpecification")
-            .field("semantic_entries", &self.semantic_entries)
+            .field("declarations", &self.declarations)
             .field("input_vars", &OrderedVars(&self.input_vars_in_order()))
             .field("output_vars", &OrderedVars(&self.output_vars_in_order()))
             .field("aux_vars", &OrderedVars(&self.aux_vars_in_order()))
@@ -452,15 +473,15 @@ fn complete_order(
 }
 
 impl DsrvSpecification {
-    pub fn semantic_entries(&self) -> &[SemanticEntry] {
-        &self.semantic_entries
+    pub fn declarations(&self) -> &[Declaration] {
+        &self.declarations
     }
 
     pub fn roots(&self) -> impl DoubleEndedIterator<Item = (&VarName, ExprRef<'_>)> {
         self.exprs.iter()
     }
 
-    /// Every syntax node in allocation order. Assignment trees occupy disjoint ranges.
+    /// Every syntax node in allocation order. Equation trees occupy disjoint ranges.
     pub fn nodes(&self) -> impl DoubleEndedIterator<Item = ExprRef<'_>> {
         self.exprs.nodes()
     }
@@ -476,22 +497,22 @@ impl DsrvSpecification {
         let output_order = output_vars.iter().cloned().collect::<Vec<_>>();
         let aux_vars = aux_vars.into_iter().collect::<Vec<_>>();
         let mut entries = Vec::new();
-        entries.extend(input_order.iter().map(|name| SemanticEntry::Input {
+        entries.extend(input_order.iter().map(|name| Declaration::Input {
             name: name.clone(),
             annotation: type_annotations.get(name).cloned(),
             span: Span::default(),
         }));
-        entries.extend(output_order.iter().map(|name| SemanticEntry::Output {
+        entries.extend(output_order.iter().map(|name| Declaration::Output {
             name: name.clone(),
             annotation: type_annotations.get(name).cloned(),
             span: Span::default(),
         }));
-        entries.extend(aux_vars.iter().map(|name| SemanticEntry::Aux {
+        entries.extend(aux_vars.iter().map(|name| Declaration::Aux {
             name: name.clone(),
             annotation: type_annotations.get(name).cloned(),
             span: Span::default(),
         }));
-        entries.extend(exprs.keys().map(|name| SemanticEntry::Assignment {
+        entries.extend(exprs.keys().map(|name| Declaration::Equation {
             name: name.clone(),
             span: Span::default(),
         }));
@@ -511,7 +532,7 @@ impl DsrvSpecification {
         exprs: ExprForestMap<VarName>,
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
-        semantic_entries: Vec<SemanticEntry>,
+        declarations: Vec<Declaration>,
     ) -> Self {
         let aux_vars = aux_vars.into_iter().collect::<BTreeSet<_>>();
         let stream_vars = output_vars
@@ -526,7 +547,7 @@ impl DsrvSpecification {
             stream_vars,
             exprs,
             type_annotations,
-            semantic_entries,
+            declarations,
             source_context: AstShared::new(SourceContext::default()),
         }
     }
@@ -574,12 +595,10 @@ impl DsrvSpecification {
     }
     pub fn input_vars_in_order(&self) -> Vec<VarName> {
         complete_order(
-            self.semantic_entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    SemanticEntry::Input { name, .. } => Some(name.clone()),
-                    _ => None,
-                }),
+            self.declarations.iter().filter_map(|entry| match entry {
+                Declaration::Input { name, .. } => Some(name.clone()),
+                _ => None,
+            }),
             &self.input_vars,
         )
     }
@@ -588,12 +607,10 @@ impl DsrvSpecification {
     }
     pub fn output_vars_in_order(&self) -> Vec<VarName> {
         complete_order(
-            self.semantic_entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    SemanticEntry::Output { name, .. } => Some(name.clone()),
-                    _ => None,
-                }),
+            self.declarations.iter().filter_map(|entry| match entry {
+                Declaration::Output { name, .. } => Some(name.clone()),
+                _ => None,
+            }),
             &self.output_vars,
         )
     }
@@ -602,12 +619,10 @@ impl DsrvSpecification {
     }
     pub fn aux_vars_in_order(&self) -> Vec<VarName> {
         complete_order(
-            self.semantic_entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    SemanticEntry::Aux { name, .. } => Some(name.clone()),
-                    _ => None,
-                }),
+            self.declarations.iter().filter_map(|entry| match entry {
+                Declaration::Aux { name, .. } => Some(name.clone()),
+                _ => None,
+            }),
             &self.aux_vars,
         )
     }
@@ -616,14 +631,12 @@ impl DsrvSpecification {
     }
     pub fn stream_vars_in_order(&self) -> Vec<VarName> {
         complete_order(
-            self.semantic_entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    SemanticEntry::Output { name, .. } | SemanticEntry::Aux { name, .. } => {
-                        Some(name.clone())
-                    }
-                    _ => None,
-                }),
+            self.declarations.iter().filter_map(|entry| match entry {
+                Declaration::Output { name, .. } | Declaration::Aux { name, .. } => {
+                    Some(name.clone())
+                }
+                _ => None,
+            }),
             &self.stream_vars,
         )
     }
@@ -709,13 +722,13 @@ mod tests {
         spec_simple_add_monitor_typed,
     };
     use crate::lang::dsrv::ast::{
-        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, ExprBuilder, ExprKind,
-        ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
+        CheckedDsrvSpecification, CheckedExpr, Declaration, DsrvSpecification, ExprBuilder,
+        ExprKind, ReconfigurableExprScope, SyntaxLiteral,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
     use crate::lang::dsrv::test_support::{
-        SemanticEntryOracle, arb_boolean_sexpr, arb_duplicate_declaration_case, arb_float_sexpr,
+        DeclarationOracle, arb_boolean_sexpr, arb_duplicate_declaration_case, arb_float_sexpr,
         arb_int_sexpr, arb_mixed_sexpr, arb_ordered_specification_case, arb_string_sexpr,
     };
     use crate::lang::dsrv::type_checker::{SemanticError, TCType, TypeErrorKind};
@@ -873,9 +886,9 @@ mod tests {
         for (name, root) in specification.roots() {
             assert!(
                 specification
-                    .semantic_entries()
+                    .declarations()
                     .iter()
-                    .any(|entry| matches!(entry, SemanticEntry::Assignment { name: entry_name, .. } if entry_name == name)),
+                    .any(|entry| matches!(entry, Declaration::Equation { name: entry_name, .. } if entry_name == name)),
                 "each root must have an assignment entry"
             );
             assert!(
@@ -1065,38 +1078,38 @@ mod tests {
         assert!(!encoded.contains("nodes"));
     }
 
-    fn assert_oracle_entries(specification: &DsrvSpecification, expected: &[SemanticEntryOracle]) {
+    fn assert_oracle_entries(specification: &DsrvSpecification, expected: &[DeclarationOracle]) {
         assert_eq!(
-            specification.semantic_entries().len(),
+            specification.declarations().len(),
             expected.len(),
             "semantic entry count differs for source:\n{}",
             specification
         );
-        for (actual, expected) in specification.semantic_entries().iter().zip(expected) {
+        for (actual, expected) in specification.declarations().iter().zip(expected) {
             match (actual, expected) {
                 (
-                    SemanticEntry::Input {
+                    Declaration::Input {
                         name, annotation, ..
                     },
-                    SemanticEntryOracle::Input {
+                    DeclarationOracle::Input {
                         name: expected_name,
                         annotation: expected_annotation,
                     },
                 )
                 | (
-                    SemanticEntry::Output {
+                    Declaration::Output {
                         name, annotation, ..
                     },
-                    SemanticEntryOracle::Output {
+                    DeclarationOracle::Output {
                         name: expected_name,
                         annotation: expected_annotation,
                     },
                 )
                 | (
-                    SemanticEntry::Aux {
+                    Declaration::Aux {
                         name, annotation, ..
                     },
-                    SemanticEntryOracle::Aux {
+                    DeclarationOracle::Aux {
                         name: expected_name,
                         annotation: expected_annotation,
                     },
@@ -1112,8 +1125,8 @@ mod tests {
                     );
                 }
                 (
-                    SemanticEntry::Assignment { name, .. },
-                    SemanticEntryOracle::Assignment {
+                    Declaration::Equation { name, .. },
+                    DeclarationOracle::Equation {
                         name: expected_name,
                         ..
                     },
@@ -1124,8 +1137,8 @@ mod tests {
     }
 
     fn stable_filter(
-        entries: &[SemanticEntryOracle],
-        predicate: impl Fn(&SemanticEntryOracle) -> bool,
+        entries: &[DeclarationOracle],
+        predicate: impl Fn(&DeclarationOracle) -> bool,
     ) -> Vec<VarName> {
         entries
             .iter()
@@ -1180,18 +1193,18 @@ mod tests {
                       out c: Int\n\
                       c = z - q";
         let specification = source.parse::<DsrvSpecification>().unwrap();
-        let entries = specification.semantic_entries();
+        let entries = specification.declarations();
 
         assert_eq!(
             entries
                 .iter()
-                .map(|entry| entry.name().name())
+                .map(|entry| entry.stream().expect("a stream declaration").name())
                 .collect::<Vec<_>>(),
             ["z", "b", "b", "q", "a", "a", "c", "c"]
         );
         assert!(matches!(
             entries[0],
-            SemanticEntry::Input {
+            Declaration::Input {
                 annotation: Some(StreamType::Int),
                 ..
             }
@@ -1212,7 +1225,8 @@ mod tests {
         let assignment_order = entries
             .iter()
             .filter_map(|entry| {
-                matches!(entry, SemanticEntry::Assignment { .. }).then(|| entry.name().clone())
+                matches!(entry, Declaration::Equation { .. })
+                    .then(|| entry.stream().expect("a stream declaration").clone())
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -1235,12 +1249,12 @@ mod tests {
         let ordered_markers = [
             "Input { name: VarName::new(\"z\")",
             "Output { name: VarName::new(\"b\")",
-            "Assignment { name: VarName::new(\"b\")",
+            "Equation { name: VarName::new(\"b\")",
             "Input { name: VarName::new(\"q\")",
             "Aux { name: VarName::new(\"a\")",
-            "Assignment { name: VarName::new(\"a\")",
+            "Equation { name: VarName::new(\"a\")",
             "Output { name: VarName::new(\"c\")",
-            "Assignment { name: VarName::new(\"c\")",
+            "Equation { name: VarName::new(\"c\")",
         ];
         let mut previous = 0;
         for marker in ordered_markers {
@@ -1284,7 +1298,7 @@ mod tests {
                          y = x + 1"
             .parse::<DsrvSpecification>()
             .unwrap();
-        assert_eq!(compact.semantic_entries(), commented.semantic_entries());
+        assert_eq!(compact.declarations(), commented.declarations());
         assert_eq!(compact.input_vars(), commented.input_vars());
         assert_eq!(compact.output_vars(), commented.output_vars());
         assert_eq!(compact, commented);
@@ -1323,9 +1337,9 @@ mod tests {
         let source = "in z: Int\nout a: Int\nin z: Bool\na = z";
         let specification = source.parse::<DsrvSpecification>().unwrap();
         let z_entries = specification
-            .semantic_entries()
+            .declarations()
             .iter()
-            .filter(|entry| entry.name() == &VarName::new("z"))
+            .filter(|entry| entry.stream() == Some(&VarName::new("z")))
             .collect::<Vec<_>>();
         assert_eq!(z_entries.len(), 2);
         assert_eq!(
@@ -1368,9 +1382,9 @@ mod tests {
                       a = z";
         let specification = source.parse::<DsrvSpecification>().unwrap();
         let z_entries = specification
-            .semantic_entries()
+            .declarations()
             .iter()
-            .filter(|entry| entry.name() == &VarName::new("z"))
+            .filter(|entry| entry.stream() == Some(&VarName::new("z")))
             .collect::<Vec<_>>();
         assert_eq!(z_entries.len(), 2);
         assert_eq!(&source[z_entries[0].span().to_range()], "in z: Int");
@@ -1400,8 +1414,8 @@ mod tests {
         );
         assert_eq!(annotation_only.to_string(), "in input: Int\n");
         assert_eq!(
-            annotation_only.semantic_entries(),
-            &[SemanticEntry::Input {
+            annotation_only.declarations(),
+            &[Declaration::Input {
                 name: VarName::new("input"),
                 annotation: Some(StreamType::Int),
                 span: Span::default(),
@@ -1438,9 +1452,9 @@ mod tests {
         );
         assert_eq!(
             repeated_aux
-                .semantic_entries()
+                .declarations()
                 .iter()
-                .filter(|entry| matches!(entry, SemanticEntry::Aux { .. }))
+                .filter(|entry| matches!(entry, Declaration::Aux { .. }))
                 .count(),
             2
         );
@@ -1477,7 +1491,7 @@ mod tests {
                 "type_annotations".to_owned(),
             ])
         );
-        assert!(!object.contains_key("semantic_entries"));
+        assert!(!object.contains_key("declarations"));
         assert!(!serialized.to_string().contains("Span"));
         let serialized_names =
             |variables: &BTreeSet<VarName>| variables.iter().map(VarName::name).collect::<Vec<_>>();
@@ -1593,20 +1607,20 @@ mod tests {
             assert_oracle_entries(&specification, &case.entries);
 
             let expected_inputs = stable_filter(&case.entries, |entry| {
-                matches!(entry, SemanticEntryOracle::Input { .. })
+                matches!(entry, DeclarationOracle::Input { .. })
             });
             let expected_outputs = stable_filter(&case.entries, |entry| {
-                matches!(entry, SemanticEntryOracle::Output { .. })
+                matches!(entry, DeclarationOracle::Output { .. })
             });
             let expected_aux = stable_filter(&case.entries, |entry| {
-                matches!(entry, SemanticEntryOracle::Aux { .. })
+                matches!(entry, DeclarationOracle::Aux { .. })
             });
             let expected_streams = case.entries.iter().filter_map(|entry| {
-                matches!(entry, SemanticEntryOracle::Output { .. } | SemanticEntryOracle::Aux { .. })
+                matches!(entry, DeclarationOracle::Output { .. } | DeclarationOracle::Aux { .. })
                     .then(|| VarName::new(entry.name()))
             }).collect::<Vec<_>>();
             let expected_assignments = case.entries.iter().filter_map(|entry| {
-                matches!(entry, SemanticEntryOracle::Assignment { .. })
+                matches!(entry, DeclarationOracle::Equation { .. })
                     .then(|| VarName::new(entry.name()))
             }).collect::<Vec<_>>();
             prop_assert_eq!(specification.input_vars_in_order(), expected_inputs);
@@ -1614,9 +1628,9 @@ mod tests {
             prop_assert_eq!(specification.aux_vars_in_order(), expected_aux);
             prop_assert_eq!(specification.stream_vars_in_order(), expected_streams);
             prop_assert_eq!(
-                specification.semantic_entries().iter().filter_map(|entry| {
-                    matches!(entry, SemanticEntry::Assignment { .. })
-                        .then(|| entry.name().clone())
+                specification.declarations().iter().filter_map(|entry| {
+                    matches!(entry, Declaration::Equation { .. })
+                        .then(|| entry.stream().expect("a stream declaration").clone())
                 }).collect::<Vec<_>>(),
                 expected_assignments
             );
@@ -1625,7 +1639,7 @@ mod tests {
                 .entries
                 .iter()
                 .rev()
-                .map(SemanticEntryOracle::source_line)
+                .map(DeclarationOracle::source_line)
                 .collect::<Vec<_>>()
                 .join("\n");
             let permuted = permuted_source
@@ -1635,7 +1649,7 @@ mod tests {
             prop_assert_eq!(permuted.output_vars(), specification.output_vars());
             prop_assert_eq!(permuted.aux_vars(), specification.aux_vars());
             for entry in &case.entries {
-                if let SemanticEntryOracle::Assignment { name, .. } = entry {
+                if let DeclarationOracle::Equation { name, .. } = entry {
                     let name = VarName::new(name);
                     prop_assert_eq!(
                         format!("{}", permuted.var_expr_ref(&name).unwrap()),
@@ -1647,7 +1661,7 @@ mod tests {
             let displayed = specification.to_string();
             let reparsed = displayed.parse::<DsrvSpecification>()
                 .expect("Display output should be parser-valid");
-            prop_assert_eq!(reparsed.semantic_entries(), specification.semantic_entries());
+            prop_assert_eq!(reparsed.declarations(), specification.declarations());
             prop_assert_eq!(reparsed.input_vars(), specification.input_vars());
             prop_assert_eq!(reparsed.output_vars(), specification.output_vars());
             let reparsed_roots = reparsed
@@ -1661,7 +1675,7 @@ mod tests {
             prop_assert_eq!(reparsed_roots, original_roots);
             for entry in &case.entries {
                 let name = VarName::new(entry.name());
-                if matches!(entry, SemanticEntryOracle::Assignment { .. }) {
+                if matches!(entry, DeclarationOracle::Equation { .. }) {
                     prop_assert!(specification.var_expr_ref(&name).is_some());
                 }
             }
@@ -1674,8 +1688,8 @@ mod tests {
             let specification = case.source.parse::<DsrvSpecification>()
                 .expect("duplicate generator changes declarations only");
             assert_oracle_entries(&specification, &case.entries);
-            let occurrences = specification.semantic_entries().iter().filter(|entry| {
-                entry.name() == &VarName::new(&case.duplicate_name)
+            let occurrences = specification.declarations().iter().filter(|entry| {
+                entry.stream() == Some(&VarName::new(&case.duplicate_name))
             }).count();
             prop_assert!(occurrences >= 2);
 

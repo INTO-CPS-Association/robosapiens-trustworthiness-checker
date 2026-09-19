@@ -133,7 +133,7 @@ mod tests {
     use crate::{
         VarName,
         lang::dsrv::{
-            ast::SemanticEntry,
+            ast::Declaration,
             type_checker::{SemanticError, TCType},
         },
     };
@@ -147,6 +147,171 @@ mod tests {
         assert!(specification.input_vars().contains(&VarName::new("x")));
         assert!(specification.output_vars().contains(&VarName::new("y")));
         assert!(specification.var_expr_ref(&VarName::new("y")).is_some());
+    }
+
+    #[test]
+    fn operations_on_dynamic_values_are_checked_at_run_time() {
+        // Each operation on a value of type `Any` gives the type the value
+        // does not determine statically.
+        let cases = [
+            ("out y = Map.get(v, \"k\")", TCType::Any),
+            ("out y = v.field", TCType::Any),
+            ("out y = List.get(v, 0)", TCType::Any),
+            ("out y = List.head(v)", TCType::Any),
+            ("out y = List.tail(v)", TCType::Any),
+            ("out y = List.len(v)", TCType::Int),
+            ("out y = List.append(v, 1)", TCType::Any),
+            ("out y = Map.insert(v, \"k\", 1)", TCType::Any),
+            ("out y = Map.remove(v, \"k\")", TCType::Any),
+            ("out y = Map.has_key(v, \"k\")", TCType::Bool),
+            (
+                "out y = List.map(\\x -> x, v)",
+                TCType::List(Box::new(TCType::Any)),
+            ),
+            ("out y = v(1)", TCType::Any),
+            ("out y = partial(v, 1)", TCType::Any),
+        ];
+        for (equation, expected) in cases {
+            // Unannotated, under gradual checking.
+            let source = format!("in v\n{equation}");
+            let checked = CheckedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                checked.var_expr_ref(&VarName::new("y")).unwrap().typ(),
+                &expected,
+                "{source}"
+            );
+            // Written as `Any`, under strict checking.
+            let annotated = format!(
+                "in v: Any\n{}",
+                equation.replacen("out y", &format!("out y: {}", source_type(&expected)), 1)
+            );
+            CheckedDsrvSpecification::parse_with(&annotated, TypeCheckOptions::STRICT)
+                .unwrap_or_else(|error| panic!("{annotated}: {error}"));
+        }
+        // A value with a known type that is not a collection is still an error.
+        assert!(
+            CheckedDsrvSpecification::parse_with(
+                "in v: Int\nout y: Int = List.len(v)",
+                TypeCheckOptions::STRICT
+            )
+            .is_err()
+        );
+    }
+
+    fn source_type(typ: &TCType) -> &'static str {
+        match typ {
+            TCType::Any => "Any",
+            TCType::Int => "Int",
+            TCType::Bool => "Bool",
+            TCType::List(_) => "List<Any>",
+            other => panic!("no source spelling for {other}"),
+        }
+    }
+
+    #[test]
+    fn struct_equality_needs_operands_of_the_same_struct_type() {
+        let strict =
+            |source: &str| CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT);
+        strict("in a: Struct<x: Int>\nin b: Struct<x: Int>\nout same: Bool = a == b").unwrap();
+        strict("in n: Int\nout same: Bool = {x: n, y: 2} != {y: 2, x: 1}").unwrap();
+        for source in [
+            "in n: Int\nout same: Bool = {x: 1} == {x: \"a\"}",
+            "in n: Int\nout same: Bool = {x: 1} == {x: 1, y: 2}",
+            "in n: Int\nout same: Bool = {x: 1} == n",
+        ] {
+            let Err(DsrvPipelineError::TypeCheck(errors)) = strict(source) else {
+                panic!("{source} must not type check");
+            };
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| format!("{error:?}").contains("equality operator")),
+                "{source}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lambda_parameter_types_are_inferred_from_their_context() {
+        let strict = |source: &str| {
+            CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
+                .unwrap_or_else(|error| panic!("{source}: {error}"))
+        };
+        for (source, output, expected) in [
+            (
+                "in xs: List<Int>\nout ys: List<Int> = List.map(\\x -> x + 1, xs)",
+                "ys",
+                TCType::List(Box::new(TCType::Int)),
+            ),
+            (
+                "in xs: List<Int>\nout ys: List<Int> = List.filter(\\x -> x > 0, xs)",
+                "ys",
+                TCType::List(Box::new(TCType::Int)),
+            ),
+            (
+                "in xs: List<Int>\nout s: Int = List.fold(\\acc, x -> acc + x, 0, xs)",
+                "s",
+                TCType::Int,
+            ),
+            (
+                "in x: Int\nout y: Int = (\\n -> n * 2)(x)",
+                "y",
+                TCType::Int,
+            ),
+            (
+                "in x: Float\nout y: Float = (\\n, m -> n + m)(x, 1.5)",
+                "y",
+                TCType::Float,
+            ),
+        ] {
+            let checked = strict(source);
+            assert_eq!(
+                checked.var_expr_ref(&VarName::new(output)).unwrap().typ(),
+                &expected,
+                "{source}"
+            );
+        }
+
+        // Annotations still win, and must agree with the context.
+        strict("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Int -> x + 1, xs)");
+        assert!(
+            CheckedDsrvSpecification::parse_with(
+                "in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Str -> 1, xs)",
+                TypeCheckOptions::STRICT,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_lambda_parameter_without_annotation_or_context_is_strict_error_and_gradual_any() {
+        // A lambda stored in a list is checked with nothing to infer from.
+        let source = "in x: Int\nout y: Int = List.len(List(\\f -> 1))";
+        let Err(DsrvPipelineError::TypeCheck(errors)) =
+            CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
+        else {
+            panic!("strict checking must reject an uninferable parameter");
+        };
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::MissingTypeAnnotation(message, Some(_))
+                    if message.contains("lambda parameter `f`")
+            )),
+            "{errors:?}"
+        );
+        CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+            .expect("gradual checking gives the parameter the dynamic type");
+    }
+
+    #[test]
+    fn inferred_lambda_parameters_print_without_annotations() {
+        let source = "in xs: List<Int>\nout ys: List<Int>\nys = List.map(\\x -> x + 1, xs)\n";
+        let spec = source.parse::<DsrvSpecification>().unwrap();
+        let printed = spec.to_string();
+        assert!(printed.contains("\\x -> "), "{printed}");
+        assert_eq!(printed.parse::<DsrvSpecification>().unwrap(), spec);
     }
 
     #[test]
@@ -230,8 +395,8 @@ mod tests {
             vec![VarName::new("z"), VarName::new("q")]
         );
         assert!(matches!(
-            specification.semantic_entries()[1],
-            SemanticEntry::Output {
+            specification.declarations()[1],
+            Declaration::Output {
                 ref name,
                 annotation: Some(crate::core::StreamType::Int),
                 ..
@@ -255,10 +420,11 @@ mod tests {
         );
         assert_eq!(
             specification
-                .semantic_entries()
+                .declarations()
                 .iter()
                 .filter_map(|entry| {
-                    matches!(entry, SemanticEntry::Assignment { .. }).then(|| entry.name().clone())
+                    matches!(entry, Declaration::Equation { .. })
+                        .then(|| entry.stream().expect("a stream declaration").clone())
                 })
                 .collect::<Vec<_>>(),
             [VarName::new("b"), VarName::new("a"), VarName::new("c")]
@@ -542,9 +708,9 @@ mod tests {
                 let specification = source.parse::<DsrvSpecification>().unwrap();
                 assert_eq!(
                     specification
-                        .semantic_entries()
+                        .declarations()
                         .iter()
-                        .filter(|entry| entry.name() == &VarName::new("z"))
+                        .filter(|entry| entry.stream() == Some(&VarName::new("z")))
                         .count(),
                     2
                 );

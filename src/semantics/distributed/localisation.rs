@@ -9,7 +9,7 @@ use contiguous_tree::CloneTreeError;
 use tracing::debug;
 
 use crate::lang::dsrv::ast::{
-    DependencyKind, DsrvSpecification, ExprView, SemanticEntry, ValidatedDsrvSpecification,
+    Declaration, DependencyKind, DsrvSpecification, ExprView, ValidatedDsrvSpecification,
 };
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::type_checker::SemanticErrors;
@@ -169,11 +169,13 @@ fn prune_to_dependency_closure(
         .chain(spec.aux_vars.iter())
         .cloned()
         .collect();
-    spec.semantic_entries.retain(|entry| match entry {
-        SemanticEntry::Input { name, .. } => spec.input_vars.contains(name),
-        SemanticEntry::Output { name, .. } => spec.output_vars.contains(name),
-        SemanticEntry::Aux { name, .. } => spec.aux_vars.contains(name),
-        SemanticEntry::Assignment { name, .. } => spec.exprs.contains_key(name),
+    spec.declarations.retain(|entry| match entry {
+        Declaration::Input { name, .. } => spec.input_vars.contains(name),
+        Declaration::Output { name, .. } => spec.output_vars.contains(name),
+        Declaration::Aux { name, .. } => spec.aux_vars.contains(name),
+        Declaration::Equation { name, .. } => spec.exprs.contains_key(name),
+        // The localised specification keeps the namespace, so its aliases.
+        Declaration::TypeAlias { .. } => true,
     });
     spec
 }
@@ -219,14 +221,14 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         .into_iter()
         .filter(|(name, _)| !aux_vars.contains(name))
         .collect();
-    let semantic_entries = spec
-        .semantic_entries
+    let declarations = spec
+        .declarations
         .into_iter()
         .filter(|entry| match entry {
-            SemanticEntry::Aux { .. } => false,
-            SemanticEntry::Output { name, .. } => !aux_vars.contains(name),
-            SemanticEntry::Assignment { name, .. } => exprs.contains_key(name),
-            SemanticEntry::Input { .. } => true,
+            Declaration::Aux { .. } => false,
+            Declaration::Output { name, .. } => !aux_vars.contains(name),
+            Declaration::Equation { name, .. } => exprs.contains_key(name),
+            Declaration::Input { .. } | Declaration::TypeAlias { .. } => true,
         })
         .collect();
 
@@ -236,7 +238,7 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         exprs,
         type_annotations,
         std::iter::empty(),
-        semantic_entries,
+        declarations,
     ))
 }
 
@@ -257,13 +259,13 @@ fn finish_localisation(
         .flat_map(|expression| expression.stream_dependencies())
         .collect::<HashSet<_>>();
     let input_order = original
-        .semantic_entries()
+        .declarations()
         .iter()
         .filter_map(|entry| match entry {
-            SemanticEntry::Input { name, .. }
-            | SemanticEntry::Output { name, .. }
-            | SemanticEntry::Aux { name, .. } => Some(name),
-            SemanticEntry::Assignment { .. } => None,
+            Declaration::Input { name, .. }
+            | Declaration::Output { name, .. }
+            | Declaration::Aux { name, .. } => Some(name),
+            Declaration::Equation { .. } | Declaration::TypeAlias { .. } => None,
         })
         .filter(|var| !local_set.contains(*var))
         .filter(|var| needed_inputs.contains(var))
@@ -280,36 +282,36 @@ fn finish_localisation(
         .cloned()
         .collect();
     let mut declared_inputs = BTreeSet::new();
-    spec.semantic_entries = original
-        .semantic_entries()
+    spec.declarations = original
+        .declarations()
         .iter()
         .filter_map(|entry| match entry {
-            SemanticEntry::Input {
+            Declaration::Input {
                 name,
                 annotation,
                 span,
             }
-            | SemanticEntry::Output {
+            | Declaration::Output {
                 name,
                 annotation,
                 span,
             }
-            | SemanticEntry::Aux {
+            | Declaration::Aux {
                 name,
                 annotation,
                 span,
             } if spec.input_vars.contains(name) && declared_inputs.insert(name.clone()) => {
-                Some(SemanticEntry::Input {
+                Some(Declaration::Input {
                     name: name.clone(),
                     annotation: annotation.clone(),
                     span: *span,
                 })
             }
-            SemanticEntry::Output { name, .. } if spec.output_vars.contains(name) => {
+            Declaration::Output { name, .. } if spec.output_vars.contains(name) => {
                 Some(entry.clone())
             }
-            SemanticEntry::Aux { name, .. } if spec.aux_vars.contains(name) => Some(entry.clone()),
-            SemanticEntry::Assignment { name, .. } if spec.exprs.contains_key(name) => {
+            Declaration::Aux { name, .. } if spec.aux_vars.contains(name) => Some(entry.clone()),
+            Declaration::Equation { name, .. } if spec.exprs.contains_key(name) => {
                 Some(entry.clone())
             }
             _ => None,
@@ -396,7 +398,7 @@ mod tests {
     use crate::dataflow::DataflowMonitor;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::{Expr, SemanticEntry};
+    use crate::lang::dsrv::ast::{Declaration, Expr};
     use crate::lang::dsrv::span::strip_span_ref;
     use crate::{TypeCheckMode, Value};
     use proptest::prelude::*;
@@ -675,17 +677,17 @@ mod tests {
         assert_eq!(localised.aux_vars_in_order(), []);
         assert_eq!(
             localised
-                .semantic_entries()
+                .declarations()
                 .iter()
-                .map(|entry| entry.name().name())
+                .map(|entry| entry.stream().expect("a stream declaration").name())
                 .collect::<Vec<_>>(),
             ["remote", "b", "b", "other", "c", "c"]
         );
         assert!(
             localised
-                .semantic_entries()
+                .declarations()
                 .iter()
-                .all(|entry| !matches!(entry, SemanticEntry::Aux { .. }))
+                .all(|entry| !matches!(entry, Declaration::Aux { .. }))
         );
         let b = localised.var_expr(&VarName::new("b")).unwrap();
         assert_eq!(b.to_string(), "(other + remote)");

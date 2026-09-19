@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use contiguous_tree::TreeCursorExt;
 
 use super::{ExprRef, ExprView, ReconfigurableExprScope};
-use crate::core::{StreamType, VarName};
+use crate::core::VarName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DependencyKind {
@@ -15,7 +15,7 @@ pub(crate) enum DependencyKind {
 
 enum DependencyTraversalEvent<'arena> {
     Expression(ExprRef<'arena>),
-    LeaveBindings(&'arena [(VarName, StreamType)]),
+    LeaveBindings(&'arena [(VarName, crate::core::StreamTypeAscription)]),
 }
 
 impl<'arena> ExprRef<'arena> {
@@ -101,19 +101,27 @@ impl<'arena> ExprRef<'arena> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::BinaryOperator;
+    use crate::core::{BinaryOperator, StreamType};
     use crate::lang::dsrv::ast::Expr;
 
     #[test]
     fn free_variables_exclude_nested_and_shadowed_lambda_parameters() {
         let expr = Expr::Lambda(
-            vec![("x".into(), StreamType::Int)].into(),
+            vec![(
+                "x".into(),
+                crate::core::StreamTypeAscription::Ascribed(StreamType::Int),
+            )]
+            .into(),
             Box::new(Expr::Tuple(
                 vec![
                     Expr::Var("x".into()),
                     Expr::Var("free".into()),
                     Expr::Lambda(
-                        vec![("x".into(), StreamType::Int)].into(),
+                        vec![(
+                            "x".into(),
+                            crate::core::StreamTypeAscription::Ascribed(StreamType::Int),
+                        )]
+                        .into(),
                         Box::new(Expr::BinOp(
                             Box::new(Expr::Var("x".into())),
                             Box::new(Expr::Var("also_free".into())),
@@ -136,7 +144,10 @@ mod tests {
         use ecow::eco_vec;
 
         let expr = Expr::Lambda(
-            eco_vec![("bound".into(), StreamType::Int)],
+            eco_vec![(
+                "bound".into(),
+                crate::core::StreamTypeAscription::Ascribed(StreamType::Int)
+            )],
             Box::new(Expr::Tuple(
                 vec![
                     Expr::Defer(
@@ -182,7 +193,10 @@ mod tests {
         use ecow::eco_vec;
 
         let expr = Expr::Lambda(
-            eco_vec![("bound".into(), StreamType::Int)],
+            eco_vec![(
+                "bound".into(),
+                crate::core::StreamTypeAscription::Ascribed(StreamType::Int)
+            )],
             Box::new(Expr::Tuple(
                 vec![
                     Expr::Var("free".into()),

@@ -4,8 +4,8 @@ use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::source::SourceTypeDisplay;
 
 use super::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
-    ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
+    CheckedDsrvSpecification, CheckedExpr, Declaration, DsrvSpecification, Expr, ExprRef,
+    ReconfigurableExprScope, SyntaxLiteral,
 };
 
 impl Debug for CheckedExpr {
@@ -95,7 +95,12 @@ impl Display for ExprRef<'_> {
             Lambda(params, body) => {
                 let params = params
                     .iter()
-                    .map(|(name, typ)| format!("{name}: {}", SourceTypeDisplay(typ)))
+                    .map(|(name, ascription)| match ascription {
+                        crate::core::StreamTypeAscription::Ascribed(typ) => {
+                            format!("{name}: {}", SourceTypeDisplay(typ))
+                        }
+                        crate::core::StreamTypeAscription::Unascribed => name.to_string(),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "\\{params} -> {body}")
@@ -188,9 +193,6 @@ impl Display for ExprRef<'_> {
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.source_context.language().header())?;
-        for (name, ty) in self.source_context.aliases() {
-            writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
-        }
         fmt_specification(self, f, |_, annotation| annotation)
     }
 }
@@ -200,22 +202,22 @@ fn fmt_specification<'a>(
     f: &mut std::fmt::Formatter<'_>,
     annotation_for: impl Fn(&'a crate::VarName, Option<&'a StreamType>) -> Option<&'a StreamType>,
 ) -> std::fmt::Result {
-    for entry in &spec.semantic_entries {
+    for entry in &spec.declarations {
         match entry {
-            SemanticEntry::Input {
+            Declaration::Input {
                 name, annotation, ..
             }
-            | SemanticEntry::Output {
+            | Declaration::Output {
                 name, annotation, ..
             }
-            | SemanticEntry::Aux {
+            | Declaration::Aux {
                 name, annotation, ..
             } => {
                 let keyword = match entry {
-                    SemanticEntry::Input { .. } => "in",
-                    SemanticEntry::Output { .. } => "out",
-                    SemanticEntry::Aux { .. } => "aux",
-                    SemanticEntry::Assignment { .. } => unreachable!(),
+                    Declaration::Input { .. } => "in",
+                    Declaration::Output { .. } => "out",
+                    Declaration::Aux { .. } => "aux",
+                    Declaration::Equation { .. } | Declaration::TypeAlias { .. } => unreachable!(),
                 };
                 write!(f, "{keyword} {name}")?;
                 if let Some(typ) = annotation_for(name, annotation.as_ref()) {
@@ -223,9 +225,13 @@ fn fmt_specification<'a>(
                 }
                 writeln!(f)?;
             }
-            SemanticEntry::Assignment { name, .. } => {
+            Declaration::Equation { name, .. } => {
                 let expression = spec.exprs.get(name).ok_or(Error)?;
                 writeln!(f, "{name} = {expression}")?;
+            }
+            Declaration::TypeAlias { name, .. } => {
+                let ty = spec.source_context.get(name).ok_or(Error)?;
+                writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
             }
         }
     }

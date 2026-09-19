@@ -1,11 +1,62 @@
 //! Expansion: the parsed tree becomes the core specification.
 //!
-//! This stage owns every step between parsing and type checking: resolving
-//! type names against the specification's own namespace, converting the
-//! parsed tree into semantic nodes, and assembling the specification itself.
-//! Today the conversion is one node per parsed node; later language features
-//! rewrite here instead, which is why this stage owns the conversion rather
-//! than the parser.
+//! The DSRV front end runs in three stages. [`super::syntax`] parses source
+//! text into a parsed tree and resolves no names. Expansion, this module,
+//! turns that tree into a [`DsrvSpecification`]. Validation and type checking
+//! ([`super::type_checker`]) then judge the specification. Expansion is the
+//! only stage that reads the language settings, and the only one that sees
+//! source syntax; everything after it works on the core AST. Today the
+//! conversion is one core node per parsed node; language features that
+//! rewrite syntax will do so here, which is why this stage, not the parser,
+//! owns it.
+//!
+//! # Steps
+//!
+//! [`expand_specification`] runs them in this order, and each failure is a
+//! [`DsrvExpandError`]:
+//!
+//! 1. **Language.** The header lines (`language`, `edition`) and any request
+//!    from outside the file resolve to one [`language::LanguageConfig`]
+//!    ([`language::resolve_language`]).
+//! 2. **Namespace.** The type aliases resolve into a [`SourceContext`], which
+//!    also carries the language settings. Every expression expanded here, and
+//!    every runtime expression expanded later against this context, shares it.
+//! 3. **Declarations and equations** ([`expand_declarations`]). Each
+//!    top-level form becomes a [`Declaration`] with its types resolved, in
+//!    source order. The header produces none: it lives on in the context. The
+//!    expression of each equation `x = e` is converted into core nodes, with
+//!    types resolved against the namespace, into one shared builder.
+//! 4. **Assembling the specification** (below).
+//! 5. **Dialect.** The distribution primitives are rejected outside Distributed
+//!    DSRV, and a Core specification must be Core throughout
+//!    ([`language::CoreDsrvSpecification::check`]).
+//!
+//! [`expand_expression`] expands one runtime expression (the source of a
+//! `dynamic` or `defer`) against an existing namespace, with the same
+//! conversion and the same dialect checks, and no declarations.
+//!
+//! # Assembling the specification
+//!
+//! [`assemble_specification`] turns the declarations and the converted
+//! equations into the specification itself:
+//!
+//! - **Indexes.** The input and output sets, the aux list and the map of type
+//!   annotations are derived from the `in`, `out` and `aux` declarations.
+//!   Equations and type aliases add nothing to them.
+//! - **The forest.** The equations' expressions, given as roots in the order
+//!   of the equations, become one expression forest: each tree is stored once
+//!   and shared by everything that later reads the specification.
+//! - **Pairing** ([`UnvalidatedDsrvSpecification::validate`]). Each equation
+//!   is paired with its tree by stream name. A stream with two equations, or
+//!   an object with a repeated field, is rejected here, because the
+//!   specification cannot represent either.
+//! - **Declarations are kept in source order,** type aliases included, so the
+//!   specification prints back in the order it was written.
+//!
+//! Assembling checks only what the specification's representation needs.
+//! Whether each stream is declared once, whether every variable is declared,
+//! and whether equations fit their types are validation's and the type
+//! checker's questions, asked of the assembled specification.
 
 pub(crate) mod language;
 
@@ -15,14 +66,13 @@ use ecow::EcoVec;
 
 use super::ast::AstShared as Rc;
 use super::ast::{
-    DsrvAstError, Expr, ExprBuilder, ExprId, ExprKind, ExprMetadata, SemanticEntry,
+    Declaration, DsrvAstError, Expr, ExprBuilder, ExprId, ExprKind, ExprMetadata,
     UnvalidatedDsrvSpecification,
 };
 use super::source::{SourceContext, SourceResolveError};
-use super::span::Span;
 use super::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAscription};
-use crate::core::{StreamType, StreamTypeAscription, VarName};
+use crate::core::StreamTypeAscription;
 use crate::lang::dsrv::ast::DsrvSpecification;
 use contiguous_tree::TreeCursor as _;
 use language::{Dialect, LanguageError, LanguageRequest};
@@ -43,14 +93,15 @@ pub enum DsrvExpandError {
     Language(#[from] LanguageError),
 }
 
-/// A top-level declaration with its names and types resolved.
-
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Declaration {
-    Input(VarName, Option<StreamType>, Span),
-    Output(VarName, Option<StreamType>, Span),
-    Aux(VarName, Option<StreamType>, Span),
-    Assignment(VarName, ExprId, Span),
+/// A parsed specification's declarations, with names and types resolved.
+pub(crate) struct ExpandedDeclarations {
+    /// Holds every equation's expression.
+    pub(crate) builder: ExprBuilder,
+    /// In source order.
+    pub(crate) declarations: EcoVec<Declaration>,
+    /// Each equation's expression, in the order of the equations.
+    pub(crate) roots: EcoVec<ExprId>,
+    pub(crate) context: Rc<SourceContext>,
 }
 
 impl SourceAscription {
@@ -66,7 +117,7 @@ impl SourceAscription {
 pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
     request: LanguageRequest,
-) -> Result<(ExprBuilder, EcoVec<Declaration>, Rc<SourceContext>), DsrvExpandError> {
+) -> Result<ExpandedDeclarations, DsrvExpandError> {
     let (expressions, parsed_declarations) = parsed.into_parts();
     let language = language::resolve_language(&parsed_declarations, request)?;
     let core = language.dialect() == Dialect::Core;
@@ -88,38 +139,62 @@ pub(crate) fn expand_declarations(
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
     let mut declarations = EcoVec::new();
+    let mut equation_roots = EcoVec::new();
     for declaration in parsed_declarations {
         let resolved = match declaration {
-            ParsedDeclaration::Input(name, ty, span) => Declaration::Input(
+            ParsedDeclaration::Input(name, ty, span) => Declaration::Input {
                 name,
-                ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
+                annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
                 span,
-            ),
-            ParsedDeclaration::Output(name, ty, span) => Declaration::Output(
-                name,
-                ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
-                span,
-            ),
-            ParsedDeclaration::Aux(name, ty, span) => Declaration::Aux(
-                name,
-                ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
-                span,
-            ),
-            ParsedDeclaration::Assignment(name, _, span) => {
-                let expression = roots.next().expect("each assignment owns one parsed root");
-                Declaration::Assignment(
-                    name,
-                    expand_tree(expression.as_ref(), &mut builder, &context)?,
+            },
+            // A one-line definition declares the stream, then defines it:
+            // two declarations sharing the line's span.
+            ParsedDeclaration::Output(name, ty, definition, span) => {
+                declarations.push(Declaration::Output {
+                    name: name.clone(),
+                    annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
                     span,
-                )
+                });
+                if definition.is_none() {
+                    continue;
+                }
+                let expression = roots.next().expect("each definition owns one parsed root");
+                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                Declaration::Equation { name, span }
             }
-            ParsedDeclaration::Alias(_)
-            | ParsedDeclaration::Language(..)
-            | ParsedDeclaration::Edition(..) => continue,
+            ParsedDeclaration::Aux(name, ty, definition, span) => {
+                declarations.push(Declaration::Aux {
+                    name: name.clone(),
+                    annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
+                    span,
+                });
+                if definition.is_none() {
+                    continue;
+                }
+                let expression = roots.next().expect("each definition owns one parsed root");
+                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                Declaration::Equation { name, span }
+            }
+            ParsedDeclaration::Equation(name, _, span) => {
+                let expression = roots.next().expect("each equation owns one parsed root");
+                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                Declaration::Equation { name, span }
+            }
+            ParsedDeclaration::Alias(alias) => Declaration::TypeAlias {
+                name: alias.name,
+                span: alias.span,
+            },
+            // The header is expanded into the source context, not kept.
+            ParsedDeclaration::Language(..) | ParsedDeclaration::Edition(..) => continue,
         };
         declarations.push(resolved);
     }
-    Ok((builder, declarations, context))
+    Ok(ExpandedDeclarations {
+        builder,
+        declarations,
+        roots: equation_roots,
+        context,
+    })
 }
 
 /// Expand a parsed specification into the core specification.
@@ -127,8 +202,13 @@ pub(crate) fn expand_specification(
     parsed: ParsedSpecification,
     request: LanguageRequest,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
-    let (builder, declarations, context) = expand_declarations(parsed, request)?;
-    let mut specification = create_dsrv_spec(builder, declarations)?;
+    let ExpandedDeclarations {
+        builder,
+        declarations,
+        roots,
+        context,
+    } = expand_declarations(parsed, request)?;
+    let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
     let dialect = specification.source_context.language().dialect();
     for node in specification.nodes() {
@@ -167,59 +247,43 @@ pub(crate) fn expand_expression(
     Ok(expr)
 }
 
-pub(crate) fn create_dsrv_spec(
+/// Assemble the specification from its declarations and the expressions of
+/// its equations, given in the order of the equations. See the module
+/// documentation, "Assembling the specification".
+pub(crate) fn assemble_specification(
     builder: ExprBuilder,
-    stmts: EcoVec<Declaration>,
+    declarations: EcoVec<Declaration>,
+    roots: EcoVec<ExprId>,
 ) -> Result<DsrvSpecification, DsrvAstError> {
     let mut inputs = BTreeSet::new();
     let mut outputs = BTreeSet::new();
-    let mut stream_names = BTreeSet::new();
-    let mut aux_vars = Vec::with_capacity(stmts.len());
-    let mut entries = Vec::with_capacity(stmts.len());
-    let mut roots = Vec::with_capacity(stmts.len());
+    let mut aux_vars = Vec::with_capacity(declarations.len());
     let mut type_annotations = BTreeMap::new();
 
-    for stmt in stmts {
-        match stmt {
-            Declaration::Input(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                inputs.insert(var.clone());
-                entries.push(SemanticEntry::Input {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
+    for declaration in &declarations {
+        let (name, annotation) = match declaration {
+            Declaration::Input {
+                name, annotation, ..
+            } => {
+                inputs.insert(name.clone());
+                (name, annotation)
             }
-            Declaration::Output(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                outputs.insert(var.clone());
-                stream_names.insert(var.clone());
-                entries.push(SemanticEntry::Output {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
+            Declaration::Output {
+                name, annotation, ..
+            } => {
+                outputs.insert(name.clone());
+                (name, annotation)
             }
-            Declaration::Aux(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                stream_names.insert(var.clone());
-                aux_vars.push(var.clone());
-                entries.push(SemanticEntry::Aux {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
+            Declaration::Aux {
+                name, annotation, ..
+            } => {
+                aux_vars.push(name.clone());
+                (name, annotation)
             }
-            Declaration::Assignment(name, root, span) => {
-                entries.push(SemanticEntry::Assignment { name, span });
-                roots.push(root);
-            }
+            Declaration::Equation { .. } | Declaration::TypeAlias { .. } => continue,
+        };
+        if let Some(annotation) = annotation {
+            type_annotations.insert(name.clone(), annotation.clone());
         }
     }
 
@@ -229,7 +293,7 @@ pub(crate) fn create_dsrv_spec(
         outputs,
         aux_vars,
         expressions,
-        entries,
+        declarations.into_iter().collect(),
         type_annotations,
     )
     .validate()
@@ -272,7 +336,15 @@ pub(crate) fn expand_tree(
                 Lambda(params, body) => ExprKind::Lambda(
                     params
                         .iter()
-                        .map(|(name, ty)| Ok((name.clone(), context.resolve_type(ty)?)))
+                        .map(|(name, ty)| {
+                            let ascription = match ty {
+                                Some(ty) => {
+                                    StreamTypeAscription::Ascribed(context.resolve_type(ty)?)
+                                }
+                                None => StreamTypeAscription::Unascribed,
+                            };
+                            Ok((name.clone(), ascription))
+                        })
                         .collect::<Result<_, SourceResolveError>>()?,
                     *node.child(*body),
                 ),

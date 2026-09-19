@@ -634,6 +634,17 @@ pub enum StreamTypeAscription {
     Unascribed,
 }
 
+impl StreamTypeAscription {
+    /// A function parameter as runtimes display it: `x: Int`, or `x` when its
+    /// type was left to inference.
+    pub fn parameter_display(&self, name: &crate::VarName) -> String {
+        match self {
+            Self::Ascribed(typ) => format!("{name}: {typ}"),
+            Self::Unascribed => name.to_string(),
+        }
+    }
+}
+
 impl Serialize for Value {
     // Certain edge cases were not covered by derived Serialize, such as serializing List
     // symmetrically, hence manual impl

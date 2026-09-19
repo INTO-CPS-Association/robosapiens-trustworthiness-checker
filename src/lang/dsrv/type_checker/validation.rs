@@ -7,7 +7,7 @@ use contiguous_tree::TreeCursorExt;
 use super::{SemanticError, SemanticResult, TCType, TypeErrorKind};
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
-    DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope, SemanticEntry,
+    Declaration, DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope,
     SyntaxLiteral, ValidatedDsrvSpecification,
 };
 use crate::{Value, VarName};
@@ -36,18 +36,23 @@ pub(crate) fn validate_specification(spec: &DsrvSpecification) -> SemanticResult
         .collect::<BTreeSet<_>>();
     let mut errors = Vec::new();
     let mut declarations = std::collections::BTreeMap::new();
-    for entry in spec.semantic_entries() {
-        if matches!(entry, SemanticEntry::Assignment { .. }) {
+    for declaration in spec.declarations() {
+        // Equations are checked against their forest; a duplicate type alias
+        // is rejected when the namespace is built.
+        let (Declaration::Input { name, span, .. }
+        | Declaration::Output { name, span, .. }
+        | Declaration::Aux { name, span, .. }) = declaration
+        else {
             continue;
-        }
-        if let Some(first) = declarations.get(entry.name()) {
+        };
+        if let Some(first) = declarations.get(name) {
             errors.push(SemanticError::DuplicateDeclaration {
-                variable: entry.name().clone(),
+                variable: name.clone(),
                 first: *first,
-                duplicate: entry.span(),
+                duplicate: *span,
             });
         } else {
-            declarations.insert(entry.name().clone(), entry.span());
+            declarations.insert(name.clone(), *span);
         }
     }
 

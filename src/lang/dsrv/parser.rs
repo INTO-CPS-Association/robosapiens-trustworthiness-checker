@@ -9,9 +9,9 @@ use anyhow::Error;
 #[cfg(test)]
 use anyhow::anyhow;
 
-use super::ast::{DsrvAstError, Expr, ExprId};
 #[cfg(test)]
-use super::expand::Declaration;
+use super::ast::Declaration;
+use super::ast::{DsrvAstError, Expr, ExprId};
 use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError, LanguageRequest};
 use super::expand::{self, DsrvExpandError};
 use super::source::{SourceContext, SourceResolveError};
@@ -130,7 +130,7 @@ pub fn parse_syntax_for_benchmark(input: &str) -> Result<(), DsrvParseError> {
 #[cfg(test)]
 fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
     let rendered = format!("{result:?}");
-    let Some(start) = rendered.find("semantic_entries: [") else {
+    let Some(start) = rendered.find("declarations: [") else {
         return rendered;
     };
     let mut depth = 0usize;
@@ -162,15 +162,20 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
             parsed.declaration_count()
         ));
     }
-    let (builder, declarations, _) = expand::expand_declarations(parsed, Default::default())?;
+    let expand::ExpandedDeclarations {
+        builder,
+        declarations,
+        roots,
+        ..
+    } = expand::expand_declarations(parsed, Default::default())?;
     let declaration = declarations
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("expected a stream declaration"))?;
     let expression = match &declaration {
-        Declaration::Assignment(_, root, _) => {
+        Declaration::Equation { .. } => {
             let expression = builder
-                .finish(*root)
+                .finish(roots[0])
                 .map_err(|error| anyhow!("Invalid expression tree: {error}"))?;
             if let Some(key) = expression.as_ref().duplicate_field() {
                 return Err(anyhow!("duplicate expression field {key:?}"));
@@ -226,7 +231,10 @@ mod source_tests {
         else {
             panic!("expected lambda")
         };
-        assert_eq!(parameters[0].1, StreamType::Int);
+        assert_eq!(
+            parameters[0].1,
+            crate::core::StreamTypeAscription::Ascribed(StreamType::Int)
+        );
         assert!(matches!(
             body.view(),
             ExprView::Dynamic(
@@ -325,11 +333,153 @@ mod source_tests {
         )
         .unwrap();
         let displayed = spec.to_string();
-        assert!(displayed.starts_with("type Count = Int\n"));
+        // Aliases print where they were declared, not sorted by name.
+        let aliases: Vec<_> = displayed
+            .lines()
+            .filter_map(|line| line.strip_prefix("type "))
+            .map(|line| line.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(aliases, ["State", "Count", "Record"]);
         let reparsed = parse_str(&displayed).unwrap();
         assert_eq!(spec.source_context(), reparsed.source_context());
         assert_eq!(spec.type_annotations(), reparsed.type_annotations());
         assert_eq!(displayed, reparsed.to_string());
+    }
+
+    #[test]
+    fn declarations_keep_source_order_including_type_aliases_but_not_the_header() {
+        use crate::lang::dsrv::ast::Declaration;
+        let source = "language distributed\nin x\ntype T = Int\nout y: T\ny = x\n";
+        let spec = parse_str(source).unwrap();
+        let kinds: Vec<String> = spec
+            .declarations()
+            .iter()
+            .map(|declaration| match declaration {
+                Declaration::Input { name, .. } => format!("in {name}"),
+                Declaration::Output { name, .. } => format!("out {name}"),
+                Declaration::Aux { name, .. } => format!("aux {name}"),
+                Declaration::Equation { name, .. } => format!("{name} ="),
+                Declaration::TypeAlias { name, .. } => format!("type {name}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["in x", "type T", "out y", "y ="]);
+        let Declaration::TypeAlias { span, .. } = &spec.declarations()[1] else {
+            panic!("the alias is the second declaration");
+        };
+        let start = source.find("type T").unwrap() as u32;
+        assert_eq!(*span, Span::new(start, start + "type T = Int".len() as u32));
+        assert_eq!(spec.declarations()[1].stream(), None);
+        assert_eq!(
+            spec.declarations()[3].stream(),
+            Some(&crate::VarName::new("y"))
+        );
+    }
+
+    #[test]
+    fn a_one_line_definition_is_a_declaration_and_an_equation() {
+        use crate::lang::dsrv::ast::Declaration;
+        for (one_line, two_lines) in [
+            (
+                "in x: Int\nout y: Int = x + 1",
+                "in x: Int\nout y: Int\ny = x + 1",
+            ),
+            ("in x\nout y = x", "in x\nout y\ny = x"),
+            (
+                "in x: Int\naux a: Int = x\nout y: Int = a",
+                "in x: Int\naux a: Int\na = x\nout y: Int\ny = a",
+            ),
+            (
+                "in x: Int\nvar a: Int = x\nout y: Int = a",
+                "in x: Int\naux a: Int\na = x\nout y: Int\ny = a",
+            ),
+        ] {
+            let one = parse_str(one_line).unwrap_or_else(|error| panic!("{one_line}: {error}"));
+            assert_eq!(one, parse_str(two_lines).unwrap(), "{one_line}");
+            // Printing uses the two-line form and reads back the same.
+            assert_eq!(parse_str(&one.to_string()).unwrap(), one, "{one_line}");
+        }
+
+        let source = "in x: Int\nout y: Int = x + 1\nout z: Int = y";
+        let spec = parse_str(source).unwrap();
+        let line = |text: &str| {
+            let start = source.find(text).unwrap() as u32;
+            Span::new(start, start + text.len() as u32)
+        };
+        let declarations = spec.declarations();
+        assert!(
+            matches!(&declarations[1], Declaration::Output { span, .. } if *span == line("out y: Int = x + 1"))
+        );
+        assert!(
+            matches!(&declarations[2], Declaration::Equation { span, .. } if *span == line("out y: Int = x + 1"))
+        );
+        assert!(matches!(&declarations[3], Declaration::Output { .. }));
+        assert!(matches!(&declarations[4], Declaration::Equation { .. }));
+        assert_eq!(declarations.len(), 5);
+    }
+
+    #[test]
+    fn one_line_definitions_are_core_and_follow_the_usual_rules() {
+        crate::lang::dsrv::check_core_source("in x: Int\nout y: Int = x[1]").unwrap();
+        assert!(matches!(
+            parse_str("in x = 1"),
+            Err(DsrvParseError::Syntax(_))
+        ));
+        let error = parse_str("out y = 1\ny = 2").unwrap_err().to_string();
+        assert!(
+            error.contains("stream y has more than one equation"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn object_field_shorthand_names_a_stream_by_its_field() {
+        let declarations = "in x: Int\nin label: Str\nout o: Struct<x: Int, label: Str>\n";
+        for (short, long) in [
+            ("o = {x, label}", "o = {x: x, label: label}"),
+            ("o = {x, label: \"p\"}", "o = {x: x, label: \"p\"}"),
+            ("o = {label: \"p\", x,}", "o = {label: \"p\", x: x}"),
+        ] {
+            let short_spec = parse_str(&format!("{declarations}{short}"))
+                .unwrap_or_else(|error| panic!("{short}: {error}"));
+            assert_eq!(
+                short_spec,
+                parse_str(&format!("{declarations}{long}")).unwrap(),
+                "{short}"
+            );
+            assert_eq!(
+                parse_str(&short_spec.to_string()).unwrap(),
+                short_spec,
+                "{short}"
+            );
+        }
+        crate::CheckedDsrvSpecification::parse_with(
+            &format!("{declarations}o = {{x, label}}"),
+            crate::lang::dsrv::TypeCheckOptions::STRICT,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            parse_str(&format!("{declarations}o = {{x, x: 1}}")),
+            Err(DsrvParseError::Ast(_))
+        ));
+        for source in ["out o\no = {and}", "out o\no = {\"x\"}"] {
+            assert!(
+                matches!(parse_str(source), Err(DsrvParseError::Syntax(_))),
+                "{source}"
+            );
+        }
+        // A `dynamic` scope is still a list of streams, not an object.
+        parse_str("in source: Str\nin x: Int\nout y: Int\ny = dynamic(source: Int, {x})").unwrap();
+    }
+
+    #[test]
+    fn a_stream_with_two_equations_names_both() {
+        let error = parse_str("out y\ny = 1\ny = 2").unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("stream y has more than one equation"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -486,13 +636,35 @@ mod tests {
         assert!(matches!(expression.as_ref().view(), ExprView::Neg(_)));
     }
 
+    /// A compact rendering, with the span, which `Declaration`'s equality
+    /// ignores.
     fn declaration_to_string(result: &Result<(Option<Expr>, Declaration), Error>) -> String {
         match result {
-            Ok((Some(expression), Declaration::Assignment(name, _, span))) => {
+            Ok((Some(expression), Declaration::Equation { name, span })) => {
                 format!(
-                    "Ok(Assignment({name:?}, {}, {span:?}))",
+                    "Ok(Equation({name:?}, {}, {span:?}))",
                     strip_span(expression)
                 )
+            }
+            Ok((
+                _,
+                Declaration::Input {
+                    name,
+                    annotation,
+                    span,
+                },
+            )) => {
+                format!("Ok(Input({name:?}, {annotation:?}, {span:?}))")
+            }
+            Ok((
+                _,
+                Declaration::Output {
+                    name,
+                    annotation,
+                    span,
+                },
+            )) => {
+                format!("Ok(Output({name:?}, {annotation:?}, {span:?}))")
             }
             Ok((_, declaration)) => format!("Ok({declaration:?})"),
             Err(error) => format!("Err({error:?})"),
@@ -621,43 +793,43 @@ mod tests {
         let input = "in xs: List<Int>";
         assert_eq!(
             parse_declaration(input).unwrap().1,
-            Declaration::Input(
-                "xs".into(),
-                Some(StreamType::List(Box::new(StreamType::Int))),
-                Span::new(0, input.len() as u32),
-            )
+            Declaration::Input {
+                name: "xs".into(),
+                annotation: Some(StreamType::List(Box::new(StreamType::Int))),
+                span: Span::new(0, input.len() as u32)
+            }
         );
 
         let input = "in m: Map<List<Bool>>";
         assert_eq!(
             parse_declaration(input).unwrap().1,
-            Declaration::Input(
-                "m".into(),
-                Some(StreamType::Map(Box::new(StreamType::List(Box::new(
+            Declaration::Input {
+                name: "m".into(),
+                annotation: Some(StreamType::Map(Box::new(StreamType::List(Box::new(
                     StreamType::Bool
                 ))))),
-                Span::new(0, input.len() as u32),
-            )
+                span: Span::new(0, input.len() as u32)
+            }
         );
 
         let input = "in property: Expr<List<Bool>>";
         assert_eq!(
             parse_declaration(input).unwrap().1,
-            Declaration::Input(
-                "property".into(),
-                Some(StreamType::Expr(Box::new(StreamType::List(Box::new(
+            Declaration::Input {
+                name: "property".into(),
+                annotation: Some(StreamType::Expr(Box::new(StreamType::List(Box::new(
                     StreamType::Bool
                 ))))),
-                Span::new(0, input.len() as u32),
-            )
+                span: Span::new(0, input.len() as u32)
+            }
         );
 
         let input = "in robot: Struct<id: Int, label: Str>";
         assert_eq!(
             parse_declaration(input).unwrap().1,
-            Declaration::Input(
-                "robot".into(),
-                Some(StreamType::Struct(
+            Declaration::Input {
+                name: "robot".into(),
+                annotation: Some(StreamType::Struct(
                     vec![
                         ("id".into(), StreamType::Int),
                         ("label".into(), StreamType::Str),
@@ -665,21 +837,21 @@ mod tests {
                     .into(),
                     false,
                 )),
-                Span::new(0, input.len() as u32),
-            )
+                span: Span::new(0, input.len() as u32)
+            }
         );
 
         let input = "in robot: Struct<id: Int, ...>";
         assert_eq!(
             parse_declaration(input).unwrap().1,
-            Declaration::Input(
-                "robot".into(),
-                Some(StreamType::Struct(
+            Declaration::Input {
+                name: "robot".into(),
+                annotation: Some(StreamType::Struct(
                     vec![("id".into(), StreamType::Int)].into(),
                     true,
                 )),
-                Span::new(0, input.len() as u32),
-            )
+                span: Span::new(0, input.len() as u32)
+            }
         );
 
         // Not sure if we should allow this, but this is how it currently works. As long as we
@@ -1155,19 +1327,19 @@ mod tests {
     fn test_assignment_decl() {
         assert_eq!(
             declaration_to_string(&parse_declaration("x = 0")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Int(0)), Span { start: 0, end: 5 }))"#
+            r#"Ok(Equation(VarName::new("x"), Val(Int(0)), Span { start: 0, end: 5 }))"#
         );
         assert_eq!(
             declaration_to_string(&parse_declaration(r#"x = "hello""#)),
-            r#"Ok(Assignment(VarName::new("x"), Val(Str("hello")), Span { start: 0, end: 11 }))"#
+            r#"Ok(Equation(VarName::new("x"), Val(Str("hello")), Span { start: 0, end: 11 }))"#
         );
         assert_eq!(
             declaration_to_string(&parse_declaration("x = true")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Bool(true)), Span { start: 0, end: 8 }))"#
+            r#"Ok(Equation(VarName::new("x"), Val(Bool(true)), Span { start: 0, end: 8 }))"#
         );
         assert_eq!(
             declaration_to_string(&parse_declaration("x = false")),
-            r#"Ok(Assignment(VarName::new("x"), Val(Bool(false)), Span { start: 0, end: 9 }))"#
+            r#"Ok(Equation(VarName::new("x"), Val(Bool(false)), Span { start: 0, end: 9 }))"#
         );
     }
 
@@ -1232,7 +1404,7 @@ mod tests {
     fn duplicate_assignments_are_ast_validation_errors() {
         let source = "out x\nx = 1\nx = 2";
         let error = parse_str(source).unwrap_err();
-        let DsrvParseError::Ast(DsrvAstError::DuplicateAssignment {
+        let DsrvParseError::Ast(DsrvAstError::DuplicateEquation {
             variable,
             first,
             duplicate,
@@ -1250,7 +1422,7 @@ mod tests {
     fn duplicate_assignment_errors_follow_source_order() {
         let source = "out z\nout a\nz = 0\na = 0\nz = 1\na = 1";
         let error = parse_str(source).unwrap_err();
-        let DsrvParseError::Ast(DsrvAstError::DuplicateAssignment {
+        let DsrvParseError::Ast(DsrvAstError::DuplicateEquation {
             variable,
             first,
             duplicate,
@@ -1394,7 +1566,7 @@ mod tests {
         );
         assert_eq!(
             declaration_to_string(&parse_declaration("y = List()")),
-            r#"Ok(Assignment(VarName::new("y"), List([]), Span { start: 0, end: 10 }))"#
+            r#"Ok(Equation(VarName::new("y"), List([]), Span { start: 0, end: 10 }))"#
         )
     }
 
@@ -1542,7 +1714,7 @@ mod tests {
         );
         assert_eq!(
             declaration_to_string(&parse_declaration("y = Map()")),
-            r#"Ok(Assignment(VarName::new("y"), Map({}), Span { start: 0, end: 9 }))"#
+            r#"Ok(Equation(VarName::new("y"), Map({}), Span { start: 0, end: 9 }))"#
         )
     }
 
@@ -2098,7 +2270,12 @@ mod tests {
         let parse_type = |typ: &str| {
             let (_, declaration) =
                 parse_declaration(&format!("in value: {typ}")).expect("type should parse");
-            let Declaration::Input(_, typ, _) = declaration else {
+            let Declaration::Input {
+                name: _,
+                annotation: typ,
+                span: _,
+            } = declaration
+            else {
                 panic!("expected input declaration");
             };
             typ
@@ -2109,15 +2286,23 @@ mod tests {
         let (_, declaration) = parse_declaration("in value: Struct<>").unwrap();
         assert!(matches!(
             declaration,
-            Declaration::Input(_, Some(StreamType::Struct(fields, false)), _)
+            Declaration::Input { name: _, annotation: Some(StreamType::Struct(fields, false)), span: _ }
                 if fields.is_empty()
         ));
         assert!(parse_declaration("in value: Struct<,>").is_err());
         let nested_plain = parse_declaration("in value: List<Map<Int>>").unwrap().1;
         let nested_trailing = parse_declaration("in value: List<Map<Int,>,>").unwrap().1;
         let (
-            Declaration::Input(_, plain_type, plain_span),
-            Declaration::Input(_, trailing_type, trailing_span),
+            Declaration::Input {
+                name: _,
+                annotation: plain_type,
+                span: plain_span,
+            },
+            Declaration::Input {
+                name: _,
+                annotation: trailing_type,
+                span: trailing_span,
+            },
         ) = (&nested_plain, &nested_trailing)
         else {
             panic!("expected nested list declarations");
@@ -2241,7 +2426,7 @@ mod tests {
                     .expect("generated type should parse");
                 let (_, trailed_declaration) = parse_declaration(&format!("in value: {with}"))
                     .expect("generated type with comma should parse");
-                let (Declaration::Input(_, plain, _), Declaration::Input(_, trailed, _)) =
+                let (Declaration::Input { name: _, annotation: plain, span: _ }, Declaration::Input { name: _, annotation: trailed, span: _ }) =
                     (plain_declaration, trailed_declaration)
                 else {
                     panic!("generated type pair did not parse as input declarations");

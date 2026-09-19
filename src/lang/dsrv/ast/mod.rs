@@ -35,7 +35,7 @@ pub(crate) use expression::{
 
 pub(crate) use specification::UnvalidatedDsrvSpecification;
 pub use specification::{
-    CheckedDsrvSpecification, DsrvAstError, DsrvSpecification, SemanticEntry,
+    CheckedDsrvSpecification, Declaration, DsrvAstError, DsrvSpecification,
     ValidatedDsrvSpecification,
 };
 

@@ -138,7 +138,7 @@ where
         Lambda(params, body) => {
             let params_display = params
                 .iter()
-                .map(|(name, typ)| format!("{}: {}", name, typ))
+                .map(|(name, ascription)| ascription.parameter_display(name))
                 .collect::<Vec<_>>()
                 .join(", ");
             let body = own_child(body);

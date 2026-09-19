@@ -25,6 +25,13 @@ struct TypeContext<'types> {
     expr_types: Option<ExprTypesBuilder>,
     owner: Option<VarName>,
     strict_runtime_sources: bool,
+    /// Gradual checking gives a lambda parameter with neither annotation nor
+    /// hint the dynamic type; strict checking reports it.
+    dynamic_unhinted_parameters: bool,
+    /// Parameter types for the lambda about to be checked, from where it is
+    /// used (a list callback's element type, or an immediate call's
+    /// arguments). Taken by that lambda; callers clear it afterwards.
+    parameter_hints: Option<EcoVec<TCType>>,
 }
 
 impl TypeContext<'_> {
@@ -50,6 +57,8 @@ pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsr
         expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
         strict_runtime_sources: true,
+        dynamic_unhinted_parameters: false,
+        parameter_hints: None,
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -90,6 +99,8 @@ pub(crate) fn check_expression(
         expr_types: Some(expr.annotations_builder()),
         owner: None,
         strict_runtime_sources: true,
+        dynamic_unhinted_parameters: false,
+        parameter_hints: None,
     };
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
     #[cfg(debug_assertions)]
@@ -151,6 +162,8 @@ pub(crate) fn infer_expression(
         expr_types: None,
         owner: None,
         strict_runtime_sources: false,
+        dynamic_unhinted_parameters: true,
+        parameter_hints: None,
     };
     check(expr, expected, &mut context)
 }
@@ -166,6 +179,8 @@ pub(crate) fn check_gradual_expr_types(
         expr_types: Some(spec.exprs.annotations_builder()),
         owner: None,
         strict_runtime_sources: false,
+        dynamic_unhinted_parameters: true,
+        parameter_hints: None,
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -196,6 +211,21 @@ fn assign_any_to_subtree(expr: ExprRef<'_>, expr_types: &mut ExprTypesBuilder) {
             .insert(node, TCType::Any)
             .expect("expression belongs to the expression-type scope");
     }
+}
+
+/// Check a list callback. A lambda written in place gets its parameter types
+/// from `hints`; any other function expression is checked as it stands.
+fn check_callback(
+    function: ExprRef<'_>,
+    hints: EcoVec<TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    if matches!(function.view(), ExprView::Lambda(..)) {
+        context.parameter_hints = Some(hints);
+    }
+    let checked = check(function, None, context);
+    context.parameter_hints = None;
+    checked
 }
 
 fn check(
@@ -326,13 +356,47 @@ fn check(
             (typ, None)
         }
         Lambda(params, body) => {
+            // A parameter's type is its annotation, else the type the
+            // context expects for that argument.
+            let hints = context
+                .parameter_hints
+                .take()
+                .or_else(|| match expected {
+                    Some(TCType::Function(hinted, _)) => Some(hinted.clone()),
+                    _ => None,
+                })
+                .filter(|hinted| hinted.len() == params.len());
+            let mut parameters = Vec::with_capacity(params.len());
+            for (index, (name, ascription)) in params.iter().enumerate() {
+                let typ = match ascription {
+                    StreamTypeAscription::Ascribed(typ) => typ.clone(),
+                    StreamTypeAscription::Unascribed => {
+                        match hints
+                            .as_ref()
+                            .and_then(|hinted| hinted[index].to_stream_type())
+                        {
+                            Some(typ) => typ,
+                            None if context.dynamic_unhinted_parameters => StreamType::Any,
+                            None => {
+                                return Err(SemanticError::MissingTypeAnnotation(
+                                    format!(
+                                        "cannot infer the type of lambda parameter `{name}` from its context; annotate it"
+                                    ),
+                                    Some(expr.span()),
+                                ));
+                            }
+                        }
+                    }
+                };
+                parameters.push((name.clone(), typ));
+            }
             let frame_start = context.local_bindings.len();
-            context.local_bindings.extend(params.iter().cloned());
+            context.local_bindings.extend(parameters.iter().cloned());
             let result = check(body, None, context);
             context.local_bindings.truncate(frame_start);
             (
                 TCType::Function(
-                    params
+                    parameters
                         .iter()
                         .map(|(_, typ)| TCType::from_stream_type(typ))
                         .collect(),
@@ -341,8 +405,46 @@ fn check(
                 None,
             )
         }
-        Apply(function, args) => {
+        Apply(function, args)
+            if matches!(
+                function.view(),
+                Lambda(params, _) if params
+                    .iter()
+                    .any(|(_, ascription)| matches!(ascription, StreamTypeAscription::Unascribed))
+            ) =>
+        {
+            // `(\x -> …)(a)`: the arguments are checked first and give the
+            // lambda's parameters their types.
+            let arguments = args
+                .map(|arg| check(arg, None, context))
+                .collect::<Result<EcoVec<_>, _>>()?;
+            context.parameter_hints = Some(arguments.clone());
+            let checked = check(function, None, context);
+            context.parameter_hints = None;
+            let TCType::Function(params, result) = checked? else {
+                unreachable!("a lambda checks to a function type");
+            };
+            if params.len() != arguments.len() {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::FunctionArityMismatch,
+                    "function argument count differs",
+                ));
+            }
+            for (actual, expected) in arguments.into_iter().zip(&params) {
+                require(actual, expected, expr)?;
+            }
+            (*result, None)
+        }
+        Apply(function, args) => 'apply: {
             let function = check(function, None, context)?;
+            if function == TCType::Any {
+                // A dynamic function is applied at runtime.
+                for arg in args {
+                    check(arg, None, context)?;
+                }
+                break 'apply (TCType::Any, None);
+            }
             let TCType::Function(params, result) = function else {
                 return Err(error(
                     expr,
@@ -363,8 +465,11 @@ fn check(
             }
             (*result, None)
         }
-        Fix(function) => {
+        Fix(function) => 'fix: {
             let function = check(function, None, context)?;
+            if function == TCType::Any {
+                break 'fix (TCType::Any, None);
+            }
             let TCType::Function(params, result) = function else {
                 return Err(error(
                     expr,
@@ -387,8 +492,14 @@ fn check(
             require(params[0].clone(), &fixed, expr)?;
             (fixed, None)
         }
-        Partial(function, args) => {
+        Partial(function, args) => 'partial: {
             let function = check(function, None, context)?;
+            if function == TCType::Any {
+                for arg in args {
+                    check(arg, None, context)?;
+                }
+                break 'partial (TCType::Any, None);
+            }
             let TCType::Function(params, result) = function else {
                 return Err(error(
                     expr,
@@ -437,46 +548,55 @@ fn check(
                 &TCType::Int,
                 expr,
             )?;
-            let list = check(list, None, context)?;
-            let TCType::List(element) = list else {
-                return Err(error(
-                    expr,
-                    TypeErrorKind::ListIndexTypeMismatch,
-                    "indexing requires a list",
-                ));
-            };
-            (*element, None)
+            match check(list, None, context)? {
+                TCType::List(element) => (*element, None),
+                // A dynamic value is indexed at runtime.
+                TCType::Any => (TCType::Any, None),
+                _ => {
+                    return Err(error(
+                        expr,
+                        TypeErrorKind::ListIndexTypeMismatch,
+                        "indexing requires a list",
+                    ));
+                }
+            }
         }
-        LAppend(list, value) => {
-            let list_type = check(list, expected, context)?;
-            let TCType::List(element) = list_type else {
+        LAppend(list, value) => match check(list, expected, context)? {
+            TCType::List(element) => {
+                require(check(value, Some(&element), context)?, &element, expr)?;
+                (TCType::List(element), None)
+            }
+            TCType::Any => {
+                check(value, None, context)?;
+                (TCType::Any, None)
+            }
+            _ => {
                 return Err(error(
                     expr,
                     TypeErrorKind::ListOperationTypeMismatch,
                     "append requires a list",
                 ));
-            };
-            require(check(value, Some(&element), context)?, &element, expr)?;
-            (TCType::List(element), None)
-        }
+            }
+        },
         LConcat(a, b) => {
             let a = check(a, expected, context)?;
             let b = check(b, Some(&a), context)?;
             (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
         }
-        LHead(list) => {
-            let TCType::List(element) = check(list, None, context)? else {
+        LHead(list) => match check(list, None, context)? {
+            TCType::List(element) => (*element, None),
+            TCType::Any => (TCType::Any, None),
+            _ => {
                 return Err(error(
                     expr,
                     TypeErrorKind::ListOperationTypeMismatch,
                     "head requires a list",
                 ));
-            };
-            (*element, None)
-        }
+            }
+        },
         LTail(list) => {
             let typ = check(list, expected, context)?;
-            if !matches!(typ, TCType::List(_)) {
+            if !matches!(typ, TCType::List(_) | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::ListOperationTypeMismatch,
@@ -487,7 +607,7 @@ fn check(
         }
         LLen(list) => {
             let typ = check(list, None, context)?;
-            if !matches!(typ, TCType::List(_)) {
+            if !matches!(typ, TCType::List(_) | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::ListOperationTypeMismatch,
@@ -497,7 +617,10 @@ fn check(
             (TCType::Int, None)
         }
         LMap(function, list) => {
-            let list = check(list, None, context)?;
+            let list = match check(list, None, context)? {
+                TCType::Any => TCType::List(Box::new(TCType::Any)),
+                list => list,
+            };
             let TCType::List(input) = list else {
                 return Err(error(
                     expr,
@@ -505,7 +628,7 @@ fn check(
                     "map requires a list",
                 ));
             };
-            let function = check(function, None, context)?;
+            let function = check_callback(function, EcoVec::from([(*input).clone()]), context)?;
             let TCType::Function(params, output) = function else {
                 return Err(error(
                     expr,
@@ -523,7 +646,10 @@ fn check(
             (TCType::List(output), None)
         }
         LFilter(function, list) => {
-            let list = check(list, expected, context)?;
+            let list = match check(list, expected, context)? {
+                TCType::Any => TCType::List(Box::new(TCType::Any)),
+                list => list,
+            };
             let TCType::List(input) = &list else {
                 return Err(error(
                     expr,
@@ -531,7 +657,7 @@ fn check(
                     "filter requires a list",
                 ));
             };
-            let function = check(function, None, context)?;
+            let function = check_callback(function, EcoVec::from([(**input).clone()]), context)?;
             let TCType::Function(params, output) = function else {
                 return Err(error(
                     expr,
@@ -550,14 +676,22 @@ fn check(
         }
         LFold(function, init, list) => {
             let accumulator = check(init, expected, context)?;
-            let TCType::List(element) = check(list, None, context)? else {
+            let list = match check(list, None, context)? {
+                TCType::Any => TCType::List(Box::new(TCType::Any)),
+                list => list,
+            };
+            let TCType::List(element) = list else {
                 return Err(error(
                     expr,
                     TypeErrorKind::ListOperationTypeMismatch,
                     "fold requires a list",
                 ));
             };
-            let function = check(function, None, context)?;
+            let function = check_callback(
+                function,
+                EcoVec::from([accumulator.clone(), (*element).clone()]),
+                context,
+            )?;
             let TCType::Function(params, output) = function else {
                 return Err(error(
                     expr,
@@ -716,6 +850,7 @@ fn check(
         }
         MGet(map, key) => match check(map, None, context)? {
             TCType::Map(value) => (*value, None),
+            TCType::Any => (TCType::Any, None),
             TCType::Struct(fields, _) => (
                 fields
                     .iter()
@@ -739,6 +874,7 @@ fn check(
             }
         },
         SGet(value, key) => match check(value, None, context)? {
+            TCType::Any => (TCType::Any, None),
             TCType::Struct(fields, _) => (
                 fields
                     .iter()
@@ -778,6 +914,7 @@ fn check(
             let map_type = check(map, expected, context)?;
             let element = match &map_type {
                 TCType::Map(element) => element.as_ref(),
+                TCType::Any => &TCType::Any,
                 TCType::Struct(fields, _) => fields
                     .iter()
                     .find(|(name, _)| name == key)
@@ -802,7 +939,7 @@ fn check(
         }
         MRemove(map, _) => {
             let typ = check(map, expected, context)?;
-            if !matches!(typ, TCType::Map(_)) {
+            if !matches!(typ, TCType::Map(_) | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::MapOperationTypeMismatch,
@@ -813,7 +950,7 @@ fn check(
         }
         MHasKey(map, _) => {
             let typ = check(map, None, context)?;
-            if !matches!(typ, TCType::Map(_) | TCType::Struct(_, _)) {
+            if !matches!(typ, TCType::Map(_) | TCType::Struct(_, _) | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::MapOperationTypeMismatch,

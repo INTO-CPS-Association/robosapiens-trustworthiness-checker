@@ -19,7 +19,7 @@ use ecow::{EcoString, EcoVec};
 
 use super::CheckedExprRef;
 use super::checked::CheckedTypes;
-use crate::core::{BinaryOperator, StreamType, Value};
+use crate::core::{BinaryOperator, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::source::SourceContext;
@@ -296,7 +296,8 @@ contiguous_tree::tree_schema! {
         Not(value: child),
         Neg(value: child),
 
-        Lambda(parameters: data(EcoVec<(VarName, StreamType)>), body: child),
+        // An unascribed parameter's type is inferred from where the lambda is used.
+        Lambda(parameters: data(EcoVec<(VarName, StreamTypeAscription)>), body: child),
         Apply(function: child, arguments: children),
         Fix(function: child),
         Partial(function: child, arguments: children),
