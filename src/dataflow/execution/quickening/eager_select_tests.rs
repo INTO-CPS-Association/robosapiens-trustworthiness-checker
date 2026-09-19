@@ -1,4 +1,3 @@
-use crate::CheckedDsrvSpecification;
 use crate::core::Value;
 use crate::dataflow::execution::evaluator::Evaluator;
 use crate::dataflow::execution::evaluator_state::NodeState;
@@ -8,6 +7,7 @@ use crate::dataflow::stream_id::StreamId;
 use crate::dataflow::{DataflowMonitor, DataflowProgram};
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
+use crate::dsrv_fixtures::elaborated;
 
 use super::{QuickenedRegionPlan, QuickenedRegionState};
 
@@ -17,12 +17,10 @@ fn conditional() -> (
     Vec<Evaluator>,
     Vec<Value>,
 ) {
-    let compiled = DataflowProgram::compile_checked(
+    let compiled = DataflowProgram::compile_checked(elaborated(
         "in c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
-         result = if c then x + 1 else y + 2"
-            .parse::<CheckedDsrvSpecification>()
-            .expect("conditional should type check"),
-    )
+         result = if c then x + 1 else y + 2",
+    ))
     .expect("conditional should compile");
     let programs = compiled.stream_programs().to_vec();
     let order = [StreamId::new(0)];
@@ -72,13 +70,11 @@ fn eager_select_gives_unselected_no_val_precedence() {
 
 #[test]
 fn eager_select_reads_an_earlier_member_and_supports_nested_conditionals() {
-    let compiled = DataflowProgram::compile_checked(
+    let compiled = DataflowProgram::compile_checked(elaborated(
         "in c: Bool\nin x: Int\nin y: Int\naux a: Int\nout result: Int\n\
          a = x + 1\n\
-         result = if c then (if c then a + 2 else y + 3) else y + 4"
-            .parse::<CheckedDsrvSpecification>()
-            .expect("dependent conditionals should type check"),
-    )
+         result = if c then (if c then a + 2 else y + 3) else y + 4",
+    ))
     .expect("dependent conditionals should compile");
     let programs = compiled.stream_programs().to_vec();
     let order = [StreamId::new(0), StreamId::new(1)];
@@ -139,12 +135,12 @@ fn eager_select_nested_state_round_trips_through_canonical_state() {
 
 #[test]
 fn eager_select_matches_canonical_in_a_mixed_temporal_schedule() {
-    let specification = "in c: Bool\nin x: Int\nin y: Int\n\
+    let specification = elaborated(
+        "in c: Bool\nin x: Int\nin y: Int\n\
         aux previous: Int\nout result: Int\n\
         previous = default(x[1], 0)\n\
-        result = if c then previous + x else y + 2"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("mixed schedule should type check");
+        result = if c then previous + x else y + 2",
+    );
     let mut quick = DataflowMonitor::compile_checked(specification.clone()).unwrap();
     let mut canonical = DataflowMonitor::compile_checked(specification).unwrap();
     canonical.set_quickening(false);
@@ -166,10 +162,10 @@ fn eager_select_matches_canonical_in_a_mixed_temporal_schedule() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_select_state_survives_native_quick_and_canonical_transitions() {
-    let specification = "in c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
-        result = if c then x + 1 else y + 2"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("conditional should type check");
+    let specification = elaborated(
+        "in c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
+        result = if c then x + 1 else y + 2",
+    );
     let mut tiered =
         DataflowMonitor::compile_checked_with_jit(specification.clone(), JitConfig::eager())
             .unwrap();
@@ -201,11 +197,11 @@ fn eager_select_state_survives_native_quick_and_canonical_transitions() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_select_region_native_recovers_after_successive_sparse_rows() {
-    let specification = "in c: Bool\nin x: Int\nin y: Int\nin text: Str\n\
+    let specification = elaborated(
+        "in c: Bool\nin x: Int\nin y: Int\nin text: Str\n\
         out result: Int\nout label: Str\n\
-        result = if c then x + 1 else y + 2\nlabel = text"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("mixed native regions should type check");
+        result = if c then x + 1 else y + 2\nlabel = text",
+    );
     let mut tiered =
         DataflowMonitor::compile_checked_with_jit(specification.clone(), JitConfig::eager())
             .unwrap();

@@ -1,6 +1,7 @@
 //! DSRV syntax, parsers, and type checking.
 
 pub mod ast;
+mod elaborate;
 mod expand;
 pub mod parser;
 mod pipeline;
@@ -12,6 +13,7 @@ pub mod type_checker;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use elaborate::ElaboratedDsrvSpecification;
 pub use expand::language::{
     CoreDsrvSpecification, Dialect, Edition, LanguageConfig, LanguageError, LanguageRequest,
 };

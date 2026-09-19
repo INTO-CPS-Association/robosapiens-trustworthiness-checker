@@ -74,7 +74,7 @@
 //!
 //! | Stage | Main artifact | Responsibility |
 //! |:------|:--------------|:---------------|
-//! | **1. Read the model** | `DsrvSpecification` or `CheckedDsrvSpecification` | Supply untyped expressions or expressions with checked types. |
+//! | **1. Read the model** | `ElaboratedDsrvSpecification` | Supply the checked, elaborated equations and the type of each node. |
 //! | **2. Lower expressions** | `UnboundEvaluationGraph` | Convert syntax into ordered operations whose external references are still `VarName` values. |
 //! | **3. Order and bind streams** | `BoundEvaluationGraph` | Topologically order same-tick dependencies and replace names with stable `EnvironmentSlot` values. |
 //! | **4. Build the definition** | `DataflowProgram`, `StreamProgram`, and `MonitorPlan` | Bind immutable programs, fixed layout metadata, reconfigurable expressions, dependencies, and temporal effects. |
@@ -104,18 +104,17 @@
 //! <figcaption>Compilation creates the ordered monitor; evaluation reuses it for each logical input row.</figcaption>
 //! </figure>
 //!
-//! ## Typed and untyped entry points
+//! ## Entry points
 //!
-//! [`DataflowMonitor::compile_checked`] accepts a [`crate::CheckedDsrvSpecification`]. Its equations
-//! are already type checked, and that checked type environment and each expected result type are
-//! retained so later `dynamic`/`defer` source strings are type checked when they become active.
-//! [`DataflowMonitor::compile_untyped`] accepts a [`DsrvSpecification`], lowers its untyped
-//! expressions directly, and runtime-compiles dynamic definitions without a type-checking pass.
-//! Parsing a [`DsrvSpecification`] alone does not make it typed.
-//!
-//! `TryFrom<DsrvSpecification>` and `TryFrom<CheckedDsrvSpecification>` are exact conveniences for
-//! those two methods. The generic [`crate::runtime::dataflow::DataflowRuntimeBuilder`] uses the same
-//! conversions, so choosing the model type also chooses checked versus unchecked compilation.
+//! [`DataflowMonitor::compile_checked`] accepts an [`crate::ElaboratedDsrvSpecification`]: a
+//! specification that has been checked and elaborated, so each equation carries the types used
+//! for scalar specialisation and for checking later `dynamic`/`defer` source strings when they
+//! become active. [`DataflowMonitor::compile_with_semantics`] compiles the same specification
+//! with the evaluation strategy of a [`crate::core::Semantics`]: `untimed` lowers the elaborated
+//! expressions without consulting their types, and every other semantics compiles as
+//! [`DataflowMonitor::compile_checked`] does. The generic
+//! [`crate::runtime::dataflow::DataflowRuntimeBuilder`] uses the same entry points, so the
+//! semantics chooses the strategy; the model is always elaborated.
 //!
 //! ## Row representation: `Value` rows or typed rows
 //!
@@ -142,7 +141,7 @@
 //! This executable version exercises compilation and the public monitor interface directly:
 //!
 //! ```
-//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in x: Int\n\
@@ -152,8 +151,9 @@
 //!     alert = total > 20\n\
 //!     total = default(total[1], 0) + scaled\n\
 //!     scaled = x * 2";
-//! let spec = source.parse::<DsrvSpecification>().expect("valid DSRV specification");
-//! let mut monitor = DataflowMonitor::compile_untyped(spec).expect("valid dataflow");
+//! let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+//!     .expect("valid DSRV specification");
+//! let mut monitor = DataflowMonitor::compile_checked(spec).expect("valid dataflow");
 //! let outputs = monitor.output_vars().to_vec();
 //! let output_index = |name: &str| {
 //!     outputs.iter().position(|var| var == &VarName::new(name)).expect("declared output")
@@ -527,14 +527,14 @@
 //! sees the same captured value:
 //!
 //! ```
-//! use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 //! use trustworthiness_checker::dataflow::DataflowMonitor;
 //!
 //! let source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let spec = source.parse::<DsrvSpecification>().unwrap();
-//! let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+//! let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL).unwrap();
+//! let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let output_vars = monitor.output_vars().to_vec();
 //! let input = |bias: i64, n: i64| {
@@ -599,11 +599,13 @@
 //! an incompatible `x[0]` body, and then starts another `x[1]` evaluator:
 //!
 //! ```
-//! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! # use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 //! # use trustworthiness_checker::dataflow::DataflowMonitor;
-//! # let spec = "in source: Str\nin x: Int\nout z: Int\nz = dynamic(source: Int)"
-//! #     .parse::<DsrvSpecification>().unwrap();
-//! # let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+//! # let spec = ElaboratedDsrvSpecification::parse_with(
+//! #     "in source: Str\nin x: Int\nout z: Int\nz = dynamic(source: Int)",
+//! #     TypeCheckOptions::GRADUAL,
+//! # ).unwrap();
+//! # let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! # let input_vars = monitor.input_vars().to_vec();
 //! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {
 //! #     if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
@@ -639,11 +641,13 @@
 //! `x[1]` evaluator, and a later `Deferred` source does not interrupt its history:
 //!
 //! ```
-//! # use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+//! # use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 //! # use trustworthiness_checker::dataflow::DataflowMonitor;
-//! # let spec = "in source: Str\nin x: Int\nout z: Int\nz = defer(source: Int)"
-//! #     .parse::<DsrvSpecification>().unwrap();
-//! # let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+//! # let spec = ElaboratedDsrvSpecification::parse_with(
+//! #     "in source: Str\nin x: Int\nout z: Int\nz = defer(source: Int)",
+//! #     TypeCheckOptions::GRADUAL,
+//! # ).unwrap();
+//! # let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! # let input_vars = monitor.input_vars().to_vec();
 //! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {
 //! #     if var == &VarName::new("source") { source.clone() } else { Value::Int(x) }
@@ -700,7 +704,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::core::{RuntimeFunction, StreamType, Value};
-use crate::lang::dsrv::ast::{DsrvSpecification, Expr};
+use crate::lang::dsrv::ast::Expr;
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};

@@ -458,16 +458,22 @@ where
     }
 }
 
+/// Untimed semantics that evaluates the elaborated tree without consulting
+/// its types.
 impl<AC> MonitoringSemantics<AC> for UntimedDsrvSemantics
 where
-    AC: AsyncConfig<Val = Value, Expr = Expr>,
+    AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation.
     const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
 
-    fn to_async_stream(expr: &Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> LocalStream<Value> {
-        evaluate::<AC>(expr.clone(), owner, ctx)
+    fn to_async_stream(
+        expr: &CheckedExpr,
+        ctx: &AC::Ctx,
+        owner: Option<VarName>,
+    ) -> LocalStream<Value> {
+        evaluate::<AC>(expr.expr().clone(), owner, ctx)
     }
 }
 
@@ -508,7 +514,7 @@ mod tests {
         ast::{CheckedDsrvSpecification, Expr},
     };
     use crate::runtime::asynchronous::Context;
-    use crate::runtime::builder::CheckedValueConfig;
+    use crate::runtime::builder::ValueConfig;
     use crate::semantics::StreamContext;
     use ecow::eco_vec;
     use futures::stream::{self, StreamExt};
@@ -558,10 +564,10 @@ mod tests {
         )
         .unwrap();
         let expression = checked.var_expr(&"result".into()).unwrap();
-        let context = Context::<CheckedValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
+        let context = Context::<ValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
 
         let values: Vec<Value> = <CheckedUntimedDsrvSemantics as MonitoringSemantics<
-            CheckedValueConfig,
+            ValueConfig,
         >>::to_async_stream(&expression, &context, None)
         .take(1)
         .collect::<Vec<_>>()
@@ -581,14 +587,14 @@ mod tests {
         .unwrap();
         let expression = checked.var_expr(&"result".into()).unwrap();
         let input = Box::pin(futures::stream::iter([Value::Float(1.0), Value::NoVal]));
-        let mut context =
-            Context::<CheckedValueConfig>::new(executor, vec!["x".into()], vec![input], 0);
+        let mut context = Context::<ValueConfig>::new(executor, vec!["x".into()], vec![input], 0);
 
-        let output = <CheckedUntimedDsrvSemantics as MonitoringSemantics<CheckedValueConfig>>::to_async_stream(
-            &expression,
-            &context,
-            None,
-        );
+        let output =
+            <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::to_async_stream(
+                &expression,
+                &context,
+                None,
+            );
         context.run().await;
         let values: Vec<Value> = output.collect::<Vec<_>>().await;
 
@@ -753,7 +759,7 @@ mod tests {
     }
 
     fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> LocalStream<Value> {
-        <UntimedDsrvSemantics as MonitoringSemantics<TestConfig>>::to_async_stream(&expr, ctx, None)
+        evaluate::<TestConfig>(expr, None, ctx)
     }
     // ============================================================================
     // DEFER TESTS

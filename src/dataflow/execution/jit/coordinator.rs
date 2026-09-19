@@ -538,13 +538,13 @@ mod tests {
 
     #[test]
     fn materialize_into_replays_fused_state_in_live_evaluators() {
-        let specification = "in x: Int\n\
+        let specification = elaborated(
+            "in x: Int\n\
             aux a: Int\n\
             out result: Int\n\
             a = x + 1\n\
-            result = a * 2"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+            result = a * 2",
+        );
         let program = DataflowProgram::compile_checked(specification).unwrap();
         let programs = program.stream_programs().to_vec();
         let stream_slots = program.monitor_plan().stream_slots;
@@ -592,12 +592,9 @@ mod tests {
 
     #[test]
     fn active_jit_recompiles_after_an_unavailable_plan_changes() {
-        let old_program = DataflowProgram::compile_checked(
-            "in x: Str\nout result: Str\nresult = x"
-                .parse::<CheckedDsrvSpecification>()
-                .unwrap(),
-        )
-        .unwrap();
+        let old_program =
+            DataflowProgram::compile_checked(elaborated("in x: Str\nout result: Str\nresult = x"))
+                .unwrap();
         let old_programs = old_program.stream_programs().to_vec();
         let old_plan = ScheduledExecutionPlan::new(
             PlanId(0),
@@ -611,11 +608,9 @@ mod tests {
         jit.configure(&old_plan, &[], JitConfig::eager(), None);
         assert!(matches!(jit.execution, NativeExecution::None));
 
-        let new_program = DataflowProgram::compile_checked(
-            "in x: Int\nout result: Int\nresult = x + 1"
-                .parse::<CheckedDsrvSpecification>()
-                .unwrap(),
-        )
+        let new_program = DataflowProgram::compile_checked(elaborated(
+            "in x: Int\nout result: Int\nresult = x + 1",
+        ))
         .unwrap();
         let new_programs = new_program.stream_programs().to_vec();
         let new_plan = ScheduledExecutionPlan::new(
@@ -634,11 +629,11 @@ mod tests {
 
     #[test]
     fn fused_temporal_completion_updates_environment_without_publishing() {
-        let specification = "in x: Int\n\
+        let specification = elaborated(
+            "in x: Int\n\
             out result: Int\n\
-            result = default(result[1], 0) + x"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+            result = default(result[1], 0) + x",
+        );
         let program = DataflowProgram::compile_checked(specification).unwrap();
         let programs = program.stream_programs().to_vec();
         let stream_slots = program.monitor_plan().stream_slots;

@@ -3,16 +3,17 @@
 use static_assertions::assert_obj_safe;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Debug};
-use std::sync::Arc;
 
-use contiguous_tree::CloneTreeError;
+use contiguous_tree::{RewriteError, TreeCursor, TreeNodeMut};
 use tracing::debug;
 
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::lang::dsrv::ast::{
-    Declaration, DependencyKind, DsrvSpecification, ExprView, ValidatedDsrvSpecification,
+    CheckedDsrvSpecification, CheckedExprRef, Declaration, DependencyKind, DsrvSpecification,
+    ExprBuilder, ExprForestMap, ExprId, ExprRewriteNode, ExprView,
 };
 use crate::lang::dsrv::span::Span;
-use crate::lang::dsrv::type_checker::SemanticErrors;
+use crate::lang::dsrv::type_checker::TCType;
 
 use crate::VarName;
 use crate::distributed::distribution_graphs::{GenericLabelledDistributionGraph, NodeName};
@@ -76,7 +77,6 @@ pub trait TryLocalisable: Localisable {
 /// A failure while localising a DSRV specification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DsrvLocalisationError {
-    Validation(Arc<SemanticErrors>),
     Locality(LocalitySpecError),
     MissingAuxDefinition { variable: VarName },
     MonitoredAtAux { variable: VarName, node: NodeName },
@@ -87,12 +87,6 @@ pub enum DsrvLocalisationError {
 impl fmt::Display for DsrvLocalisationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Validation(errors) => {
-                write!(
-                    formatter,
-                    "distributed specification failed validation: {errors:?}"
-                )
-            }
             Self::Locality(error) => fmt::Display::fmt(error, formatter),
             Self::MissingAuxDefinition { variable } => {
                 write!(
@@ -116,7 +110,6 @@ impl fmt::Display for DsrvLocalisationError {
 impl std::error::Error for DsrvLocalisationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Validation(_) => None,
             Self::Locality(error) => Some(error),
             _ => None,
         }
@@ -180,7 +173,12 @@ fn prune_to_dependency_closure(
     spec
 }
 
-fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLocalisationError> {
+/// Inline every auxiliary stream into the outputs that use it, rewriting the
+/// elaborated tree so that each emitted node keeps the type it had there.
+fn try_inline_aux(
+    spec: DsrvSpecification,
+    elaborated: &CheckedDsrvSpecification,
+) -> Result<CheckedDsrvSpecification, DsrvLocalisationError> {
     let aux_vars = spec.aux_vars.clone();
     for aux in &aux_vars {
         if !spec.exprs.contains_key(aux) {
@@ -190,30 +188,50 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         }
     }
 
-    let exprs = spec
+    let names = spec
         .exprs
-        .try_rewrite_selected_with(
-            |var| spec.output_vars.contains(var) && !aux_vars.contains(var),
-            |expression| match expression.view() {
-                ExprView::Var(var) if aux_vars.contains(var) => Ok(spec.var_expr_ref(var)),
-                ExprView::MonitoredAt(var, node) if aux_vars.contains(var) => {
-                    Err(DsrvLocalisationError::MonitoredAtAux {
-                        variable: var.clone(),
-                        node: node.clone(),
-                    })
-                }
-                ExprView::Dist(_, _) => Err(DsrvLocalisationError::Dist),
-                _ => Ok(None),
+        .keys()
+        .filter(|var| spec.output_vars.contains(*var) && !aux_vars.contains(*var))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut inliner = AuxInliner {
+        elaborated,
+        aux_vars: &aux_vars,
+        types: Vec::new(),
+        expanding: Vec::new(),
+    };
+    let mut builder = ExprBuilder::with_capacities(0, names.len());
+    let roots = builder
+        .try_rewrite_forest(
+            names.iter().map(|name| {
+                elaborated
+                    .var_expr_ref(name)
+                    .expect("every retained equation is elaborated")
+            }),
+            |mut node| {
+                let source = node.source();
+                inliner.emit(&mut node, source, true)
             },
         )
         .map_err(|error| match error {
-            CloneTreeError::Policy(error) => error,
-            CloneTreeError::ReplacementCycle { cursors } => {
-                DsrvLocalisationError::CyclicReplacement {
-                    replacement_spans: cursors.into_iter().map(|cursor| cursor.span()).collect(),
-                }
-            }
+            RewriteError::Convert(error) => error,
+            error => panic!("aux inlining emits one subtree per node: {error}"),
         })?;
+    let forest = builder
+        .finish_forest(roots)
+        .expect("aux inlining emits one complete tree per output");
+    let exprs = ExprForestMap::new(names, forest)
+        .expect("aux inlining keeps the sorted, unique output names");
+    let mut expr_types = exprs.annotations_builder();
+    assert_eq!(inliner.types.len(), exprs.nodes().len());
+    for (node, typ) in exprs.nodes().zip(inliner.types) {
+        expr_types
+            .insert(node, typ)
+            .expect("an emitted node belongs to the inlined forest");
+    }
+    let expr_types = expr_types
+        .finish()
+        .expect("aux inlining types every node it emits");
 
     let output_vars = spec.output_vars.difference(&aux_vars).cloned().collect();
     let type_annotations = spec
@@ -232,19 +250,91 @@ fn try_inline_aux(spec: DsrvSpecification) -> Result<DsrvSpecification, DsrvLoca
         })
         .collect();
 
-    Ok(DsrvSpecification::from_expression_forest_with_entries(
+    let mut inlined = DsrvSpecification::from_expression_forest_with_entries(
         spec.input_vars,
         output_vars,
         exprs,
         type_annotations,
         std::iter::empty(),
         declarations,
-    ))
+    );
+    inlined.source_context = spec.source_context;
+    Ok(CheckedDsrvSpecification::new(inlined, expr_types))
 }
 
-#[cfg(test)]
-fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
-    try_inline_aux(spec).unwrap_or_else(|error| panic!("Failed to inline aux variables: {error}"))
+/// Emits one destination subtree per source node, replacing each use of an
+/// auxiliary stream by a copy of its definition.
+struct AuxInliner<'a> {
+    elaborated: &'a CheckedDsrvSpecification,
+    aux_vars: &'a BTreeSet<VarName>,
+    /// The type of each emitted node, in allocation order.
+    types: Vec<TCType>,
+    /// The auxiliary uses being expanded, outermost first.
+    expanding: Vec<(VarName, Span)>,
+}
+
+impl<'a> AuxInliner<'a> {
+    /// Emit `cursor` as one subtree. With `children_emitted`, `cursor` is the
+    /// source node being rewritten and the rewrite has emitted its children.
+    fn emit(
+        &mut self,
+        node: &mut ExprRewriteNode<'_, '_, CheckedExprRef<'a>>,
+        cursor: CheckedExprRef<'a>,
+        children_emitted: bool,
+    ) -> Result<ExprId, DsrvLocalisationError> {
+        match cursor.expr().view() {
+            ExprView::Var(var) if self.aux_vars.contains(var) => {
+                let span = cursor.expr().span();
+                if let Some(start) = self.expanding.iter().position(|(name, _)| name == var) {
+                    let mut replacement_spans = self.expanding[start..]
+                        .iter()
+                        .map(|(_, span)| *span)
+                        .collect::<Vec<_>>();
+                    replacement_spans.push(span);
+                    return Err(DsrvLocalisationError::CyclicReplacement { replacement_spans });
+                }
+                let definition = self
+                    .elaborated
+                    .var_expr_ref(var)
+                    .expect("every auxiliary stream has a definition");
+                self.expanding.push((var.clone(), span));
+                let root = self.emit(node, definition, false)?;
+                self.expanding.pop();
+                return Ok(root);
+            }
+            ExprView::MonitoredAt(var, monitor) if self.aux_vars.contains(var) => {
+                return Err(DsrvLocalisationError::MonitoredAtAux {
+                    variable: var.clone(),
+                    node: monitor.clone(),
+                });
+            }
+            ExprView::Dist(_, _) => return Err(DsrvLocalisationError::Dist),
+            _ => {}
+        }
+
+        let kind = if children_emitted {
+            node.source_node().rebuild(cursor.kind().clone())
+        } else {
+            let mut emitted = Vec::new();
+            for child in cursor.child_ids() {
+                emitted.push((child, self.emit(node, cursor.child(child), false)?));
+            }
+            let mut kind = cursor.kind().clone();
+            kind.for_each_child_id_mut(|child| {
+                *child = emitted
+                    .iter()
+                    .find(|(source, _)| source == child)
+                    .map(|(_, emitted)| *emitted)
+                    .expect("every child was emitted");
+            });
+            kind
+        };
+        let id = node
+            .alloc(kind, cursor.expr().metadata().clone())
+            .expect("emitted children are the trailing roots");
+        self.types.push(cursor.typ().clone());
+        Ok(id)
+    }
 }
 
 fn finish_localisation(
@@ -322,69 +412,48 @@ fn finish_localisation(
     spec
 }
 
-/// A specification admitted for distributed monitoring. Only
-/// [`DistributedDsrvSpecification::admit`] constructs one, so localisation
-/// always starts from validated declarations. Every dialect is admitted: the
-/// dialects are nested, and a Full or Core specification simply places no
-/// streams explicitly.
-#[derive(Clone, Debug)]
-pub struct DistributedDsrvSpecification(ValidatedDsrvSpecification);
-
-impl DistributedDsrvSpecification {
-    /// Validate a specification for distributed monitoring.
+impl ElaboratedDsrvSpecification {
+    /// Keep only what the local node monitors, as an elaborated specification
+    /// whose nodes keep their types.
     ///
-    /// Admission deliberately happens before dependency pruning or auxiliary
-    /// expansion so those rewrites cannot erase duplicate or conflicting
-    /// declarations.
-    pub fn admit(specification: DsrvSpecification) -> Result<Self, DsrvLocalisationError> {
-        specification
-            .validate()
-            .map(Self)
-            .map_err(Arc::new)
-            .map_err(DsrvLocalisationError::Validation)
-    }
-
-    pub fn specification(&self) -> &DsrvSpecification {
-        self.0.specification()
-    }
-
-    /// Keep only what the local node monitors.
-    pub fn try_localise(
-        &self,
-        locality_spec: &impl LocalitySpec,
-    ) -> Result<DsrvSpecification, DsrvLocalisationError> {
-        let local_vars = locality_spec.local_vars()?;
-        let original = self.specification();
-        let spec = try_inline_aux(prune_to_dependency_closure(original.clone(), &local_vars))?;
-        let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
-        Ok(finish_localisation(spec, original, &local_set))
-    }
-}
-
-impl DsrvSpecification {
-    /// Admit this specification for distributed monitoring, then localise it.
+    /// Checking and elaboration happen before dependency pruning or auxiliary
+    /// expansion, so those rewrites cannot erase duplicate or conflicting
+    /// declarations, or hide an ill-typed equation that no node monitors.
+    /// Every dialect is localised: the dialects are nested, and a Full or Core
+    /// specification simply places no streams explicitly.
     pub fn try_localise(
         &self,
         locality_spec: &impl LocalitySpec,
     ) -> Result<Self, DsrvLocalisationError> {
-        DistributedDsrvSpecification::admit(self.clone())?.try_localise(locality_spec)
+        let local_vars = locality_spec.local_vars()?;
+        let elaborated = self.checked();
+        let original = elaborated.unchecked();
+        let inlined = try_inline_aux(
+            prune_to_dependency_closure(original.clone(), &local_vars),
+            elaborated,
+        )?;
+        let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
+        let localised =
+            inlined.map_specification(|spec| finish_localisation(spec, original, &local_set));
+        Ok(Self::from_rewritten(localised))
     }
 }
 
-impl Localisable for DsrvSpecification {
+impl Localisable for ElaboratedDsrvSpecification {
     fn localise(&self, locality_spec: &impl LocalitySpec) -> Self {
         self.try_localise(locality_spec)
             .unwrap_or_else(|error| panic!("Failed to localise DSRV specification: {error}"))
     }
 }
 
-impl TryLocalisable for DsrvSpecification {
+impl TryLocalisable for ElaboratedDsrvSpecification {
     type Error = DsrvLocalisationError;
 
     fn try_localise(&self, locality_spec: &impl LocalitySpec) -> Result<Self, Self::Error> {
-        DsrvSpecification::try_localise(self, locality_spec)
+        ElaboratedDsrvSpecification::try_localise(self, locality_spec)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -394,18 +463,36 @@ mod tests {
     use contiguous_tree::TreeCursorExt;
     use petgraph::graph::DiGraph;
 
-    use crate::core::BinaryOperator;
+    use crate::core::{BinaryOperator, Semantics};
     use crate::dataflow::DataflowMonitor;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
-    use crate::dsrv_fixtures::spec_simple_add_decomposable;
+    use crate::dsrv_fixtures::{elaborated, spec_simple_add_decomposable};
     use crate::lang::dsrv::ast::{Declaration, Expr};
     use crate::lang::dsrv::span::strip_span_ref;
-    use crate::{TypeCheckMode, Value};
+    use crate::{TypeCheckOptions, Value};
     use proptest::prelude::*;
     use test_log::test;
 
     use super::*;
     use crate::lang::dsrv::test_support::arb_boolean_dsrv_spec;
+
+    fn elaborate(spec: DsrvSpecification) -> ElaboratedDsrvSpecification {
+        spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+            .expect("test specification should check")
+    }
+
+    /// The elaborated tree of a localised specification.
+    fn tree(spec: &ElaboratedDsrvSpecification) -> &DsrvSpecification {
+        spec.checked().unchecked()
+    }
+
+    fn inline_aux(spec: DsrvSpecification) -> DsrvSpecification {
+        let spec = elaborate(spec);
+        try_inline_aux(tree(&spec).clone(), spec.checked())
+            .unwrap_or_else(|error| panic!("Failed to inline aux variables: {error}"))
+            .unchecked()
+            .clone()
+    }
 
     fn locality_graph() -> GenericLabelledDistributionGraph<u64> {
         let mut graph: DiGraph<NodeName, u64> = DiGraph::new();
@@ -444,7 +531,9 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(
-            spec.try_localise(&(unknown.clone(), &graph)),
+            elaborate(spec)
+                .try_localise(&(unknown.clone(), &graph))
+                .map(|_| ()),
             Err(DsrvLocalisationError::Locality(
                 LocalitySpecError::UnknownNode { node: unknown }
             ))
@@ -452,16 +541,12 @@ mod tests {
     }
 
     #[test]
-    fn raw_localisation_validates_before_duplicate_declarations_can_be_pruned() {
+    fn checking_refuses_duplicate_declarations_before_localisation_could_prune_them() {
         let spec = "in x: Int\nin x: Bool\nout y\ny = x"
             .parse::<DsrvSpecification>()
             .unwrap();
 
-        assert!(spec.clone().validate().is_err());
-        assert!(matches!(
-            spec.try_localise(&vec![VarName::new("y")]),
-            Err(DsrvLocalisationError::Validation(_))
-        ));
+        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
     }
 
     fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
@@ -469,7 +554,11 @@ mod tests {
         assert_eq!(actual.output_vars, expected.output_vars);
         assert_eq!(actual.aux_vars, expected.aux_vars);
         assert_eq!(actual.stream_vars, expected.stream_vars);
-        assert_eq!(actual.type_annotations, expected.type_annotations);
+        // Annotations are compared only where the expected specification
+        // declares them; the rest are the types gradual checking inferred.
+        for (name, annotation) in &expected.type_annotations {
+            assert_eq!(actual.type_annotations.get(name), Some(annotation));
+        }
 
         let actual_exprs = actual
             .exprs
@@ -500,9 +589,9 @@ mod tests {
             vec![],
         );
         let restricted_vars = vec!["c".into(), "e".into()];
-        let localised_spec = spec.localise(&restricted_vars);
+        let localised_spec = elaborate(spec).localise(&restricted_vars);
         assert_specs_eq_ignoring_spans(
-            &localised_spec,
+            tree(&localised_spec),
             &DsrvSpecification::new(
                 BTreeSet::from(["a".into(), "d".into()]),
                 BTreeSet::from(["c".into(), "e".into()]),
@@ -528,30 +617,28 @@ mod tests {
             vec![],
         );
         let restricted_vars = vec![];
-        let localised_spec = spec.localise(&restricted_vars);
-        assert_eq!(
-            localised_spec,
-            DsrvSpecification::new(
+        let localised_spec = elaborate(spec).localise(&restricted_vars);
+        assert_specs_eq_ignoring_spans(
+            tree(&localised_spec),
+            &DsrvSpecification::new(
                 BTreeSet::new(),
                 BTreeSet::new(),
                 BTreeMap::<VarName, Expr>::new(),
                 BTreeMap::new(),
                 vec![],
-            )
+            ),
         )
     }
 
     #[test]
     fn test_localise_specification_simple_add() {
-        let spec = spec_simple_add_decomposable()
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let spec = elaborated(spec_simple_add_decomposable());
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
 
         assert_specs_eq_ignoring_spans(
-            &local_spec1,
+            tree(&local_spec1),
             &DsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
@@ -571,7 +658,7 @@ mod tests {
         );
 
         assert_specs_eq_ignoring_spans(
-            &local_spec2,
+            tree(&local_spec2),
             &DsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
@@ -595,7 +682,8 @@ mod tests {
     fn test_localise_spec_with_aux() {
         // Tests that localisation correctly handles auxiliary variables
         // Note that these must be specified similarly to output variables
-        let spec = "   in x
+        let spec = elaborated(
+            "   in x
                     in y
                     in z
                     out w
@@ -603,15 +691,14 @@ mod tests {
                     aux tmp
                     w = x + y
                     tmp = z + w
-                    v = tmp"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+                    v = tmp",
+        );
 
         let local_spec1 = spec.localise(&vec!["w".into()]);
         let local_spec2 = spec.localise(&vec!["v".into()]);
 
         assert_specs_eq_ignoring_spans(
-            &local_spec1,
+            tree(&local_spec1),
             &DsrvSpecification::new(
                 BTreeSet::from(["x".into(), "y".into()]),
                 BTreeSet::from(["w".into()]),
@@ -631,7 +718,7 @@ mod tests {
         );
 
         assert_specs_eq_ignoring_spans(
-            &local_spec2,
+            tree(&local_spec2),
             &DsrvSpecification::new(
                 BTreeSet::from(["z".into(), "w".into()]),
                 BTreeSet::from(["v".into()]),
@@ -661,22 +748,23 @@ mod tests {
                       helper = other\n\
                       out c\n\
                       c = remote";
-        let specification = source.parse::<DsrvSpecification>().unwrap();
+        let specification = elaborated(source);
         let localised = specification
             .try_localise(&vec![VarName::new("b"), VarName::new("c")])
             .expect("localisation should inline the helper");
+        let localised_tree = tree(&localised);
 
         assert_eq!(
-            localised.input_vars_in_order(),
+            localised_tree.input_vars_in_order(),
             [VarName::new("remote"), VarName::new("other")]
         );
         assert_eq!(
-            localised.output_vars_in_order(),
+            localised_tree.output_vars_in_order(),
             [VarName::new("b"), VarName::new("c")]
         );
-        assert_eq!(localised.aux_vars_in_order(), []);
+        assert_eq!(localised_tree.aux_vars_in_order(), []);
         assert_eq!(
-            localised
+            localised_tree
                 .declarations()
                 .iter()
                 .map(|entry| entry.stream().expect("a stream declaration").name())
@@ -684,33 +772,56 @@ mod tests {
             ["remote", "b", "b", "other", "c", "c"]
         );
         assert!(
-            localised
+            localised_tree
                 .declarations()
                 .iter()
                 .all(|entry| !matches!(entry, Declaration::Aux { .. }))
         );
-        let b = localised.var_expr(&VarName::new("b")).unwrap();
+        let b = localised_tree.var_expr(&VarName::new("b")).unwrap();
         assert_eq!(b.to_string(), "(other + remote)");
 
-        let validated = localised
-            .clone()
-            .validate()
-            .expect("rewritten node must obtain a fresh local proof");
-        let checked = validated
-            .type_check(TypeCheckMode::Gradual)
-            .expect("rewritten node must obtain fresh checked types");
-        let mut monitor = DataflowMonitor::compile_untyped(localised).unwrap();
+        let mut monitor =
+            DataflowMonitor::compile_with_semantics(localised.clone(), Semantics::Untimed).unwrap();
         let mut output = [Value::NoVal, Value::NoVal];
         monitor
             .evaluate(&[Value::Int(10), Value::Int(2)], &mut output)
             .unwrap();
         assert_eq!(output, [Value::Int(12), Value::Int(10)]);
-        let mut checked_monitor = DataflowMonitor::compile_checked(checked).unwrap();
+        let mut checked_monitor = DataflowMonitor::compile_checked(localised).unwrap();
         let mut checked_output = [Value::NoVal, Value::NoVal];
         checked_monitor
             .evaluate(&[Value::Int(10), Value::Int(2)], &mut checked_output)
             .unwrap();
         assert_eq!(checked_output, output);
+    }
+
+    #[test]
+    fn localisation_keeps_the_type_of_every_elaborated_node() {
+        let spec = elaborated(
+            "in x: Int\nin flag: Bool\nout y: Float\naux h: Int\n\
+             h = if flag then x + 1 else x\ny = if h > 0 then 1.5 else 2.5",
+        );
+        let localised = spec
+            .try_localise(&vec![VarName::new("y")])
+            .expect("localisation should inline h");
+        let root = localised.var_expr_ref(&VarName::new("y")).unwrap();
+        assert_eq!(root.typ(), &TCType::Float);
+        assert_eq!(
+            root.expr().to_string(),
+            "(if ((if flag then (x + 1) else x) > 0) then 1.5 else 2.5)"
+        );
+        // Each inlined node has the type it had in the definition of h.
+        let inlined = spec.var_expr_ref(&VarName::new("h")).unwrap();
+        let copied = root
+            .postorder()
+            .filter(|node| matches!(node.expr().view(), ExprView::If(..)))
+            .find(|node| node.typ() == &TCType::Int)
+            .expect("the inlined definition of h");
+        for (before, after) in inlined.postorder().zip(copied.postorder()) {
+            assert!(before.kind().same_payload(after.kind()));
+            assert_eq!(before.typ(), after.typ());
+            assert_eq!(before.expr().span(), after.expr().span());
+        }
     }
 
     #[test]
@@ -722,7 +833,7 @@ mod tests {
 
         let spec = DsrvSpecification::new(
             BTreeSet::from(["x".into(), "y".into()]),
-            BTreeSet::from([tmp.clone(), z.clone()]),
+            BTreeSet::from([z.clone()]),
             vec![
                 (
                     tmp.clone(),
@@ -764,15 +875,15 @@ mod tests {
         .into_iter()
         .collect();
 
-        assert_eq!(
-            result,
-            DsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &result,
+            &DsrvSpecification::new(
                 BTreeSet::from([x, y]),
                 BTreeSet::from([z]),
                 expected_exprs,
                 BTreeMap::new(),
-                vec![]
-            )
+                vec![],
+            ),
         );
     }
 
@@ -786,7 +897,7 @@ mod tests {
 
         let spec = DsrvSpecification::new(
             BTreeSet::from([i.clone()]),
-            BTreeSet::from([h1.clone(), h2.clone(), h3.clone(), out.clone()]),
+            BTreeSet::from([out.clone()]),
             vec![
                 (h1.clone(), Expr::Var(i.clone())),
                 (
@@ -831,21 +942,20 @@ mod tests {
         .into_iter()
         .collect();
 
-        assert_eq!(
-            result,
-            DsrvSpecification::new(
+        assert_specs_eq_ignoring_spans(
+            &result,
+            &DsrvSpecification::new(
                 BTreeSet::from([i]),
                 BTreeSet::from([out]),
                 expected_exprs,
                 BTreeMap::new(),
-                vec![]
-            )
+                vec![],
+            ),
         );
     }
 
     #[test]
-    #[should_panic(expected = "cyclic aux replacement expansion")]
-    fn test_inline_aux_cycle_panics() {
+    fn checking_refuses_cyclic_aux_before_it_could_be_inlined() {
         let h1: VarName = "h1".into();
         let h2: VarName = "h2".into();
         let out: VarName = "out".into();
@@ -864,11 +974,11 @@ mod tests {
             vec![h1, h2],
         );
 
-        let _ = inline_aux(spec);
+        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
     }
 
     #[test]
-    fn try_localise_rejects_missing_aux_definition_during_admission() {
+    fn checking_refuses_a_missing_aux_definition_before_localisation() {
         let missing: VarName = "missing".into();
         let output: VarName = "output".into();
         let spec = DsrvSpecification::new(
@@ -879,22 +989,19 @@ mod tests {
             [missing.clone()],
         );
 
-        assert!(matches!(
-            spec.try_localise(&vec![output]),
-            Err(DsrvLocalisationError::Validation(_))
-        ));
+        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
     }
 
     #[test]
     fn try_localise_reports_monitored_at_aux() {
         let helper: VarName = "helper".into();
         let output: VarName = "output".into();
-        let spec = "language distributed\naux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let spec = elaborated(
+            "language distributed\naux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)",
+        );
 
         assert!(matches!(
-            spec.try_localise(&vec![output]),
+            spec.try_localise(&vec![output]).map(|_| ()),
             Err(DsrvLocalisationError::MonitoredAtAux { variable, .. }) if variable == helper
         ));
     }
@@ -902,18 +1009,16 @@ mod tests {
     #[test]
     fn try_localise_reports_dist() {
         let output: VarName = "output".into();
-        let spec = "language distributed\nout output\noutput = dist(A, B)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let spec = elaborated("language distributed\nout output\noutput = dist(A, B)");
 
         assert_eq!(
-            spec.try_localise(&vec![output]).unwrap_err(),
+            spec.try_localise(&vec![output]).map(|_| ()).unwrap_err(),
             DsrvLocalisationError::Dist
         );
     }
 
     #[test]
-    fn try_localise_rejects_cyclic_aux_during_admission() {
+    fn checking_refuses_cyclic_aux_before_localisation() {
         let first: VarName = "first".into();
         let second: VarName = "second".into();
         let output: VarName = "output".into();
@@ -928,11 +1033,9 @@ mod tests {
             BTreeMap::new(),
             [first, second],
         );
+        let _ = output;
 
-        assert!(matches!(
-            spec.try_localise(&vec![output]),
-            Err(DsrvLocalisationError::Validation(_))
-        ));
+        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
     }
 
     #[test]
@@ -942,7 +1045,7 @@ mod tests {
         let second: VarName = "second".into();
         let spec = DsrvSpecification::new(
             BTreeSet::from(["input".into()]),
-            BTreeSet::from([helper.clone(), first.clone(), second.clone()]),
+            BTreeSet::from([first.clone(), second.clone()]),
             BTreeMap::from([
                 (
                     helper.clone(),
@@ -961,22 +1064,27 @@ mod tests {
             BTreeMap::new(),
             [helper],
         );
+        let elaborated = elaborate(spec);
+        let spec = tree(&elaborated);
 
         let local_set = BTreeSet::from([first, second]);
         let pruned = prune_to_dependency_closure(
             spec.clone(),
             &local_set.iter().cloned().collect::<Vec<_>>(),
         );
-        let rewritten = try_inline_aux(pruned).unwrap();
+        let rewritten = try_inline_aux(pruned, elaborated.checked()).unwrap();
         let rewritten_name = rewritten
+            .unchecked()
             .roots()
             .next()
             .expect("local roots should exist")
             .0
             .clone();
-        let rewritten_root = rewritten.var_expr(&rewritten_name).unwrap();
+        let rewritten_root = rewritten.unchecked().var_expr(&rewritten_name).unwrap();
 
-        let localised = finish_localisation(rewritten, &spec, &local_set);
+        let localised = rewritten
+            .map_specification(|rewritten| finish_localisation(rewritten, spec, &local_set));
+        let localised = localised.unchecked();
         let final_root = localised.var_expr(&rewritten_name).unwrap();
         assert!(
             final_root.shares_storage_with(&rewritten_root),
@@ -1003,10 +1111,11 @@ mod tests {
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
             let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
-            let Ok(admitted) = DistributedDsrvSpecification::admit(spec.clone()) else {
+            let Ok(admitted) = spec.clone().check_and_elaborate(TypeCheckOptions::GRADUAL) else {
                 return Ok(());
             };
             let localised_spec = admitted.try_localise(&restricted_vars).unwrap();
+            let localised_spec = tree(&localised_spec);
 
             for var in localised_spec.output_vars.iter() {
                 assert!(restricted_vars.contains(var));

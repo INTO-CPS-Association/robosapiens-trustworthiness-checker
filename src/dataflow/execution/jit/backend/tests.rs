@@ -1,22 +1,18 @@
 use super::ir::{LoweredNode, ScalarRef};
 use super::lowering::Lowering;
 
+use crate::core::Semantics;
 use crate::core::{BinaryOperator, Value};
 use crate::dataflow::execution::scalar_ir::ScalarProgram;
 use crate::dataflow::ir::ScalarKind;
 use crate::dataflow::monitor::test_support::{execution, jit_artifact_count};
 use crate::dataflow::{DataflowMonitor, DataflowProgram, JitConfig, JitPlan};
-use crate::{CheckedDsrvSpecification, DsrvSpecification};
+use crate::dsrv_fixtures::elaborated;
 
 fn compile_pair(source: &str) -> (DataflowMonitor, DataflowMonitor) {
-    let checked = source
-        .parse::<CheckedDsrvSpecification>()
-        .expect("test specification should type check");
-    let canonical = source
-        .parse::<DsrvSpecification>()
-        .expect("test specification should parse")
-        .try_into()
-        .expect("untyped monitor should compile");
+    let checked = elaborated(&source);
+    let canonical = DataflowMonitor::compile_with_semantics(elaborated(source), Semantics::Untimed)
+        .expect("monitor should compile without types");
     let jitted = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
         .expect("checked monitor should compile");
     assert!(
@@ -38,9 +34,7 @@ fn assert_rows(source: &str, rows: &[Vec<Value>]) {
 }
 
 fn assert_jit_row(source: &str, row: &[Value], expected: &[Value]) {
-    let checked = source
-        .parse::<CheckedDsrvSpecification>()
-        .expect("test specification should type check");
+    let checked = elaborated(&source);
     let mut monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
         .expect("checked monitor should compile");
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
@@ -49,7 +43,7 @@ fn assert_jit_row(source: &str, row: &[Value], expected: &[Value]) {
 }
 
 fn assert_complete_temporal_kernel(source: &str) {
-    let checked = source.parse::<CheckedDsrvSpecification>().unwrap();
+    let checked = elaborated(&source);
     let monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
         .expect("temporal kernel should compile");
     assert_eq!(
@@ -65,7 +59,7 @@ fn assert_complete_temporal_kernel(source: &str) {
 fn repeated_integer_adds_lower_to_one_reachable_add() {
     let expression = std::iter::repeat_n("1", 32).collect::<Vec<_>>().join(" + ");
     let source = format!("in x: Int\nout result: Int\nresult = x + {expression}");
-    let checked = source.parse::<CheckedDsrvSpecification>().unwrap();
+    let checked = elaborated(&source);
     let program = DataflowProgram::compile_checked(checked).unwrap();
     let graph = &program.stream_programs()[0].graph;
     let scalar = ScalarProgram::from_bound_graph(graph, ScalarKind::Int).unwrap();
@@ -118,9 +112,7 @@ fn integer_division_and_remainder_are_native_eligible() {
 
 #[test]
 fn hotness_activates_before_the_tick_after_the_threshold() {
-    let checked = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("test specification should type check");
+    let checked = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(checked, JitConfig::after_events(2))
             .expect("checked monitor should compile");
@@ -145,9 +137,7 @@ fn hotness_activates_before_the_tick_after_the_threshold() {
 
 #[test]
 fn history_backed_delays_promote_into_the_fused_temporal_kernel() {
-    let checked = "in x: Int\nout result: Int\nresult = default(x[2], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("test specification should type check");
+    let checked = elaborated("in x: Int\nout result: Int\nresult = default(x[2], 0) + x");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(checked, JitConfig::after_events(2))
             .expect("checked monitor should compile");
@@ -168,9 +158,7 @@ fn history_backed_delays_promote_into_the_fused_temporal_kernel() {
 
 #[test]
 fn unsupported_streams_are_reported_and_interpreted() {
-    let checked = "in x: Str\nout result: Str\nresult = x"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("test specification should type check");
+    let checked = elaborated("in x: Str\nout result: Str\nresult = x");
     let mut monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
         .expect("checked monitor should compile");
     let report = monitor.jit_report().unwrap();
@@ -259,9 +247,8 @@ fn native_integer_power_rejects_negative_exponents_and_overflow() {
         [Value::Int(2), Value::Int(-1)],
         [Value::Int(2), Value::Int(63)],
     ] {
-        let checked = "in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        let checked =
+            elaborated("in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent");
         let mut monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
             .expect("power graph should compile natively");
         assert!(jit_artifact_count(&monitor) > 0);
@@ -279,9 +266,8 @@ fn native_integer_power_rejects_negative_exponents_and_overflow() {
 // than narrowing it before checking the negative-exponent error.
 #[test]
 fn native_integer_power_rejects_i64_min_exponent_without_wrapping() {
-    let checked = "in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let checked =
+        elaborated("in x: Int\nin exponent: Int\nout result: Int\nresult = x ** exponent");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager()).unwrap();
     assert!(jit_artifact_count(&monitor) > 0);
@@ -382,7 +368,7 @@ fn scheduler_plan_fuses_scalar_streams_around_temporal_state() {
             base = x + 1\n\
             delayed = default(base[1], 0) + base\n\
             result = delayed * 2";
-    let checked = source.parse::<CheckedDsrvSpecification>().unwrap();
+    let checked = elaborated(&source);
     let monitor = DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
         .expect("the complete scheduled plan should compile");
     let report = monitor.jit_report().unwrap();
@@ -407,9 +393,7 @@ fn hot_activation_preserves_scheduled_temporal_state() {
         "in x: Int\nout result: Bool\nresult = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3",
         "in x: Int\nout result: Int\nresult = default(result[1], 0) + x",
     ] {
-        let checked = source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("test specification should type check");
+        let checked = elaborated(&source);
         let canonical = DataflowMonitor::compile_checked(checked.clone()).unwrap();
         let jitted =
             DataflowMonitor::compile_checked_with_jit(checked, JitConfig::after_events(3)).unwrap();

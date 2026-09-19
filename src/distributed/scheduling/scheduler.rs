@@ -447,7 +447,7 @@ mod tests {
     use petgraph::graph::DiGraph;
 
     use crate::{
-        DsrvSpecification, LocalStream, Value, async_test,
+        ElaboratedDsrvSpecification, LocalStream, Value, async_test,
         distributed::{
             distribution_graphs::NodeName,
             scheduling::{
@@ -457,6 +457,7 @@ mod tests {
                 },
             },
         },
+        dsrv_fixtures::elaborated,
         io::{config::TopicMapping, mqtt::dist_graph_provider::StaticDistGraphProvider},
         stream_utils::channel_to_output_stream,
     };
@@ -502,7 +503,7 @@ mod tests {
         })
     }
 
-    fn scheduler_constraint_spec() -> DsrvSpecification {
+    fn scheduler_constraint_spec() -> ElaboratedDsrvSpecification {
         let src = r#"language distributed
 in gate
 out work
@@ -510,9 +511,7 @@ out distX
 work = gate
 distX = gate && monitored_at(work, "A")
 "#;
-        (src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse")
+        elaborated(&src)
     }
 
     fn graph_with_work_at_b() -> Rc<LabelledDistributionGraph> {
@@ -571,7 +570,7 @@ distX = gate && monitored_at(work, "A")
             placement_publications.clone(),
         );
         let constraint_stream = dist_constraint_event_stream(
-            spec,
+            spec.checked().unchecked().clone(),
             vec![VarName::new("distX")],
             placement_stream,
             input_index,

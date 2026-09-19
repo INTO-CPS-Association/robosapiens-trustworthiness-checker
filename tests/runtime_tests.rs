@@ -15,7 +15,8 @@ use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_g
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{
-    CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, dsrv_fixtures::*,
+    CheckedDsrvSpecification, DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions,
+    dsrv_fixtures::*,
 };
 use trustworthiness_checker::{
     InputStream, Value,
@@ -4887,9 +4888,7 @@ mod reconf_tests {
     async fn test_reconf_no_change_of_streams(ex: Rc<LocalExecutor<'static>>) {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure but do
         // not introduce/remove any streams
-        let spec = (spec_simple_add_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_simple_add_monitor());
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8)];
         let expected = vec![
@@ -4910,7 +4909,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5013,9 +5015,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the simple add monitor, where we reconfigure to a
         // spec that does not require a y stream
 
-        let spec = (spec_simple_add_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_simple_add_monitor());
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -5035,7 +5035,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5131,9 +5134,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the acc spec, where we reconfigure to
         // run the simple_add spec, which includes an extra input stream
 
-        let spec = (spec_acc_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_acc_monitor());
         let xs = vec![Value::Int(1), Value::Int(3), Value::Int(5), Value::Int(7)];
         let ys = vec![Value::Int(2), Value::Int(4)];
         let y_len = ys.len();
@@ -5155,7 +5156,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5236,9 +5240,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have two output streams,
         // and reconfigure into having one
 
-        let spec = (spec_assignment2_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_assignment2_monitor());
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(2), Value::Int(3)];
@@ -5250,7 +5252,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5337,9 +5342,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime with the where we initally have one output streams,
         // and reconfigure into having two
 
-        let spec = (spec_assignment_monitor())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_assignment_monitor());
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let vs = xs.clone();
         let ws = vec![Value::Int(4), Value::Int(5)];
@@ -5351,7 +5354,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5438,9 +5444,7 @@ mod reconf_tests {
         // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
         // new one.
 
-        let spec = (spec_sindex())
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(spec_sindex());
         let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
         let in_len = xs.len();
         let expected = vec![
@@ -5457,7 +5461,10 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                .parse_spec(|source| {
+                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                        .map_err(anyhow::Error::from)
+                })
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5543,9 +5550,7 @@ mod reconf_tests {
             out z\n\
             y = x\n\
             z = y[1] + 1";
-            let spec = (first_spec)
-                .parse::<DsrvSpecification>()
-                .expect("test DSRV specification should parse");
+            let spec = elaborated(first_spec);
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5573,7 +5578,10 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                    .parse_spec(|source| {
+                        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                            .map_err(anyhow::Error::from)
+                    })
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -5662,9 +5670,7 @@ mod reconf_tests {
         // Runs twice: once with context transfer, once without.
 
         for use_context_transfer in [true, false] {
-            let spec = (spec_acc_monitor())
-                .parse::<DsrvSpecification>()
-                .expect("test DSRV specification should parse");
+            let spec = elaborated(spec_acc_monitor());
             let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
             let in_len = xs.len();
             let expected = if use_context_transfer {
@@ -5692,7 +5698,10 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| parse_str(source).map_err(anyhow::Error::from))
+                    .parse_spec(|source| {
+                        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+                            .map_err(anyhow::Error::from)
+                    })
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))

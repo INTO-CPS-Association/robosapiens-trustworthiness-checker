@@ -23,11 +23,12 @@ use trustworthiness_checker::benches_common::{
 use trustworthiness_checker::benches_common::{
     monitor_outputs_jit_dataflow, monitor_outputs_jit_dataflow_limited,
 };
+use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::dsrv_fixtures::add_defer_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_add_defer;
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
+use trustworthiness_checker::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
 use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
 #[cfg(feature = "jemalloc")]
@@ -483,10 +484,9 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 fn dataflow_dynamic_phases(c: &mut Criterion) {
     fn compile(operator: &str) -> DataflowMonitor {
         let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
-        let spec = source
-            .parse::<DsrvSpecification>()
-            .expect("dynamic phase benchmark specification should parse");
-        DataflowMonitor::compile_untyped(spec).unwrap()
+        let spec = ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
+            .expect("dynamic phase benchmark specification should parse and check");
+        DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap()
     }
 
     fn row(monitor: &DataflowMonitor) -> Vec<Value> {

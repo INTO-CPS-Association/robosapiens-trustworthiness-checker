@@ -12,7 +12,7 @@ use super::{
 };
 use crate::dataflow::execution::jit::PreparedDirectJit;
 use crate::dataflow::{DataflowMonitor, DataflowProgram};
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 
 /// A stateful native monitor specialized for statically typed tuple rows.
 ///
@@ -27,7 +27,7 @@ pub struct TypedJitMonitor<I: TypedInput, O: TypedOutput> {
 #[cfg(feature = "jit")]
 impl<I: TypedInput, O: TypedOutput> TypedJitMonitor<I, O> {
     pub fn compile_checked(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
     ) -> Result<Self, TypedBindingError> {
         let program = DataflowProgram::compile_checked(specification)?;
         Self::from_program(program)

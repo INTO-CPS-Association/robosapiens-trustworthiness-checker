@@ -10,7 +10,7 @@ use tracing::debug;
 use unsync::spsc;
 
 use crate::{
-    DsrvSpecification, LocalStream, Value, VarName,
+    ElaboratedDsrvSpecification, LocalStream, Value, VarName,
     core::{OutputWriter, Runtime, input},
     distributed::{
         distribution_graphs::{LabelledDistributionGraph, NodeName},
@@ -158,7 +158,7 @@ pub enum DistGraphMode {
 }
 
 impl<
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = ElaboratedDsrvSpecification>,
     S: MonitoringSemantics<AC>,
 > AbstractAsyncRuntimeBuilder<AC> for DistAsyncRuntimeBuilder<AC, S>
 where
@@ -468,7 +468,7 @@ impl DirectSchedulerInputRuntime {
 impl<S, AC> DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = ElaboratedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     fn make_sat_solver(
@@ -508,7 +508,7 @@ where
 impl<S, AC> RuntimeBuilder<AC::Spec, AC::Val> for DistAsyncRuntimeBuilder<AC, S>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Ctx = DistributedContext<AC>, Spec = ElaboratedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     type Runtime = DistributedRuntime<AC, S>;
@@ -1228,7 +1228,10 @@ where
                 .unwrap()
                 .take_placement_labelling_stream();
             if !dist_constraints.is_empty() {
-                let constraint_inputs = dist_constraint_input_vars(&spec, &dist_constraints);
+                // Distribution constraints are evaluated over the elaborated tree.
+                let constraint_spec = spec.checked().unchecked();
+                let constraint_inputs =
+                    dist_constraint_input_vars(constraint_spec, &dist_constraints);
                 let constraint_input_index =
                     ConstraintInputIndex::new(constraint_inputs.iter().cloned());
                 let input = self.input.expect("Input stream not set");
@@ -1239,7 +1242,7 @@ where
                 let constraint_events = channel_to_output_stream(constraint_receiver);
 
                 let stream = dist_constraint_event_stream(
-                    spec.clone(),
+                    constraint_spec.clone(),
                     dist_constraints.clone(),
                     placement_labelling_stream,
                     constraint_input_index.clone(),
@@ -1428,7 +1431,7 @@ fn combine_runtime_results(
 impl<S, AC> Runtime for DistributedRuntime<AC, S>
 where
     AC::Spec: Localisable,
-    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Ctx = DistributedContext<AC>, Spec = ElaboratedDsrvSpecification>,
     S: MonitoringSemantics<AC>,
 {
     async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {

@@ -28,7 +28,9 @@ use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
 use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
 use trustworthiness_checker::{self as tc, Specification};
-use trustworthiness_checker::{Value, VarName};
+use trustworthiness_checker::{
+    DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName,
+};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
@@ -121,11 +123,11 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     let model = match (&builder.distribution_mode, model) {
         (DistributionMode::LocalMonitor(locality_mode), LangSpecification::Dsrv(model)) => {
             debug!(?locality_mode, "Localising model");
-            let model = model
+            let model = admit_distributed(model)?
                 .try_localise(locality_mode)
-                .context("Distributed model failed admission or localisation")?;
+                .context("Distributed model failed localisation")?;
             info!(?model, output_vars=?model.output_vars(), input_vars=?model.input_vars(), "Localised model");
-            LangSpecification::Dsrv(model)
+            LangSpecification::Dsrv(model.source().unchecked().clone())
         }
         (_, model) => model,
     };
@@ -139,9 +141,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                let localized = model
+                let localized = admit_distributed(model.clone())?
                     .try_localise(&localized_constraint_vars)
-                    .context("Distribution constraints failed admission or localisation")?;
+                    .context("Distribution constraints failed localisation")?;
                 let mut input_vars = localized.input_vars().clone();
                 input_vars.extend(dist_constraint_input_vars(
                     model,
@@ -405,4 +407,13 @@ fn init_tracing(log_file: Option<&str>) -> anyhow::Result<WorkerGuard> {
         .init();
 
     Ok(guard)
+}
+
+/// Check a distributed model gradually and elaborate it before localising it.
+fn admit_distributed(model: DsrvSpecification) -> anyhow::Result<ElaboratedDsrvSpecification> {
+    model
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .map_err(|errors| {
+            anyhow::anyhow!("Distributed model failed gradual type checking: {errors:?}")
+        })
 }

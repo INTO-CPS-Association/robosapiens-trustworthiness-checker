@@ -35,6 +35,10 @@ impl CheckedTypes {
     pub(crate) fn shared_type_environment(&self) -> &AstShared<StreamTypeEnvironment> {
         &self.environment
     }
+
+    pub(crate) fn has_type(&self, expr: ExprRef<'_>) -> bool {
+        self.expr_types.get(expr).is_some()
+    }
 }
 
 /// An expression whose complete syntax tree has been type checked.

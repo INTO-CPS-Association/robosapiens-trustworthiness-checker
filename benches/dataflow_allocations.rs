@@ -2,8 +2,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::DataflowMonitor;
-use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
 struct CountingAllocator;
 
@@ -58,10 +59,10 @@ fn counts() -> AllocationCounts {
 }
 
 fn compile(source: &str) -> DataflowMonitor {
-    let spec = source
-        .parse::<DsrvSpecification>()
-        .expect("allocation benchmark specification should parse");
-    DataflowMonitor::compile_untyped(spec).expect("allocation benchmark monitor should compile")
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+        .expect("allocation benchmark specification should parse and check");
+    DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
+        .expect("allocation benchmark monitor should compile")
 }
 
 fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {

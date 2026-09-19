@@ -15,7 +15,7 @@
 // ANCHOR: monitor_evaluate
 fn evaluate_two_ticks() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
     let source = "in x: Int\n\
         out alert: Bool\n\
@@ -24,8 +24,8 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
         alert = total > 20\n\
         total = default(total[1], 0) + scaled\n\
         scaled = x * 2";
-    let spec = source.parse::<DsrvSpecification>()?;
-    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
         outputs
@@ -49,13 +49,13 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
 // ANCHOR: dataflow_program_lifecycle
 fn reuse_a_compiled_program_for_independent_traces() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::{DataflowMonitor, DataflowProgram};
-    use trustworthiness_checker::{DsrvSpecification, Value};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
 
     let source = "in x: Int\n\
         out total: Int\n\
         total = default(total[1], 0) + x";
-    let spec = source.parse::<DsrvSpecification>()?;
-    let program = DataflowProgram::compile_untyped(spec)?;
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let program = DataflowProgram::compile_checked(spec)?;
 
     let mut first = DataflowMonitor::from_program(program.clone());
     let mut second = DataflowMonitor::from_program(program);
@@ -323,7 +323,7 @@ fn write_one_output_row() -> anyhow::Result<()> {
 // ANCHOR: dsrv_operator_syntax
 fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
     let source = "in base: Int\n\
         in exponent: Int\n\
@@ -333,8 +333,8 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
         different = base != exponent\n\
         signed_power = (-base) ** exponent\n\
         both_positive = base > 0 and exponent > 0";
-    let spec = source.parse::<DsrvSpecification>()?;
-    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
         outputs
@@ -394,15 +394,15 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
 // ANCHOR: dsrv_trailing_commas_and_list_get
 fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
     let source = "in values: List<Int,>\n\
         out first: Int\n\
         out count: Int\n\
         first = List.get(values, 0,)\n\
         count = List.len(values,)";
-    let spec = source.parse::<DsrvSpecification>()?;
-    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
         outputs
@@ -425,15 +425,15 @@ fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
 // ANCHOR: dsrv_else_if_chain
 fn evaluate_else_if_chain() -> anyhow::Result<()> {
     use trustworthiness_checker::dataflow::DataflowMonitor;
-    use trustworthiness_checker::{DsrvSpecification, Value, VarName};
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
     let source = "in temperature: Int\n\
         out level: Int\n\
         level = if temperature > 90 then 2\n\
                 else if temperature > 70 then 1\n\
                 else 0";
-    let spec = source.parse::<DsrvSpecification>()?;
-    let mut monitor = DataflowMonitor::compile_untyped(spec)?;
+    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let output = VarName::new("level");
     let mut row = vec![Value::NoVal];
 

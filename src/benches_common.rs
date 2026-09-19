@@ -18,11 +18,10 @@ use crate::core::Semantics;
 use crate::io::output::OutputBackendConfig;
 use crate::io::{InputPipeline, InputSource, OutputPipeline};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
-use crate::runtime::builder::{
-    CheckedSemiSyncValueConfig, CheckedValueConfig, SemiSyncValueConfig,
-};
+use crate::runtime::builder::{SemiSyncValueConfig, ValueConfig};
 use crate::runtime::dataflow::{DataflowRuntimeBuilder, ReconfigurableDataflowRuntimeBuilder};
 use crate::runtime::reconfigurable_semi_sync::ReconfSemiSyncRuntimeBuilder;
 use crate::runtime::semi_sync::SemiSyncRuntimeBuilder;
@@ -36,6 +35,12 @@ use smol::LocalExecutor;
 pub const RECONF_TOPIC: &str = "R";
 #[cfg(feature = "jit")]
 pub const KEY_BENCHMARK_JIT_HOTNESS_EVENTS: u64 = 1_024;
+
+/// Check and elaborate a replacement specification gradually.
+fn parse_replacement(source: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
+    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+        .map_err(anyhow::Error::from)
+}
 
 pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -> usize {
     assert!(terms > 0);
@@ -212,7 +217,7 @@ pub async fn monitor_outputs_specialized_dataflow(
 
 pub async fn monitor_outputs_typed_semisync(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
     let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
@@ -221,20 +226,19 @@ pub async fn monitor_outputs_typed_semisync(
         .await
         .expect("typed semi-sync output pipeline should open");
 
-    let monitor =
-        SemiSyncRuntimeBuilder::<CheckedSemiSyncValueConfig, CheckedUntimedDsrvSemantics>::new()
-            .executor(executor)
-            .model(spec)
-            .output_writer(writer)
-            .input(input_stream.into())
-            .build()
-            .await;
+    let monitor = SemiSyncRuntimeBuilder::<SemiSyncValueConfig, CheckedUntimedDsrvSemantics>::new()
+        .executor(executor)
+        .model(spec)
+        .output_writer(writer)
+        .input(input_stream.into())
+        .build()
+        .await;
     monitor.run().await.expect("Error running monitor");
 }
 
 pub async fn monitor_outputs_typed_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     semantics: Semantics,
 ) {
@@ -253,7 +257,7 @@ pub async fn monitor_outputs_typed_dataflow(
 /// Run the checked dataflow runtime without quickening or native compilation.
 pub async fn monitor_outputs_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
     let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
@@ -261,7 +265,7 @@ pub async fn monitor_outputs_dataflow(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .quickening(false)
         .executor(executor)
@@ -276,7 +280,7 @@ pub async fn monitor_outputs_dataflow(
 /// Run a fixed number of checked dataflow outputs without quickening or native compilation.
 pub async fn monitor_outputs_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
@@ -285,7 +289,7 @@ pub async fn monitor_outputs_dataflow_limited(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .quickening(false)
         .executor(executor)
@@ -300,7 +304,7 @@ pub async fn monitor_outputs_dataflow_limited(
 /// Run the checked dataflow interpreter through its scheduler-plan quickening tier.
 pub async fn monitor_outputs_quickened_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
     let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
@@ -308,7 +312,7 @@ pub async fn monitor_outputs_quickened_dataflow(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("quickened dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor)
         .model(spec)
@@ -322,7 +326,7 @@ pub async fn monitor_outputs_quickened_dataflow(
 /// Run a fixed number of checked dataflow outputs through scheduler-plan quickening.
 pub async fn monitor_outputs_quickened_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
@@ -331,7 +335,7 @@ pub async fn monitor_outputs_quickened_dataflow_limited(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("quickened dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .executor(executor)
         .model(spec)
@@ -347,7 +351,7 @@ pub async fn monitor_outputs_quickened_dataflow_limited(
 #[cfg(feature = "jit")]
 pub async fn monitor_outputs_jit_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
     let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::null());
@@ -355,7 +359,7 @@ pub async fn monitor_outputs_jit_dataflow(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("JIT dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .jit(crate::dataflow::JitConfig::after_events(
             KEY_BENCHMARK_JIT_HOTNESS_EVENTS,
@@ -374,7 +378,7 @@ pub async fn monitor_outputs_jit_dataflow(
 #[cfg(feature = "jit")]
 pub async fn monitor_outputs_jit_dataflow_limited(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     _limit: usize,
 ) {
@@ -383,7 +387,7 @@ pub async fn monitor_outputs_jit_dataflow_limited(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("JIT dataflow output pipeline should open");
-    let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let runtime = DataflowRuntimeBuilder::new()
         .execution_policy(ExecutionPolicy::Buffered)
         .jit(crate::dataflow::JitConfig::after_events(
             KEY_BENCHMARK_JIT_HOTNESS_EVENTS,
@@ -404,9 +408,12 @@ pub async fn monitor_outputs_untyped_reconf_limited(
     output_pipeline: OutputPipeline,
     use_context_transfer: bool,
 ) {
+    let spec = spec
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .expect("reconfiguration benchmark specification should check");
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
         ReconfSemiSyncRuntimeBuilder::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+            .parse_spec(parse_replacement)
             .executor(executor)
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
@@ -430,8 +437,12 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
     } else {
         ContextTransferPolicy::None
     };
-    let builder = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+    let spec = spec
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .expect("reconfiguration benchmark specification should check");
+    let builder = ReconfigurableDataflowRuntimeBuilder::new()
+        .semantics(Semantics::Untimed)
+        .parse_spec(parse_replacement)
         .executor(executor)
         .model(spec)
         .input_pipeline(input_pipeline)
@@ -457,11 +468,10 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
         ContextTransferPolicy::None
     };
     let checked = spec
-        .to_string()
-        .parse::<CheckedDsrvSpecification>()
+        .check_and_elaborate(TypeCheckOptions::STRICT)
         .expect("reconfiguration benchmark specification should type check");
-    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+    let builder = ReconfigurableDataflowRuntimeBuilder::new()
+        .parse_spec(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -487,11 +497,10 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
         ContextTransferPolicy::None
     };
     let checked = spec
-        .to_string()
-        .parse::<CheckedDsrvSpecification>()
+        .check_and_elaborate(TypeCheckOptions::STRICT)
         .expect("reconfiguration benchmark specification should type check");
-    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+    let builder = ReconfigurableDataflowRuntimeBuilder::new()
+        .parse_spec(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -517,11 +526,10 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
         ContextTransferPolicy::None
     };
     let checked = spec
-        .to_string()
-        .parse::<CheckedDsrvSpecification>()
+        .check_and_elaborate(TypeCheckOptions::STRICT)
         .expect("reconfiguration benchmark specification should type check");
-    let builder = ReconfigurableDataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
-        .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+    let builder = ReconfigurableDataflowRuntimeBuilder::new()
+        .parse_spec(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -569,7 +577,7 @@ pub async fn monitor_outputs_untyped_little(
 
 pub async fn monitor_outputs_typed_async(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
 ) {
     // Currently cannot be deduplicated since it includes the type
@@ -580,14 +588,13 @@ pub async fn monitor_outputs_typed_async(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("typed async output pipeline should open");
-    let async_monitor =
-        AsyncRuntimeBuilder::<CheckedValueConfig, CheckedUntimedDsrvSemantics>::new()
-            .executor(executor.clone())
-            .model(spec)
-            .input(input_stream.into())
-            .output_writer(writer)
-            .build()
-            .await;
+    let async_monitor = AsyncRuntimeBuilder::<ValueConfig, CheckedUntimedDsrvSemantics>::new()
+        .executor(executor.clone())
+        .model(spec)
+        .input(input_stream.into())
+        .output_writer(writer)
+        .build()
+        .await;
     async_monitor.run().await.expect("Error running monitor");
 }
 

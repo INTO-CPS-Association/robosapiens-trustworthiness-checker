@@ -1,13 +1,12 @@
 use super::*;
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::dsrv_fixtures::elaborated;
 
 #[test]
 fn typed_monitor_mixed_rows_avoid_the_value_interface() {
-    let specification = "in x: Int\nin scale: Float\nout result: Float\nresult = x * scale"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nin scale: Float\nout result: Float\nresult = x * scale");
     let mut monitor =
         TypedDataflowMonitor::<(i64, f64), (f64,)>::compile_checked(specification).unwrap();
     assert_eq!(monitor.evaluate(&(4, 1.5)), (6.0,));
@@ -18,10 +17,10 @@ fn typed_monitor_mixed_rows_avoid_the_value_interface() {
 // value for both revised operators.
 #[test]
 fn typed_monitor_evaluates_power_and_inequality() {
-    let specification = "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
-         result = x ** exponent\ndifferent = x != exponent"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
+         result = x ** exponent\ndifferent = x != exponent",
+    );
     let mut monitor =
         TypedDataflowMonitor::<(i64, i64), (i64, bool)>::compile_checked(specification).unwrap();
 
@@ -37,10 +36,10 @@ fn typed_monitor_evaluates_power_and_inequality() {
 #[test]
 fn typed_monitor_activates_direct_jit_for_power_and_inequality() {
     crate::dataflow::execution::jit::reset_compile_count();
-    let specification = "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
-         result = x ** exponent\ndifferent = x != exponent"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin exponent: Int\nout result: Int\nout different: Bool\n\
+         result = x ** exponent\ndifferent = x != exponent",
+    );
     let mut monitor = TypedDataflowMonitor::<(i64, i64), (i64, bool)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(1),
@@ -65,10 +64,9 @@ fn typed_monitor_activates_direct_jit_for_power_and_inequality() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_native_jit_preserves_variant_sensitive_mixed_numeric_inequality() {
-    let specification =
-        "in integer: Int\nin float: Float\nout different: Bool\ndifferent = integer != float"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in integer: Int\nin float: Float\nout different: Bool\ndifferent = integer != float",
+    );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (bool,)>::compile_checked(specification).unwrap();
 
@@ -80,9 +78,7 @@ fn eager_native_jit_preserves_variant_sensitive_mixed_numeric_inequality() {
 fn typed_monitor_reports_a_non_concrete_output_rather_than_guessing() {
     // Sparse ticks are not representable in a typed row. The first tick of a delayed stream has
     // no previous value, so the monitor must surface that instead of inventing a scalar.
-    let specification = "in x: Int\nout result: Int\nresult = x[1]"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x[1]");
     let mut monitor =
         TypedDataflowMonitor::<(i64,), (i64,)>::compile_checked(specification).unwrap();
     assert!(matches!(
@@ -95,9 +91,9 @@ fn typed_monitor_reports_a_non_concrete_output_rather_than_guessing() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_uses_native_mixed_tuple_layout() {
-    let specification = "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = x * scale\nalert = result > 3.5"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = x * scale\nalert = result > 3.5",
+    );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (f64, bool)>::compile_checked(specification).unwrap();
     assert_eq!(monitor.evaluate(&(2, 2.0)), (4.0, true));
@@ -107,9 +103,9 @@ fn jit_direct_uses_native_mixed_tuple_layout() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_supports_integer_division_and_remainder() {
-    let specification = "in x: Int\nin divisor: Int\nout quotient: Int\nout remainder: Int\nquotient = x / divisor\nremainder = x % divisor"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin divisor: Int\nout quotient: Int\nout remainder: Int\nquotient = x / divisor\nremainder = x % divisor",
+    );
     let mut monitor =
         TypedJitMonitor::<(i64, i64), (i64, i64)>::compile_checked(specification).unwrap();
 
@@ -122,9 +118,8 @@ fn jit_direct_supports_integer_division_and_remainder() {
 #[test]
 #[should_panic(expected = "integer division by zero in direct JIT monitor")]
 fn jit_direct_rejects_zero_integer_divisors_without_a_hardware_trap() {
-    let specification = "in x: Int\nin divisor: Int\nout result: Int\nresult = x / divisor"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nin divisor: Int\nout result: Int\nresult = x / divisor");
     let mut monitor =
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
@@ -136,9 +131,7 @@ fn jit_direct_rejects_zero_integer_divisors_without_a_hardware_trap() {
 #[should_panic(expected = "negative integer exponent in direct JIT monitor")]
 fn jit_direct_reports_negative_integer_exponents_distinctly() {
     let specification =
-        "in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        elaborated("in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent");
     let mut monitor =
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
@@ -150,9 +143,7 @@ fn jit_direct_reports_negative_integer_exponents_distinctly() {
 #[should_panic(expected = "integer overflow during exponentiation in direct JIT monitor")]
 fn jit_direct_reports_integer_power_overflow_distinctly() {
     let specification =
-        "in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        elaborated("in base: Int\nin exponent: Int\nout result: Int\nresult = base ** exponent");
     let mut monitor =
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
@@ -162,9 +153,9 @@ fn jit_direct_reports_integer_power_overflow_distinctly() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_preserves_temporal_window_state() {
-    let specification = "in x: Int\nout result: Bool\nresult = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nout result: Bool\nresult = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3",
+    );
     let mut monitor = TypedJitMonitor::<(i64,), (bool,)>::compile_checked(specification).unwrap();
 
     let outputs = [1, 4, 5, 6, 2].map(|input| monitor.evaluate(&(input,)).0);
@@ -174,9 +165,8 @@ fn jit_direct_preserves_temporal_window_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_preserves_recursive_accumulator_state() {
-    let specification = "in x: Int\nout result: Int\nresult = default(result[1], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nout result: Int\nresult = default(result[1], 0) + x");
     let mut monitor = TypedJitMonitor::<(i64,), (i64,)>::compile_checked(specification).unwrap();
 
     let outputs = [1, 2, 3, 4].map(|input| monitor.evaluate(&(input,)).0);
@@ -186,10 +176,9 @@ fn jit_direct_preserves_recursive_accumulator_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_temporal_supports_dynamic_integer_remainder() {
-    let specification =
-        "in x: Int\nin divisor: Int\nout result: Int\nresult = default(x[1], 0) % divisor"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin divisor: Int\nout result: Int\nresult = default(x[1], 0) % divisor",
+    );
     let mut monitor =
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
@@ -201,9 +190,9 @@ fn jit_direct_temporal_supports_dynamic_integer_remainder() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_direct_temporal_uses_native_mixed_layout_and_stream_ssa() {
-    let specification = "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = default(x[1], 0) * scale\nalert = result > 3.5"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = default(x[1], 0) * scale\nalert = result > 3.5",
+    );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (f64, bool)>::compile_checked(specification).unwrap();
 
@@ -216,9 +205,7 @@ fn jit_direct_temporal_uses_native_mixed_layout_and_stream_ssa() {
 #[test]
 fn typed_monitor_activates_direct_jit_after_normal_warmup() {
     crate::dataflow::execution::jit::reset_compile_count();
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor = TypedDataflowMonitor::<(i64,), (i64,)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(2),
@@ -240,9 +227,9 @@ fn typed_monitor_activates_direct_jit_after_normal_warmup() {
 #[cfg(feature = "jit")]
 #[test]
 fn typed_monitor_preserves_window_state_across_direct_activation() {
-    let specification = "in x: Int\nout result: Bool\nresult = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+    let specification = elaborated(
+        "in x: Int\nout result: Bool\nresult = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3",
+    );
     let mut monitor = TypedDataflowMonitor::<(i64,), (bool,)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(2),
@@ -257,9 +244,7 @@ fn typed_monitor_preserves_window_state_across_direct_activation() {
 #[cfg(feature = "jit")]
 #[test]
 fn typed_monitor_keeps_warm_executor_when_direct_extraction_fails() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor = TypedDataflowMonitor::<(i64,), (i64,)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(1),
@@ -280,9 +265,8 @@ fn typed_monitor_keeps_warm_executor_when_direct_extraction_fails() {
 #[cfg(feature = "jit")]
 #[test]
 fn typed_monitor_preserves_temporal_state_when_direct_extraction_fails() {
-    let specification = "in x: Int\nout result: Int\nresult = default(result[1], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nout result: Int\nresult = default(result[1], 0) + x");
     let mut monitor = TypedDataflowMonitor::<(i64,), (i64,)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(1),
@@ -304,9 +288,8 @@ fn typed_monitor_preserves_temporal_state_when_direct_extraction_fails() {
 #[cfg(feature = "jit")]
 #[test]
 fn typed_monitor_preserves_recursive_state_across_direct_activation() {
-    let specification = "in x: Int\nout result: Int\nresult = default(result[1], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nout result: Int\nresult = default(result[1], 0) + x");
     let mut monitor = TypedDataflowMonitor::<(i64,), (i64,)>::compile_checked_with_jit(
         specification,
         JitConfig::after_events(2),
@@ -320,9 +303,7 @@ fn typed_monitor_preserves_recursive_state_across_direct_activation() {
 
 #[test]
 fn binding_rejects_wrong_tuple_kind() {
-    let specification = "in x: Int\nout result: Bool\nresult = x > 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Bool\nresult = x > 3");
     assert!(matches!(
         TypedDataflowMonitor::<(f64,), (bool,)>::compile_checked(specification),
         Err(TypedBindingError::TypeMismatch { side: "input", .. })

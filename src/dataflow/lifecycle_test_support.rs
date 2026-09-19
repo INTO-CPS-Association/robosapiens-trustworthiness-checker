@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::core::BinaryOperator;
-use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
+use crate::lang::dsrv::ast::{DsrvSpecification, Expr, SyntaxLiteral};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,7 +46,7 @@ pub(in crate::dataflow) enum LifecycleRecipe {
 
 #[derive(Clone, Debug)]
 pub(in crate::dataflow) struct LifecycleCase {
-    pub specification: DsrvSpecification,
+    pub specification: ElaboratedDsrvSpecification,
     pub trace_a: Vec<Vec<Value>>,
     pub trace_b: Vec<Vec<Value>>,
     pub recipes: Vec<LifecycleRecipe>,
@@ -158,7 +159,9 @@ pub(in crate::dataflow) fn arb_lifecycle_case() -> impl Strategy<Value = Lifecyc
         arb_trace(),
     )
         .prop_map(|(recipes, trace_a, trace_b)| LifecycleCase {
-            specification: specification_from_recipes(&recipes),
+            specification: specification_from_recipes(&recipes)
+                .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+                .expect("lifecycle specifications check"),
             trace_a,
             trace_b,
             recipes,
@@ -271,6 +274,7 @@ fn specification_from_recipes(recipes: &[LifecycleRecipe]) -> DsrvSpecification 
 #[cfg(test)]
 mod generator_contract_tests {
     use super::*;
+    use crate::core::Semantics;
     use proptest::test_runner::{Config, TestRunner};
 
     #[test]
@@ -285,7 +289,10 @@ mod generator_contract_tests {
                 prop_assert!(case.recipes.len() <= NORMAL_MAX_STREAMS);
                 prop_assert!(case.trace_a.len() <= NORMAL_MAX_TRACE_ROWS);
                 prop_assert!(case.trace_b.len() <= NORMAL_MAX_TRACE_ROWS);
-                prop_assert!(DataflowProgram::compile_untyped(case.specification).is_ok());
+                prop_assert!(
+                    DataflowProgram::compile_with_semantics(case.specification, Semantics::Untimed)
+                        .is_ok()
+                );
                 Ok(())
             })
             .unwrap();

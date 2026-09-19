@@ -142,9 +142,10 @@ impl<M: Specification + TryLocalisable> SchedulerExecutor<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DsrvSpecification;
+    use crate::ElaboratedDsrvSpecification;
     use crate::distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph};
     use crate::distributed::scheduling::communication::{MockSchedulerCommunicator, WorkTypeInfo};
+    use crate::dsrv_fixtures::elaborated;
     use crate::semantics::distributed::localisation::Localisable;
     use macro_rules_attribute::apply;
     use std::collections::BTreeSet;
@@ -153,9 +154,7 @@ mod tests {
     #[test]
     fn monitor_work_keeps_only_localised_io_type_info() -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(&spec_src);
         let local_spec = spec.localise(&vec!["y".into()]);
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
@@ -186,9 +185,7 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(&spec_src);
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),
@@ -209,7 +206,9 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
+            ElaboratedDsrvSpecification,
+        > {
             log: vec![],
         }));
         let topic_mapping: BTreeMap<VarName, String> = BTreeMap::from([
@@ -244,9 +243,7 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nin z: Int\nout y: Int\ny = (x + 1)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(&spec_src);
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),
@@ -274,7 +271,9 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
+            ElaboratedDsrvSpecification,
+        > {
             log: vec![],
         }));
         let mut executor = SchedulerExecutor::new(
@@ -314,9 +313,7 @@ mod tests {
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) -> anyhow::Result<()> {
         let spec_src = "in x: Int\nout y: Int\ny = (x + 1)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = elaborated(&spec_src);
 
         let var_msg_types: WorkTypeInfo = BTreeMap::from([
             ("x".into(), "Int32".to_string()),
@@ -345,7 +342,9 @@ mod tests {
             node_labels: BTreeMap::from([(node_a, vec!["y".into()]), (node_b, vec![])]),
         };
 
-        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<DsrvSpecification> {
+        let communicator = Arc::new(Mutex::new(MockSchedulerCommunicator::<
+            ElaboratedDsrvSpecification,
+        > {
             log: vec![],
         }));
         let mut executor = SchedulerExecutor::new(

@@ -1,5 +1,6 @@
 use super::MonitorExecution;
 use super::plan::{ExecutableSegment, ExecutionPlan, ExecutionStep};
+use crate::core::Semantics;
 #[cfg(feature = "jit")]
 use crate::dataflow::StreamStateTransferOutcome;
 use crate::dataflow::execution::evaluator::Evaluator;
@@ -16,7 +17,7 @@ use crate::dataflow::{ContextTransferPolicy, DataflowMonitor, StreamMapping};
 use crate::dataflow::{DataflowProgram, ReconfigurationMapping};
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
-use crate::{CheckedDsrvSpecification, DsrvSpecification};
+use crate::dsrv_fixtures::elaborated;
 use crate::{Value, VarName};
 use std::rc::Rc;
 
@@ -126,11 +127,7 @@ fn standalone_execution(program: &DataflowProgram) -> MonitorExecution {
 }
 
 fn compile_program(source: &str) -> DataflowProgram {
-    source
-        .parse::<DsrvSpecification>()
-        .unwrap()
-        .try_into()
-        .unwrap()
+    DataflowProgram::compile_with_semantics(elaborated(source), Semantics::Untimed).unwrap()
 }
 
 fn assert_all_node_values(evaluator: &Evaluator, expected: Value) {
@@ -239,14 +236,14 @@ fn documented_scalar_program_has_the_listed_shape() {
     use crate::dataflow::execution::scalar_ir::ScalarValueDefinition;
     use crate::dataflow::execution::scalar_region::ScalarRegion;
 
-    let specification = "in x: Int\nin y: Int\n\
+    let specification = elaborated(
+        "in x: Int\nin y: Int\n\
         out scaled: Int\nout offset: Int\nout merged: Int\nout total: Int\n\
         scaled = x * 2\n\
         offset = y + 5\n\
         merged = scaled + offset\n\
-        total = default(total[1], 0) + merged"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        total = default(total[1], 0) + merged",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let execution = execution(&monitor);
 
@@ -299,7 +296,8 @@ fn documented_scalar_program_has_the_listed_shape() {
 /// figures, so they are checked here rather than left to drift.
 #[test]
 fn documented_fusion_example_partitions_into_six_steps() {
-    let specification = "in x: Int\nin y: Int\nin flag: Bool\nin lbl: Str\n\
+    let specification = elaborated(
+        "in x: Int\nin y: Int\nin flag: Bool\nin lbl: Str\n\
         out scaled: Int\nout offset: Int\nout merged: Int\nout blended: Int\n\
         out delta: Int\nout ratio: Int\nout total: Int\nout echoed: Str\n\
         out level: Int\nout alert: Bool\n\
@@ -312,9 +310,8 @@ fn documented_fusion_example_partitions_into_six_steps() {
         total = default(total[1], 0) + ratio\n\
         echoed = lbl\n\
         level = total + ratio\n\
-        alert = level > 20"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        alert = level > 20",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let execution = execution(&monitor);
     let plan = &execution.engine.active_plan;
@@ -367,15 +364,15 @@ fn documented_fusion_example_partitions_into_six_steps() {
 /// here rather than left to drift.
 #[test]
 fn documented_running_example_partitions_into_two_stream_regions_around_a_graph_step() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         out alert: Bool\n\
         out total: Int\n\
         out scaled: Int\n\
         alert = total > 20\n\
         total = default(total[1], 0) + scaled\n\
-        scaled = x * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        scaled = x * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let execution = execution(&monitor);
 
@@ -404,13 +401,13 @@ fn documented_running_example_partitions_into_two_stream_regions_around_a_graph_
 
 #[test]
 fn disabling_quickening_keeps_regions_but_selects_canonical_execution() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux a: Int\n\
         out b: Int\n\
         a = x + 1\n\
-        b = a * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        b = a * 2",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     monitor.set_quickening(false);
     let execution = execution(&monitor);
@@ -431,9 +428,7 @@ fn disabling_quickening_keeps_regions_but_selects_canonical_execution() {
 
 #[test]
 fn toggling_quickening_preserves_lift_state() {
-    let specification = "in x: Int\nout y: Int\ny = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout y: Int\ny = x + 1");
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal];
 
@@ -455,11 +450,11 @@ fn toggling_quickening_preserves_lift_state() {
 
 #[test]
 fn a_temporal_stream_quickens_as_one_region() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         out result: Bool\n\
-        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(layout_snapshot(&monitor), [LayoutSnapshot::Graph(0)]);
@@ -478,12 +473,8 @@ fn scalar_islands_match_canonical_results_across_special_rows() {
     let source = "in x: Int\n\
         out result: Bool\n\
         result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3";
-    let mut quickened =
-        DataflowMonitor::compile_checked(source.parse::<CheckedDsrvSpecification>().unwrap())
-            .unwrap();
-    let mut canonical =
-        DataflowMonitor::compile_checked(source.parse::<CheckedDsrvSpecification>().unwrap())
-            .unwrap();
+    let mut quickened = DataflowMonitor::compile_checked(elaborated(&source)).unwrap();
+    let mut canonical = DataflowMonitor::compile_checked(elaborated(&source)).unwrap();
     canonical.set_quickening(false);
 
     let mut quickened_output = [Value::NoVal];
@@ -506,11 +497,11 @@ fn scalar_islands_match_canonical_results_across_special_rows() {
 
 #[test]
 fn island_lifting_state_materializes_into_the_canonical_arena_on_transition() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         out result: Int\n\
-        result = default(x[1], 0) + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = default(x[1], 0) + 1",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal];
 
@@ -562,10 +553,9 @@ fn island_lifting_state_materializes_into_the_canonical_arena_on_transition() {
 
 #[test]
 fn an_incompatible_row_returns_one_island_to_canonical_evaluation() {
-    let specification = "in x: Int\nout result: Int\nresult = default(x[1], 0) + 1"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let program = DataflowProgram::compile_untyped(specification).unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = default(x[1], 0) + 1");
+    let program =
+        DataflowProgram::compile_with_semantics(specification, Semantics::Untimed).unwrap();
     // The untyped program has no scalar signatures, so its graph stays wholly canonical.
     let execution = standalone_execution(&program);
     assert!(execution.engine.active_plan.regions.is_empty());
@@ -573,10 +563,9 @@ fn an_incompatible_row_returns_one_island_to_canonical_evaluation() {
 
 #[test]
 fn unchecked_graphs_have_no_scalar_regions() {
-    let specification = "in x: Int\nout y: Int\ny = x + 1"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
+    let specification = elaborated("in x: Int\nout y: Int\ny = x + 1");
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed).unwrap();
 
     assert!(execution(&monitor).engine.active_plan.regions.is_empty());
     assert_eq!(layout_snapshot(&monitor), [LayoutSnapshot::Graph(0)]);
@@ -592,12 +581,9 @@ fn unchecked_graphs_have_no_scalar_regions() {
 
 #[test]
 fn exact_transfer_moves_island_lift_state() {
-    let source = "in x: Int\nout y: Int\ny = default(x[1], 0) + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
-    let target = "in x: Int\nout y: Int\nout z: Int\ny = default(x[1], 0) + 1\nz = x * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let source = elaborated("in x: Int\nout y: Int\ny = default(x[1], 0) + 1");
+    let target =
+        elaborated("in x: Int\nout y: Int\nout z: Int\ny = default(x[1], 0) + 1\nz = x * 2");
     let mut monitor = DataflowMonitor::compile_checked(source).unwrap();
     let mut output = [Value::NoVal];
 
@@ -617,15 +603,15 @@ fn exact_transfer_moves_island_lift_state() {
 
 #[test]
 fn scalar_streams_form_one_execution_run() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux a: Int\n\
         aux b: Int\n\
         out c: Int\n\
         a = x + 1\n\
         b = a * 2\n\
-        c = b - 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        c = b - 3",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(
@@ -636,7 +622,8 @@ fn scalar_streams_form_one_execution_run() {
 
 #[test]
 fn graph_stream_splits_scalar_runs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         in choose: Bool\n\
         aux a: Int\n\
         aux b: Int\n\
@@ -647,9 +634,8 @@ fn graph_stream_splits_scalar_runs() {
         b = a + 1\n\
         c = if choose then b else x\n\
         d = c + 1\n\
-        e = d + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        e = d + 1",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(
@@ -664,15 +650,15 @@ fn graph_stream_splits_scalar_runs() {
 
 #[test]
 fn temporal_stream_splits_scalar_runs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux current: Int\n\
         aux delayed: Int\n\
         out result: Int\n\
         current = x + 1\n\
         delayed = default(current[1], 0) + 1\n\
-        result = delayed * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = delayed * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(
@@ -687,9 +673,9 @@ fn temporal_stream_splits_scalar_runs() {
 
 #[test]
 fn shared_history_does_not_disable_separate_scalar_quickening() {
-    let specification = "in delayed_input: Int\nin scalar_input: Int\nout delayed: Int\naux scalar_base: Int\nout scalar_result: Int\ndelayed = delayed_input[1] + 1\nscalar_base = scalar_input + 1\nscalar_result = scalar_base * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated(
+        "in delayed_input: Int\nin scalar_input: Int\nout delayed: Int\naux scalar_base: Int\nout scalar_result: Int\ndelayed = delayed_input[1] + 1\nscalar_base = scalar_input + 1\nscalar_result = scalar_base * 2",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
@@ -756,9 +742,7 @@ fn shared_history_does_not_disable_separate_scalar_quickening() {
 
 #[test]
 fn fused_scalar_runs_materialize_authoritative_arena_state_on_transition() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal];
 
@@ -784,13 +768,13 @@ fn fused_scalar_runs_materialize_authoritative_arena_state_on_transition() {
 
 #[test]
 fn semantic_plan_records_schedule_publication_effects_and_state_identity() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux base: Int\n\
         out result: Int\n\
         base = x + 1\n\
-        result = default(base[1], 0) + base"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = default(base[1], 0) + base",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let plan = &execution(&monitor).engine.active_plan.semantic;
 
@@ -811,13 +795,13 @@ fn semantic_plan_records_schedule_publication_effects_and_state_identity() {
 
 #[test]
 fn source_boundary_is_part_of_cached_plan_identity() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux source: Int\n\
         out result: Int\n\
         source = x + 1\n\
-        result = source * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = source * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     let source_plan = execution.engine.active_plan.semantic.id;
@@ -851,13 +835,13 @@ fn source_boundary_is_part_of_cached_plan_identity() {
 
 #[test]
 fn unchanged_schedule_keeps_the_active_plan() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux a: Int\n\
         out b: Int\n\
         a = x + 1\n\
-        b = a * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        b = a * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     let active_plan = execution.engine.active_plan.semantic.as_ref() as *const _;
@@ -878,13 +862,13 @@ fn unchanged_schedule_keeps_the_active_plan() {
 
 #[test]
 fn unseen_schedule_reuses_per_stream_metadata() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux base: Int\n\
         out result: Int\n\
         base = x + 1\n\
-        result = default(base[1], 0) + base"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = default(base[1], 0) + base",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     let metadata = Rc::clone(&execution.engine.active_plan.semantic.metadata);
@@ -911,15 +895,15 @@ fn unseen_schedule_reuses_per_stream_metadata() {
 
 #[test]
 fn source_and_main_have_separate_scalar_runs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux source: Int\n\
         aux middle: Int\n\
         out result: Int\n\
         source = x + 1\n\
         middle = source * 2\n\
-        result = middle - 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = middle - 3",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let execution = execution_with_ranges(
         &monitor,
@@ -945,13 +929,13 @@ fn source_and_main_have_separate_scalar_runs() {
 
 #[test]
 fn source_scalar_publication_is_available_to_main_range() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux source: Int\n\
         out result: Int\n\
         source = x + 1\n\
-        result = source * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = source * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     let mut environment = vec![Value::NoVal; execution.engine.active_plan.semantic.environment_len];
@@ -974,13 +958,13 @@ fn source_scalar_publication_is_available_to_main_range() {
 
 #[test]
 fn temporal_source_moved_to_main_is_evaluated_once_per_tick() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux delayed: Int\n\
         out result: Int\n\
         delayed = default(x[1], 0)\n\
-        result = delayed"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = delayed",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     #[cfg(feature = "jit")]
@@ -1017,11 +1001,11 @@ fn temporal_source_moved_to_main_is_evaluated_once_per_tick() {
 #[cfg(feature = "jit")]
 #[test]
 fn partial_temporal_region_is_not_compiled() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         out result: Bool\n\
-        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = x > 3 && default(x[1], 4) > 3 && default(x[2], 4) > 3",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[]);
     execution.enable_jit(JitConfig::eager());
@@ -1035,13 +1019,13 @@ fn partial_temporal_region_is_not_compiled() {
 #[cfg(feature = "jit")]
 #[test]
 fn source_barrier_uses_schedule_owned_native_regions() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux source: Int\n\
         out result: Int\n\
         source = x + 1\n\
-        result = source * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = source * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     execution.enable_jit(JitConfig::eager());
@@ -1068,13 +1052,13 @@ fn source_barrier_uses_schedule_owned_native_regions() {
 #[cfg(feature = "jit")]
 #[test]
 fn hotness_advances_once_across_both_ranges() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux source: Int\n\
         out result: Int\n\
         source = x + 1\n\
-        result = source * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = source * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     execution.enable_jit(JitConfig::after_events(1));
@@ -1102,13 +1086,13 @@ fn hotness_advances_once_across_both_ranges() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_reports_unsupported_streams_from_both_ranges() {
-    let specification = "in x: Str\n\
+    let specification = elaborated(
+        "in x: Str\n\
         aux source: Str\n\
         out result: Str\n\
         source = x\n\
-        result = source"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = source",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[StreamId::new(0)], &[StreamId::new(1)]);
     execution.enable_jit(JitConfig::eager());
@@ -1120,12 +1104,13 @@ fn jit_reports_unsupported_streams_from_both_ranges() {
 
 #[test]
 fn expression_location_validation_requires_the_planned_stream_and_node() {
-    let specification = "in source: Str\n\
+    let specification = elaborated(
+        "in source: Str\n\
         out result: Int\n\
-        result = dynamic(source: Int)"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let monitor = DataflowMonitor::compile_untyped(specification).unwrap();
+        result = dynamic(source: Int)",
+    );
+    let monitor =
+        DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed).unwrap();
     let execution = execution(&monitor);
 
     assert!(execution.validate_expression_location(
@@ -1155,7 +1140,7 @@ fn dynamic_and_defer_owners_share_templates_but_not_state() {
         a = dynamic(a_source: Int, {x})\n\
         b = defer(b_source: Int, {x})";
     let mut monitor =
-        DataflowMonitor::compile_untyped(specification.parse::<DsrvSpecification>().unwrap())
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
             .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     let input = input_row(
@@ -1200,9 +1185,7 @@ fn dynamic_and_defer_owners_share_templates_but_not_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn special_row_falls_back_and_dense_row_resumes_whole_native_execution() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
     let mut output = [Value::NoVal];
@@ -1237,9 +1220,7 @@ fn special_row_falls_back_and_dense_row_resumes_whole_native_execution() {
 #[cfg(feature = "jit")]
 #[test]
 fn consecutive_sparse_rows_keep_canonical_retention_until_native_resumes() {
-    let specification = "in x: Int\nin y: Int\nout result: Int\nresult = x + y"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nin y: Int\nout result: Int\nresult = x + y");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
     let mut output = [Value::NoVal];
@@ -1263,9 +1244,8 @@ fn consecutive_sparse_rows_keep_canonical_retention_until_native_resumes() {
 #[cfg(feature = "jit")]
 #[test]
 fn fused_temporal_state_materializes_before_context_transfer() {
-    let old_specification = "in x: Int\nout result: Int\nresult = default(result[1], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let old_specification =
+        elaborated("in x: Int\nout result: Int\nresult = default(result[1], 0) + x");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(old_specification, JitConfig::eager()).unwrap();
     let mut output = [Value::NoVal];
@@ -1276,9 +1256,7 @@ fn fused_temporal_state_materializes_before_context_transfer() {
     assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
 
     let new_specification =
-        "in added: Int\nin x: Int\nout result: Int\nresult = default(result[1], 0) + x"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        elaborated("in added: Int\nin x: Int\nout result: Int\nresult = default(result[1], 0) + x");
     let candidate = DataflowProgram::compile_checked(new_specification).unwrap();
     let report = monitor
         .reconfigure(candidate, ContextTransferPolicy::MatchingStreamState)
@@ -1298,16 +1276,17 @@ fn fused_temporal_state_materializes_before_context_transfer() {
 
 #[test]
 fn dynamic_schedule_reuses_cached_plan_identity() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         in a_source: Str\n\
         in b_source: Str\n\
         out a: Int\n\
         out b: Int\n\
         a = dynamic(a_source: Int)\n\
-        b = dynamic(b_source: Int)"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
+        b = dynamic(b_source: Int)",
+    );
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     let forward_plan_id = execution(&monitor).engine.active_plan.semantic.id;
 
@@ -1356,9 +1335,7 @@ fn dynamic_schedule_reuses_cached_plan_identity() {
 #[cfg(feature = "jit")]
 #[test]
 fn late_eager_jit_activation_preserves_fused_lift_state() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal];
 
@@ -1373,9 +1350,7 @@ fn late_eager_jit_activation_preserves_fused_lift_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn hot_jit_activation_preserves_fused_lift_state() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     monitor.enable_jit(JitConfig::after_events(1));
     let mut output = [Value::NoVal];
@@ -1389,15 +1364,15 @@ fn hot_jit_activation_preserves_fused_lift_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn schedule_change_after_native_tick_materializes_native_before_fused_state() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux first: Int\n\
         aux second: Int\n\
         out result: Int\n\
         first = (x + 1) * 2\n\
         second = x * 3\n\
-        result = first + second"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = first + second",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(
         &monitor,
@@ -1433,13 +1408,13 @@ fn schedule_change_after_native_tick_materializes_native_before_fused_state() {
 #[cfg(feature = "jit")]
 #[test]
 fn scalar_native_context_transfer_preserves_canonical_lift_state() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
         aux first: Int\n\
         out result: Int\n\
         first = (x + 1) * 2\n\
-        result = first + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = first + 1",
+    );
     let source_program = DataflowProgram::compile_checked(specification.clone()).unwrap();
     let target_program = DataflowProgram::compile_checked(specification).unwrap();
     let mapping = ReconfigurationMapping::between(&source_program, &target_program);
@@ -1498,14 +1473,14 @@ fn scalar_native_context_transfer_preserves_canonical_lift_state() {
 
 #[test]
 fn fused_plan_transition_restores_cached_plan_identity() {
-    let specification = "in left_input: Int\n\
+    let specification = elaborated(
+        "in left_input: Int\n\
         in right_input: Int\n\
         out left: Int\n\
         out right: Int\n\
         left = left_input + 1\n\
-        right = right_input * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        right = right_input * 2",
+    );
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut execution = execution_with_ranges(&monitor, &[], &[StreamId::new(0), StreamId::new(1)]);
     assert_eq!(execution.engine.active_plan.regions.len(), 1);
@@ -1552,9 +1527,7 @@ fn fused_plan_transition_restores_cached_plan_identity() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_jit_retains_deferred_through_trailing_no_val() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
     let mut output = [Value::NoVal];
@@ -1573,13 +1546,13 @@ fn eager_jit_retains_deferred_through_trailing_no_val() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_jit_conditional_retention_matches_checked_canonical() {
-    let specification = "in c: Bool\n\
+    let specification = elaborated(
+        "in c: Bool\n\
         in x: Int\n\
         in y: Int\n\
         out result: Int\n\
-        result = if c then x + 1 else y + 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+        result = if c then x + 1 else y + 2",
+    );
     let mut canonical = DataflowMonitor::compile_checked(specification.clone()).unwrap();
     let mut eager =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
@@ -1612,9 +1585,7 @@ fn eager_jit_conditional_retention_matches_checked_canonical() {
 #[cfg(feature = "jit")]
 #[test]
 fn eager_jit_materialization_preserves_deferred_after_no_val_replay() {
-    let specification = "in x: Int\nout result: Int\nresult = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout result: Int\nresult = x + 1");
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
     let mut output = [Value::NoVal];
@@ -1626,11 +1597,9 @@ fn eager_jit_materialization_preserves_deferred_after_no_val_replay() {
     monitor.evaluate(&[Value::NoVal], &mut output).unwrap();
     assert_eq!(output, [Value::Deferred]);
 
-    let target = DataflowProgram::compile_checked(
-        "in added: Int\nin x: Int\nout result: Int\nresult = x + 1"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap(),
-    )
+    let target = DataflowProgram::compile_checked(elaborated(
+        "in added: Int\nin x: Int\nout result: Int\nresult = x + 1",
+    ))
     .unwrap();
     monitor
         .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
@@ -1643,9 +1612,7 @@ fn eager_jit_materialization_preserves_deferred_after_no_val_replay() {
 /// `out y = x` binds a stream to an external directly, so its graph has no nodes at all.
 #[test]
 fn a_pass_through_stream_still_forms_a_scalar_region() {
-    let specification = "in x: Int\nout y: Int\ny = x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout y: Int\ny = x");
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(

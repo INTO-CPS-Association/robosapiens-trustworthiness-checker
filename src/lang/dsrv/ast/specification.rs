@@ -372,6 +372,18 @@ impl CheckedDsrvSpecification {
         &self.spec
     }
 
+    /// Change declaration-level parts of the specification, keeping every
+    /// expression and so every node's type.
+    pub(crate) fn map_specification(
+        self,
+        change: impl FnOnce(DsrvSpecification) -> DsrvSpecification,
+    ) -> Self {
+        let Self { spec, checked } = self;
+        let spec = change(spec);
+        debug_assert!(spec.nodes().all(|node| checked.has_type(node)));
+        Self { spec, checked }
+    }
+
     pub fn var_expr_ref(&self, var: &VarName) -> Option<CheckedExprRef<'_>> {
         self.spec
             .exprs

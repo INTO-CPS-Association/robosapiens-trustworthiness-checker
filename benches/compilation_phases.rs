@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use trustworthiness_checker::Value;
-use trustworthiness_checker::core::StreamType;
+use trustworthiness_checker::core::{Semantics, StreamType};
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::lang::core::dependency_graph::{
     DependencyGraphRoots, DependencyGraphSpec,
@@ -99,9 +99,10 @@ fn compilation_phases(c: &mut Criterion) {
         let typed = source
             .parse::<CheckedDsrvSpecification>()
             .expect("benchmark input should type check");
-        DataflowMonitor::compile_untyped(parsed.clone())
+        let elaborated = typed.clone().elaborate();
+        DataflowMonitor::compile_with_semantics(elaborated.clone(), Semantics::Untimed)
             .expect("benchmark input should compile untyped");
-        DataflowMonitor::compile_checked(typed.clone())
+        DataflowMonitor::compile_checked(elaborated.clone())
             .expect("benchmark input should compile typed");
 
         group.throughput(Throughput::Bytes(source.len() as u64));
@@ -125,6 +126,13 @@ fn compilation_phases(c: &mut Criterion) {
                         .expect("benchmark source should parse")
                 },
                 |spec| black_box(type_check(spec).unwrap()),
+                BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new("elaborate", assignments), |b| {
+            b.iter_batched(
+                || typed.clone(),
+                |spec| black_box(spec.elaborate()),
                 BatchSize::SmallInput,
             )
         });
@@ -152,8 +160,13 @@ fn compilation_phases(c: &mut Criterion) {
             BenchmarkId::new("dataflow_compile_untyped", assignments),
             |b| {
                 b.iter_batched(
-                    || parsed.clone(),
-                    |spec| black_box(DataflowMonitor::compile_untyped(spec).unwrap()),
+                    || elaborated.clone(),
+                    |spec| {
+                        black_box(
+                            DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
+                                .unwrap(),
+                        )
+                    },
                     BatchSize::SmallInput,
                 )
             },
@@ -162,7 +175,7 @@ fn compilation_phases(c: &mut Criterion) {
             BenchmarkId::new("dataflow_compile_typed", assignments),
             |b| {
                 b.iter_batched(
-                    || typed.clone(),
+                    || elaborated.clone(),
                     |spec| black_box(DataflowMonitor::compile_checked(spec).unwrap()),
                     BatchSize::SmallInput,
                 )
@@ -175,7 +188,7 @@ fn compilation_phases(c: &mut Criterion) {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
                     let typed = type_check(parsed).unwrap();
-                    black_box(DataflowMonitor::compile_checked(typed).unwrap())
+                    black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
             },
         );
@@ -187,7 +200,7 @@ fn compilation_phases(c: &mut Criterion) {
                     let parsed = parse_str(black_box(source)).unwrap();
                     let typed = type_check(parsed).unwrap();
                     black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
-                    black_box(DataflowMonitor::compile_checked(typed).unwrap())
+                    black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
             },
         );

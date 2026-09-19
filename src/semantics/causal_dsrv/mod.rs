@@ -16,18 +16,18 @@ use std::marker::PhantomData;
 use crate::causal::{CausalDomain, CausalSet, CausalValue, RoleCausalDomain};
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::core::DependencyGraphExpr;
-use crate::lang::dsrv::ast::{
-    CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, Expr, ExprRef, ExprView,
-};
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
+use crate::lang::dsrv::ast::{CheckedExpr, CheckedExprRef, Expr, ExprRef, ExprView};
 use crate::runtime::semi_sync::SemiSyncContext;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
-use crate::{DsrvSpecification, LocalStream, VarName};
+use crate::{LocalStream, VarName};
 
 pub use builder::{CausalRuntimeBuilder, CheckedCausalRuntimeBuilder};
 pub use input::annotate_input;
 pub use input::annotate_input_for_spec;
 
-/// Semi-synchronous unchecked DSRV configuration with causal values.
+/// Semi-synchronous DSRV configuration with causal values, whose semantics
+/// evaluate the elaborated tree without consulting its types.
 #[derive(Debug, Default, PartialEq)]
 pub struct CausalSemiSyncConfig<D>(PhantomData<D>);
 
@@ -39,9 +39,9 @@ impl<D> Clone for CausalSemiSyncConfig<D> {
 
 impl<D: CausalDomain> AsyncConfig for CausalSemiSyncConfig<D> {
     type Val = CausalValue<D>;
-    type Expr = Expr;
+    type Expr = CheckedExpr;
     type Ctx = SemiSyncContext<Self>;
-    type Spec = DsrvSpecification;
+    type Spec = ElaboratedDsrvSpecification;
 }
 
 /// Semi-synchronous checked DSRV configuration with causal values.
@@ -58,7 +58,7 @@ impl<D: CausalDomain> AsyncConfig for CausalCheckedSemiSyncConfig<D> {
     type Val = CausalValue<D>;
     type Expr = CheckedExpr;
     type Ctx = SemiSyncContext<Self>;
-    type Spec = CheckedDsrvSpecification;
+    type Spec = ElaboratedDsrvSpecification;
 }
 
 /// Default reference causal semantics over [`CausalSet`].
@@ -71,11 +71,11 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
     const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
 
     fn to_async_stream(
-        expr: &Expr,
+        expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
         owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
-        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.clone(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.expr().clone(), ctx, owner)
     }
 }
 
@@ -106,11 +106,11 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
     const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
 
     fn to_async_stream(
-        expr: &Expr,
+        expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
         owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
-        evaluate::<CausalSemiSyncConfig<D>, D>(expr.clone(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<D>, D>(expr.expr().clone(), ctx, owner)
     }
 }
 
@@ -319,7 +319,6 @@ mod tests {
     };
     use crate::core::Runtime;
     use crate::io::{map, testing::channel_output};
-    use crate::lang::dsrv::parser::parse_str;
     use crate::runtime::{RuntimeBuilder, semi_sync::SemiSyncRuntimeBuilder};
     use crate::semantics::MonitoringSemantics;
     use crate::{Value, VarName, async_test};
@@ -369,7 +368,7 @@ mod tests {
         D: CausalDomain,
         MS: MonitoringSemantics<CausalSemiSyncConfig<D>>,
     {
-        let spec = parse_str(source).expect("causal fixture should parse");
+        let spec = crate::dsrv_fixtures::elaborated(source);
         let input = annotate_input::<D>(map::input_stream(input), spec.input_vars().clone());
         let (output_writer, mut rows) = channel_output(spec.output_vars().clone()).await;
         let runtime = SemiSyncRuntimeBuilder::<CausalSemiSyncConfig<D>, MS>::new()
@@ -582,7 +581,8 @@ mod tests {
         let checked =
             "in property: Str\nin x: Int\nout result: Int\nresult = dynamic(property : Int)"
                 .parse::<crate::CheckedDsrvSpecification>()
-                .expect("checked causal fixture should type-check");
+                .expect("checked causal fixture should type-check")
+                .elaborate();
         let (output_writer, mut rows) = channel_output(checked.output_vars().clone()).await;
         let runtime = crate::semantics::CheckedCausalRuntimeBuilder::<RoleCausalSet>::role_new()
             .executor(executor.clone())

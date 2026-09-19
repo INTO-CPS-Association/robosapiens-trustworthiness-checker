@@ -31,6 +31,8 @@ pub(in crate::dataflow) mod test_support {
 }
 
 use super::*;
+use crate::DsrvSpecification;
+use crate::core::Semantics;
 use crate::dataflow::execution::evaluator_state::{reset_state_clone_count, state_clone_count};
 use crate::dataflow::stream_id::StreamId;
 use crate::dataflow::{
@@ -39,8 +41,8 @@ use crate::dataflow::{
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
+use crate::dsrv_fixtures::elaborated;
 use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
-use crate::{CheckedDsrvSpecification, DsrvSpecification};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {
@@ -84,10 +86,10 @@ fn history_depth_for(monitor: &DataflowMonitor, variable: &str) -> Option<usize>
 
 #[test]
 fn checked_expression_typed_source_uses_string_runtime_values() {
-    let specification = "in x: Int\nin property: Expr<Int>\nout result: Int\n\
-                         result = dynamic(property)"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("Expr<T> source should type-check");
+    let specification = elaborated(
+        "in x: Int\nin property: Expr<Int>\nout result: Int\n\
+                         result = dynamic(property)",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal];
 
@@ -111,8 +113,10 @@ fn checked_expression_typed_source_uses_string_runtime_values() {
 fn matching_root_reconfiguration_initializes_changed_stream_state() {
     let old_spec = "in x: Int\nout z: Int\nz = x";
     let new_spec = "in x: Int\nout z: Int\nz = x + 1";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
 
     let report = monitor
         .reconfigure(
@@ -135,7 +139,9 @@ fn matching_root_reconfiguration_initializes_changed_stream_state() {
 #[test]
 fn exact_root_reconfiguration_preserves_active_state_under_matching_transfer() {
     let specification = "in x: Int\nout first: Int\nout second: Int\nfirst = x[1]\nsecond = x[2]";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor.set_quickening(false);
     assert_eq!(monitor.revision(), MonitorRevision::INITIAL);
     assert!(!monitor.quickening_enabled());
@@ -145,7 +151,9 @@ fn exact_root_reconfiguration_preserves_active_state_under_matching_transfer() {
     monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
     assert_eq!(output, [Value::Int(1), Value::Deferred]);
 
-    let mut candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     candidate.set_quickening(true);
     let report = monitor
         .reconfigure(
@@ -178,14 +186,18 @@ fn exact_root_reconfiguration_preserves_active_state_under_matching_transfer() {
 #[test]
 fn root_exact_transfer_moves_state_without_cloning_evaluator_state() {
     let specification = "in x: Int\nout z: Int\nz = x[2]";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
     monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
     let source_history_id = history_id_for(&monitor, "x");
     let source_history_slots = monitor.history_store[source_history_id].slots_ptr();
 
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     reset_state_clone_count();
     let report = monitor
         .reconfigure(
@@ -215,7 +227,8 @@ fn root_exact_transfer_moves_state_without_cloning_evaluator_state() {
 fn root_replacement_reuses_named_history_immediately() {
     let old_spec = "in x: Int\nout a: Int\na = x[3]";
     let new_spec = "in x: Int\nout v: Bool\nv = x[2] > 0";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     #[cfg(feature = "jit")]
     monitor.enable_jit(JitConfig::eager());
     let mut output = [Value::NoVal];
@@ -223,7 +236,8 @@ fn root_replacement_reuses_named_history_immediately() {
         monitor.evaluate(&[Value::Int(value)], &mut output).unwrap();
     }
 
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -239,13 +253,15 @@ fn root_replacement_reuses_named_history_immediately() {
 fn root_replacement_reports_partial_named_history_until_target_depth_is_available() {
     let old_spec = "in x: Int\nout v: Int\nv = x[2]";
     let new_spec = "in x: Int\nout v: Int\nv = x[3]";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     for value in [1, 2] {
         monitor.evaluate(&[Value::Int(value)], &mut output).unwrap();
     }
 
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -262,7 +278,9 @@ fn root_replacement_reports_partial_named_history_until_target_depth_is_availabl
 #[test]
 fn direct_external_delays_share_one_history_and_do_not_allocate_private_rings() {
     let specification = "in x: Int\nout a: Int\nout b: Int\na = x[1]\nb = x[2]";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     assert_eq!(monitor.history_store.len(), 1);
     assert_eq!(monitor.execution.delay_ring_lengths(), [0, 0]);
 
@@ -280,14 +298,16 @@ fn direct_external_delays_share_one_history_and_do_not_allocate_private_rings() 
 fn matching_root_transfer_initializes_changed_delay_state() {
     let old_spec = "in x: Int\nout z: Int\nz = x[1] + 1";
     let new_spec = "in x: Int\nout z: Int\nz = x[1] + 2";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
     assert_eq!(output, [Value::Deferred]);
     monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
     assert_eq!(output, [Value::Int(2)]);
 
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = monitor
         .reconfigure(
             candidate.program,
@@ -310,7 +330,8 @@ fn matching_root_transfer_initializes_changed_delay_state() {
 fn matching_transfer_initializes_changed_stream_retained_values() {
     let old_spec = "in x: Int\nin source: Str\nout base: Int\nout z: Int\nbase = x[1] + x + 1\nz = dynamic(source: Int)";
     let new_spec = "in x: Int\nin source: Str\nout base: Int\nout z: Int\nbase = x[1] + x + 2\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
     monitor
@@ -339,7 +360,8 @@ fn matching_transfer_initializes_changed_stream_retained_values() {
         Value::Int(4)
     );
 
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = monitor
         .reconfigure(
             candidate.program,
@@ -363,11 +385,13 @@ fn matching_transfer_initializes_changed_stream_retained_values() {
 fn matching_root_transfer_initializes_changed_delay_history() {
     let old_spec = "in x: Int\nout z: Int\nz = x[1]";
     let new_spec = "in x: Int\nout z: Int\nz = x[1] + 1";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
 
-    let candidate = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = monitor
         .reconfigure(
             candidate.program,
@@ -390,7 +414,9 @@ fn matching_root_transfer_initializes_changed_delay_history() {
 #[test]
 fn active_dynamics_share_one_history_within_a_stream() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout z: Int\nz = dynamic(first: Int) + dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     let input = input_row(
         &monitor,
@@ -410,7 +436,9 @@ fn active_dynamics_share_one_history_within_a_stream() {
 #[test]
 fn active_dynamics_share_one_history_across_streams() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\na = dynamic(first: Int)\nb = dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     let input = input_row(
         &monitor,
@@ -430,7 +458,9 @@ fn active_dynamics_share_one_history_across_streams() {
 #[test]
 fn active_defers_share_one_history() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\na = defer(first: Int)\nb = defer(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     let input = input_row(
         &monitor,
@@ -450,7 +480,9 @@ fn active_defers_share_one_history() {
 #[test]
 fn replacing_one_consumer_keeps_the_other_consumer_depth() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout z: Int\nz = dynamic(first: Int) + dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
 
     let first = input_row(
@@ -480,7 +512,9 @@ fn replacing_one_consumer_keeps_the_other_consumer_depth() {
 #[test]
 fn dynamic_activation_of_unretained_history_starts_cold() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
 
     let before_activation = input_row(&monitor, &[("x", Value::Int(1)), ("source", Value::NoVal)]);
@@ -505,7 +539,9 @@ fn dynamic_activation_of_unretained_history_starts_cold() {
 #[test]
 fn exact_root_transfer_moves_shared_history_and_each_active_body() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\na = dynamic(first: Int)\nb = dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
     let activation = input_row(
@@ -528,7 +564,9 @@ fn exact_root_transfer_moves_shared_history_and_each_active_body() {
     monitor.evaluate(&sparse, &mut output).unwrap();
     assert_eq!(output, [Value::Int(1), Value::Int(1)]);
 
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -552,24 +590,28 @@ fn exact_root_transfer_moves_shared_history_and_each_active_body() {
 
 #[test]
 fn definition_keys_follow_normalized_semantics_not_source_formatting() {
-    let compact =
-        DataflowMonitor::compile_untyped("in x: Int\nout z: Int\nz = x + 1".parse().unwrap())
-            .unwrap();
-    let formatted =
-        DataflowMonitor::compile_untyped("in x: Int\nout z: Int\nz = ( x + 1 )".parse().unwrap())
-            .unwrap();
-    let changed =
-        DataflowMonitor::compile_untyped("in x: Int\nout z: Int\nz = x + 2".parse().unwrap())
-            .unwrap();
+    let compact = DataflowMonitor::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = x + 1"),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let formatted = DataflowMonitor::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = ( x + 1 )"),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let changed = DataflowMonitor::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = x + 2"),
+        Semantics::Untimed,
+    )
+    .unwrap();
     assert_eq!(compact.definition_key(), formatted.definition_key());
     assert_ne!(compact.definition_key(), changed.definition_key());
 }
 
 #[test]
 fn compiled_program_is_separate_from_monitor_state() {
-    let specification = "in x: Int\nout z: Int\nz = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout z: Int\nz = x + 1");
     let program = DataflowProgram::compile_checked(specification).unwrap();
     let definition_key = program.definition_key().clone();
 
@@ -585,9 +627,7 @@ fn compiled_program_is_separate_from_monitor_state() {
 
 #[test]
 fn static_monitor_does_not_allocate_a_retained_environment() {
-    let specification = "in x: Int\nout z: Int\nz = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout z: Int\nz = x + 1");
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert!(monitor.retained_environment_values.is_none());
@@ -597,10 +637,12 @@ fn static_monitor_does_not_allocate_a_retained_environment() {
 fn matching_root_transfer_initializes_changed_stream_state_after_execution() {
     let old_spec = "in x: Int\nout z: Int\nz = x";
     let new_spec = "in x: Int\nout z: Int\nz = x + 1";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
 
     let report = monitor
         .reconfigure(
@@ -621,12 +663,16 @@ fn matching_root_transfer_initializes_changed_stream_state_after_execution() {
 #[test]
 fn none_root_transfer_initializes_stream_state() {
     let specification = "in x: Int\nout z: Int\nz = x[1]";
-    let mut source = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut source =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     source.set_quickening(false);
     let mut output = [Value::NoVal];
     source.evaluate(&[Value::Int(1)], &mut output).unwrap();
 
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let report = source
         .reconfigure(candidate.program, ContextTransferPolicy::None)
         .unwrap();
@@ -653,11 +699,15 @@ fn none_root_transfer_initializes_stream_state() {
 fn matching_root_transfer_preserves_exact_and_initializes_changed_streams() {
     let source_spec = "in x: Int\nout a: Int\nout b: Int\na = x[1]\nb = x";
     let candidate_spec = "in x: Int\nout a: Int\nout b: Int\na = x[1]\nb = x + 1";
-    let mut source = DataflowMonitor::compile_untyped(source_spec.parse().unwrap()).unwrap();
+    let mut source =
+        DataflowMonitor::compile_with_semantics(elaborated(&source_spec), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     source.evaluate(&[Value::Int(1)], &mut output).unwrap();
 
-    let candidate = DataflowMonitor::compile_untyped(candidate_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&candidate_spec), Semantics::Untimed)
+            .unwrap();
     let report = source
         .reconfigure(
             candidate.program,
@@ -688,7 +738,8 @@ fn matching_root_transfer_preserves_exact_and_initializes_changed_streams() {
 fn root_transfer_reuses_context_retained_for_an_active_body() {
     let old_spec = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
     let new_spec = "in x: Int\nin source: Str\nout z: Int\nz = x[3]";
-    let mut monitor = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
 
     for value in [1, 2, 3] {
@@ -715,7 +766,8 @@ fn root_transfer_reuses_context_retained_for_an_active_body() {
     assert_eq!(output, [Value::Deferred]);
     assert_eq!(history_depth_for(&monitor, "x"), Some(3));
 
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = monitor
         .reconfigure(
             replacement.program,
@@ -740,7 +792,8 @@ fn root_transfer_reuses_context_retained_for_an_active_body() {
 fn matching_root_transfer_preserves_exact_active_body_history() {
     let old_spec = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
     let new_spec = "in a: Int\nin x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut old = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     old.evaluate(
         &input_row(
@@ -760,7 +813,8 @@ fn matching_root_transfer_preserves_exact_active_body_history() {
     .unwrap();
     assert_eq!(output, [Value::Int(1)]);
 
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = old
         .reconfigure(
             replacement.program,
@@ -792,7 +846,9 @@ fn matching_root_transfer_preserves_exact_active_body_history() {
 #[test]
 fn matching_unchanged_dynamic_body_preserves_delay_cells() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor
         .evaluate(
@@ -822,7 +878,9 @@ fn matching_unchanged_dynamic_body_preserves_delay_cells() {
 #[test]
 fn matching_changed_dynamic_body_starts_cold() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor
         .evaluate(
@@ -848,7 +906,9 @@ fn matching_changed_dynamic_body_starts_cold() {
 #[test]
 fn matching_changed_dynamic_transfer_starts_cold() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor.set_reconfiguration_transfer_policy(ContextTransferPolicy::MatchingStreamState);
     let mut output = [Value::NoVal];
     monitor
@@ -887,7 +947,9 @@ fn matching_changed_dynamic_transfer_starts_cold() {
 fn changed_dynamic_transfer_does_not_reuse_wrong_provenance_history() {
     let specification =
         "in x: Int\nin y: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor
         .evaluate(
@@ -939,7 +1001,9 @@ fn changed_dynamic_transfer_does_not_reuse_wrong_provenance_history() {
 fn root_transfer_reconstructs_active_dynamic_dependency_edges() {
     let specification = "in x: Int\nin source: Str\nout z: Int\naux computed: Int\n\
             z = dynamic(source: Int)\ncomputed = x + 1";
-    let mut old = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
 
     old.evaluate(
@@ -961,7 +1025,9 @@ fn root_transfer_reconstructs_active_dynamic_dependency_edges() {
     .unwrap();
     assert_eq!(output, [Value::Int(3)]);
 
-    let replacement = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     old.reconfigure(
         replacement.program,
         ContextTransferPolicy::MatchingStreamState,
@@ -978,7 +1044,9 @@ fn root_transfer_reconstructs_active_dynamic_dependency_edges() {
 #[test]
 fn invalid_dynamic_candidate_poisons_the_monitor() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor
         .evaluate(
@@ -1013,7 +1081,9 @@ fn invalid_dynamic_candidate_poisons_the_monitor() {
 #[test]
 fn failed_active_monitor_does_not_take_exact_root_retention() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     let error = monitor
         .evaluate(
@@ -1029,7 +1099,9 @@ fn failed_active_monitor_does_not_take_exact_root_retention() {
         DataflowEvaluationError::ReconfigurableExpressionParse { .. }
     ));
 
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -1060,7 +1132,9 @@ fn failed_active_monitor_does_not_take_exact_root_retention() {
 fn invalid_dynamic_candidate_publishes_no_failed_tick_output() {
     let specification = "in x: Int\nin source_text: Str\nout source: Str\nout z: Int\
             \nsource = source_text\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     monitor
         .evaluate(
@@ -1102,7 +1176,9 @@ fn invalid_dynamic_candidate_publishes_no_failed_tick_output() {
 #[test]
 fn invalid_dynamic_source_poisons_the_monitor() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     monitor
         .evaluate(
@@ -1135,7 +1211,9 @@ fn invalid_dynamic_source_poisons_the_monitor() {
 #[test]
 fn invalid_first_defer_source_poisons_the_monitor() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     let error = monitor
         .evaluate(
@@ -1160,7 +1238,9 @@ fn invalid_first_defer_source_poisons_the_monitor() {
 fn nested_expression_reconfigurations_advance_revision_once_per_tick() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\
             \na = dynamic(first: Int)\nb = dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
     monitor
@@ -1199,7 +1279,9 @@ fn nested_expression_reconfigurations_advance_revision_once_per_tick() {
 fn unchanged_dynamic_point_keeps_state_when_another_point_changes() {
     let specification = "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\
             \na = dynamic(first: Int)\nb = dynamic(second: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor.set_reconfiguration_transfer_policy(ContextTransferPolicy::None);
     let mut output = [Value::NoVal, Value::NoVal];
 
@@ -1248,7 +1330,9 @@ fn changed_expression_rebuilds_same_stream_dependencies_before_and_after_it() {
             out z: Int\naux before: Int\naux changed: Int\naux after: Int\naux replacement: Int\n\
             before = x + 1\nchanged = x + 10\nafter = x + 100\nreplacement = x + 1000\n\
             z = defer(before_source: Int) + dynamic(changed_source: Int) + dynamic(after_source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
 
     monitor
@@ -1288,7 +1372,9 @@ fn changed_expression_rebuilds_same_stream_dependencies_before_and_after_it() {
 fn one_changed_expression_is_scanned_once_and_updates_the_scheduler_once() {
     let specification = "in x: Int\nin a_source: Str\nin b_source: Str\nout a: Int\nout b: Int\
             \na = dynamic(a_source: Int)\nb = dynamic(b_source: Int)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     let first = input_row(
         &monitor,
@@ -1328,7 +1414,8 @@ fn exact_dynamic_transfer_projects_a_shifted_computed_stream() {
             z = dynamic(source: Int)\ncomputed = x + 1";
     let new_spec = "in added: Int\nin x: Int\nin source: Str\nout z: Int\naux computed: Int\n\
             z = dynamic(source: Int)\ncomputed = x + 1";
-    let mut old = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let old_computed = old
         .program
         .environment_layout()
@@ -1367,7 +1454,8 @@ fn exact_dynamic_transfer_projects_a_shifted_computed_stream() {
     );
     assert!(old.history_store.is_empty());
 
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let target_computed = replacement
         .program
         .environment_layout()
@@ -1427,7 +1515,7 @@ fn exact_defer_transfer_projects_a_shifted_computed_stream() {
             z = defer(source: Int)\ncomputed = x + 1";
     let new_spec = "in added: Int\nin x: Int\nin source: Str\nout z: Int\naux computed: Int\n\
             z = defer(source: Int)\ncomputed = x + 1";
-    let mut old = DataflowMonitor::compile_checked(old_spec.parse().unwrap()).unwrap();
+    let mut old = DataflowMonitor::compile_checked(elaborated(&old_spec)).unwrap();
     let mut output = [Value::NoVal];
     old.evaluate(
         &input_row(
@@ -1443,7 +1531,7 @@ fn exact_defer_transfer_projects_a_shifted_computed_stream() {
     assert_eq!(output, [Value::Int(2)]);
     assert!(old.reconfiguration_state.source_order().is_empty());
 
-    let replacement = DataflowMonitor::compile_checked(new_spec.parse().unwrap()).unwrap();
+    let replacement = DataflowMonitor::compile_checked(elaborated(&new_spec)).unwrap();
     let old_computed = old
         .program
         .environment_layout()
@@ -1484,7 +1572,8 @@ fn transferred_active_bodies_project_and_share_shifted_history() {
             aux computed: Int\na = defer(first: Int)\nb = defer(second: Int)\ncomputed = x + 1";
     let new_spec = "in added: Int\nin x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\n\
             aux computed: Int\na = defer(first: Int)\nb = defer(second: Int)\ncomputed = x + 1";
-    let mut old = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
     for value in [1, 2, 3] {
         old.evaluate(
@@ -1519,7 +1608,8 @@ fn transferred_active_bodies_project_and_share_shifted_history() {
     assert_eq!(history_depth_for(&old, "computed"), Some(3));
     let source_history_slots = old.history_store[history_id_for(&old, "computed")].slots_ptr();
 
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let old_computed = old
         .program
         .environment_layout()
@@ -1579,7 +1669,8 @@ fn transferred_active_bodies_project_and_share_shifted_history() {
 fn matching_root_transfer_preserves_sealed_defer_expression() {
     let old_spec = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)";
     let new_spec = "in a: Int\nin x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)";
-    let mut old = DataflowMonitor::compile_untyped(old_spec.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&old_spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     for value in [1, 2] {
         old.evaluate(
@@ -1597,7 +1688,8 @@ fn matching_root_transfer_preserves_sealed_defer_expression() {
     assert_eq!(output, [Value::Int(1)]);
     assert!(old.reconfiguration_state.source_order().is_empty());
 
-    let replacement = DataflowMonitor::compile_untyped(new_spec.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&new_spec), Semantics::Untimed).unwrap();
     let report = old
         .reconfigure(
             replacement.program,
@@ -1630,11 +1722,15 @@ fn matching_root_transfer_preserves_sealed_defer_expression() {
 #[test]
 fn unactivated_defer_stays_inactive_across_root_transfer() {
     let specification = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)";
-    let mut old = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut old =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     old.evaluate(&[Value::Int(1), Value::NoVal], &mut output)
         .unwrap();
-    let replacement = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let replacement =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     old.reconfigure(
         replacement.program,
         ContextTransferPolicy::MatchingStreamState,
@@ -1655,9 +1751,8 @@ fn unactivated_defer_stays_inactive_across_root_transfer() {
 
 #[test]
 fn reconfigurable_monitor_retains_an_outer_environment() {
-    let specification = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification =
+        elaborated("in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)");
     let monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     assert_eq!(
@@ -1668,12 +1763,12 @@ fn reconfigurable_monitor_retains_an_outer_environment() {
 
 #[test]
 fn activated_defer_releases_its_computed_source_into_the_main_plan() {
-    let specification = "in x: Int\nin choose: Bool\nin left: Str\nin right: Str\n\
+    let specification = elaborated(
+        "in x: Int\nin choose: Bool\nin left: Str\nin right: Str\n\
             aux source: Str\nout result: Int\n\
             source = if choose then left else right\n\
-            result = defer(source: Int)"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            result = defer(source: Int)",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     assert_eq!(monitor.reconfiguration_state.source_order().len(), 1);
 
@@ -1707,13 +1802,13 @@ fn activated_defer_releases_its_computed_source_into_the_main_plan() {
 
 #[test]
 fn shared_dynamic_source_keeps_a_sealed_defer_source_in_the_prelude() {
-    let specification = "in x: Int\nin choose: Bool\nin left: Str\nin right: Str\n\
+    let specification = elaborated(
+        "in x: Int\nin choose: Bool\nin left: Str\nin right: Str\n\
             aux source: Str\nout deferred: Int\nout dynamic_result: Int\n\
             source = if choose then left else right\n\
             deferred = defer(source: Int)\n\
-            dynamic_result = dynamic(source: Int)"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            dynamic_result = dynamic(source: Int)",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
@@ -1747,7 +1842,9 @@ fn shared_dynamic_source_keeps_a_sealed_defer_source_in_the_prelude() {
 #[test]
 fn monitor_without_positive_history_requirements_has_an_empty_store() {
     let specification = "in x: Int\nout z: Int\nz = x";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
 
     assert!(monitor.history_store.is_empty());
     assert_eq!(monitor.history_store.len(), 0);
@@ -1761,7 +1858,9 @@ fn monitor_without_positive_history_requirements_has_an_empty_store() {
 #[test]
 fn successful_tick_projects_outputs_before_capturing_environment_history() {
     let specification = "in x: Int\nout y: Int\nout z: Int\ny = x\nz = x[1]";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal, Value::NoVal];
 
     monitor.evaluate(&[Value::Int(7)], &mut output).unwrap();
@@ -1776,7 +1875,9 @@ fn successful_tick_projects_outputs_before_capturing_environment_history() {
 fn destructive_root_transfer_shrinks_named_history_without_moving_values_individually() {
     let source_spec = "in x: Int\nout z: Int\nz = x[3]";
     let target_spec = "in x: Int\nout z: Int\nz = x[2]";
-    let mut monitor = DataflowMonitor::compile_untyped(source_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&source_spec), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     for value in [10, 20, 30] {
         monitor.evaluate(&[Value::Int(value)], &mut output).unwrap();
@@ -1784,7 +1885,9 @@ fn destructive_root_transfer_shrinks_named_history_without_moving_values_individ
     let source_history_id = history_id_for(&monitor, "x");
     let source_history_slots = monitor.history_store[source_history_id].slots_ptr();
 
-    let candidate = DataflowMonitor::compile_untyped(target_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&target_spec), Semantics::Untimed)
+            .unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -1805,13 +1908,17 @@ fn destructive_root_transfer_shrinks_named_history_without_moving_values_individ
 fn destructive_root_transfer_grows_named_history_and_preserves_available_values() {
     let source_spec = "in x: Int\nout z: Int\nz = x[2]";
     let target_spec = "in x: Int\nout z: Int\nz = x[3]";
-    let mut monitor = DataflowMonitor::compile_untyped(source_spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&source_spec), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     for value in [10, 20] {
         monitor.evaluate(&[Value::Int(value)], &mut output).unwrap();
     }
 
-    let candidate = DataflowMonitor::compile_untyped(target_spec.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&target_spec), Semantics::Untimed)
+            .unwrap();
     monitor
         .reconfigure(
             candidate.program,
@@ -1832,12 +1939,16 @@ fn destructive_root_transfer_grows_named_history_and_preserves_available_values(
 #[test]
 fn destructive_none_transfer_keeps_target_named_history_cold() {
     let specification = "in x: Int\nout z: Int\nz = x[2]";
-    let mut source = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut source =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut output = [Value::NoVal];
     source.evaluate(&[Value::Int(10)], &mut output).unwrap();
     source.evaluate(&[Value::Int(20)], &mut output).unwrap();
 
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     source
         .reconfigure(candidate.program, ContextTransferPolicy::None)
         .unwrap();
@@ -1852,10 +1963,10 @@ fn destructive_none_transfer_keeps_target_named_history_cold() {
 #[cfg(feature = "jit")]
 #[test]
 fn destructive_root_transfer_materializes_fused_branch_and_lift_state() {
-    let specification = "in x: Int\nin choose: Bool\nout result: Int\n\
-result = if choose then x + 1 else x + 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated(
+        "in x: Int\nin choose: Bool\nout result: Int\n\
+result = if choose then x + 1 else x + 2",
+    );
     let mut continued =
         DataflowMonitor::compile_checked_with_jit(specification.clone(), JitConfig::eager())
             .unwrap();
@@ -1902,14 +2013,14 @@ result = if choose then x + 1 else x + 2"
 #[cfg(feature = "jit")]
 #[test]
 fn defer_sealing_preserves_per_stream_jit_artifacts() {
-    let specification = "in x: Int\nin left: Str\nin right: Str\n\
+    let specification = elaborated(
+        "in x: Int\nin left: Str\nin right: Str\n\
             aux selector: Int\naux source: Str\nout fixed: Int\nout result: Int\n\
             selector = x + 1\n\
             source = if selector > 0 then left else right\n\
             fixed = x * 2\n\
-            result = defer(source: Int)"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            result = defer(source: Int)",
+    );
     let mut monitor =
         DataflowMonitor::compile_checked_with_jit(specification, JitConfig::eager()).unwrap();
     assert_eq!(monitor.jit_report().unwrap().plan(), JitPlan::Regions);
@@ -1945,15 +2056,15 @@ fn defer_sealing_preserves_per_stream_jit_artifacts() {
 
 #[test]
 fn static_scalar_chain_preserves_values_across_sparse_inputs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             aux a: Int\n\
             aux b: Int\n\
             out c: Int\n\
             a = x + 1\n\
             b = a * 2\n\
-            c = b - 3"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            c = b - 3",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal];
@@ -1969,13 +2080,13 @@ fn static_scalar_chain_preserves_values_across_sparse_inputs() {
 
 #[test]
 fn scalar_run_deoptimizes_only_the_mismatched_stream() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             aux equal: Bool\n\
             out negated: Bool\n\
             equal = x == 1\n\
-            negated = !equal"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            negated = !equal",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal];
@@ -1991,15 +2102,15 @@ fn scalar_run_deoptimizes_only_the_mismatched_stream() {
 
 #[test]
 fn fusion_preserves_fanout_and_intermediate_outputs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             out a: Int\n\
             aux b: Int\n\
             out c: Int\n\
             a = x + 1\n\
             b = a * 2\n\
-            c = a + b"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            c = a + b",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal, Value::NoVal];
@@ -2009,7 +2120,8 @@ fn fusion_preserves_fanout_and_intermediate_outputs() {
 
 #[test]
 fn nested_graph_scope_preserves_values() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             in choose: Bool\n\
             aux a: Int\n\
             aux b: Int\n\
@@ -2020,9 +2132,8 @@ fn nested_graph_scope_preserves_values() {
             b = a + 1\n\
             c = if choose then b else x\n\
             d = c + 1\n\
-            e = d + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            e = d + 1",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal];
@@ -2034,13 +2145,13 @@ fn nested_graph_scope_preserves_values() {
 
 #[test]
 fn delay_captures_internal_stream_after_the_completed_tick() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             aux current: Int\n\
             out delayed: Int\n\
             current = x + 1\n\
-            delayed = default(current[1], 0) + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            delayed = default(current[1], 0) + 1",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal];
@@ -2056,15 +2167,15 @@ fn delay_captures_internal_stream_after_the_completed_tick() {
 
 #[test]
 fn temporal_stream_preserves_values_between_scalar_streams() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             aux current: Int\n\
             aux delayed: Int\n\
             out result: Int\n\
             current = x + 1\n\
             delayed = default(current[1], 0) + 1\n\
-            result = delayed * 2"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            result = delayed * 2",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal];
@@ -2076,9 +2187,7 @@ fn temporal_stream_preserves_values_between_scalar_streams() {
 
 #[test]
 fn temporal_maple_cycle_preserves_outputs() {
-    let specification = crate::dsrv_fixtures::spec_maple_sequence()
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated(crate::dsrv_fixtures::spec_maple_sequence());
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = vec![Value::NoVal; 6];
@@ -2095,14 +2204,14 @@ fn temporal_maple_cycle_preserves_outputs() {
 
 #[test]
 fn recursive_delay_state_survives_scheduled_plan() {
-    let specification = "out counter: Int\n\
+    let specification = elaborated(
+        "out counter: Int\n\
             aux incremented: Int\n\
             out result: Int\n\
             counter = default(counter[1], 0) + 1\n\
             incremented = counter + 1\n\
-            result = incremented + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            result = incremented + 1",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
 
     let mut output = [Value::NoVal, Value::NoVal];
@@ -2118,16 +2227,17 @@ fn recursive_delay_state_survives_scheduled_plan() {
 
 #[test]
 fn dynamic_schedule_changes_preserve_outputs() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             in a_source: Str\n\
             in b_source: Str\n\
             out a: Int\n\
             out b: Int\n\
             a = dynamic(a_source: Int)\n\
-            b = dynamic(b_source: Int)"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let mut monitor = DataflowMonitor::compile_untyped(specification).unwrap();
+            b = dynamic(b_source: Int)",
+    );
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed).unwrap();
 
     let mut output = [Value::NoVal, Value::NoVal];
     for (values, expected) in [
@@ -2164,7 +2274,8 @@ fn dynamic_schedule_changes_preserve_outputs() {
 
 #[test]
 fn deoptimization_state_survives_cached_plan_swaps() {
-    let specification = "in x: Int\n\
+    let specification = elaborated(
+        "in x: Int\n\
             in a_source: Str\n\
             in b_source: Str\n\
             out a: Int\n\
@@ -2172,9 +2283,8 @@ fn deoptimization_state_survives_cached_plan_swaps() {
             out equal: Bool\n\
             a = dynamic(a_source: Int)\n\
             b = dynamic(b_source: Int)\n\
-            equal = x == 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+            equal = x == 1",
+    );
     let mut monitor = DataflowMonitor::compile_checked(specification).unwrap();
     let mut output = [Value::NoVal, Value::NoVal, Value::NoVal];
 
@@ -2252,21 +2362,21 @@ fn lifecycle_input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> V
 }
 
 fn lifecycle_counter_program() -> DataflowProgram {
-    DataflowProgram::compile_untyped(
-        "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
-            .parse()
-            .expect("counter specification should parse"),
+    DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x"),
+        Semantics::Untimed,
     )
     .expect("counter specification should compile")
 }
 
 fn lifecycle_dynamic_program() -> DataflowProgram {
-    DataflowProgram::compile_untyped(
-        "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
+    DataflowProgram::compile_with_semantics(
+        elaborated(
+            "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
          z = dynamic(source: Int, {x, y, source, sum})\n\
-         sum = x + y"
-            .parse()
-            .expect("dynamic specification should parse"),
+         sum = x + y",
+        ),
+        Semantics::Untimed,
     )
     .expect("dynamic specification should compile")
 }
@@ -2275,11 +2385,9 @@ fn lifecycle_dynamic_program() -> DataflowProgram {
 fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     DataflowProgram::reset_root_compile_counts();
     crate::lang::dsrv::reset_test_pipeline_counts();
-    let specification = "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
-        .parse::<DsrvSpecification>()
-        .expect("counter specification should parse");
-    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 0, 0));
-    let program = DataflowProgram::compile_untyped(specification);
+    let specification = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
+    assert_eq!(crate::lang::dsrv::test_pipeline_counts(), (1, 0, 1));
+    let program = DataflowProgram::compile_with_semantics(specification, Semantics::Untimed);
     let program = program.expect("counter specification should compile");
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
 
@@ -2312,14 +2420,12 @@ fn lifecycle_compile_once_clones_payload_but_not_session_state() {
     assert_eq!(DataflowProgram::root_compile_counts(), (0, 1));
     assert_eq!(
         crate::lang::dsrv::test_pipeline_counts(),
-        (1, 0, 0),
+        (1, 0, 1),
         "cloning and monitor construction must not parse or type-check the root again"
     );
 
     DataflowProgram::reset_root_compile_counts();
-    let checked_spec = "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
-        .parse::<CheckedDsrvSpecification>()
-        .expect("counter should type-check");
+    let checked_spec = elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x");
     let checked_program = DataflowProgram::compile_checked(checked_spec).unwrap();
     let mut checked_monitor = DataflowMonitor::from_program(checked_program);
     checked_monitor.reset();
@@ -2438,13 +2544,11 @@ fn lifecycle_reset_after_evaluator_error_clears_poison_and_staging() {
 fn lifecycle_dynamic_error_variants_preserve_prefix_and_reset_to_nominal() {
     for (source, expected_error) in [("(", "parse"), ("x > 0", "type"), ("unknown", "context")] {
         let program = if expected_error == "type" {
-            let checked = "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
+            let checked = elaborated(
+                "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\
                            z = dynamic(source: Int, {x, y, source, sum})\n\
-                           sum = x + y"
-                .parse::<DsrvSpecification>()
-                .unwrap()
-                .type_check(crate::TypeCheckOptions::STRICT)
-                .unwrap();
+                           sum = x + y",
+            );
             DataflowProgram::compile_checked(checked).unwrap()
         } else {
             lifecycle_dynamic_program()
@@ -2523,12 +2627,13 @@ fn lifecycle_dynamic_error_variants_preserve_prefix_and_reset_to_nominal() {
 
 #[test]
 fn lifecycle_dynamic_cycle_error_poison_and_reset_are_contained() {
-    let program = DataflowProgram::compile_untyped(
-        "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\n\
+    let program = DataflowProgram::compile_with_semantics(
+        elaborated(
+            "in x: Int\nin first: Str\nin second: Str\nout a: Int\nout b: Int\n\
          a = dynamic(first: Int)\n\
-         b = dynamic(second: Int)"
-            .parse()
-            .unwrap(),
+         b = dynamic(second: Int)",
+        ),
+        Semantics::Untimed,
     )
     .unwrap();
     let mut monitor = DataflowMonitor::from_program(program);
@@ -2563,12 +2668,9 @@ fn lifecycle_dynamic_cycle_error_poison_and_reset_are_contained() {
 
 #[test]
 fn lifecycle_trace_is_append_only_and_empty_calls_do_not_check_poison() {
-    let no_output = DataflowProgram::compile_untyped(
-        "in x: Int"
-            .parse()
-            .expect("no-output specification should parse"),
-    )
-    .expect("no-output specification should compile");
+    let no_output =
+        DataflowProgram::compile_with_semantics(elaborated("in x: Int"), Semantics::Untimed)
+            .expect("no-output specification should compile");
     let mut monitor = DataflowMonitor::from_program(no_output);
     let mut rows = vec![vec![Value::Int(99)]];
     monitor
@@ -2663,8 +2765,10 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         expressions,
         BTreeMap::from([(VarName::new("source"), crate::core::StreamType::Int)]),
         [],
-    );
-    let mut monitor = DataflowMonitor::compile_untyped(specification)
+    )
+    .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+    .expect("complete-value spec should check");
+    let mut monitor = DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed)
         .expect("complete-value spec should compile");
     let mut output = Vec::new();
     monitor
@@ -2695,11 +2799,12 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
 
 #[test]
 fn lifecycle_equal_encoded_timestamps_are_distinct_ticks_and_chunking_is_exact() {
-    let program = DataflowProgram::compile_untyped(
-        "in timestamp: Int\nout seen: Int\nout ticks: Int\n\
-         seen = timestamp\nticks = default(ticks[1], 0) + 1"
-            .parse()
-            .unwrap(),
+    let program = DataflowProgram::compile_with_semantics(
+        elaborated(
+            "in timestamp: Int\nout seen: Int\nout ticks: Int\n\
+         seen = timestamp\nticks = default(ticks[1], 0) + 1",
+        ),
+        Semantics::Untimed,
     )
     .unwrap();
     let rows = vec![vec![Value::Int(7)], vec![Value::Int(7)]];
@@ -2745,7 +2850,8 @@ fn lifecycle_past_recursive_and_lazy_state_restarts_cold() {
                 past = x[2]\n\
                 sum = default(sum[1], 0) + x\n\
                 branch = if choose then x[1] else default(x[2], -1)";
-    let program = DataflowProgram::compile_untyped(spec.parse().unwrap()).unwrap();
+    let program =
+        DataflowProgram::compile_with_semantics(elaborated(&spec), Semantics::Untimed).unwrap();
     let rows_a = vec![
         vec![Value::Int(10), Value::Bool(true)],
         vec![Value::Int(20), Value::Bool(false)],
@@ -2803,7 +2909,8 @@ fn lifecycle_past_recursive_and_lazy_reset_matches_both_quickening_modes() {
         vec![Value::Int(6), Value::Bool(true)],
     ];
     for quickening in [false, true] {
-        let program = DataflowProgram::compile_untyped(spec.parse().unwrap()).unwrap();
+        let program =
+            DataflowProgram::compile_with_semantics(elaborated(&spec), Semantics::Untimed).unwrap();
         let mut subject = DataflowMonitor::from_program(program.clone());
         let mut fresh = DataflowMonitor::from_program(program);
         subject.set_quickening(quickening);
@@ -2827,10 +2934,9 @@ fn lifecycle_past_recursive_and_lazy_reset_matches_both_quickening_modes() {
 
 #[test]
 fn lifecycle_defer_noval_and_deferred_are_rows_and_eof_does_not_finalize() {
-    let program = DataflowProgram::compile_untyped(
-        "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"
-            .parse()
-            .unwrap(),
+    let program = DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"),
+        Semantics::Untimed,
     )
     .unwrap();
     for source in [Value::NoVal, Value::Deferred] {
@@ -2926,10 +3032,9 @@ fn lifecycle_dynamic_and_defer_activation_history_and_sealing_reset() {
     assert_eq!(output, [Value::Int(5)]);
     assert_eq!(lifecycle_snapshot(&subject), lifecycle_snapshot(&fresh));
 
-    let defer = DataflowProgram::compile_untyped(
-        "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"
-            .parse()
-            .unwrap(),
+    let defer = DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int)"),
+        Semantics::Untimed,
     )
     .unwrap();
     let mut deferred = DataflowMonitor::from_program(defer.clone());
@@ -3072,14 +3177,14 @@ fn lifecycle_arity_errors_are_preflight_and_trace_stops_at_first_failed_row() {
 #[test]
 fn lifecycle_transfer_is_stateful_before_reset_but_reset_is_cold_and_no_transfer() {
     let spec = "in x: Int\nout z: Int\nz = default(z[1], 0) + x";
-    let mut monitor = DataflowMonitor::compile_untyped(spec.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&spec), Semantics::Untimed).unwrap();
     let mut output = [Value::NoVal];
     monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
     monitor.evaluate(&[Value::Int(2)], &mut output).unwrap();
-    let candidate = DataflowMonitor::compile_untyped(
-        "in a: Int\nin x: Int\nout z: Int\nz = default(z[1], 0) + x"
-            .parse()
-            .unwrap(),
+    let candidate = DataflowMonitor::compile_with_semantics(
+        elaborated("in a: Int\nin x: Int\nout z: Int\nz = default(z[1], 0) + x"),
+        Semantics::Untimed,
     )
     .unwrap();
     let report = monitor
@@ -3117,22 +3222,19 @@ fn lifecycle_transfer_is_stateful_before_reset_but_reset_is_cold_and_no_transfer
 
 #[test]
 fn lifecycle_reset_restores_original_root_and_interface_after_replacement() {
-    let base = DataflowProgram::compile_untyped(
-        "in x: Int\nout z: Int\nz = default(z[1], 0) + x"
-            .parse()
-            .unwrap(),
+    let base = DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x"),
+        Semantics::Untimed,
     )
     .unwrap();
-    let compatible = DataflowProgram::compile_untyped(
-        "in x: Int\nout z: Int\nz = default(z[1], 0) + x + 1"
-            .parse()
-            .unwrap(),
+    let compatible = DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nout z: Int\nz = default(z[1], 0) + x + 1"),
+        Semantics::Untimed,
     )
     .unwrap();
-    let interface = DataflowProgram::compile_untyped(
-        "in y: Int\nin x: Int\nout other: Int\nout z: Int\nother = y\nz = x"
-            .parse()
-            .unwrap(),
+    let interface = DataflowProgram::compile_with_semantics(
+        elaborated("in y: Int\nin x: Int\nout other: Int\nout z: Int\nother = y\nz = x"),
+        Semantics::Untimed,
     )
     .unwrap();
     let base_key = base.definition_key().clone();
@@ -3180,10 +3282,9 @@ fn lifecycle_reset_restores_original_root_and_interface_after_replacement() {
 
 #[test]
 fn lifecycle_repeated_reset_rebuilds_bounded_session_capacity() {
-    let program = DataflowProgram::compile_untyped(
-        "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"
-            .parse()
-            .unwrap(),
+    let program = DataflowProgram::compile_with_semantics(
+        elaborated("in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)"),
+        Semantics::Untimed,
     )
     .unwrap();
     let mut monitor = DataflowMonitor::from_program(program.clone());
@@ -3218,10 +3319,8 @@ fn lifecycle_repeated_reset_rebuilds_bounded_session_capacity() {
 
 #[test]
 fn lifecycle_old_constructors_and_iterator_forms_remain_usable() {
-    let specification = "in x: Int\nout z: Int\nz = x"
-        .parse::<DsrvSpecification>()
-        .unwrap();
-    let program: DataflowProgram = specification.clone().try_into().unwrap();
+    let specification = elaborated("in x: Int\nout z: Int\nz = x");
+    let program = DataflowProgram::compile_checked(specification.clone()).unwrap();
     let mut monitor = DataflowMonitor::new(program.clone());
     assert_eq!(monitor.program().definition_key(), program.definition_key());
 
@@ -3234,7 +3333,7 @@ fn lifecycle_old_constructors_and_iterator_forms_remain_usable() {
     monitor.evaluate_trace(&mut iterator, &mut outputs).unwrap();
     assert_eq!(outputs, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
 
-    let mut from_try: DataflowMonitor = specification.try_into().unwrap();
+    let mut from_try = DataflowMonitor::compile_checked(specification).unwrap();
     let mut single = vec![Value::NoVal];
     from_try.evaluate(&[Value::Int(3)], &mut single).unwrap();
     assert_eq!(single, [Value::Int(3)]);
@@ -3243,9 +3342,7 @@ fn lifecycle_old_constructors_and_iterator_forms_remain_usable() {
 #[cfg(feature = "jit")]
 #[test]
 fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
-    let specification = "in x: Int\nout z: Int\nz = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let specification = elaborated("in x: Int\nout z: Int\nz = x + 1");
     let program = DataflowProgram::compile_checked(specification).unwrap();
     let mut monitor =
         DataflowMonitor::from_program_with_jit(program.clone(), JitConfig::after_events(2));
@@ -3267,9 +3364,7 @@ fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
     monitor.evaluate(&[Value::Int(12)], &mut output).unwrap();
     assert!(test_support::jit_artifact_count(&monitor) > 0);
 
-    let eager_specification = "in x: Int\nout z: Int\nz = x + 1"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let eager_specification = elaborated("in x: Int\nout z: Int\nz = x + 1");
     let eager_program = DataflowProgram::compile_checked(eager_specification).unwrap();
     let mut eager = DataflowMonitor::from_program_with_jit(eager_program, JitConfig::eager());
     assert_eq!(eager.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
@@ -3277,9 +3372,7 @@ fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
     eager.reset();
     assert_eq!(eager.jit_report().unwrap().plan(), JitPlan::WholeSchedule);
 
-    let unsupported_specification = "in x: Str\nout z: Str\nz = x"
-        .parse::<CheckedDsrvSpecification>()
-        .unwrap();
+    let unsupported_specification = elaborated("in x: Str\nout z: Str\nz = x");
     let unsupported_program = DataflowProgram::compile_checked(unsupported_specification).unwrap();
     let mut unsupported =
         DataflowMonitor::from_program_with_jit(unsupported_program, JitConfig::eager());
@@ -3305,17 +3398,19 @@ fn lifecycle_jit_reset_preserves_selection_but_clears_hotness_and_artifacts() {
 fn branch_recursion_monitors(specification: &str) -> Vec<(String, DataflowMonitor)> {
     let mut monitors = Vec::new();
     for quickening in [false, true] {
-        let mut untyped = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+        let mut untyped =
+            DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+                .unwrap();
         untyped.set_quickening(quickening);
         monitors.push((format!("untyped, quickening {quickening}"), untyped));
-        let checked = specification.parse::<CheckedDsrvSpecification>().unwrap();
+        let checked = elaborated(&specification);
         let mut typed = DataflowMonitor::compile_checked(checked).unwrap();
         typed.set_quickening(quickening);
         monitors.push((format!("typed, quickening {quickening}"), typed));
     }
     #[cfg(feature = "jit")]
     {
-        let checked = specification.parse::<CheckedDsrvSpecification>().unwrap();
+        let checked = elaborated(&specification);
         monitors.push((
             "typed, eager JIT".to_owned(),
             DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager()).unwrap(),
@@ -3400,7 +3495,9 @@ fn a_latched_branch_verdict_stays_latched() {
 fn branch_recursion_restarts_cold_and_transfers_with_its_stream() {
     let specification = "in x: Int\nout held: Int\n\
         held = if x >= 0 then x else default(held[1], -1)";
-    let mut monitor = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     let mut rows = Vec::new();
     monitor
         .evaluate_trace(int_rows(&[4, -1]), &mut rows)
@@ -3413,7 +3510,9 @@ fn branch_recursion_restarts_cold_and_transfers_with_its_stream() {
 
     // A compatible replacement keeps the held value.
     monitor.evaluate_trace(int_rows(&[9]), &mut rows).unwrap();
-    let candidate = DataflowMonitor::compile_untyped(specification.parse().unwrap()).unwrap();
+    let candidate =
+        DataflowMonitor::compile_with_semantics(elaborated(&specification), Semantics::Untimed)
+            .unwrap();
     monitor
         .reconfigure(
             candidate.program,

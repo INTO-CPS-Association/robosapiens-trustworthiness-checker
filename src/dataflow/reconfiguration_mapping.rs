@@ -321,12 +321,13 @@ fn validate_source_id(
 mod tests {
     use super::*;
     use crate::VarName;
+    use crate::core::Semantics;
+    use crate::dsrv_fixtures::elaborated;
 
     fn compile(source: &str) -> DataflowProgram {
-        let specification = source
-            .parse::<crate::lang::dsrv::ast::DsrvSpecification>()
-            .expect("test specification must parse");
-        DataflowProgram::compile_untyped(specification).expect("test specification must compile")
+        let specification = elaborated(&source);
+        DataflowProgram::compile_with_semantics(specification, Semantics::Untimed)
+            .expect("test specification must compile")
     }
 
     #[test]

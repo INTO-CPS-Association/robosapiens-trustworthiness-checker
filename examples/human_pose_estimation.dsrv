@@ -51,7 +51,6 @@ aux lForearmHeight
 aux lForearmHeightSmooth
 aux lForearmDiff
 aux lForearmDiffSmooth
-aux lForearmDiffSmooth
 aux rForearmConstantLength
 aux lForearmConstantLength
 

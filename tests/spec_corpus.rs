@@ -1,14 +1,16 @@
-//! Every specification shipped with the repository parses and expands.
+//! Every specification shipped with the repository parses, expands, passes
+//! gradual type checking and elaborates.
 //!
-//! The frontend runs in two stages, syntax then expansion, and this guards
-//! the corpus against a regression in either of them. Type checking is not
-//! attempted here: some fixtures are deliberately ill-typed.
+//! Every runtime checks and elaborates a specification before running it,
+//! gradually for `untimed` semantics, so a shipped specification that does
+//! not check is one no runtime accepts. Fragments that a harness assembles
+//! into specifications are named `.dsrv.in` and are not part of the corpus.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
-use trustworthiness_checker::lang::dsrv::{Dialect, LanguageConfig};
+use trustworthiness_checker::lang::dsrv::{Dialect, LanguageConfig, TypeCheckOptions};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -28,7 +30,7 @@ fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn every_shipped_specification_parses_and_expands() {
+fn every_shipped_specification_parses_checks_and_elaborates() {
     let mut paths = Vec::new();
     specifications_under(Path::new("examples"), &mut paths);
     specifications_under(Path::new("tests/fixtures"), &mut paths);
@@ -45,6 +47,14 @@ fn every_shipped_specification_parses_and_expands() {
     const NOT_ACCEPTED: [&str; 2] = [
         "examples/simple_add_distributable_dist_constraints.dsrv",
         "tests/fixtures/dsrv_syntax_revision_invalid_literal.dsrv",
+    ];
+
+    // Fixtures that are ill-typed on purpose, to test that checking rejects
+    // them.
+    const ILL_TYPED: [&str; 3] = [
+        "examples/recursive_types_illtyped.dsrv",
+        "examples/simple_add_illtyped.dsrv",
+        "tests/fixtures/invalid_typed_model.dsrv",
     ];
 
     let mut unexpected = Vec::new();
@@ -66,6 +76,15 @@ fn every_shipped_specification_parses_and_expands() {
                 || (expected_dialect == Dialect::Full && language != &LanguageConfig::default())
             {
                 unexpected.push(format!("{name} resolves to {language}"));
+            }
+            let checks = specification
+                .clone()
+                .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .is_ok();
+            match (checks, ILL_TYPED.contains(&name.as_str())) {
+                (true, false) | (false, true) => {}
+                (false, false) => unexpected.push(format!("{name} fails gradual checking")),
+                (true, true) => unexpected.push(format!("{name} now checks; update the list")),
             }
         }
         let accepted = parsed.is_ok();

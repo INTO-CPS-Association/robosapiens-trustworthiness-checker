@@ -10,7 +10,7 @@ use sat_solver::sat::solver::{Solver, SolverImpls};
 use tracing::{info, warn};
 
 use crate::{
-    DsrvSpecification, Value, VarName,
+    DsrvSpecification, ElaboratedDsrvSpecification, Value, VarName,
     core::{BinaryOperator, BinaryOperatorKind},
     distributed::{
         distribution_constraint::{
@@ -81,7 +81,7 @@ impl From<ConstraintLoweringError> for SatSolverConstructionError {
 pub struct SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = ElaboratedDsrvSpecification>,
 {
     pub dist_constraints: Vec<VarName>,
     pub output_vars: Vec<VarName>,
@@ -100,13 +100,13 @@ where
 impl<S, AC> SatMonitoredAtDistConstraintSolver<S, AC>
 where
     S: MonitoringSemantics<AC>,
-    AC: AsyncConfig<Val = Value, Spec = DsrvSpecification>,
+    AC: AsyncConfig<Val = Value, Spec = ElaboratedDsrvSpecification>,
     AC::Spec: Localisable,
 {
     pub fn new(
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
-        spec: DsrvSpecification,
+        spec: ElaboratedDsrvSpecification,
         default_planning_context: Option<PlanningContextSnapshot>,
     ) -> Self {
         Self::try_new(
@@ -121,7 +121,7 @@ where
     pub fn try_new(
         dist_constraints: Vec<VarName>,
         output_vars: Vec<VarName>,
-        spec: DsrvSpecification,
+        spec: ElaboratedDsrvSpecification,
         default_planning_context: Option<PlanningContextSnapshot>,
     ) -> Result<Self, SatSolverConstructionError> {
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();

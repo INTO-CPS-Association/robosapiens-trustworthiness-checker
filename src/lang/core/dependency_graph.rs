@@ -430,6 +430,12 @@ impl DependencyGraphSpec for crate::lang::dsrv::ast::CheckedDsrvSpecification {
     }
 }
 
+impl DependencyGraphSpec for crate::lang::dsrv::ElaboratedDsrvSpecification {
+    fn dependency_graph_for(&self, roots: DependencyGraphRoots) -> DepGraph {
+        self.checked().dependency_graph_for(roots)
+    }
+}
+
 impl<AC> DependencyResolver<AC> for DepGraph
 where
     AC: AsyncConfig,
@@ -461,6 +467,19 @@ mod tests {
     use crate::DsrvSpecification;
     use crate::dsrv_fixtures::*;
     use crate::lang::dsrv::ast::Expr;
+    use crate::runtime::asynchronous::Context;
+
+    /// Resolves dependencies of expressions as written; the resolver needs no
+    /// runtime to run them.
+    #[derive(Clone)]
+    struct SyntaxConfig;
+
+    impl AsyncConfig for SyntaxConfig {
+        type Val = crate::Value;
+        type Expr = Expr;
+        type Ctx = Context<Self>;
+        type Spec = DsrvSpecification;
+    }
 
     fn test_parser(input: &mut &str) -> anyhow::Result<DsrvSpecification> {
         (*input).parse().map_err(anyhow::Error::from)
@@ -496,7 +515,7 @@ mod tests {
             .collect()
     }
 
-    fn get_graph(graph: impl DependencyResolver<TestConfig> + 'static) -> GraphType {
+    fn get_graph(graph: impl DependencyResolver<SyntaxConfig> + 'static) -> GraphType {
         <dyn std::any::Any>::downcast_ref::<DepGraph>(&graph)
             .unwrap()
             .graph
@@ -618,7 +637,7 @@ mod tests {
     fn test_time_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         let expected = BTreeMap::from([("x".into(), 0)]);
         assert_eq!(dep.longest_time_dependencies(), expected);
@@ -628,7 +647,7 @@ mod tests {
     fn test_time_index_past() {
         let mut spec = specs()["single_inp_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"a".into()), 1);
         let expected = BTreeMap::from([("x".into(), 0), ("a".into(), 1)]);
@@ -639,7 +658,7 @@ mod tests {
     fn test_time_multi_out_past() {
         let mut spec = specs()["multi_out_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"y".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"a".into()), 1);
@@ -651,7 +670,7 @@ mod tests {
     fn test_time_multi_dependent() {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"y".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"a".into()), 0);
@@ -663,7 +682,7 @@ mod tests {
     fn test_time_multi_dependent_past() {
         let mut spec = specs()["multi_dependent_past"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 1);
         assert_eq!(dep.longest_time_dependency(&"y".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"a".into()), 1);
@@ -675,7 +694,7 @@ mod tests {
     fn test_time_multi_same_dependent() {
         let mut spec = specs()["multi_same_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"a".into()), 1);
         let expected = BTreeMap::from([("x".into(), 0), ("a".into(), 1)]);
@@ -686,7 +705,7 @@ mod tests {
     fn test_time_recursion() {
         let mut spec = specs()["recursion"];
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"z".into()), 1);
         let expected = BTreeMap::from([("z".into(), 1)]);
         assert_eq!(dep.longest_time_dependencies(), expected);
@@ -696,7 +715,7 @@ mod tests {
     fn test_add_dep_simple() {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.add_dependency(&"new".into(), &Expr::Val(42));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
@@ -707,7 +726,7 @@ mod tests {
     fn test_add_dep_new_edge() {
         let mut spec = specs()["single_no_inp"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.add_dependency(&"a".into(), &Expr::Var("x".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
@@ -723,7 +742,7 @@ mod tests {
     fn test_add_dep_new_edge_existing() {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.add_dependency(&"a".into(), &Expr::Var("y".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
@@ -746,7 +765,7 @@ mod tests {
     fn test_add_dep_add_weight() {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.add_dependency(&"x".into(), &Expr::Var("a".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
@@ -762,7 +781,7 @@ mod tests {
     fn test_add_dep_add_weight_past() {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.add_dependency(
             &"x".into(),
             &Expr::SIndex(Box::new(Expr::Var("a".into())), 1),
@@ -782,7 +801,7 @@ mod tests {
         // Case where the last weight is removed so we remove the entire edge
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.remove_dependency(&"y".into(), &Expr::Var("x".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
@@ -801,7 +820,7 @@ mod tests {
         // Case where we still have a weight left after removing dependency
         let mut spec = specs()["multi_same_dependent"];
         let spec = test_parser(&mut spec).unwrap();
-        let mut dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         dep.remove_dependency(&"x".into(), &Expr::Var("a".into()));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
@@ -820,7 +839,7 @@ mod tests {
         // Parentheses unfortunately needed due to parser bugs
         let mut spec = "in x\nout z\nz = (x[1])[1]";
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 2);
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 2);
@@ -837,7 +856,7 @@ mod tests {
         // Parentheses unfortunately needed due to parser bugs
         let mut spec = "in x\nout y\nout z\ny = x[1]\nz = y[1]";
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 1);
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
@@ -849,7 +868,7 @@ mod tests {
         // Regression test for a bug where time dependencies of the lhs in binary operations were carried over to rhs.
         let mut spec = spec_acc_monitor();
         let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<TestConfig>(spec);
+        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
         assert_eq!(dep.longest_time_dependency(&"x".into()), 0);
         assert_eq!(dep.longest_time_dependency(&"z".into()), 1);
     }

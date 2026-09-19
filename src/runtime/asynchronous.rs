@@ -1599,8 +1599,8 @@ fn combine_runtime_errors(primary: anyhow::Error, additional: anyhow::Error) -> 
 #[cfg(test)]
 mod tests {
     use crate::{
-        DsrvSpecification, InputStream, LocalStream, OutputBatch, OutputError, OutputWriter, Value,
-        dsrv_fixtures::{TestConfig, TestRuntime, spec_simple_add_monitor},
+        InputStream, LocalStream, OutputBatch, OutputError, OutputWriter, Value,
+        dsrv_fixtures::{TestConfig, TestRuntime, elaborated, spec_simple_add_monitor},
         io::{output::AsyncFnSink, testing::null_output},
     };
 
@@ -1624,7 +1624,7 @@ mod tests {
     #[apply(async_test)]
     async fn runtime_propagates_input_errors(executor: Rc<LocalExecutor<'static>>) {
         let source = spec_simple_add_monitor();
-        let spec = source.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&source);
         let output = null_output(spec.output_vars().clone()).await;
         let runtime: TestRuntime = TestRuntime::new(executor, spec, failing_input(), output).await;
 

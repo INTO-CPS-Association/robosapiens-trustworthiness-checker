@@ -5,11 +5,12 @@ use std::time::Duration;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
 use smol::LocalExecutor;
-use trustworthiness_checker::core::Runtime;
+use trustworthiness_checker::core::{Runtime, Semantics};
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
 use trustworthiness_checker::lang::dsrv::ast::CheckedDsrvSpecification;
+use trustworthiness_checker::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
 
 use trustworthiness_checker::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder;
@@ -108,7 +109,7 @@ async fn monitor_recursive_outputs_typed_semisync(
         .await
         .expect("typed semi-sync benchmark output pipeline should open");
     let monitor = SemiSyncRuntimeBuilder::<
-        trustworthiness_checker::runtime::builder::CheckedSemiSyncValueConfig,
+        trustworthiness_checker::runtime::builder::SemiSyncValueConfig,
         trustworthiness_checker::semantics::CheckedUntimedDsrvSemantics,
     >::new()
     .executor(executor.clone())
@@ -156,6 +157,13 @@ fn typed_recursive_spec() -> CheckedDsrvSpecification {
                     z = if x % 5 == 0 then default(z[1], 0) + y * 3 else default(z[1], 0) + x + y";
     spec.parse::<CheckedDsrvSpecification>()
         .expect("recursive benchmark specification should type check")
+}
+
+/// Check a specification gradually and elaborate it, as every runtime requires.
+fn elaborate_gradually(spec: &DsrvSpecification) -> ElaboratedDsrvSpecification {
+    spec.clone()
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .expect("benchmark specification should check gradually")
 }
 
 fn arithmetic_spec() -> DsrvSpecification {
@@ -591,6 +599,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     let typed_recursive_function_if_spec = typed_recursive_function_if_spec();
     let direct_function_if_spec = direct_function_if_spec();
     let typed_direct_function_if_spec = typed_direct_function_if_spec();
+    let elaborated_arithmetic_spec = elaborate_gradually(&arithmetic_spec);
+    let elaborated_if_arithmetic_spec = elaborate_gradually(&if_arithmetic_spec);
+    let elaborated_function_spec = elaborate_gradually(&function_spec);
+    let elaborated_direct_function_if_spec = elaborate_gradually(&direct_function_if_spec);
+    let elaborated_recursive_function_if_spec = elaborate_gradually(&recursive_function_if_spec);
     let mut group = c.benchmark_group("dataflow_semantics_function_evaluation");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
@@ -603,8 +616,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor =
-                        DataflowMonitor::compile_untyped(arithmetic_spec.clone()).unwrap();
+                    let mut monitor = DataflowMonitor::compile_with_semantics(
+                        elaborated_arithmetic_spec.clone(),
+                        Semantics::Untimed,
+                    )
+                    .unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -614,8 +630,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor =
-                        DataflowMonitor::compile_untyped(function_spec.clone()).unwrap();
+                    let mut monitor = DataflowMonitor::compile_with_semantics(
+                        elaborated_function_spec.clone(),
+                        Semantics::Untimed,
+                    )
+                    .unwrap();
                     evaluate_monitor(&mut monitor, &function_input_columns(size))
                 })
             },
@@ -636,8 +655,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor =
-                        DataflowMonitor::compile_untyped(if_arithmetic_spec.clone()).unwrap();
+                    let mut monitor = DataflowMonitor::compile_with_semantics(
+                        elaborated_if_arithmetic_spec.clone(),
+                        Semantics::Untimed,
+                    )
+                    .unwrap();
                     evaluate_monitor(&mut monitor, &arithmetic_input_columns(size))
                 })
             },
@@ -669,8 +691,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor =
-                        DataflowMonitor::compile_untyped(direct_function_if_spec.clone()).unwrap();
+                    let mut monitor = DataflowMonitor::compile_with_semantics(
+                        elaborated_direct_function_if_spec.clone(),
+                        Semantics::Untimed,
+                    )
+                    .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
             },
@@ -692,9 +717,11 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
             &size,
             |b, &size| {
                 b.iter(|| {
-                    let mut monitor =
-                        DataflowMonitor::compile_untyped(recursive_function_if_spec.clone())
-                            .unwrap();
+                    let mut monitor = DataflowMonitor::compile_with_semantics(
+                        elaborated_recursive_function_if_spec.clone(),
+                        Semantics::Untimed,
+                    )
+                    .unwrap();
                     evaluate_monitor(&mut monitor, &recursive_function_input_columns(size))
                 })
             },

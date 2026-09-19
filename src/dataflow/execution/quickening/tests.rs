@@ -19,6 +19,7 @@ use crate::dataflow::ir::{
     BoundEvaluationGraph, BoundOp, BoundRef, NodeId, ScalarKind, ScalarSignature, StreamProgram,
 };
 use crate::dataflow::stream_id::{StreamId, StreamSlots};
+use crate::dsrv_fixtures::elaborated;
 
 /// Wraps one evaluator's canonical arena the way a graph step does.
 fn arena<'a>(node_values: &'a mut [Value], node_states: &'a mut [NodeState]) -> CanonicalArena<'a> {
@@ -224,12 +225,8 @@ fn graph_region(
 
 /// Compiles a real specification into stream programs plus a whole-schedule scheduled plan.
 fn compiled(source: &str) -> (Vec<Rc<StreamProgram>>, ScheduledExecutionPlan) {
-    let program = crate::dataflow::DataflowProgram::compile_checked(
-        source
-            .parse::<crate::CheckedDsrvSpecification>()
-            .expect("the specification should type check"),
-    )
-    .expect("the specification should compile");
+    let program = crate::dataflow::DataflowProgram::compile_checked(elaborated(&source))
+        .expect("the specification should compile");
     let programs = program.stream_programs().to_vec();
     let order = (0..programs.len()).map(StreamId::new).collect::<Vec<_>>();
     let plan = ScheduledExecutionPlan::new(

@@ -11,10 +11,13 @@ use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
+use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::{
     DataflowMonitor, JitConfig, JitPlan, TypedDataflowMonitor, TypedJitMonitor, TypedMonitor,
 };
-use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, Value};
+use trustworthiness_checker::{
+    CheckedDsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions, Value,
+};
 
 const HOTNESS_EVENTS: u64 = 1_024;
 const WARM_EVENTS: usize = 10_000;
@@ -88,13 +91,14 @@ const BOUNDARY_SCENARIOS: &[Scenario] = &[
     },
 ];
 
-fn parse(source: &str) -> CheckedDsrvSpecification {
+fn parse(source: &str) -> ElaboratedDsrvSpecification {
     source
-        .parse()
+        .parse::<CheckedDsrvSpecification>()
         .expect("benchmark specification should type check")
+        .elaborate()
 }
 
-fn build(specification: CheckedDsrvSpecification, config: JitConfig) -> DataflowMonitor {
+fn build(specification: ElaboratedDsrvSpecification, config: JitConfig) -> DataflowMonitor {
     DataflowMonitor::compile_checked_with_jit(specification, config)
         .expect("integrated JIT benchmark should compile")
 }
@@ -104,10 +108,10 @@ fn compile(source: &str, config: JitConfig) -> DataflowMonitor {
 }
 
 fn compile_untyped(source: &str) -> DataflowMonitor {
-    DataflowMonitor::compile_untyped(
-        source
-            .parse::<DsrvSpecification>()
-            .expect("benchmark specification should parse"),
+    DataflowMonitor::compile_with_semantics(
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+            .expect("benchmark specification should parse and check"),
+        Semantics::Untimed,
     )
     .expect("untyped benchmark specification should compile")
 }

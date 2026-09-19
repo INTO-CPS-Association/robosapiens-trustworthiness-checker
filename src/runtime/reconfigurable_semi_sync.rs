@@ -787,6 +787,7 @@ mod tests {
     use super::*;
     use crate::async_test;
     use crate::core::{OutputBatch, OutputError, OutputInterface, OutputWriter};
+    use crate::dsrv_fixtures::elaborated;
     use crate::io::output::TestOutputOpener;
     #[cfg(not(feature = "ros"))]
     use crate::io::{FormatId, Route};
@@ -795,15 +796,16 @@ mod tests {
     use crate::runtime::builder::SemiSyncValueConfig;
     use crate::semantics::UntimedDsrvSemantics;
     use crate::stream_utils::{Fanout, FanoutSender};
-    use crate::{DsrvSpecification, Value, VarName};
+    use crate::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
 
     type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics>;
 
     const PENDING_MODEL: &str = "in x: Int\nout z: Int\nz = x";
     const FINITE_FIRST_OUTPUT_MODEL: &str = "in x: Int\nout z: Int\nz = 1";
 
-    fn parse_spec(source: &str) -> anyhow::Result<DsrvSpecification> {
-        source.parse().map_err(anyhow::Error::from)
+    fn parse_spec(source: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+            .map_err(anyhow::Error::from)
     }
 
     fn channel_input() -> (
@@ -837,7 +839,7 @@ mod tests {
         ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
             .parse_spec(parse_spec)
             .executor(executor)
-            .model(model.parse().expect("test model should parse"))
+            .model(elaborated(&model))
             .input_pipeline(InputPipeline::new(input))
             .output_pipeline(output)
             .reconf_topic("reconf".to_owned())

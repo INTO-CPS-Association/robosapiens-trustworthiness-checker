@@ -5,68 +5,38 @@ use super::super::program::DataflowProgram;
 use super::super::stream_id::StreamSlots;
 use super::super::*;
 use super::lower::*;
+use crate::core::Semantics;
 use crate::lang::core::DepGraph as NamedDependencyGraph;
-use crate::lang::dsrv::ast::{CheckedDsrvSpecification, ValidatedDsrvSpecification};
-
-impl TryFrom<DsrvSpecification> for DataflowProgram {
-    type Error = DataflowCompilationError;
-
-    fn try_from(specification: DsrvSpecification) -> Result<Self, Self::Error> {
-        Self::compile_untyped(specification)
-    }
-}
-
-impl TryFrom<CheckedDsrvSpecification> for DataflowProgram {
-    type Error = DataflowCompilationError;
-
-    fn try_from(specification: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
-        Self::compile_checked(specification)
-    }
-}
-
-impl TryFrom<DsrvSpecification> for DataflowMonitor {
-    type Error = DataflowCompilationError;
-
-    fn try_from(specification: DsrvSpecification) -> Result<Self, Self::Error> {
-        DataflowMonitor::compile_untyped(specification)
-    }
-}
-
-impl TryFrom<CheckedDsrvSpecification> for DataflowMonitor {
-    type Error = DataflowCompilationError;
-
-    fn try_from(specification: CheckedDsrvSpecification) -> Result<Self, Self::Error> {
-        Self::compile_checked(specification)
-    }
-}
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 
 impl DataflowProgram {
-    /// Compile a checked specification into an immutable monitor definition.
+    /// Compile an elaborated specification into an immutable monitor definition,
+    /// using its types for scalar specialisation and for checking runtime text.
     pub fn compile_checked(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
         #[cfg(test)]
         DataflowProgram::record_root_compile(true);
         Self::compile_specification(specification, build_checked_expression_graph)
     }
 
-    /// Compile an unchecked specification into an immutable monitor definition.
-    pub fn compile_untyped(
-        specification: DsrvSpecification,
+    /// Compile an elaborated specification with the evaluation strategy of
+    /// `semantics`: `untimed` does not consult the types, every other
+    /// semantics does, as [`Self::compile_checked`].
+    pub fn compile_with_semantics(
+        specification: ElaboratedDsrvSpecification,
+        semantics: Semantics,
     ) -> Result<Self, DataflowCompilationError> {
-        let specification = specification
-            .validate()
-            .map_err(DataflowCompilationError::Semantic)?;
-        Self::compile_validated(specification)
-    }
-
-    /// Compile a specification whose common and local admission checks have succeeded.
-    pub fn compile_validated(
-        specification: ValidatedDsrvSpecification,
-    ) -> Result<Self, DataflowCompilationError> {
-        #[cfg(test)]
-        DataflowProgram::record_root_compile(false);
-        Self::compile_specification(specification.into_specification(), build_expression_graph)
+        match semantics {
+            Semantics::Untimed => {
+                #[cfg(test)]
+                DataflowProgram::record_root_compile(false);
+                Self::compile_specification(specification, |expression| {
+                    build_expression_graph(expression.expr().clone())
+                })
+            }
+            _ => Self::compile_checked(specification),
+        }
     }
 
     fn compile_specification<S>(
@@ -90,7 +60,7 @@ impl DataflowProgram {
 
 impl DataflowMonitor {
     pub fn compile_checked(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
         DataflowProgram::compile_checked(specification).map(Self::from_program)
     }
@@ -102,17 +72,20 @@ impl DataflowMonitor {
     /// execution, even when the crate is built with the `jit` feature.
     #[cfg(feature = "jit")]
     pub fn compile_checked_with_jit(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
         config: JitConfig,
     ) -> Result<Self, DataflowCompilationError> {
         DataflowProgram::compile_checked(specification)
             .map(|program| Self::from_program_with_jit(program, config))
     }
 
-    pub fn compile_untyped(
-        specification: DsrvSpecification,
+    /// Compile with the evaluation strategy of `semantics`; see
+    /// [`DataflowProgram::compile_with_semantics`].
+    pub fn compile_with_semantics(
+        specification: ElaboratedDsrvSpecification,
+        semantics: Semantics,
     ) -> Result<Self, DataflowCompilationError> {
-        DataflowProgram::compile_untyped(specification).map(Self::from_program)
+        DataflowProgram::compile_with_semantics(specification, semantics).map(Self::from_program)
     }
 }
 

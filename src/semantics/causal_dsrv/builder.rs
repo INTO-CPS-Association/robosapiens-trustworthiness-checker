@@ -6,7 +6,7 @@ use crate::causal::{
     CausalDomain, CausalSet, CausalValue, RoleCausalAntichain, RoleCausalDomain, RoleCausalSet,
 };
 use crate::core::OutputWriter;
-use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::runtime::RuntimeBuilder;
 use crate::runtime::semi_sync::{SemiSyncRuntime, SemiSyncRuntimeBuilder};
 use crate::{Value, io::OpenedInput};
@@ -22,7 +22,7 @@ use super::{
 /// logical tick internally before constructing the causal runtime.
 pub struct CausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<DsrvSpecification>,
+    model: Option<ElaboratedDsrvSpecification>,
     input: Option<OpenedInput<Value>>,
     output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
@@ -33,7 +33,7 @@ impl<D: CausalDomain> CausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn model(mut self, model: DsrvSpecification) -> Self {
+    pub fn model(mut self, model: ElaboratedDsrvSpecification) -> Self {
         self.model = Some(model);
         self
     }
@@ -63,7 +63,7 @@ impl CausalRuntimeBuilder<CausalSet> {
     pub async fn build(
         self,
     ) -> anyhow::Result<SemiSyncRuntime<CausalSemiSyncConfig<CausalSet>, CausalDsrvSemantics>> {
-        build_unchecked::<CausalSet, CausalDsrvSemantics>(self).await
+        build_ignoring_types::<CausalSet, CausalDsrvSemantics>(self).await
     }
 }
 
@@ -87,7 +87,7 @@ impl<D: RoleCausalDomain> CausalRuntimeBuilder<D> {
     pub async fn build(
         self,
     ) -> anyhow::Result<SemiSyncRuntime<CausalSemiSyncConfig<D>, RoleCausalDsrvSemantics<D>>> {
-        build_unchecked::<D, RoleCausalDsrvSemantics<D>>(self).await
+        build_ignoring_types::<D, RoleCausalDsrvSemantics<D>>(self).await
     }
 }
 
@@ -97,7 +97,7 @@ impl<D: RoleCausalDomain> Default for CausalRuntimeBuilder<D> {
     }
 }
 
-async fn build_unchecked<D, MS>(
+async fn build_ignoring_types<D, MS>(
     builder: CausalRuntimeBuilder<D>,
 ) -> anyhow::Result<SemiSyncRuntime<CausalSemiSyncConfig<D>, MS>>
 where
@@ -128,10 +128,11 @@ where
         .await)
 }
 
-/// Checked model-owned causal runtime builder.
+/// Model-owned causal runtime builder whose semantics consult the types of
+/// the elaborated specification.
 pub struct CheckedCausalRuntimeBuilder<D: CausalDomain = CausalSet> {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<CheckedDsrvSpecification>,
+    model: Option<ElaboratedDsrvSpecification>,
     input: Option<OpenedInput<Value>>,
     output_writer: Option<OutputWriter<CausalValue<D>>>,
 }
@@ -142,7 +143,7 @@ impl<D: CausalDomain> CheckedCausalRuntimeBuilder<D> {
         self
     }
 
-    pub fn model(mut self, model: CheckedDsrvSpecification) -> Self {
+    pub fn model(mut self, model: ElaboratedDsrvSpecification) -> Self {
         self.model = Some(model);
         self
     }

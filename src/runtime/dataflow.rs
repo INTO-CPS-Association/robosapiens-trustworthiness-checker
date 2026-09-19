@@ -25,10 +25,11 @@
 //!
 //! ## Construction
 //!
-//! [`DataflowRuntimeBuilder<S>`] accepts any model type for which `DataflowMonitor: TryFrom<S>`.
-//! Passing a [`crate::DsrvSpecification`] selects untyped dataflow compilation; passing a
-//! [`crate::CheckedDsrvSpecification`] selects the checked path and enables type-directed scalar
-//! specialization. The builder requires an input stream and an already-open [`OutputWriter`].
+//! [`DataflowRuntimeBuilder`] accepts an [`crate::ElaboratedDsrvSpecification`].
+//! [`DataflowRuntimeBuilder::semantics`] selects the evaluation strategy, as
+//! [`DataflowMonitor::compile_with_semantics`] describes; by default compilation uses the
+//! specification's types for scalar specialization. The builder requires an input stream and an
+//! already-open [`OutputWriter`].
 //! `build` stores the compilation result in the runtime, so a compilation failure is returned when
 //! [`Runtime::run`] begins.
 //!
@@ -100,7 +101,7 @@ use std::sync::Arc;
 
 use crate::core::{
     ExecutionPolicy, InputBatch, InputStream, OutputBatch, OutputError, OutputWriter, Runtime,
-    Specification, Value,
+    Semantics, Specification, Value,
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::JitConfig;
@@ -116,6 +117,7 @@ use crate::io::reconfigurable_input::{
     InputPipelineSession, ReconfigurableInput, ReconfigurableInputItem,
 };
 use crate::io::{InputPipeline, OutputPipeline, ReconfigurationRequest};
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::runtime::builder::RuntimeBuilder;
 
 use async_trait::async_trait;
@@ -242,25 +244,23 @@ pub struct DataflowRuntime {
 
 /// Configures the model, input stream, output writer, and flush policy for a
 /// [`DataflowRuntime`].
-pub struct DataflowRuntimeBuilder<S>
-where
-    S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
-{
-    model: Option<S>,
+pub struct DataflowRuntimeBuilder {
+    model: Option<ElaboratedDsrvSpecification>,
     input: Option<crate::io::OpenedInput<Value>>,
     output_writer: Option<OutputWriter<Value>>,
+    semantics: Semantics,
     execution_policy: ExecutionPolicy,
     quickening: bool,
     #[cfg(feature = "jit")]
     jit_config: Option<JitConfig>,
 }
 
-impl<S> DataflowRuntimeBuilder<S>
-where
-    S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
-{
+impl DataflowRuntimeBuilder {
+    /// Select the evaluation strategy; see [`DataflowMonitor::compile_with_semantics`].
+    pub fn semantics(self, semantics: Semantics) -> Self {
+        Self { semantics, ..self }
+    }
+
     /// Select when completed monitor rows are flushed to the output writer.
     pub fn execution_policy(self, execution_policy: ExecutionPolicy) -> Self {
         Self {
@@ -311,17 +311,14 @@ where
 
 /// Configures a dataflow runtime whose monitor and live I/O sessions are reconfigured at
 /// validated root-command boundaries.
-pub struct ReconfigurableDataflowRuntimeBuilder<S>
-where
-    S: 'static,
-    DataflowProgram: TryFrom<S, Error = DataflowCompilationError>,
-{
+pub struct ReconfigurableDataflowRuntimeBuilder {
     executor: Option<Rc<LocalExecutor<'static>>>,
-    model: Option<S>,
+    model: Option<ElaboratedDsrvSpecification>,
     input_pipeline: Option<InputPipeline<Value>>,
     output_pipeline: Option<OutputPipeline<Value>>,
     reconf_topic: Option<String>,
-    parse_spec: Option<fn(&str) -> anyhow::Result<S>>,
+    parse_spec: Option<fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification>>,
+    semantics: Semantics,
     execution_policy: ExecutionPolicy,
     quickening: bool,
     transfer_policy: ContextTransferPolicy,
@@ -331,13 +328,19 @@ where
     jit_config: Option<JitConfig>,
 }
 
-impl<S> ReconfigurableDataflowRuntimeBuilder<S>
-where
-    S: Specification + 'static,
-    DataflowProgram: TryFrom<S, Error = DataflowCompilationError>,
-{
-    pub fn parse_spec(mut self, parse_spec: fn(&str) -> anyhow::Result<S>) -> Self {
+impl ReconfigurableDataflowRuntimeBuilder {
+    /// Check and elaborate each replacement specification.
+    pub fn parse_spec(
+        mut self,
+        parse_spec: fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification>,
+    ) -> Self {
         self.parse_spec = Some(parse_spec);
+        self
+    }
+
+    /// Select the evaluation strategy; see [`DataflowMonitor::compile_with_semantics`].
+    pub fn semantics(mut self, semantics: Semantics) -> Self {
+        self.semantics = semantics;
         self
     }
 
@@ -389,11 +392,7 @@ where
     }
 }
 
-impl<S> RuntimeBuilder<S, Value> for ReconfigurableDataflowRuntimeBuilder<S>
-where
-    S: Specification + 'static,
-    DataflowProgram: TryFrom<S, Error = DataflowCompilationError>,
-{
+impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDataflowRuntimeBuilder {
     type Runtime = DataflowRuntime;
 
     fn new() -> Self {
@@ -404,6 +403,7 @@ where
             output_pipeline: None,
             reconf_topic: None,
             parse_spec: None,
+            semantics: Semantics::GradualTypedUntimed,
             execution_policy: ExecutionPolicy::Synchronous,
             quickening: true,
             transfer_policy: ContextTransferPolicy::MatchingStreamState,
@@ -419,7 +419,7 @@ where
         self
     }
 
-    fn model(mut self, model: S) -> Self {
+    fn model(mut self, model: ElaboratedDsrvSpecification) -> Self {
         self.model = Some(model);
         self
     }
@@ -479,9 +479,9 @@ where
                     Ok(input) => input,
                     Err(error) => return failed_dataflow_runtime(policy, error),
                 };
-            let input_vars = model.input_vars();
-            let output_vars = model.output_vars();
-            let auxiliary_vars = model.aux_vars();
+            let input_vars = Specification::input_vars(&model);
+            let output_vars = Specification::output_vars(&model);
+            let auxiliary_vars = Specification::aux_vars(&model);
             let resolved_input = match input.pipeline().resolve(&input_vars, None) {
                 Ok(resolved) => resolved,
                 Err(error) => return failed_dataflow_runtime(policy, error),
@@ -493,7 +493,8 @@ where
                 Err(error) => return failed_dataflow_runtime(policy, error),
             };
 
-            let compiled = match compile_model(model) {
+            let semantics = self.semantics;
+            let compiled = match compile_model(model, semantics) {
                 Ok(compiled) => compiled,
                 Err(error) => return failed_dataflow_runtime(policy, error.into()),
             };
@@ -528,7 +529,7 @@ where
 
             let compiler: ReconfigurationCompiler = Rc::new(move |source| {
                 let model = parse_spec(source)?;
-                compile_model(model).map_err(anyhow::Error::from)
+                compile_model(model, semantics).map_err(anyhow::Error::from)
             });
 
             DataflowRuntime {
@@ -551,11 +552,7 @@ where
     }
 }
 
-impl<S> RuntimeBuilder<S, Value> for DataflowRuntimeBuilder<S>
-where
-    S: 'static,
-    DataflowMonitor: TryFrom<S, Error = DataflowCompilationError>,
-{
+impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuilder {
     type Runtime = DataflowRuntime;
 
     fn new() -> Self {
@@ -563,6 +560,7 @@ where
             model: None,
             input: None,
             output_writer: None,
+            semantics: Semantics::GradualTypedUntimed,
             execution_policy: ExecutionPolicy::Buffered,
             quickening: true,
             #[cfg(feature = "jit")]
@@ -574,7 +572,7 @@ where
         self
     }
 
-    fn model(self, model: S) -> Self {
+    fn model(self, model: ElaboratedDsrvSpecification) -> Self {
         Self {
             model: Some(model),
             ..self
@@ -589,7 +587,7 @@ where
     }
 
     fn output_writer(self, output_writer: OutputWriter<Value>) -> Self {
-        DataflowRuntimeBuilder::<S>::output_writer(self, output_writer)
+        DataflowRuntimeBuilder::output_writer(self, output_writer)
     }
 
     fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
@@ -597,7 +595,8 @@ where
             let execution_policy = self.execution_policy;
             let mut startup_error = None;
             let mut monitor = match self.model {
-                Some(model) => DataflowMonitor::try_from(model).map_err(anyhow::Error::from),
+                Some(model) => DataflowMonitor::compile_with_semantics(model, self.semantics)
+                    .map_err(anyhow::Error::from),
                 None => Err(anyhow::anyhow!("dataflow runtime model is not configured")),
             };
             if let Ok(monitor) = &mut monitor {
@@ -936,15 +935,14 @@ fn failed_dataflow_runtime(
     }
 }
 
-fn compile_model<S>(model: S) -> Result<CompiledDefinition, DataflowCompilationError>
-where
-    S: Specification + 'static,
-    DataflowProgram: TryFrom<S, Error = DataflowCompilationError>,
-{
-    let input_vars = model.input_vars();
-    let output_vars = model.output_vars();
-    let auxiliary_vars = model.aux_vars();
-    let program = DataflowProgram::try_from(model)?;
+fn compile_model(
+    model: ElaboratedDsrvSpecification,
+    semantics: Semantics,
+) -> Result<CompiledDefinition, DataflowCompilationError> {
+    let input_vars = model.input_vars().clone();
+    let output_vars = model.output_vars().clone();
+    let auxiliary_vars = model.aux_vars().clone();
+    let program = DataflowProgram::compile_with_semantics(model, semantics)?;
     Ok(CompiledDefinition {
         program,
         input_vars,
@@ -1479,9 +1477,10 @@ mod tests {
     use crate::io::testing::{channel_output, input_source_with_control, limited_null_output};
     use crate::io::{InputPipeline, OutputBackendConfig, OutputPipeline, map};
     use crate::stream_utils::Fanout;
-    use crate::{CheckedDsrvSpecification, DsrvSpecification, TypeCheckOptions, Value, async_test};
+    use crate::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, async_test};
 
     use super::*;
+    use crate::dsrv_fixtures::elaborated;
 
     fn recording_writer(batches: Rc<RefCell<Vec<OutputBatch<Value>>>>) -> OutputWriter<Value> {
         let batches_for_sink = Rc::clone(&batches);
@@ -1637,9 +1636,10 @@ mod tests {
         inputs: BTreeMap<VarName, Vec<Value>>,
         limit: usize,
     ) {
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let output_writer = limited_null_output(spec.output_vars().clone(), limit).await;
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor.clone())
             .model(spec)
             .input(map::input_stream(inputs).into())
@@ -1675,7 +1675,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x: Int\nout z: Int\nz = x";
-        let model = spec_src.parse::<DsrvSpecification>().unwrap();
+        let model = elaborated(&spec_src);
         let (x_sender, x_fanout) = Fanout::<Value>::new();
         let (control_sender, control_fanout) = Fanout::<Value>::new();
         let input_source = input_source_with_control(
@@ -1687,8 +1687,15 @@ mod tests {
         let (ack_sender, mut acknowledgements) =
             bounded::channel::<ReconfigurationAck>(2).into_split();
 
-        let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        let runtime = ReconfigurableDataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
+            .parse_spec(|source| {
+                crate::ElaboratedDsrvSpecification::parse_with(
+                    source,
+                    crate::TypeCheckOptions::GRADUAL,
+                )
+                .map_err(anyhow::Error::from)
+            })
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1749,7 +1756,7 @@ mod tests {
         // An exact no-op keeps both pipeline sessions open; only the monitor
         // revision advances for the accepted request.
         let spec_src = "in x: Int\nout z: Int\nz = x";
-        let model = spec_src.parse::<DsrvSpecification>().unwrap();
+        let model = elaborated(&spec_src);
         let (x_sender, x_fanout) = Fanout::<Value>::new();
         let (control_sender, control_fanout) = Fanout::<Value>::new();
         let input_source = input_source_with_control(
@@ -1762,8 +1769,15 @@ mod tests {
         let (ack_sender, mut acknowledgements) =
             bounded::channel::<ReconfigurationAck>(1).into_split();
 
-        let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        let runtime = ReconfigurableDataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
+            .parse_spec(|source| {
+                crate::ElaboratedDsrvSpecification::parse_with(
+                    source,
+                    crate::TypeCheckOptions::GRADUAL,
+                )
+                .map_err(anyhow::Error::from)
+            })
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1817,9 +1831,7 @@ mod tests {
     async fn reconfigurable_dataflow_replacement_inherits_quickening_setting(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let model = "in x: Int\nout z: Int\nz = x + 1"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let model = elaborated("in x: Int\nout z: Int\nz = x + 1");
         let (_x_sender, x_fanout) = Fanout::<Value>::new();
         let (_control_sender, control_fanout) = Fanout::<Value>::new();
         let input_source = input_source_with_control(
@@ -1828,8 +1840,15 @@ mod tests {
         )
         .with_reconfiguration_route("control")
         .unwrap();
-        let runtime = ReconfigurableDataflowRuntimeBuilder::<DsrvSpecification>::new()
-            .parse_spec(|source| source.parse().map_err(anyhow::Error::from))
+        let runtime = ReconfigurableDataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
+            .parse_spec(|source| {
+                crate::ElaboratedDsrvSpecification::parse_with(
+                    source,
+                    crate::TypeCheckOptions::GRADUAL,
+                )
+                .map_err(anyhow::Error::from)
+            })
             .executor(executor)
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1853,9 +1872,7 @@ mod tests {
     #[test]
     fn eager_jit_runtime_replacement_compiles_candidate_once_for_cold_and_transfer_plans() {
         fn checked_program(source: &str) -> DataflowProgram {
-            let checked = source
-                .parse::<DsrvSpecification>()
-                .unwrap()
+            let checked = elaborated(&source)
                 .type_check(TypeCheckOptions::STRICT)
                 .unwrap();
             DataflowProgram::compile_checked(checked).unwrap()
@@ -1895,13 +1912,14 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let (output_writer, mut outputs) = channel_output(spec.output_vars().clone()).await;
         let input = map::input_stream(BTreeMap::from([(
             VarName::new("x"),
             vec![Value::Int(1), Value::Int(2)],
         )]));
-        let (builder, controller) = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let (builder, controller) = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .controlled_input(input);
@@ -1946,22 +1964,21 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x: Int\nin y: Int\nout z: Int\nz = x + y";
-        let spec = spec_src.parse::<CheckedDsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let output_writer = limited_null_output(spec.output_vars().clone(), 3).await;
-        let runtime =
-            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
-                .executor(executor.clone())
-                .model(spec)
-                .input(
-                    map::input_stream(BTreeMap::from([
-                        (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                        (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-                    ]))
-                    .into(),
-                )
-                .output_writer(output_writer)
-                .build()
-                .await;
+        let runtime = DataflowRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(
+                map::input_stream(BTreeMap::from([
+                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                ]))
+                .into(),
+            )
+            .output_writer(output_writer)
+            .build()
+            .await;
 
         runtime
             .run()
@@ -1972,11 +1989,9 @@ mod tests {
     #[cfg(feature = "jit")]
     #[apply(async_test)]
     async fn checked_dataflow_runtime_can_enable_delayed_jit(executor: Rc<LocalExecutor<'static>>) {
-        let spec = "in x: Int\nout z: Int\nz = x + 1"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        let spec = elaborated("in x: Int\nout z: Int\nz = x + 1");
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
-        let runtime = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
             .jit(JitConfig::after_events(1))
             .executor(executor.clone())
             .model(spec)
@@ -2016,22 +2031,21 @@ mod tests {
     ) {
         let spec_src = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
         let spec =
-            CheckedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
+            ElaboratedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
         let output_writer = limited_null_output(spec.output_vars().clone(), 3).await;
-        let runtime =
-            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
-                .executor(executor.clone())
-                .model(spec)
-                .input(
-                    map::input_stream(BTreeMap::from([
-                        (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
-                        (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
-                    ]))
-                    .into(),
-                )
-                .output_writer(output_writer)
-                .build()
-                .await;
+        let runtime = DataflowRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(
+                map::input_stream(BTreeMap::from([
+                    (VarName::new("x"), vec![1.into(), 2.into(), 3.into()]),
+                    (VarName::new("y"), vec![10.into(), 20.into(), 30.into()]),
+                ]))
+                .into(),
+            )
+            .output_writer(output_writer)
+            .build()
+            .await;
 
         runtime
             .run()
@@ -2045,22 +2059,21 @@ mod tests {
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
         let spec =
-            CheckedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
+            ElaboratedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
-        let runtime =
-            DataflowRuntimeBuilder::<crate::lang::dsrv::ast::CheckedDsrvSpecification>::new()
-                .executor(executor.clone())
-                .model(spec)
-                .input(
-                    map::input_stream(BTreeMap::from([(
-                        VarName::new("x"),
-                        vec![41.into(), 1.into()],
-                    )]))
-                    .into(),
-                )
-                .output_writer(output_writer)
-                .build()
-                .await;
+        let runtime = DataflowRuntimeBuilder::new()
+            .executor(executor.clone())
+            .model(spec)
+            .input(
+                map::input_stream(BTreeMap::from([(
+                    VarName::new("x"),
+                    vec![41.into(), 1.into()],
+                )]))
+                .into(),
+            )
+            .output_writer(output_writer)
+            .build()
+            .await;
 
         executor.spawn(runtime.run()).detach();
         let outputs = tc_testutils::streams::with_timeout(
@@ -2085,9 +2098,10 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 10";
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor.clone())
             .model(spec)
             .input(
@@ -2124,9 +2138,10 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor.clone())
             .model(spec)
             .input(
@@ -2159,7 +2174,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nin y\nout z\nz = 42";
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated(&spec_src);
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let simultaneous = crate::InputBatch::tick(vec![
             crate::InputUpdate::new("x".into(), Value::Int(1)),
@@ -2173,7 +2188,8 @@ mod tests {
         .unwrap();
         let input: InputStream<Value> =
             Box::pin(futures::stream::iter([Ok(simultaneous), Ok(independent)]));
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor.clone())
             .model(spec)
             .input(input.into())
@@ -2203,10 +2219,9 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let batches = Rc::new(RefCell::new(Vec::new()));
-        let spec = "in x\nin y\nout a\nout z\na = x\nz = y"
-            .parse::<DsrvSpecification>()
-            .unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated("in x\nin y\nout a\nout z\na = x\nz = y");
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(
@@ -2269,8 +2284,9 @@ mod tests {
                         past = x[2]\n\
                         sum = default(sum[1], 0) + x\n\
                         branch = if choose then x[1] else default(x[2], -1)";
-        let spec = spec_src.parse::<DsrvSpecification>().unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated(&spec_src);
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(
@@ -2336,8 +2352,9 @@ mod tests {
             VarName::new("z"),
         )])
         .unwrap();
-        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated("in x\nout z\nz = x");
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(
@@ -2357,7 +2374,7 @@ mod tests {
     async fn direct_dataflow_retains_backend_open_errors_until_run(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
+        let spec = elaborated("in x\nout z\nz = x");
         let error = match Rc::new(FailingBackend)
             .open(crate::OutputInterface::empty())
             .await
@@ -2374,8 +2391,9 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let batches = Rc::new(RefCell::new(Vec::new()));
-        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated("in x\nout z\nz = x");
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .execution_policy(ExecutionPolicy::Synchronous)
             .executor(executor)
             .model(spec)
@@ -2402,16 +2420,15 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let batches = Rc::new(RefCell::new(Vec::new()));
-        let spec = "in source\nout z\nz = dynamic(source: Int)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let spec = elaborated("in source\nout z\nz = dynamic(source: Int)");
         let input: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
             crate::InputBatch::from(crate::InputUpdate::new(
                 VarName::new("source"),
                 Value::Str("not a valid expression".into()),
             )),
         )]));
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(input.into())
@@ -2430,9 +2447,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let closes = Rc::new(Cell::new(0));
-        let spec = "in source\nout z\nz = dynamic(source: Int)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
+        let spec = elaborated("in source\nout z\nz = dynamic(source: Int)");
         let input: InputStream<Value> = Box::pin(futures::stream::iter([Ok(
             crate::InputBatch::from(crate::InputUpdate::new(
                 VarName::new("source"),
@@ -2444,7 +2459,8 @@ mod tests {
             close_error: Some(OutputError::backend("dataflow close failed")),
             closes: Rc::clone(&closes),
         });
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(input.into())
@@ -2464,8 +2480,9 @@ mod tests {
     async fn direct_dataflow_treats_closed_sink_as_intentional_early_completion(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated("in x\nout z\nz = x");
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(
@@ -2481,8 +2498,9 @@ mod tests {
 
     #[apply(async_test)]
     async fn direct_dataflow_returns_non_closed_sink_errors(executor: Rc<LocalExecutor<'static>>) {
-        let spec = "in x\nout z\nz = x".parse::<DsrvSpecification>().unwrap();
-        let runtime = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+        let spec = elaborated("in x\nout z\nz = x");
+        let runtime = DataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
             .executor(executor)
             .model(spec)
             .input(

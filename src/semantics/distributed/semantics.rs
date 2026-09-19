@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::{RuntimeFunction, Value};
-use crate::lang::dsrv::ast::{Expr, ExprRef, ExprView};
+use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprView};
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_dsrv::{combinators as mc, core_evaluation};
 use crate::semantics::{AsyncConfig, MonitoringSemantics};
@@ -15,7 +15,7 @@ pub struct DistributedSemantics;
 
 impl<AC> MonitoringSemantics<AC> for DistributedSemantics
 where
-    AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Expr = CheckedExpr, Ctx = DistributedContext<AC>>,
 {
     // The only semantics that evaluates the distribution primitives.
     const CAPABILITIES: crate::core::Capabilities =
@@ -35,7 +35,7 @@ struct DistributedExprSemantics;
 
 impl<AC> MonitoringSemantics<AC> for DistributedExprSemantics
 where
-    AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Expr = CheckedExpr, Ctx = DistributedContext<AC>>,
 {
     // The only semantics that evaluates the distribution primitives.
     const CAPABILITIES: crate::core::Capabilities =
@@ -46,7 +46,7 @@ where
         ctx: &AC::Ctx,
         owner: Option<VarName>,
     ) -> LocalStream<AC::Val> {
-        evaluate_expr::<AC>(expr.as_ref(), ctx, owner)
+        evaluate_expr::<AC>(expr.expr().as_ref(), ctx, owner)
     }
 }
 
@@ -56,7 +56,7 @@ fn evaluate_expr<'a, AC>(
     owner: Option<VarName>,
 ) -> LocalStream<AC::Val>
 where
-    AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
+    AC: AsyncConfig<Val = Value, Expr = CheckedExpr, Ctx = DistributedContext<AC>>,
 {
     use ExprView::*;
 

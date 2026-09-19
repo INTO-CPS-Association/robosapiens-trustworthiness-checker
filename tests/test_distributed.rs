@@ -10,7 +10,7 @@ use trustworthiness_checker::VarName;
 use trustworthiness_checker::async_test;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::{
-    DsrvSpecification, LocalStream, Value,
+    ElaboratedDsrvSpecification, LocalStream, TypeCheckOptions, Value,
     core::{OutputInterface, OutputWriter, Runtime},
     distributed::distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
     dsrv_fixtures::TestDistConfig,
@@ -71,10 +71,12 @@ async fn channel_output(
 
 /// Every specification here is monitored in a distribution, so it is written
 /// in Distributed DSRV.
-fn parse_spec(source: &str) -> trustworthiness_checker::DsrvSpecification {
-    format!("language distributed\n{source}")
-        .parse::<DsrvSpecification>()
-        .expect("test DSRV specification should parse")
+fn parse_spec(source: &str) -> ElaboratedDsrvSpecification {
+    ElaboratedDsrvSpecification::parse_with(
+        &format!("language distributed\n{source}"),
+        TypeCheckOptions::GRADUAL,
+    )
+    .expect("test DSRV specification should parse and check")
 }
 
 // SYN-R15/R18/E1/E2: the in-process distributed runtime carries revised scalar

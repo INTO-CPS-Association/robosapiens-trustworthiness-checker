@@ -32,7 +32,7 @@ use super::{
 use crate::core::Value;
 use crate::dataflow::execution::quickening::ScalarValue;
 use crate::dataflow::{DataflowEvaluationError, DataflowMonitor, DataflowProgram};
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::ElaboratedDsrvSpecification;
 
 #[cfg(feature = "jit")]
 use crate::dataflow::execution::jit::PreparedDirectJit;
@@ -76,7 +76,7 @@ pub struct TypedDataflowMonitor<I: TypedInput, O: TypedOutput> {
 impl<I: TypedInput, O: TypedOutput> TypedDataflowMonitor<I, O> {
     /// Binds typed rows to a checked specification, without enabling native compilation.
     pub fn compile_checked(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
     ) -> Result<Self, TypedBindingError> {
         let program = DataflowProgram::compile_checked(specification)?;
         Self::from_program(program)
@@ -90,7 +90,7 @@ impl<I: TypedInput, O: TypedOutput> TypedDataflowMonitor<I, O> {
     /// Binds typed rows and enables the monitor's hotness-driven native tier.
     #[cfg(feature = "jit")]
     pub fn compile_checked_with_jit(
-        specification: CheckedDsrvSpecification,
+        specification: ElaboratedDsrvSpecification,
         config: JitConfig,
     ) -> Result<Self, TypedBindingError> {
         let program = DataflowProgram::compile_checked(specification)?;

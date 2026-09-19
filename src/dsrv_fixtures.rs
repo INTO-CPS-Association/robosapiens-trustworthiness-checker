@@ -1,5 +1,5 @@
 use crate::{
-    InputStream, Value,
+    ElaboratedDsrvSpecification, InputStream, TypeCheckOptions, Value,
     io::map,
     runtime::{
         asynchronous::AsyncRuntime,
@@ -20,6 +20,13 @@ pub type TestSemantics = UntimedDsrvSemantics;
 
 // Default monitor runner to use in tests
 pub type TestRuntime = AsyncRuntime<TestConfig, TestSemantics>;
+
+/// Parse a specification, check it gradually and elaborate it, as every
+/// runtime requires. Panics if it does not parse or check.
+pub fn elaborated(source: &str) -> ElaboratedDsrvSpecification {
+    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+        .unwrap_or_else(|error| panic!("{error}\n{source}"))
+}
 
 pub fn empty_input_stream() -> InputStream<Value> {
     map::input_stream(BTreeMap::new())
