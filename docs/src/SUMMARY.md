@@ -29,6 +29,7 @@
 
 - [CLI reference](./reference/cli.md)
 - [DSRV syntax](./reference/dsrv-syntax.md)
+- [DSRV language settings](./reference/dsrv-language-settings.md)
 - [Input configuration](./reference/input-configuration.md)
 - [Output configuration](./reference/output-configuration.md)
 - [Reconfiguration](./reference/reconfiguration.md)

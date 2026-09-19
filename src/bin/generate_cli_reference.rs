@@ -32,6 +32,7 @@ const GROUPS: &[&str] = &[
 const ARGUMENT_CLASSIFICATIONS: &[(&str, &str, Option<&str>)] = &[
     ("model", "Model, language, and semantics", None),
     ("language", "Model, language, and semantics", None),
+    ("dsrv_edition", "Model, language, and semantics", None),
     ("semantics", "Model, language, and semantics", None),
     ("input_file", "Finite file processing", None),
     ("input_mqtt_file", "Live input sources", None),

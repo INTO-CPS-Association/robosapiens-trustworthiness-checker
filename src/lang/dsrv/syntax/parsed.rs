@@ -83,6 +83,10 @@ pub(crate) enum ParsedDeclaration {
     Aux(VarName, Option<SourceType>, Span),
     Assignment(VarName, ParsedExprId, Span),
     Alias(AliasDeclaration),
+    /// `language <name>`, with the name unchecked.
+    Language(EcoString, Span),
+    /// `edition <year>-<month>`, as written.
+    Edition(EcoString, Span),
 }
 
 /// The parsed forest is validated before any semantic node is allocated.

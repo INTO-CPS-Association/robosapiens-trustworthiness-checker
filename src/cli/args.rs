@@ -8,6 +8,7 @@ use strum_macros::Display;
 
 use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
 use crate::io::mqtt::MqttProtocol;
+use crate::lang::dsrv::{Dialect, Edition, LanguageRequest};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -28,8 +29,37 @@ pub enum Language {
     /// A stream-based specification language for runtime verification that supports
     /// temporal logic properties and dynamic spawning of new monitors
     DSRV,
+    /// Core DSRV: the basic temporal language, for files without a `language` line
+    #[value(name = "core-dsrv")]
+    #[strum(serialize = "core-dsrv")]
+    CoreDSRV,
+    /// Distributed DSRV: DSRV with the distribution primitives, for files
+    /// without a `language` line
+    #[value(name = "distributed-dsrv")]
+    #[strum(serialize = "distributed-dsrv")]
+    DistributedDSRV,
     /// Signal Temporal Logic properties monitored by the MSTLO runtime
     MSTLO,
+}
+
+impl Language {
+    /// Whether this selects a DSRV dialect.
+    pub fn is_dsrv(self) -> bool {
+        match self {
+            Self::DSRV | Self::CoreDSRV | Self::DistributedDSRV => true,
+            Self::MSTLO => false,
+        }
+    }
+
+    /// The dialect requested for a file without a `language` line. Plain
+    /// `dsrv` requests nothing, so the file decides.
+    pub fn dsrv_dialect(self) -> Option<Dialect> {
+        match self {
+            Self::CoreDSRV => Some(Dialect::Core),
+            Self::DistributedDSRV => Some(Dialect::Distributed),
+            Self::DSRV | Self::MSTLO => None,
+        }
+    }
 }
 
 /// Runtime engines selectable for DSRV specifications. MSTLO specifications
@@ -116,7 +146,7 @@ pub fn resolve_runtime(
     runtime_was_explicit: bool,
 ) -> anyhow::Result<RuntimeSpec> {
     match language {
-        Language::DSRV => {
+        Language::DSRV | Language::CoreDSRV | Language::DistributedDSRV => {
             if policy == ExecutionPolicy::Synchronous
                 && !matches!(runtime, RuntimeKind::Dataflow | RuntimeKind::ReconfDataflow)
             {
@@ -356,6 +386,11 @@ pub struct Cli {
 
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
     pub language: Language,
+    #[arg(
+        long,
+        help = "DSRV edition for a specification without an `edition` line, as YYYY-MM"
+    )]
+    pub dsrv_edition: Option<Edition>,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
     pub semantics: Semantics,
     #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Dataflow)]
@@ -535,6 +570,14 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// The DSRV settings requested on the command line.
+    pub fn dsrv_language_request(&self) -> LanguageRequest {
+        LanguageRequest {
+            dialect: self.language.dsrv_dialect(),
+            edition: self.dsrv_edition,
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         let reconfigurable = matches!(
             self.runtime,
@@ -547,9 +590,13 @@ impl Cli {
         if let Some(topic) = &self.reconf_topic {
             anyhow::ensure!(!topic.trim().is_empty(), "--reconf-topic cannot be empty");
         }
-        if matches!(self.language, Language::DSRV) {
+        if self.language.is_dsrv() {
             validate_dsrv_runtime_semantics(self.runtime, self.semantics)?;
         }
+        anyhow::ensure!(
+            self.dsrv_edition.is_none() || self.language.is_dsrv(),
+            "--dsrv-edition applies only to DSRV specifications"
+        );
         if reconfigurable {
             anyhow::ensure!(
                 self.input_mode.input_file.is_none(),
@@ -742,6 +789,56 @@ mod runtime_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dsrv_dialects_and_edition_become_a_language_request() {
+        let parse = |extra: &[&str]| {
+            let mut args = vec![
+                "trustworthiness_checker",
+                "model.dsrv",
+                "--input-file",
+                "trace.input",
+                "--output-stdout",
+            ];
+            args.extend_from_slice(extra);
+            Cli::try_parse_from(args)
+        };
+
+        let plain = parse(&[]).unwrap();
+        assert_eq!(plain.dsrv_language_request(), LanguageRequest::default());
+
+        let core = parse(&["--language", "core-dsrv", "--dsrv-edition", "2026-09"]).unwrap();
+        core.validate().unwrap();
+        assert_eq!(
+            core.dsrv_language_request(),
+            LanguageRequest {
+                dialect: Some(Dialect::Core),
+                edition: Some(Edition::BASE),
+            }
+        );
+
+        let distributed = parse(&["--language", "distributed-dsrv"]).unwrap();
+        assert_eq!(
+            distributed.dsrv_language_request().dialect,
+            Some(Dialect::Distributed)
+        );
+        for language in [Language::CoreDSRV, Language::DistributedDSRV] {
+            assert!(
+                resolve_runtime(
+                    language,
+                    RuntimeKind::Dataflow,
+                    ExecutionPolicy::Buffered,
+                    false
+                )
+                .is_ok()
+            );
+        }
+
+        let error = parse(&["--dsrv-edition", "2027-03"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("known editions: 2026-09"), "{error}");
     }
 
     #[test]

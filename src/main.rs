@@ -22,7 +22,7 @@ use trustworthiness_checker::io::{
     InputConfigFile, InputPipeline, InputPolicy, InputReduction, InputSource, InputSources,
     InputWindow, RedisKnowledgeConfig,
 };
-use trustworthiness_checker::lang::dsrv::parser::parse_file as lalr_parse_file;
+use trustworthiness_checker::lang::dsrv::parser::parse_file_with as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
@@ -111,7 +111,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model = lalr_parse_file(cli.model.as_str())
+    let model = lalr_parse_file(cli.model.as_str(), cli.dsrv_language_request())
         .await
         .map(LangSpecification::from)
         .context("Model file could not be parsed")?;

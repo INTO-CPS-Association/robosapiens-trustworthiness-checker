@@ -7,6 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use trustworthiness_checker::lang::dsrv::LanguageConfig;
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
@@ -50,7 +51,14 @@ fn every_shipped_specification_parses_and_expands() {
     for path in &paths {
         let name = path.to_string_lossy().replace('\\', "/");
         let source = fs::read_to_string(path).expect("a readable specification");
-        let accepted = parse_str(&source).is_ok();
+        let parsed = parse_str(&source);
+        if let Ok(specification) = &parsed {
+            // No shipped file declares language settings yet.
+            if specification.source_context().language() != &LanguageConfig::default() {
+                unexpected.push(format!("{name} does not resolve to the default language"));
+            }
+        }
+        let accepted = parsed.is_ok();
         match (accepted, NOT_ACCEPTED.contains(&name.as_str())) {
             (true, false) | (false, true) => {}
             (false, false) => match parse_str(&source) {

@@ -7,6 +7,8 @@
 //! rewrite here instead, which is why this stage owns the conversion rather
 //! than the parser.
 
+pub(crate) mod language;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ecow::EcoVec;
@@ -23,6 +25,7 @@ use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAs
 use crate::core::{StreamType, StreamTypeAscription, VarName};
 use crate::lang::dsrv::ast::DsrvSpecification;
 use contiguous_tree::TreeCursor as _;
+use language::{Dialect, LanguageError, LanguageRequest};
 
 /// A failure while expanding a parsed specification.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +38,9 @@ pub enum DsrvExpandError {
 
     #[error("invalid source-to-semantic tree conversion: {0}")]
     Transcode(#[source] contiguous_tree::TranscodeError<SourceResolveError, ExprId>),
+
+    #[error("invalid language settings: {0}")]
+    Language(#[from] LanguageError),
 }
 
 /// A top-level declaration with its names and types resolved.
@@ -59,14 +65,25 @@ impl SourceAscription {
 /// Resolve a parsed specification's names into semantic declarations.
 pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
+    request: LanguageRequest,
 ) -> Result<(ExprBuilder, EcoVec<Declaration>, Rc<SourceContext>), DsrvExpandError> {
     let (expressions, parsed_declarations) = parsed.into_parts();
+    let language = language::resolve_language(&parsed_declarations, request)?;
+    let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     for declaration in &parsed_declarations {
         if let ParsedDeclaration::Alias(alias) = declaration {
+            if core {
+                return Err(LanguageError::NotCore {
+                    construct: "a type alias",
+                    span: alias.span,
+                }
+                .into());
+            }
             context.insert_source(alias.clone())?;
         }
     }
+    context.language(language);
     let context = Rc::new(context.build()?);
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
@@ -96,7 +113,9 @@ pub(crate) fn expand_declarations(
                     span,
                 )
             }
-            ParsedDeclaration::Alias(_) => continue,
+            ParsedDeclaration::Alias(_)
+            | ParsedDeclaration::Language(..)
+            | ParsedDeclaration::Edition(..) => continue,
         };
         declarations.push(resolved);
     }
@@ -106,10 +125,15 @@ pub(crate) fn expand_declarations(
 /// Expand a parsed specification into the core specification.
 pub(crate) fn expand_specification(
     parsed: ParsedSpecification,
+    request: LanguageRequest,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
-    let (builder, declarations, context) = expand_declarations(parsed)?;
+    let (builder, declarations, context) = expand_declarations(parsed, request)?;
     let mut specification = create_dsrv_spec(builder, declarations)?;
     specification.source_context = context;
+    if specification.source_context.language().dialect() == Dialect::Core {
+        // A Core file is accepted only if it is Core throughout.
+        specification = language::CoreDsrvSpecification::check(specification)?.into_specification();
+    }
     Ok(specification)
 }
 
@@ -124,6 +148,10 @@ pub(crate) fn expand_expression(
     let expr = builder.finish(root).map_err(DsrvAstError::from)?;
     if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
+    }
+    if context.language().dialect() == Dialect::Core {
+        // Runtime sources of a Core specification stay within Core.
+        language::is_core_fragment(expr.as_ref())?;
     }
     Ok(expr)
 }

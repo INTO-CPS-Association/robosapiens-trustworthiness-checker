@@ -21,7 +21,8 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 
 | Argument ID | Spelling | Value names | Multiplicity | Required | Requires | Possible values | Clap default | Conflicts | Help | Feature note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `language` | `--language <LANGUAGE>` | LANGUAGE | 1 value(s) | no | — | `dsrv` — DSRV runtime-verification language<br>`mstlo` — Signal Temporal Logic properties monitored by the MSTLO runtime | dsrv | — | Specification language to use | — |
+| `dsrv_edition` | `--dsrv-edition <DSRV_EDITION>` | DSRV_EDITION | 1 value(s) | no | — | — | — | — | DSRV edition for a specification without an `edition` line, as YYYY-MM | — |
+| `language` | `--language <LANGUAGE>` | LANGUAGE | 1 value(s) | no | — | `core-dsrv` — Core DSRV: the basic temporal language, for files without a `language` line<br>`distributed-dsrv` — Distributed DSRV: DSRV with the distribution primitives, for files without a `language` line<br>`dsrv` — DSRV runtime-verification language<br>`mstlo` — Signal Temporal Logic properties monitored by the MSTLO runtime | dsrv | — | Specification language to use | — |
 | `model` | `<MODEL>` | MODEL | 1 value(s) | yes | — | — | — | — | Path to the model specification file | — |
 | `semantics` | `--semantics <SEMANTICS>` | SEMANTICS | 1 value(s) | no | — | `delayed-qualitative`<br>`delayed-quantitative`<br>`eager-qualitative`<br>`gradual-typed-untimed`<br>`robustness-interval`<br>`typed-untimed`<br>`untimed` | gradual-typed-untimed | — | Semantics engine to use for monitoring | — |
 

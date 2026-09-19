@@ -12,6 +12,7 @@ use anyhow::anyhow;
 use super::ast::{DsrvAstError, Expr, ExprId};
 #[cfg(test)]
 use super::expand::Declaration;
+use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError, LanguageRequest};
 use super::expand::{self, DsrvExpandError};
 use super::source::{SourceContext, SourceResolveError};
 use super::syntax::{self, DsrvSyntaxError};
@@ -40,6 +41,9 @@ pub enum DsrvParseError {
 
     #[error("invalid source-to-semantic tree conversion: {0}")]
     Transcode(#[source] contiguous_tree::TranscodeError<SourceResolveError, ExprId>),
+
+    #[error("invalid language settings: {0}")]
+    Language(#[from] LanguageError),
 }
 
 impl From<DsrvSyntaxError> for DsrvParseError {
@@ -57,6 +61,7 @@ impl From<DsrvExpandError> for DsrvParseError {
             DsrvExpandError::Resolve(error) => Self::Resolve(error),
             DsrvExpandError::Ast(error) => Self::Ast(error),
             DsrvExpandError::Transcode(error) => Self::Transcode(error),
+            DsrvExpandError::Language(error) => Self::Language(error),
         }
     }
 }
@@ -79,13 +84,41 @@ pub fn parse_expr_with_context(
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
-    Ok(expand::expand_specification(syntax::parse_specification(
-        input,
-    )?)?)
+    parse_str_with(input, LanguageRequest::default())
+}
+
+/// Parse a specification, applying settings requested from outside the file
+/// (such as on the command line) where the file declares none.
+pub fn parse_str_with(
+    input: &str,
+    request: LanguageRequest,
+) -> Result<DsrvSpecification, DsrvParseError> {
+    Ok(expand::expand_specification(
+        syntax::parse_specification(input)?,
+        request,
+    )?)
 }
 
 pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
     crate::io::file::parse_file(parse_str, file).await
+}
+
+pub async fn parse_file_with(
+    file: &str,
+    request: LanguageRequest,
+) -> anyhow::Result<DsrvSpecification> {
+    crate::io::file::parse_file(|input: &str| parse_str_with(input, request), file).await
+}
+
+/// Accept a Core DSRV file. A file without a `language` line is read as Core;
+/// one that declares another dialect is rejected.
+pub fn check_core_source(input: &str) -> Result<CoreDsrvSpecification, DsrvParseError> {
+    let request = LanguageRequest {
+        dialect: Some(Dialect::Core),
+        edition: None,
+    };
+    let specification = parse_str_with(input, request)?;
+    Ok(CoreDsrvSpecification::check(specification)?)
 }
 
 /// Run only the syntax stage, so benchmarks can separate it from expansion.
@@ -129,7 +162,7 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
             parsed.declaration_count()
         ));
     }
-    let (builder, declarations, _) = expand::expand_declarations(parsed)?;
+    let (builder, declarations, _) = expand::expand_declarations(parsed, Default::default())?;
     let declaration = declarations
         .into_iter()
         .next()

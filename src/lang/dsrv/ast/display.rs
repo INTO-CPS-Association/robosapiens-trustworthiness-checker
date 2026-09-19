@@ -187,6 +187,7 @@ impl Display for ExprRef<'_> {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.source_context.language().header())?;
         for (name, ty) in self.source_context.aliases() {
             writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
         }

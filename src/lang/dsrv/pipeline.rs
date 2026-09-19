@@ -68,8 +68,11 @@ impl FromStr for DsrvSpecification {
             let (parse, strict, gradual) = counts.get();
             counts.set((parse + 1, strict, gradual));
         });
-        super::expand::expand_specification(super::syntax::parse_specification(source)?)
-            .map_err(Into::into)
+        super::expand::expand_specification(
+            super::syntax::parse_specification(source)?,
+            Default::default(),
+        )
+        .map_err(Into::into)
     }
 }
 

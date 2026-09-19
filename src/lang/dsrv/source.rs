@@ -10,6 +10,7 @@ use ecow::{EcoString, EcoVec};
 
 use crate::core::StreamType;
 
+use super::expand::language::LanguageConfig;
 use super::span::Span;
 
 /// Source spelling of structural types. Unlike core diagnostics, source fields
@@ -137,7 +138,11 @@ pub enum SourceResolveError {
 /// hash or an address. Declaration order and source spelling of references do
 /// not affect it; changing even an unused alias does.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
-pub struct SourceFingerprint(BTreeMap<TypeName, StreamType>);
+pub struct SourceFingerprint {
+    aliases: BTreeMap<TypeName, StreamType>,
+    /// Two sources with different language settings are different programs.
+    language: LanguageConfig,
+}
 
 /// A namespace snapshot. Clones share immutable storage.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -151,7 +156,13 @@ impl SourceContext {
     }
 
     pub fn aliases(&self) -> &BTreeMap<TypeName, StreamType> {
-        &self.fingerprint.0
+        &self.fingerprint.aliases
+    }
+
+    /// The language settings every expression expanded in this namespace
+    /// was written under.
+    pub fn language(&self) -> &LanguageConfig {
+        &self.fingerprint.language
     }
 
     pub fn get(&self, name: &TypeName) -> Option<&StreamType> {
@@ -182,6 +193,7 @@ impl SourceContext {
 #[derive(Clone, Debug, Default)]
 pub struct SourceContextBuilder {
     definitions: BTreeMap<TypeName, AliasDeclaration>,
+    language: LanguageConfig,
 }
 
 impl SourceContextBuilder {
@@ -209,6 +221,11 @@ impl SourceContextBuilder {
         Ok(())
     }
 
+    /// Record the settings of the source this namespace belongs to.
+    pub(crate) fn language(&mut self, language: LanguageConfig) {
+        self.language = language;
+    }
+
     pub fn build(self) -> Result<SourceContext, SourceResolveError> {
         let mut resolver = AliasResolver {
             definitions: &self.definitions,
@@ -219,7 +236,10 @@ impl SourceContextBuilder {
             resolver.resolve(name, definition.span)?;
         }
         Ok(SourceContext {
-            fingerprint: Rc::new(SourceFingerprint(resolver.expanded)),
+            fingerprint: Rc::new(SourceFingerprint {
+                aliases: resolver.expanded,
+                language: self.language,
+            }),
         })
     }
 }
