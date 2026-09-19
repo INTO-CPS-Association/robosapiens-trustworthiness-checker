@@ -3,6 +3,7 @@ use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
+use crate::lang::dsrv::source::SourceContext;
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -723,6 +724,11 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
                 descriptor.push_str(",type=");
                 append_tc_type(descriptor, &typing.expected_type);
             }
+            descriptor.push_str(",context=");
+            descriptor.push_str(
+                &serde_json::to_string(spec.source_context.fingerprint())
+                    .expect("source fingerprints are serializable"),
+            );
             descriptor.push(')');
         }
         StreamOp::Function { func }
@@ -1020,6 +1026,9 @@ pub(super) struct ReconfigurableExpressionSpec<E> {
     pub(super) scope: ReconfigurableExpressionScope,
     /// The explicit `dynamic` or `defer` occurrence that owns this nested body.
     pub(super) kind: ReconfigurableExpressionKind,
+    /// The complete immutable source namespace captured by the owning AST.
+    /// Runtime source must resolve against this context, not a fresh default.
+    pub(super) source_context: AstShared<SourceContext>,
     /// Type information for typed graphs; `None` for untyped graphs.
     pub(super) typing: Option<ReconfigurableExpressionTyping>,
 }

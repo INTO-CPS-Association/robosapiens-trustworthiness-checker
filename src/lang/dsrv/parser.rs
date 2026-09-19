@@ -1,12 +1,98 @@
+//! Public parsing entry points.
+//!
+//! Parsing itself lives in [`super::syntax`] and name resolution in
+//! [`super::expand`]; these functions run both stages for existing callers.
+
+use super::ast::AstShared as Rc;
+
+use anyhow::Error;
+#[cfg(test)]
+use anyhow::anyhow;
+
+use super::ast::{DsrvAstError, Expr, ExprId};
+#[cfg(test)]
+use super::expand::Declaration;
+use super::expand::{self, DsrvExpandError};
+use super::source::{SourceContext, SourceResolveError};
+use super::syntax::{self, DsrvSyntaxError};
+use crate::DsrvSpecification;
+
+// The test modules below exercise the whole frontend, so they use the
+// semantic types the stages produce.
+#[cfg(test)]
+use super::span::Span;
+#[cfg(test)]
+use crate::core::StreamType;
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::sync::LazyLock;
 
-use anyhow::{Error, anyhow};
-use ecow::EcoVec;
-use lalrpop_util::lalrpop_mod;
+/// A failure while parsing or expanding a DSRV specification.
+#[derive(Debug, thiserror::Error)]
+pub enum DsrvParseError {
+    #[error("invalid DSRV syntax: {0}")]
+    Syntax(#[source] anyhow::Error),
 
-lalrpop_mod!(lalr, "/lang/dsrv/lalr.rs");
+    #[error("invalid DSRV specification: {0}")]
+    Ast(#[from] DsrvAstError),
+
+    #[error("invalid DSRV source: {0}")]
+    Resolve(#[from] SourceResolveError),
+
+    #[error("invalid source-to-semantic tree conversion: {0}")]
+    Transcode(#[source] contiguous_tree::TranscodeError<SourceResolveError, ExprId>),
+}
+
+impl From<DsrvSyntaxError> for DsrvParseError {
+    fn from(error: DsrvSyntaxError) -> Self {
+        match error {
+            DsrvSyntaxError::Syntax(error) => Self::Syntax(error),
+            DsrvSyntaxError::Ast(error) => Self::Ast(error),
+        }
+    }
+}
+
+impl From<DsrvExpandError> for DsrvParseError {
+    fn from(error: DsrvExpandError) -> Self {
+        match error {
+            DsrvExpandError::Resolve(error) => Self::Resolve(error),
+            DsrvExpandError::Ast(error) => Self::Ast(error),
+            DsrvExpandError::Transcode(error) => Self::Transcode(error),
+        }
+    }
+}
+
+pub fn parse_expr(input: &str) -> Result<Expr, Error> {
+    parse_expr_with_context(input, Rc::new(SourceContext::default())).map_err(|error| {
+        let message = format!("Parse error: {error}");
+        Error::new(error).context(message)
+    })
+}
+
+/// Parse an expression using an immutable alias namespace.
+/// Types in the returned expression are expanded structural types.
+pub fn parse_expr_with_context(
+    input: &str,
+    context: Rc<SourceContext>,
+) -> Result<Expr, DsrvParseError> {
+    let parsed = syntax::parse_expression(input)?;
+    Ok(expand::expand_expression(&parsed, &context)?)
+}
+
+pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
+    Ok(expand::expand_specification(syntax::parse_specification(
+        input,
+    )?)?)
+}
+
+pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
+    crate::io::file::parse_file(parse_str, file).await
+}
+
+/// Run only the syntax stage, so benchmarks can separate it from expansion.
+pub fn parse_syntax_for_benchmark(input: &str) -> Result<(), DsrvParseError> {
+    syntax::parse_specification(input)?;
+    Ok(())
+}
 
 #[cfg(test)]
 fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
@@ -34,70 +120,20 @@ fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, 
     compatible
 }
 
-use self::lalr::{DeclarationsParser, ExprParser};
-
-static EXPR_PARSER: LazyLock<ExprParser> = LazyLock::new(ExprParser::new);
-static DECLARATIONS_PARSER: LazyLock<DeclarationsParser> = LazyLock::new(DeclarationsParser::new);
-
-use crate::{
-    DsrvSpecification,
-    core::{StreamType, VarName},
-    lang::dsrv::{
-        ast::{
-            DsrvAstError, Expr, ExprBuilder, ExprId, SemanticEntry, UnvalidatedDsrvSpecification,
-        },
-        span::Span,
-    },
-};
-
-/// A failure while parsing or constructing a DSRV syntax tree.
-#[derive(Debug, thiserror::Error)]
-pub enum DsrvParseError {
-    #[error("invalid DSRV syntax: {0}")]
-    Syntax(#[source] anyhow::Error),
-
-    #[error("invalid DSRV specification: {0}")]
-    Ast(#[from] DsrvAstError),
-}
-
-/// A parser-local top-level DSRV declaration.
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Declaration {
-    Input(VarName, Option<StreamType>, Span),
-    Output(VarName, Option<StreamType>, Span),
-    Aux(VarName, Option<StreamType>, Span),
-    Assignment(VarName, ExprId, Span),
-}
-
-pub fn parse_expr(input: &str) -> Result<Expr, Error> {
-    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let mut user_error_location = None;
-    let root = EXPR_PARSER
-        .parse(&mut builder, &mut user_error_location, input)
-        .map_err(|e| anyhow!("Parse error: {:?}", e))?;
-    let expr = builder
-        .finish(root)
-        .map_err(|error| anyhow!("Invalid expression tree: {error}"))?;
-    if let Some(key) = expr.as_ref().duplicate_field() {
-        return Err(anyhow!("duplicate expression field {key:?}"));
-    }
-    Ok(expr)
-}
-
 #[cfg(test)]
 fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> {
-    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let mut user_error_location = None;
-    let declarations = DECLARATIONS_PARSER
-        .parse(&mut builder, &mut user_error_location, input)
-        .map_err(|e| anyhow!("Parse error: {:?}", e))?;
-    if declarations.len() != 1 {
+    let parsed = syntax::parse_specification(input).map_err(|e| anyhow!("Parse error: {e:?}"))?;
+    if parsed.declaration_count() != 1 {
         return Err(anyhow!(
             "expected exactly one declaration, got {}",
-            declarations.len()
+            parsed.declaration_count()
         ));
     }
-    let declaration = declarations.into_iter().next().unwrap();
+    let (builder, declarations, _) = expand::expand_declarations(parsed)?;
+    let declaration = declarations
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("expected a stream declaration"))?;
     let expression = match &declaration {
         Declaration::Assignment(_, root, _) => {
             let expression = builder
@@ -118,121 +154,192 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
     Ok((expression, declaration))
 }
 
-pub(crate) fn create_dsrv_spec(
-    builder: ExprBuilder,
-    stmts: EcoVec<Declaration>,
-) -> Result<DsrvSpecification, DsrvAstError> {
-    let mut inputs = BTreeSet::new();
-    let mut outputs = BTreeSet::new();
-    let mut stream_names = BTreeSet::new();
-    let mut aux_vars = Vec::with_capacity(stmts.len());
-    let mut entries = Vec::with_capacity(stmts.len());
-    let mut roots = Vec::with_capacity(stmts.len());
-    let mut type_annotations = BTreeMap::new();
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use crate::lang::dsrv::ast::ExprView;
+    use crate::lang::dsrv::source::TypeName;
 
-    for stmt in stmts {
-        match stmt {
-            Declaration::Input(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                inputs.insert(var.clone());
-                entries.push(SemanticEntry::Input {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
-            }
-            Declaration::Output(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                outputs.insert(var.clone());
-                stream_names.insert(var.clone());
-                entries.push(SemanticEntry::Output {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
-            }
-            Declaration::Aux(var, typ, span) => {
-                if let Some(typ) = &typ {
-                    type_annotations.insert(var.clone(), typ.clone());
-                }
-                stream_names.insert(var.clone());
-                aux_vars.push(var.clone());
-                entries.push(SemanticEntry::Aux {
-                    name: var,
-                    annotation: typ,
-                    span,
-                });
-            }
-            Declaration::Assignment(name, root, span) => {
-                entries.push(SemanticEntry::Assignment { name, span });
-                roots.push(root);
+    #[test]
+    fn delimiter_free_aliases_expand_forward_references_in_all_annotations() {
+        let spec = parse_str(
+            "type State = Struct<speed: Count, stopped: Bool>
+             in _ : State
+             out result : Count
+             result = 2
+             aux f
+             f = \\x: Count -> dynamic(\"x\": Count)
+             aux deferred
+             deferred = defer(\"result\": Count)
+             type Count = Int",
+        )
+        .unwrap();
+        assert_eq!(
+            spec.type_annotation(&"_".into()),
+            Some(&StreamType::Struct(
+                vec![
+                    ("speed".into(), StreamType::Int),
+                    ("stopped".into(), StreamType::Bool)
+                ]
+                .into(),
+                false
+            ))
+        );
+        assert_eq!(
+            spec.type_annotation(&"result".into()),
+            Some(&StreamType::Int)
+        );
+        let ExprView::Lambda(parameters, body) = spec.var_expr_ref(&"f".into()).unwrap().view()
+        else {
+            panic!("expected lambda")
+        };
+        assert_eq!(parameters[0].1, StreamType::Int);
+        assert!(matches!(
+            body.view(),
+            ExprView::Dynamic(
+                _,
+                crate::core::StreamTypeAscription::Ascribed(StreamType::Int),
+                _
+            )
+        ));
+        assert!(matches!(
+            spec.var_expr_ref(&"deferred".into()).unwrap().view(),
+            ExprView::Defer(
+                _,
+                crate::core::StreamTypeAscription::Ascribed(StreamType::Int),
+                _
+            )
+        ));
+        assert_eq!(spec.source_context().aliases().len(), 2);
+        let displayed = spec.to_string();
+        let reparsed = parse_str(&displayed).unwrap();
+        assert_eq!(spec.type_annotations(), reparsed.type_annotations());
+        assert_eq!(displayed, reparsed.to_string());
+    }
+
+    #[test]
+    fn aliased_annotations_type_check_structurally() {
+        use crate::lang::dsrv::type_checker::type_check;
+        let spec = parse_str(
+            "type P = Struct<x: Int>
+             in p: P
+             out y: Int
+             y = p.x + 1",
+        )
+        .unwrap();
+        assert_eq!(
+            spec.type_annotation(&"p".into()),
+            Some(&StreamType::Struct(
+                vec![("x".into(), StreamType::Int)].into(),
+                false
+            ))
+        );
+        assert!(type_check(spec).is_ok());
+        let mismatched = parse_str(
+            "type P = Struct<x: Int>
+             in p: P
+             out y: Bool
+             y = p.x",
+        )
+        .unwrap();
+        assert!(type_check(mismatched).is_err());
+    }
+
+    #[test]
+    fn standalone_and_specification_resolution_use_the_same_context() {
+        let spec = parse_str("type Count = Int out y y = \\x: Count -> x").unwrap();
+        let source = "\\x: Count -> x";
+        let standalone = parse_expr_with_context(source, spec.source_context().clone()).unwrap();
+        assert_eq!(
+            standalone.to_string(),
+            spec.var_expr_ref(&"y".into()).unwrap().to_string()
+        );
+        assert!(matches!(
+            parse_expr_with_context(source, Rc::new(SourceContext::default())),
+            Err(DsrvParseError::Resolve(SourceResolveError::UnknownAlias { span, .. }))
+                if span == Span::new(4, 9)
+        ));
+    }
+
+    #[test]
+    fn namespace_failures_include_unused_aliases_and_original_spans() {
+        assert!(matches!(
+            parse_str("type A = Int type A = Bool"),
+            Err(DsrvParseError::Resolve(
+                SourceResolveError::DuplicateAlias { .. }
+            ))
+        ));
+        assert!(matches!(
+            parse_str("type A = B type B = A"),
+            Err(DsrvParseError::Resolve(
+                SourceResolveError::AliasCycle { .. }
+            ))
+        ));
+        assert!(matches!(parse_str("type A = Missing"),
+            Err(DsrvParseError::Resolve(SourceResolveError::UnknownAlias { span, .. }))
+                if span == Span::new(9, 16)));
+        assert!(parse_str("type Int = Bool").is_err());
+        assert!(parse_str("type A = Int; out x").is_err());
+    }
+
+    #[test]
+    fn aliases_nested_types_and_quoted_fields_display_as_self_contained_source() {
+        let spec = parse_str(
+            "type State = Map<List<Count>>
+             type Count = Int
+             type Record = Struct<\"type\": State, \"quoted field\": (Count,), ...>
+             in row: Record out x: Count x = 1",
+        )
+        .unwrap();
+        let displayed = spec.to_string();
+        assert!(displayed.starts_with("type Count = Int\n"));
+        let reparsed = parse_str(&displayed).unwrap();
+        assert_eq!(spec.source_context(), reparsed.source_context());
+        assert_eq!(spec.type_annotations(), reparsed.type_annotations());
+        assert_eq!(displayed, reparsed.to_string());
+    }
+
+    #[test]
+    fn type_namespace_is_separate_from_stream_names_and_underscore_is_an_identifier() {
+        let spec =
+            parse_str("type _ = Int type Count = _ in Count: Count out _: _ _ = Count").unwrap();
+        assert_eq!(spec.type_annotation(&"_".into()), Some(&StreamType::Int));
+        assert_eq!(
+            spec.source_context().get(&TypeName::new("_").unwrap()),
+            Some(&StreamType::Int)
+        );
+    }
+
+    #[test]
+    fn expression_syntax_errors_report_line_and_column() {
+        let error = parse_expr_with_context("1 +\n )", Rc::new(SourceContext::default()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("line 2, column 2"), "{error}");
+    }
+
+    #[test]
+    fn runtime_context_survives_extraction_and_display() {
+        use contiguous_tree::TreeCursorExt;
+        let spec = parse_str(
+            "type Count = Int type Other = Count
+             out x x = Tuple(dynamic(\"1\": Count), defer(\"2\": Other))",
+        )
+        .unwrap();
+        let displayed = spec.to_string();
+        assert_eq!(parse_str(&displayed).unwrap().to_string(), displayed);
+        let extracted = spec.var_expr(&"x".into()).unwrap();
+        let context = spec.source_context().clone();
+        drop(spec);
+        for node in extracted.as_ref().postorder() {
+            if matches!(node.view(), ExprView::Dynamic(..) | ExprView::Defer(..)) {
+                assert!(Rc::ptr_eq(
+                    node.metadata().context.as_ref().unwrap(),
+                    &context
+                ));
             }
         }
     }
-
-    let expressions = builder.finish_forest(roots)?;
-    UnvalidatedDsrvSpecification::new(
-        inputs,
-        outputs,
-        aux_vars,
-        expressions,
-        entries,
-        type_annotations,
-    )
-    .validate()
-}
-
-struct LineCol {
-    line: usize,
-    col: usize,
-}
-
-impl fmt::Display for LineCol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}, column {}", self.line, self.col)
-    }
-}
-
-// Converts a byte offset into a line and a column
-fn line_col(input: &str, byte: usize) -> LineCol {
-    let byte = byte.min(input.len());
-    let mut line = 1usize;
-    let mut col = 1usize;
-
-    for ch in input[..byte].chars() {
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    LineCol { line, col }
-}
-
-pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
-    let mut builder = ExprBuilder::with_capacity(input.len() / 4);
-    let mut user_error_location = None;
-    let stmts = DECLARATIONS_PARSER
-        .parse(&mut builder, &mut user_error_location, input)
-        .map_err(|e| {
-            let err_fixed = e.map_location(|byte| line_col(&input, byte));
-            let location = user_error_location
-                .map(|byte| format!(" near {}", line_col(input, byte)))
-                .unwrap_or_default();
-            DsrvParseError::Syntax(anyhow::anyhow!(err_fixed.to_string()).context(format!(
-                "Failed to parse input {input}{location}: {err_fixed}"
-            )))
-        })?;
-    create_dsrv_spec(builder, stmts).map_err(DsrvParseError::Ast)
-}
-
-pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
-    crate::io::file::parse_file(parse_str, file).await
 }
 
 #[cfg(test)]

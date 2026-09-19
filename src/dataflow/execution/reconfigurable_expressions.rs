@@ -8,7 +8,7 @@ use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::evaluator_state::*;
 use super::lifting::retain_last_value;
 use crate::lang::dsrv::ast::AstShared;
-use crate::lang::dsrv::{parser::parse_expr, type_checker::check_expression};
+use crate::lang::dsrv::{parser::parse_expr_with_context, type_checker::check_expression};
 
 pub(in crate::dataflow) fn evaluate_reconfigurable_expression(
     current: Value,
@@ -106,6 +106,7 @@ impl SharedReconfigurableExpressionCacheEntry {
     ) -> bool {
         let allowed_variables = spec.scope.allowed_variables();
         &*self.template.source_text == &*source_text
+            && self.template.source_context.fingerprint() == spec.source_context.fingerprint()
             && Rc::ptr_eq(&self.environment, environment)
             && self.template.nested_environment_slots.iter().all(|slot| {
                 environment
@@ -197,6 +198,7 @@ pub(in crate::dataflow) fn prepare_active_expression_with_change(
         .iter()
         .find(|template| {
             template.source_text == source_text
+                && template.source_context.fingerprint() == spec.source_context.fingerprint()
                 && Rc::ptr_eq(&template.program.environment_layout, environment)
         })
         .cloned()
@@ -318,6 +320,7 @@ fn compile_reconfigurable_expression_template(
     }
     Ok(Rc::new(ReconfigurableExpressionTemplate {
         source_text,
+        source_context: AstShared::clone(&spec.source_context),
         program: compiled.program,
         nested_dependency_slots: compiled.nested_dependency_slots,
         nested_environment_slots: compiled.nested_environment_slots,
@@ -332,7 +335,8 @@ fn compile_dynamic_expression(
     spec: &BoundReconfigurableExpressionSpec,
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<CompiledReconfigurableExpression, DataflowEvaluationError> {
-    let expr = parse_expr(source_text.as_ref()).map_err(|error| {
+    let context = AstShared::clone(&spec.source_context);
+    let expr = parse_expr_with_context(source_text.as_ref(), context).map_err(|error| {
         DataflowEvaluationError::ReconfigurableExpressionParse {
             expression: source_text.clone(),
             message: error.to_string(),
@@ -416,6 +420,9 @@ mod tests {
                 allowed_variables: variables.into_iter().collect(),
             },
             kind,
+            source_context: crate::lang::dsrv::ast::AstShared::new(
+                crate::lang::dsrv::source::SourceContext::default(),
+            ),
             typing: None,
         };
         (spec, environment)
@@ -445,8 +452,24 @@ mod tests {
             input: BoundRef::Const(Value::NoVal),
             scope,
             kind,
+            source_context: crate::lang::dsrv::ast::AstShared::new(
+                crate::lang::dsrv::source::SourceContext::default(),
+            ),
             typing,
         }
+    }
+
+    fn alias_context(
+        alias: &str,
+    ) -> crate::lang::dsrv::ast::AstShared<crate::lang::dsrv::source::SourceContext> {
+        let mut builder = crate::lang::dsrv::source::SourceContext::builder();
+        builder
+            .insert(
+                crate::lang::dsrv::source::TypeName::new(alias).unwrap(),
+                StreamType::Int,
+            )
+            .unwrap();
+        crate::lang::dsrv::ast::AstShared::new(builder.build().unwrap())
     }
 
     fn cache_template(
@@ -469,6 +492,31 @@ mod tests {
         let template = prepared.template;
         cache.insert(spec, environment, Rc::clone(&template));
         template
+    }
+
+    #[test]
+    fn runtime_source_uses_the_owning_alias_context() {
+        let (mut spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
+        let source = "\\v: U -> v + x".into();
+        assert!(compile_dynamic_expression(&source, &spec, &environment).is_err());
+        spec.source_context = alias_context("U");
+        assert!(compile_dynamic_expression(&source, &spec, &environment).is_ok());
+    }
+
+    #[test]
+    fn source_context_is_part_of_local_and_shared_template_identity() {
+        let (mut first, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
+        first.source_context = alias_context("U");
+        let mut second = first.clone();
+        second.source_context = alias_context("V");
+        let mut cache = SharedReconfigurableExpressionCache::default();
+        let template = cache_template(&mut cache, "x", &first, &environment);
+        assert!(cache.lookup(&"x".into(), &first, &environment).is_some());
+        assert!(cache.lookup(&"x".into(), &second, &environment).is_none());
+        assert_ne!(
+            template.source_context.fingerprint(),
+            second.source_context.fingerprint()
+        );
     }
 
     #[test]

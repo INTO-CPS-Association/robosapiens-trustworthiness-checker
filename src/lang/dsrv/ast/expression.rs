@@ -22,6 +22,7 @@ use super::checked::CheckedTypes;
 use crate::core::{BinaryOperator, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
+use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
 
 /// A literal that can occur in the syntax tree.
@@ -228,6 +229,29 @@ impl Display for SyntaxLiteral {
 // Keep the syntax literal independently thread-safe in every configuration.
 static_assertions::assert_impl_all!(SyntaxLiteral: Send, Sync);
 
+/// Source-only ownership. Equality continues to compare spans, but not
+/// namespace snapshots.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExprMetadata {
+    pub span: Span,
+    pub context: Option<super::AstShared<SourceContext>>,
+}
+
+impl PartialEq for ExprMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span
+    }
+}
+
+impl From<Span> for ExprMetadata {
+    fn from(span: Span) -> Self {
+        Self {
+            span,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum ReconfigurableExprScope {
     Automatic,
@@ -241,7 +265,7 @@ contiguous_tree::tree_schema! {
         schema: pub(crate),
         serialize: display,
         owned_constructors: pub,
-        metadata: span: Span = Span::default(),
+        metadata: source: ExprMetadata = ExprMetadata::default(),
         id: u32,
         key: EcoString,
         children: EcoVec,
@@ -357,7 +381,7 @@ impl<'arena> ExprRef<'arena> {
     }
 
     pub fn span(self) -> Span {
-        self.node().span
+        self.node().source.span
     }
 
     /// Compare expression structure and payload while ignoring source metadata.

@@ -408,6 +408,7 @@ fn bind_op(
                 input: r!(spec.input),
                 scope: spec.scope,
                 kind: spec.kind,
+                source_context: crate::lang::dsrv::ast::AstShared::clone(&spec.source_context),
                 typing: spec.typing,
             })
         }

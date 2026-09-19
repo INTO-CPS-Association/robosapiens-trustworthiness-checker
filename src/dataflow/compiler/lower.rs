@@ -217,6 +217,9 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
                 source,
                 ReconfigurableExpressionScope::from_ast(scope.clone()),
                 ReconfigurableExpressionKind::Dynamic,
+                expr.expr().metadata().context.clone().unwrap_or_else(|| {
+                    AstShared::new(crate::lang::dsrv::source::SourceContext::default())
+                }),
                 expr.shared_type_environment().zip(expr.typ()).map(
                     |(environment, expected_type)| ReconfigurableExpressionTyping {
                         environment: AstShared::clone(environment),
@@ -231,6 +234,9 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
                 source,
                 ReconfigurableExpressionScope::from_ast(scope.clone()),
                 ReconfigurableExpressionKind::Deferred,
+                expr.expr().metadata().context.clone().unwrap_or_else(|| {
+                    AstShared::new(crate::lang::dsrv::source::SourceContext::default())
+                }),
                 expr.shared_type_environment().zip(expr.typ()).map(
                     |(environment, expected_type)| ReconfigurableExpressionTyping {
                         environment: AstShared::clone(environment),
@@ -356,6 +362,7 @@ fn lower_reconfigurable_expression(
     input: ExprCursor<'_>,
     scope: ReconfigurableExpressionScope,
     kind: ReconfigurableExpressionKind,
+    source_context: AstShared<crate::lang::dsrv::source::SourceContext>,
     typing: Option<ReconfigurableExpressionTyping>,
 ) -> UnboundRef {
     let input = lower_expression(input, builder);
@@ -364,6 +371,7 @@ fn lower_reconfigurable_expression(
             input,
             scope,
             kind,
+            source_context,
             typing,
         },
     ))

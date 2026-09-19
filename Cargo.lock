@@ -4390,6 +4390,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "trybuild",
  "unsync",
  "uuid",
  "winnow",

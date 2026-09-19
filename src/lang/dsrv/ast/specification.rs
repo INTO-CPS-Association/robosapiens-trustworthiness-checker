@@ -10,6 +10,7 @@ use super::{
     AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
 };
 use crate::core::{Specification, StreamType, VarName};
+use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
@@ -225,6 +226,8 @@ pub struct DsrvSpecification {
     /// set/map projection rather than making this diagnostic sequence persistent.
     #[serde(skip)]
     pub(crate) semantic_entries: Vec<SemanticEntry>,
+    #[serde(skip)]
+    pub(crate) source_context: AstShared<SourceContext>,
 }
 
 mod language_mode_sealed {
@@ -564,7 +567,13 @@ impl DsrvSpecification {
             exprs,
             type_annotations,
             semantic_entries,
+            source_context: AstShared::new(SourceContext::default()),
         }
+    }
+
+    /// The complete expanded namespace, including aliases unused by annotations.
+    pub fn source_context(&self) -> &AstShared<SourceContext> {
+        &self.source_context
     }
 
     /// Build a specification from independently constructed expression roots.
@@ -1054,12 +1063,12 @@ mod tests {
         );
 
         let mut builder = ExprBuilder::with_capacity(4);
-        let unrelated = builder.alloc(ExprKind::Val(99.into()), Span::default());
-        let left = builder.alloc(ExprKind::Val(1.into()), Span::default());
-        let right = builder.alloc(ExprKind::Val(2.into()), Span::default());
+        let unrelated = builder.alloc(ExprKind::Val(99.into()), Span::default().into());
+        let left = builder.alloc(ExprKind::Val(1.into()), Span::default().into());
+        let right = builder.alloc(ExprKind::Val(2.into()), Span::default().into());
         let root = builder.alloc(
             ExprKind::BinOp(left, right, BinaryOperator::Add),
-            Span::default(),
+            Span::default().into(),
         );
         let mut roots = builder
             .finish_forest([root, unrelated])

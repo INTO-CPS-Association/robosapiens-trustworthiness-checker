@@ -37,6 +37,7 @@
 
 # Architecture
 
+- [DSRV type aliases and source contexts](./architecture/dsrv-source-contexts.md)
 - [I/O architecture](./io.md)
   - [Batch representation](./io-batches.md)
   - [Input architecture](./input-architecture.md)

@@ -1,9 +1,12 @@
 //! DSRV syntax, parsers, and type checking.
 
 pub mod ast;
+mod expand;
 pub mod parser;
 mod pipeline;
+pub mod source;
 pub mod span;
+mod syntax;
 pub mod type_checker;
 
 #[cfg(test)]

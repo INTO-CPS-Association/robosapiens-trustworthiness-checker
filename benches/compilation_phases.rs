@@ -13,7 +13,9 @@ use trustworthiness_checker::lang::core::dependency_graph::{
 };
 
 use trustworthiness_checker::lang::dsrv::ast::ExprView;
-use trustworthiness_checker::lang::dsrv::parser::{parse_expr, parse_str};
+use trustworthiness_checker::lang::dsrv::parser::{
+    parse_expr, parse_str, parse_syntax_for_benchmark,
+};
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
 use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, VarName};
 
@@ -103,6 +105,13 @@ fn compilation_phases(c: &mut Criterion) {
             .expect("benchmark input should compile typed");
 
         group.throughput(Throughput::Bytes(source.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::new("parse_specification_syntax", assignments),
+            &source,
+            |b, source| {
+                b.iter(|| black_box(parse_syntax_for_benchmark(black_box(source)).unwrap()))
+            },
+        );
         group.bench_with_input(
             BenchmarkId::new("parse_and_validate_specification", assignments),
             &source,

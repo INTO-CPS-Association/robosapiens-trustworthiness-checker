@@ -174,6 +174,9 @@ fn dynamic_program_with_variables(
             allowed_variables: variables.into_iter().collect(),
         },
         kind: ReconfigurableExpressionKind::Dynamic,
+        source_context: crate::lang::dsrv::ast::AstShared::new(
+            crate::lang::dsrv::source::SourceContext::default(),
+        ),
         typing: None,
     };
     let mut nodes = (0..prefix_nodes)

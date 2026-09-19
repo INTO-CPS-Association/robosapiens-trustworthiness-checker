@@ -4,6 +4,18 @@ This page records DSRV expression syntax and its boundary behavior. Start with
 the [DSRV tutorial](../tutorials/write-dsrv-monitor.md) if you are writing your
 first monitor.
 
+## Type aliases
+
+`type State = Struct<speed: Int, stopped: Bool>` declares a structural alias.
+Aliases can name any supported type, refer to later declarations, and nest in
+collections and structs. Duplicate names, unknown names, and recursive alias
+cycles are rejected. Aliases do not create nominally distinct types.
+
+Struct field names in types can be quoted, as in
+`Struct<"quoted field": Int>`. See the
+[source-context architecture](../architecture/dsrv-source-contexts.md) for
+how aliases reach runtime expressions.
+
 ## Operators
 
 The operators, from highest to lowest precedence, are:

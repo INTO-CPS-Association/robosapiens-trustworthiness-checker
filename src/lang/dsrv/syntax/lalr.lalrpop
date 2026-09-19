@@ -2,9 +2,10 @@ use std::str::FromStr;
 use ecow::{EcoString, EcoVec};
 use lalrpop_util::ParseError;
 
-use crate::lang::dsrv::ast::{ExprBuilder, ReconfigurableExprScope, ExprKind, ExprId, SyntaxLiteral, VarOrNodeName};
-use crate::lang::dsrv::parser::Declaration;
-use crate::core::{BinaryOperator, StreamType, StreamTypeAscription, VarName};
+use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
+use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
+use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, AliasDeclaration, TypeName};
+use crate::core::{BinaryOperator, VarName};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
@@ -126,7 +127,7 @@ ExprList: EcoVec<ExprId> = {
     <items: DelimitedSepListOpt<Expr, ",">> => items
 };
 
-LambdaParam: (VarName, StreamType) = {
+LambdaParam: (VarName, SourceType) = {
     <name: Ident> ":" <typ: StreamTyp> => (name, typ),
 }
 
@@ -461,11 +462,12 @@ LambdaExpr: ExprId = {
 // Types / annotations
 // -----------------------------------------------------------------------------
 
-StructTypeField: (EcoString, StreamType) = {
+StructTypeField: (EcoString, SourceType) = {
     <name: RawIdent> ":" <typ: StreamTyp> => (name.into(), typ),
+    <name: String> ":" <typ: StreamTyp> => (name, typ),
 }
 
-StructPermissiveFields: EcoVec<(EcoString, StreamType)> = {
+StructPermissiveFields: EcoVec<(EcoString, SourceType)> = {
     "..." ","? => EcoVec::new(),
     <mut fields:(<StructTypeField> ",")*> <field: StructTypeField> "," "..." ","? => {
         fields.push(field);
@@ -473,7 +475,17 @@ StructPermissiveFields: EcoVec<(EcoString, StreamType)> = {
     },
 }
 
-StreamTyp: StreamType = {
+SourceName: TypeName = <l:@L> <name:RawIdent> =>? TypeName::new(name).map_err(|_| {
+    *user_error_location = Some(l);
+    ParseError::User { error: "invalid or reserved type alias name" }
+});
+
+StreamTyp: SourceType = {
+    <l:@L> <kind:StreamTypKind> <r:@R> => SourceType { kind, span: Span::new(l as u32, r as u32) },
+};
+
+StreamTypKind: StreamType = {
+    <name:SourceName> => StreamType::Named(name),
     "Int" => StreamType::Int,
     "Str" => StreamType::Str,
     "Float" => StreamType::Float,
@@ -502,7 +514,7 @@ StreamTyp: StreamType = {
     },
 }
 
-TypeAnno: StreamType = {
+TypeAnno: SourceType = {
     ":" <StreamTyp> => <>
 }
 
@@ -544,10 +556,16 @@ Assignment: Declaration = {
    <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => Declaration::Assignment(var, expr, Span::new(l as u32, r as u32))
 }
 
+AliasDecl: Declaration = {
+   <l:@L> "type" <name:SourceName> "=" <ty:StreamTyp> <r:@R> =>
+       Declaration::Alias(AliasDeclaration { name, ty, span: Span::new(l as u32, r as u32) }),
+}
+
 Declaration: Declaration = {
     InputDecl,
     OutputDecl,
     AuxDecl,
+    AliasDecl,
     Assignment
 }
 

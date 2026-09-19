@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Error};
 
 use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
+use crate::lang::dsrv::source::SourceTypeDisplay;
 
 use super::{
     CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef, LanguageMode,
@@ -58,7 +59,7 @@ impl Display for ExprRef<'_> {
             Dynamic(source, result_type, scope) => {
                 write!(f, "dynamic({}", source)?;
                 if let StreamTypeAscription::Ascribed(typ) = result_type {
-                    write!(f, ": {typ}")?;
+                    write!(f, ": {}", SourceTypeDisplay(typ))?;
                 }
                 if let ReconfigurableExprScope::Explicit(vars) = scope {
                     let vars = vars
@@ -73,7 +74,7 @@ impl Display for ExprRef<'_> {
             Defer(source, result_type, scope) => {
                 write!(f, "defer({}", source)?;
                 if let StreamTypeAscription::Ascribed(typ) = result_type {
-                    write!(f, ": {typ}")?;
+                    write!(f, ": {}", SourceTypeDisplay(typ))?;
                 }
                 if let ReconfigurableExprScope::Explicit(vars) = scope {
                     let vars = vars
@@ -94,7 +95,7 @@ impl Display for ExprRef<'_> {
             Lambda(params, body) => {
                 let params = params
                     .iter()
-                    .map(|(name, typ)| format!("{name}: {typ}"))
+                    .map(|(name, typ)| format!("{name}: {}", SourceTypeDisplay(typ)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "\\{params} -> {body}")
@@ -186,6 +187,9 @@ impl Display for ExprRef<'_> {
 
 impl Display for DsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (name, ty) in self.source_context.aliases() {
+            writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
+        }
         fmt_specification(self, f, |_, annotation| annotation)
     }
 }
@@ -214,7 +218,7 @@ fn fmt_specification<'a>(
                 };
                 write!(f, "{keyword} {name}")?;
                 if let Some(typ) = annotation_for(name, annotation.as_ref()) {
-                    write!(f, ": {typ}")?;
+                    write!(f, ": {}", SourceTypeDisplay(typ))?;
                 }
                 writeln!(f)?;
             }

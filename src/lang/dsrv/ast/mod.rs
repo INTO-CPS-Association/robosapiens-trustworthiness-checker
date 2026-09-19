@@ -28,7 +28,8 @@ pub use expression::{
     VarOrNodeName,
 };
 pub(crate) use expression::{
-    ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprRefs,
+    ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprMetadata,
+    ExprRefs,
 };
 
 pub(crate) use specification::UnvalidatedDsrvSpecification;
