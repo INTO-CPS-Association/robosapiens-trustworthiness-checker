@@ -66,6 +66,10 @@ impl<D: CausalDomain> AsyncConfig for CausalCheckedSemiSyncConfig<D> {
 pub struct CausalDsrvSemantics;
 
 impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantics {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(
         expr: &Expr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
@@ -76,6 +80,10 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
 }
 
 impl MonitoringSemantics<CausalCheckedSemiSyncConfig<CausalSet>> for CausalDsrvSemantics {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<CausalSet>>,
@@ -93,6 +101,10 @@ pub struct RoleCausalDsrvSemantics<D>(PhantomData<D>);
 impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
     for RoleCausalDsrvSemantics<D>
 {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(
         expr: &Expr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
@@ -105,6 +117,10 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
 impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
     for RoleCausalDsrvSemantics<D>
 {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<D>>,

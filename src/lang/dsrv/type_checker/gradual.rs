@@ -6,7 +6,7 @@ use super::*;
 use crate::DsrvSpecification;
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
-use crate::lang::dsrv::ast::{LanguageMode, Local, ValidatedDsrvSpecification};
+use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn gradual_fallback_type(typ: TCType) -> StreamType {
@@ -80,10 +80,8 @@ fn can_widen_gradual_error(error: &SemanticError) -> bool {
     }
 }
 
-fn type_check_gradual_for<M: LanguageMode>(
-    mut spec: DsrvSpecification,
-) -> SemanticResult<CheckedDsrvSpecification> {
-    super::validation::validate_specification::<M>(&spec)?;
+fn type_check_gradual_for(mut spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    super::validation::validate_specification(&spec)?;
     let mut types = spec.type_annotations.clone();
     for input in &spec.input_vars {
         types.entry(input.clone()).or_insert(StreamType::Any);
@@ -165,13 +163,13 @@ fn type_check_gradual_for<M: LanguageMode>(
 }
 
 pub fn type_check_gradual(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
-    type_check_gradual_for::<Local>(spec)
+    type_check_gradual_for(spec)
 }
 
-pub fn check_validated_gradual<M: LanguageMode>(
-    spec: ValidatedDsrvSpecification<M>,
-) -> SemanticResult<CheckedDsrvSpecification<M>> {
-    type_check_gradual_for::<M>(spec.into_specification()).map(CheckedDsrvSpecification::into_mode)
+pub fn check_validated_gradual(
+    spec: ValidatedDsrvSpecification,
+) -> SemanticResult<CheckedDsrvSpecification> {
+    type_check_gradual_for(spec.into_specification())
 }
 
 #[cfg(test)]

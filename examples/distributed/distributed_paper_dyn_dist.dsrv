@@ -1,3 +1,5 @@
+language distributed
+
 // Run with:
 // RUST_LOG=INFO cargo run --features ros -- examples/distributed/distributed_paper_dyn_dist.dsrv --runtime distributed --distribution-graph examples/distributed/distributed_paper_dyn_dist_graph.json --distribution-constraints dist1 dist2 dist3 dist4 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/distributed_paper_dyn_dist_map.json --output-ros-file examples/distributed/distributed_paper_dyn_dist_out_map.json
 

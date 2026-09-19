@@ -7,8 +7,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use trustworthiness_checker::lang::dsrv::LanguageConfig;
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
+use trustworthiness_checker::lang::dsrv::{Dialect, LanguageConfig};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -53,9 +53,19 @@ fn every_shipped_specification_parses_and_expands() {
         let source = fs::read_to_string(path).expect("a readable specification");
         let parsed = parse_str(&source);
         if let Ok(specification) = &parsed {
-            // No shipped file declares language settings yet.
-            if specification.source_context().language() != &LanguageConfig::default() {
-                unexpected.push(format!("{name} does not resolve to the default language"));
+            // A file declares Distributed DSRV exactly when it uses the
+            // distribution primitives; everything else is Full DSRV at the
+            // base edition, with no experiments.
+            let language = specification.source_context().language();
+            let expected_dialect = if source.contains("monitored_at(") || source.contains("dist(") {
+                Dialect::Distributed
+            } else {
+                Dialect::Full
+            };
+            if language.dialect() != expected_dialect
+                || (expected_dialect == Dialect::Full && language != &LanguageConfig::default())
+            {
+                unexpected.push(format!("{name} resolves to {language}"));
             }
         }
         let accepted = parsed.is_ok();

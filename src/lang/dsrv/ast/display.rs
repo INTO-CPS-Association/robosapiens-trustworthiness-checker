@@ -4,7 +4,7 @@ use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::source::SourceTypeDisplay;
 
 use super::{
-    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef, LanguageMode,
+    CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprRef,
     ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
 };
 
@@ -26,7 +26,7 @@ impl Display for Expr {
     }
 }
 
-impl<M: LanguageMode> Display for CheckedDsrvSpecification<M> {
+impl Display for CheckedDsrvSpecification {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt_specification(&self.spec, f, |name, _| self.type_annotation(name))
     }

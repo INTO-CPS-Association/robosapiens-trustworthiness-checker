@@ -2,6 +2,8 @@ pub mod operators;
 pub use operators::*;
 pub mod variables;
 pub use variables::*;
+pub mod capability;
+pub use capability::{Capabilities, Capability, Requirement, UnsupportedConstruct, admit};
 pub mod interfaces;
 pub use interfaces::*;
 mod batch;

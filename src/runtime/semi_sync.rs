@@ -748,7 +748,7 @@ where
         let mut output_writer = output_writer;
         let setup_result = async {
             let (subscriptions, context, expr_evals) =
-                Self::setup_evaluation(model, starting_history).await?;
+                Self::setup_evaluation(model, starting_history, "semi-sync").await?;
             let writer = output_writer
                 .take()
                 .ok_or_else(|| anyhow!("SemiSync output writer must be set"))?;
@@ -792,11 +792,14 @@ where
     pub(crate) async fn setup_evaluation(
         model: AC::Spec,
         starting_history: BTreeMap<VarName, Vec<AC::Val>>,
+        runtime: &'static str,
     ) -> anyhow::Result<(
         BTreeMap<VarName, LocalStream<AC::Val>>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
+        // Refuse unsupported constructs before building the dependency graph.
+        crate::core::admit(&model, MS::CAPABILITIES, runtime)?;
         let input_vars = model.input_vars();
         // Starting-history rows must align before replaying them into the context.
         let hist_len = starting_history

@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::cell::Cell;
 
 use super::{
-    ast::{CheckedDsrvSpecification, DsrvSpecification, LanguageMode, ValidatedDsrvSpecification},
+    ast::{CheckedDsrvSpecification, DsrvSpecification, ValidatedDsrvSpecification},
     parser,
     type_checker::{self, SemanticErrors, SemanticResult},
 };
@@ -77,7 +77,7 @@ impl FromStr for DsrvSpecification {
 }
 
 impl DsrvSpecification {
-    pub fn validate<M: LanguageMode>(self) -> SemanticResult<ValidatedDsrvSpecification<M>> {
+    pub fn validate(self) -> SemanticResult<ValidatedDsrvSpecification> {
         type_checker::validate(self)
     }
 
@@ -98,8 +98,8 @@ impl DsrvSpecification {
     }
 }
 
-impl<M: LanguageMode> ValidatedDsrvSpecification<M> {
-    pub fn type_check(self, mode: TypeCheckMode) -> SemanticResult<CheckedDsrvSpecification<M>> {
+impl ValidatedDsrvSpecification {
+    pub fn type_check(self, mode: TypeCheckMode) -> SemanticResult<CheckedDsrvSpecification> {
         match mode {
             TypeCheckMode::Strict => type_checker::check_validated_strict(self),
             TypeCheckMode::Gradual => type_checker::check_validated_gradual(self),
@@ -131,7 +131,7 @@ impl CheckedDsrvSpecification {
 mod tests {
     use super::*;
     use crate::{
-        Distributed, Local, VarName,
+        VarName,
         lang::dsrv::{
             ast::SemanticEntry,
             type_checker::{SemanticError, TCType},
@@ -271,8 +271,8 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
         for errors in [
-            specification.clone().validate::<Local>().unwrap_err(),
-            specification.validate::<Distributed>().unwrap_err(),
+            specification.clone().validate().unwrap_err(),
+            specification.validate().unwrap_err(),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -283,12 +283,32 @@ mod tests {
     }
 
     #[test]
-    fn distributed_syntax_cannot_obtain_a_local_proof() {
-        let specification = "out z: Float\nz = dist(node1, node2)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
-        assert!(specification.clone().validate::<Distributed>().is_ok());
-        assert!(specification.validate::<Local>().is_err());
+    fn distribution_primitives_need_the_distributed_dialect() {
+        use crate::lang::dsrv::{DsrvParseError, LanguageError};
+        for body in [
+            "out z: Float\nz = dist(node1, node2)",
+            "out z\nz = Tuple(dist(node1, node2))",
+            "out z\nz = if true then dist(node1, node2) else dist(node1, node2)",
+            "out z\nz = (\\x: Int -> dist(node1, node2))",
+            "out z\nz = dynamic(dist(node1, node2), {})",
+            "in x\nout z\nz = monitored_at(x, node1)",
+        ] {
+            assert!(
+                matches!(
+                    body.parse::<DsrvSpecification>(),
+                    Err(DsrvParseError::Language(
+                        LanguageError::NeedsDistributed { .. }
+                    ))
+                ),
+                "{body}"
+            );
+            let specification = format!("language distributed\n{body}")
+                .parse::<DsrvSpecification>()
+                .unwrap_or_else(|error| panic!("{body}: {error}"));
+            specification
+                .validate()
+                .unwrap_or_else(|errors| panic!("{body}: {errors:?}"));
+        }
     }
 
     #[test]
@@ -299,7 +319,7 @@ mod tests {
         for mode in [TypeCheckMode::Strict, TypeCheckMode::Gradual] {
             let local = annotated
                 .clone()
-                .validate::<Local>()
+                .validate()
                 .expect("annotated local model should validate");
             let local_checked = local
                 .type_check(mode)
@@ -314,7 +334,7 @@ mod tests {
 
             let distributed = annotated
                 .clone()
-                .validate::<Distributed>()
+                .validate()
                 .expect("ordinary model should validate in distributed mode");
             let distributed_checked = distributed
                 .type_check(mode)
@@ -331,7 +351,7 @@ mod tests {
         let unannotated = "in x\nout y\ny = x + 1"
             .parse::<DsrvSpecification>()
             .unwrap();
-        let local = unannotated.clone().validate::<Local>().unwrap();
+        let local = unannotated.clone().validate().unwrap();
         local
             .clone()
             .type_check(TypeCheckMode::Gradual)
@@ -340,7 +360,7 @@ mod tests {
             local.type_check(TypeCheckMode::Strict).is_err(),
             "strict checking must not be implied by semantic validity"
         );
-        let distributed = unannotated.validate::<Distributed>().unwrap();
+        let distributed = unannotated.validate().unwrap();
         distributed
             .clone()
             .type_check(TypeCheckMode::Gradual)
@@ -349,45 +369,6 @@ mod tests {
             distributed.type_check(TypeCheckMode::Strict).is_err(),
             "strict checking must not be implied by semantic validity"
         );
-
-        let distributed_operator = "out z: Float\nz = dist(node1, node2)"
-            .parse::<DsrvSpecification>()
-            .unwrap();
-        assert!(
-            distributed_operator
-                .clone()
-                .validate::<Distributed>()
-                .is_ok()
-        );
-        let errors = distributed_operator
-            .validate::<Local>()
-            .expect_err("local mode must reject distributed operators");
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            SemanticError::UnsupportedDistributionConstraint(_, _)
-        )));
-
-        for source in [
-            "out z\nz = Tuple(dist(node1, node2))",
-            "out z\nz = if true then dist(node1, node2) else dist(node1, node2)",
-            "out z\nz = (\\x: Int -> dist(node1, node2))",
-            "out z\nz = dynamic(dist(node1, node2), {})",
-        ] {
-            let specification = source.parse::<DsrvSpecification>().unwrap();
-            specification
-                .clone()
-                .validate::<Distributed>()
-                .unwrap_or_else(|errors| {
-                    panic!("nested distributed expression rejected: {errors:?}")
-                });
-            let errors = specification
-                .validate::<Local>()
-                .expect_err("nested distributed expression must be local-invalid");
-            assert!(errors.iter().any(|error| matches!(
-                error,
-                SemanticError::UnsupportedDistributionConstraint(_, _)
-            )));
-        }
     }
 
     #[test]
@@ -417,8 +398,8 @@ mod tests {
         ];
         for (source, expected) in cases {
             let specification = source.parse::<DsrvSpecification>().unwrap();
-            let local_errors = specification.clone().validate::<Local>().unwrap_err();
-            let distributed_errors = specification.validate::<Distributed>().unwrap_err();
+            let local_errors = specification.clone().validate().unwrap_err();
+            let distributed_errors = specification.validate().unwrap_err();
             assert!(
                 local_errors.iter().any(expected),
                 "local errors: {local_errors:?}"
@@ -440,8 +421,8 @@ mod tests {
             let source = format!("in x: Int\nin source: Str\nout z: Int\nz = {expression}");
             let specification = source.parse::<DsrvSpecification>().unwrap();
             for errors in [
-                specification.clone().validate::<Local>().unwrap_err(),
-                specification.validate::<Distributed>().unwrap_err(),
+                specification.clone().validate().unwrap_err(),
+                specification.validate().unwrap_err(),
             ] {
                 assert!(
                     errors
@@ -453,15 +434,15 @@ mod tests {
         let empty_scope = "in source: Str\nout z: Int\nz = dynamic(source: Int, {})"
             .parse::<DsrvSpecification>()
             .unwrap();
-        empty_scope.clone().validate::<Local>().unwrap();
-        empty_scope.validate::<Distributed>().unwrap();
+        empty_scope.clone().validate().unwrap();
+        empty_scope.validate().unwrap();
 
         let unused_aux = "in x\nout result\naux unused\nresult = x\nunused = missing"
             .parse::<DsrvSpecification>()
             .unwrap();
         for errors in [
-            unused_aux.clone().validate::<Local>().unwrap_err(),
-            unused_aux.validate::<Distributed>().unwrap_err(),
+            unused_aux.clone().validate().unwrap_err(),
+            unused_aux.validate().unwrap_err(),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -478,18 +459,18 @@ mod tests {
             .unwrap();
         shadowed
             .clone()
-            .validate::<Local>()
+            .validate()
             .expect("lambda shadowing should be valid");
         shadowed
-            .validate::<Distributed>()
+            .validate()
             .expect("lambda shadowing should be valid in distributed mode");
 
         let sibling = "out result: Int\nresult = Tuple((\\x: Int -> x)(1), missing)"
             .parse::<DsrvSpecification>()
             .unwrap();
         for errors in [
-            sibling.clone().validate::<Local>().unwrap_err(),
-            sibling.validate::<Distributed>().unwrap_err(),
+            sibling.clone().validate().unwrap_err(),
+            sibling.validate().unwrap_err(),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -506,7 +487,7 @@ mod tests {
             "in z: Int\nin z: Bool\nin z: Str\nout result\nresult = z",
         ] {
             let specification = source.parse::<DsrvSpecification>().unwrap();
-            let errors = specification.validate::<Local>().unwrap_err();
+            let errors = specification.validate().unwrap_err();
             let duplicate_errors = errors
                 .iter()
                 .filter_map(|error| match error {
@@ -568,8 +549,8 @@ mod tests {
                     2
                 );
                 for errors in [
-                    specification.clone().validate::<Local>().unwrap_err(),
-                    specification.validate::<Distributed>().unwrap_err(),
+                    specification.clone().validate().unwrap_err(),
+                    specification.validate().unwrap_err(),
                 ] {
                     assert!(errors.iter().any(|error| matches!(
                         error,
@@ -586,7 +567,7 @@ mod tests {
         let specification = "in z: Int\nout z: Bool\nin q\naux q\nout result\nresult = 1"
             .parse::<DsrvSpecification>()
             .unwrap();
-        let errors = specification.validate::<Local>().unwrap_err();
+        let errors = specification.validate().unwrap_err();
         let names = errors
             .iter()
             .filter_map(|error| match error {

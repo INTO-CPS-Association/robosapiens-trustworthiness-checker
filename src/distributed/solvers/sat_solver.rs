@@ -1208,7 +1208,7 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_finds_valid_assignment(_executor: Rc<LocalExecutor<'static>>) {
-        let spec_src = "in x\nout c\nc = monitored_at(x, A)";
+        let spec_src = "language distributed\nin x\nout c\nc = monitored_at(x, A)";
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
@@ -1236,7 +1236,8 @@ mod tests {
     async fn sat_solver_returns_empty_stream_on_unsat_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = "in x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
+        let spec_src =
+            "language distributed\nin x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
@@ -1330,8 +1331,7 @@ mod tests {
 
     #[apply(crate::async_test)]
     async fn sat_solver_handles_if_then_else_monitored_at(_executor: Rc<LocalExecutor<'static>>) {
-        let spec_src =
-            "in c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
@@ -1365,7 +1365,7 @@ mod tests {
 
     #[test]
     fn fast_path_handles_guarded_multi_robot_choice_shape() {
-        let spec_src = r#"
+        let spec_src = r#"language distributed
 in b1
 in b2
 out x
@@ -1404,7 +1404,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_panics_on_unsupported_dist_constraint() {
-        let spec_src = "in x\nout c\nc = dist(A, B)";
+        let spec_src = "language distributed\nin x\nout c\nc = dist(A, B)";
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
@@ -1424,7 +1424,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_returns_structured_error_for_unsupported_constraint() {
-        let spec = ("in x\nout c\nc = dist(A, B)")
+        let spec = ("language distributed\nin x\nout c\nc = dist(A, B)")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -1468,7 +1468,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_lowers_constraints_at_the_localised_boundary() {
-        let spec = ("in x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)").parse::<DsrvSpecification>()
+        let spec = ("language distributed\nin x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)").parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
         let result =
@@ -1495,9 +1495,10 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_returns_localisation_error_for_monitored_at_aux() {
-        let spec = ("aux helper\nout c\nhelper = true\nc = monitored_at(helper, A)")
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec =
+            ("language distributed\naux helper\nout c\nhelper = true\nc = monitored_at(helper, A)")
+                .parse::<DsrvSpecification>()
+                .expect("test DSRV specification should parse");
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1541,7 +1542,8 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
     async fn sat_solver_supports_const_map_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = r#"in m
+        let spec_src = r#"language distributed
+in m
 out x
 out c1
 out c2
@@ -1591,7 +1593,8 @@ c5 = monitored_at(x, A)"#;
     async fn sat_solver_supports_const_list_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = r#"in xs
+        let spec_src = r#"language distributed
+in xs
 out x
 out c1
 out c2
@@ -1647,7 +1650,8 @@ c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
     ) {
         use std::collections::BTreeMap;
 
-        let spec_src = r#"in m
+        let spec_src = r#"language distributed
+in m
 out x
 out c
 c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
@@ -1690,7 +1694,8 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
     ) {
         use std::collections::BTreeMap;
 
-        let spec_src = r#"in xs
+        let spec_src = r#"language distributed
+in xs
 out x
 out c
 c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_at(x, A)"#;
@@ -1803,7 +1808,8 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn sat_compiler_inlines_constraint_var_reference() {
-        let spec_src = "in x\nout c1\nout c2\nc1 = monitored_at(x, A)\nc2 = c1";
+        let spec_src =
+            "language distributed\nin x\nout c1\nout c2\nc1 = monitored_at(x, A)\nc2 = c1";
         let s = spec_src;
         let spec = (s)
             .parse::<DsrvSpecification>()
@@ -1927,7 +1933,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn solver_requires_bindings_only_for_non_symbolic_input_expressions() {
-        let spec = ("in gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
+        let spec = ("language distributed\nin gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
         let solver =
@@ -1944,7 +1950,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn solver_waits_for_leaf_bindings_when_a_required_local_input_is_derived() {
-        let spec = ("in threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
+        let spec = ("language distributed\nin threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
         let solver =
@@ -2122,7 +2128,8 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     ) {
         use std::collections::BTreeMap;
 
-        let spec_src = r#"in m
+        let spec_src = r#"language distributed
+in m
 in xs
 in n
 out x
@@ -2183,7 +2190,8 @@ c = (Map.get(m, "k") == 7)
     async fn sat_solver_supports_const_non_eq_comparison_operations_in_constraints(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = r#"out x
+        let spec_src = r#"language distributed
+out x
 out c1
 out c2
 out c3
@@ -2247,8 +2255,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
     async fn sat_solver_excludes_dist_constraint_vars_from_assignments(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src =
-            "in c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
+        let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
         let spec = (spec_src)
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
@@ -2308,7 +2315,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         stream_count: usize,
         constrain_count: usize,
     ) -> (String, Vec<VarName>, Vec<VarName>) {
-        let mut lines = Vec::<String>::new();
+        let mut lines = vec!["language distributed".to_owned()];
 
         // Boolean control inputs used by if-then-else constraints
         for i in 0..constrain_count {
@@ -2607,7 +2614,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
     }
 
     fn fixed_nontrivial_spec_for_3_nodes() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -2643,7 +2650,7 @@ dist3 = if c3 then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     fn spec_3_nodes_nested_bool_constraints() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -2675,7 +2682,7 @@ d3 = if (c3 => c1) then monitored_at(s3, C) else monitored_at(s3, B)
     }
 
     fn spec_3_nodes_interdependent_constraint_vars() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -2707,7 +2714,7 @@ d3 = if ((c1 && c2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     fn spec_3_nodes_with_const_and_replay_mixed() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -2743,7 +2750,7 @@ dist3 = if ((!!c3) == c3) then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     fn spec_3_nodes_with_aux_intermediate_constraints() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -2779,7 +2786,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     }
 
     fn spec_3_nodes_with_aux_const_and_replay_mixed() -> (String, Vec<VarName>, Vec<VarName>) {
-        let spec = r#"
+        let spec = r#"language distributed
 in c1
 in c2
 in c3
@@ -3103,7 +3110,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
 
     #[test]
     fn localise_resolves_helper_inputs_regression() {
-        let spec_src = r#"
+        let spec_src = r#"language distributed
 in c1
 in c2
 in c3
@@ -3154,7 +3161,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
     async fn sat_solver_supports_nested_aux_chain_after_localisation_fix(
         _executor: Rc<LocalExecutor<'static>>,
     ) {
-        let spec_src = r#"
+        let spec_src = r#"language distributed
 in c1
 in c2
 in c3
@@ -3324,7 +3331,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             a in any::<bool>(),
             b in any::<bool>(),
         ) {
-            let spec = r#"
+            let spec = r#"language distributed
 in a
 in b
 out x
@@ -3369,7 +3376,7 @@ c = ((!a || !b) == !(a && b)) && monitored_at(x, A)
             a in any::<bool>(),
             b in any::<bool>(),
         ) {
-            let spec = r#"
+            let spec = r#"language distributed
 in a
 in b
 out x
@@ -3414,7 +3421,7 @@ c = ((!a && !b) == !(a || b)) && monitored_at(x, A)
             a in any::<bool>(),
             b in any::<bool>(),
         ) {
-            let spec = r#"
+            let spec = r#"language distributed
 in a
 in b
 out x
@@ -3458,7 +3465,7 @@ c = ((a => b) == (!a || b)) && monitored_at(x, A)
         fn prop_sat_law_double_negation(
             a in any::<bool>(),
         ) {
-            let spec = r#"
+            let spec = r#"language distributed
 in a
 out x
 out c
@@ -3501,7 +3508,7 @@ c = (!!a == a) && monitored_at(x, A)
             x in -20i64..=20,
             y in -20i64..=20,
         ) {
-            let spec = r#"
+            let spec = r#"language distributed
 in x
 in y
 out w

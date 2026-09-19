@@ -1,0 +1,7 @@
+language distributed
+
+// Uses exactly one capability: distribution.
+in x: Int
+out placed: Bool
+
+placed = monitored_at(x, node1)

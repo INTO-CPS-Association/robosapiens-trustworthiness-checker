@@ -15,8 +15,8 @@ use crate::VarName;
 use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription};
 use crate::lang::dsrv::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
-    ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, LanguageMode,
-    ReconfigurableExprScope, SyntaxLiteral,
+    ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
+    SyntaxLiteral,
 };
 
 struct TypeContext<'types> {
@@ -41,10 +41,8 @@ impl TypeContext<'_> {
     }
 }
 
-pub fn check_specification<M: LanguageMode>(
-    spec: DsrvSpecification,
-) -> SemanticResult<CheckedDsrvSpecification> {
-    super::validation::validate_specification::<M>(&spec)?;
+pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    super::validation::validate_specification(&spec)?;
     let mut errors = Vec::new();
     let mut context = TypeContext {
         environment: Cow::Owned(spec.type_annotations().clone()),

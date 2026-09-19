@@ -178,6 +178,9 @@ pub enum LanguageError {
 
     #[error("{construct} at {span:?} is not part of Core DSRV")]
     NotCore { construct: &'static str, span: Span },
+
+    #[error("{construct} at {span:?} needs `language distributed`")]
+    NeedsDistributed { construct: &'static str, span: Span },
 }
 
 /// Read the header declarations and combine them with any outside request.
@@ -331,6 +334,24 @@ impl CoreDsrvSpecification {
 pub(crate) fn is_core_fragment(root: ExprRef<'_>) -> Result<(), LanguageError> {
     use contiguous_tree::TreeCursorExt;
     root.postorder().try_for_each(check_core_node)
+}
+
+/// The distribution primitives belong to Distributed DSRV only. Core
+/// specifications report them through the Core check instead.
+pub(crate) fn check_dialect_node(node: ExprRef<'_>, dialect: Dialect) -> Result<(), LanguageError> {
+    let construct = match node.kind() {
+        ExprKind::MonitoredAt(..) => "`monitored_at`",
+        ExprKind::Dist(..) => "`dist`",
+        _ => return Ok(()),
+    };
+    match dialect {
+        Dialect::Distributed => Ok(()),
+        Dialect::Core => check_core_node(node),
+        Dialect::Full => Err(LanguageError::NeedsDistributed {
+            construct,
+            span: node.span(),
+        }),
+    }
 }
 
 /// Every expression kind is listed, with no wildcard, so a new kind must be
@@ -645,6 +666,45 @@ mod tests {
             parse_expr_with_context("abs(x)", context),
             Err(DsrvParseError::Language(LanguageError::NotCore { .. }))
         ));
+    }
+
+    // R3b.1
+    #[test]
+    fn distribution_primitives_need_the_distributed_dialect() {
+        for (expression, construct) in [
+            ("monitored_at(x, n)", "`monitored_at`"),
+            ("dist(x, n)", "`dist`"),
+        ] {
+            let body = format!("in x\nout y\ny = {expression}\n");
+            let error = language_error(&body);
+            let LanguageError::NeedsDistributed {
+                construct: found,
+                span,
+            } = error
+            else {
+                panic!("{expression}: {error}");
+            };
+            assert_eq!(found, construct);
+            assert_eq!(span.start as usize, body.find(expression).unwrap());
+            assert_eq!(
+                error.to_string(),
+                format!("{construct} at {span:?} needs `language distributed`")
+            );
+            let distributed = parse_str(&format!("language distributed\n{body}")).unwrap();
+            assert_eq!(
+                distributed.source_context().language().dialect(),
+                Dialect::Distributed
+            );
+            // Runtime text follows the dialect of the specification it runs in.
+            let full = parse_str(BODY).unwrap();
+            assert!(matches!(
+                parse_expr_with_context(expression, full.source_context().clone()),
+                Err(DsrvParseError::Language(
+                    LanguageError::NeedsDistributed { .. }
+                ))
+            ));
+            parse_expr_with_context(expression, distributed.source_context().clone()).unwrap();
+        }
     }
 
     // R3.4-d

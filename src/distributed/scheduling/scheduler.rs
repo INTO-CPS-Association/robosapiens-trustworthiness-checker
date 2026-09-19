@@ -503,7 +503,7 @@ mod tests {
     }
 
     fn scheduler_constraint_spec() -> DsrvSpecification {
-        let src = r#"
+        let src = r#"language distributed
 in gate
 out work
 out distX

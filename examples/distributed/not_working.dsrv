@@ -1,3 +1,5 @@
+language distributed
+
 // Run with:
 // RUST_LOG=INFO cargo run --features ros -- examples/distributed/not_working.dsrv --runtime distributed --distribution-graph examples/distributed/not_working_graph.json --distribution-constraints distR1 --dist-constraint-solver sat --scheduling-mode ros --scheduler-ros-node-name tc_scheduler_main --scheduler-reconf-topic reconfig --input-ros-file examples/distributed/not_working_map.json --output-ros-file examples/distributed/not_working_out_map.json
 // Notice that R1Odom, etc is lost

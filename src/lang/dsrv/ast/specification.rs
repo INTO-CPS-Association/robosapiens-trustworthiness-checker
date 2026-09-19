@@ -3,12 +3,12 @@
 use contiguous_tree::TreeCursorExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 use super::checked::{CheckedTypes, ExprTypes};
 use super::{
     AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
 };
+use crate::core::{Capabilities, Requirement};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
@@ -230,33 +230,6 @@ pub struct DsrvSpecification {
     pub(crate) source_context: AstShared<SourceContext>,
 }
 
-mod language_mode_sealed {
-    pub trait Sealed {}
-}
-
-pub trait LanguageMode: language_mode_sealed::Sealed + Clone + Debug + 'static {
-    #[doc(hidden)]
-    fn validate_distribution_constraint(span: Span) -> Result<(), Span>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Local;
-impl language_mode_sealed::Sealed for Local {}
-impl LanguageMode for Local {
-    fn validate_distribution_constraint(span: Span) -> Result<(), Span> {
-        Err(span)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Distributed;
-impl language_mode_sealed::Sealed for Distributed {}
-impl LanguageMode for Distributed {
-    fn validate_distribution_constraint(_span: Span) -> Result<(), Span> {
-        Ok(())
-    }
-}
-
 impl PartialEq for DsrvSpecification {
     fn eq(&self, other: &Self) -> bool {
         self.input_vars == other.input_vars
@@ -275,17 +248,13 @@ impl PartialEq for DsrvSpecification {
 }
 
 #[derive(Clone, Debug)]
-pub struct ValidatedDsrvSpecification<M: LanguageMode> {
+pub struct ValidatedDsrvSpecification {
     spec: DsrvSpecification,
-    mode: PhantomData<M>,
 }
 
-impl<M: LanguageMode> ValidatedDsrvSpecification<M> {
+impl ValidatedDsrvSpecification {
     pub(crate) fn new(spec: DsrvSpecification) -> Self {
-        Self {
-            spec,
-            mode: PhantomData,
-        }
+        Self { spec }
     }
 
     pub fn specification(&self) -> &DsrvSpecification {
@@ -366,29 +335,16 @@ impl Debug for DsrvSpecification {
 
 /// A specification paired with one immutable type for every reachable AST node.
 #[derive(Clone, Debug)]
-pub struct CheckedDsrvSpecification<M: LanguageMode = Local> {
+pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
     checked: AstShared<CheckedTypes>,
-    mode: PhantomData<M>,
 }
 
-impl<M: LanguageMode> CheckedDsrvSpecification<M> {
+impl CheckedDsrvSpecification {
     pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
         let environment = AstShared::new(spec.type_annotations().clone());
         let checked = AstShared::new(CheckedTypes::new(expr_types, environment));
-        Self {
-            spec,
-            checked,
-            mode: PhantomData,
-        }
-    }
-
-    pub(crate) fn into_mode<N: LanguageMode>(self) -> CheckedDsrvSpecification<N> {
-        CheckedDsrvSpecification {
-            spec: self.spec,
-            checked: self.checked,
-            mode: PhantomData,
-        }
+        Self { spec, checked }
     }
 
     pub fn unchecked(&self) -> &DsrvSpecification {
@@ -441,8 +397,12 @@ impl<M: LanguageMode> CheckedDsrvSpecification<M> {
     }
 }
 
-impl<M: LanguageMode> Specification for CheckedDsrvSpecification<M> {
+impl Specification for CheckedDsrvSpecification {
     type Expr = CheckedExpr;
+
+    fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
+        Specification::first_unsupported(&self.spec, supported)
+    }
 
     fn input_vars(&self) -> BTreeSet<VarName> {
         self.spec.input_vars().clone()
@@ -678,6 +638,17 @@ impl DsrvSpecification {
 impl Specification for DsrvSpecification {
     type Expr = Expr;
 
+    fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
+        self.nodes().find_map(|node| {
+            let (capability, construct) = super::requirements::requirement(node.kind())?;
+            (!supported.contains(capability)).then_some(Requirement {
+                capability,
+                construct,
+                span: node.span(),
+            })
+        })
+    }
+
     fn input_vars(&self) -> BTreeSet<VarName> {
         DsrvSpecification::input_vars(self).clone()
     }
@@ -738,8 +709,8 @@ mod tests {
         spec_simple_add_monitor_typed,
     };
     use crate::lang::dsrv::ast::{
-        CheckedDsrvSpecification, CheckedExpr, Distributed, DsrvSpecification, ExprBuilder,
-        ExprKind, LanguageMode, Local, ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
+        CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, ExprBuilder, ExprKind,
+        ReconfigurableExprScope, SemanticEntry, SyntaxLiteral,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
     use crate::lang::dsrv::parser::parse_expr;
@@ -756,42 +727,42 @@ mod tests {
             .unwrap()
     }
 
-    fn assert_checked_views<M: LanguageMode>(checked: &CheckedDsrvSpecification<M>) {
+    fn assert_checked_views(checked: &CheckedDsrvSpecification) {
         assert_eq!(
             checked.input_vars(),
-            &<CheckedDsrvSpecification<M> as Specification>::input_vars(checked)
+            &<CheckedDsrvSpecification as Specification>::input_vars(checked)
         );
         assert_eq!(
             checked.output_vars(),
-            &<CheckedDsrvSpecification<M> as Specification>::output_vars(checked)
+            &<CheckedDsrvSpecification as Specification>::output_vars(checked)
         );
         assert_eq!(
             checked.aux_vars(),
-            &<CheckedDsrvSpecification<M> as Specification>::aux_vars(checked)
+            &<CheckedDsrvSpecification as Specification>::aux_vars(checked)
         );
         assert_eq!(
             checked.stream_vars(),
-            &<CheckedDsrvSpecification<M> as Specification>::stream_vars(checked)
+            &<CheckedDsrvSpecification as Specification>::stream_vars(checked)
         );
         assert_eq!(
             checked.aux_vars_in_order(),
-            <CheckedDsrvSpecification<M> as Specification>::aux_vars_in_order(checked)
+            <CheckedDsrvSpecification as Specification>::aux_vars_in_order(checked)
         );
         assert_eq!(
             checked.input_vars_in_order(),
-            <CheckedDsrvSpecification<M> as Specification>::input_vars_in_order(checked)
+            <CheckedDsrvSpecification as Specification>::input_vars_in_order(checked)
         );
         assert_eq!(
             checked.output_vars_in_order(),
-            <CheckedDsrvSpecification<M> as Specification>::output_vars_in_order(checked)
+            <CheckedDsrvSpecification as Specification>::output_vars_in_order(checked)
         );
         assert_eq!(
             checked.stream_vars_in_order(),
-            <CheckedDsrvSpecification<M> as Specification>::stream_vars_in_order(checked)
+            <CheckedDsrvSpecification as Specification>::stream_vars_in_order(checked)
         );
         assert_eq!(
             checked.type_annotations(),
-            &<CheckedDsrvSpecification<M> as Specification>::type_annotations(checked)
+            &<CheckedDsrvSpecification as Specification>::type_annotations(checked)
         );
     }
 
@@ -831,11 +802,11 @@ mod tests {
                       thread_mode_output = thread_mode_input + 1"
             .parse::<DsrvSpecification>()
             .unwrap();
-        let validated_local = source.clone().validate::<Local>().unwrap();
-        let validated_distributed = source.clone().validate::<Distributed>().unwrap();
+        let validated_local = source.clone().validate().unwrap();
+        let validated_distributed = source.clone().validate().unwrap();
         let checked_local = source.clone().type_check(TypeCheckOptions::STRICT).unwrap();
         let checked_distributed = source
-            .validate::<Distributed>()
+            .validate()
             .unwrap()
             .type_check(TypeCheckMode::Strict)
             .unwrap();
@@ -1164,6 +1135,41 @@ mod tests {
     }
 
     #[test]
+    fn the_first_unsupported_construct_is_found_in_declaration_order() {
+        use crate::core::{Capabilities, Capability, Specification};
+        let find = |source: &str| {
+            Specification::first_unsupported(
+                &source.parse::<DsrvSpecification>().unwrap(),
+                Capabilities::NONE,
+            )
+            .map(|requirement| requirement.construct)
+        };
+        let distributed = "language distributed\nin x\nout a: Bool\nout b: Bool\n";
+        assert_eq!(
+            Specification::first_unsupported(
+                &format!("{distributed}a = monitored_at(x, n)\nb = true")
+                    .parse::<DsrvSpecification>()
+                    .unwrap(),
+                Capabilities::NONE.with(Capability::Distribution),
+            ),
+            None
+        );
+        assert_eq!(find("in x\nout y\ny = x + 1"), None);
+        assert_eq!(
+            find(&format!(
+                "{distributed}a = monitored_at(x, n)\nb = dist(x, n)"
+            )),
+            Some("`monitored_at`")
+        );
+        assert_eq!(
+            find(&format!("{distributed}a = true\nb = dist(x, n)")),
+            Some("`dist`")
+        );
+        // A distributed specification that uses neither primitive needs nothing.
+        assert_eq!(find(&format!("{distributed}a = true\nb = false")), None);
+    }
+
+    #[test]
     fn semantic_entries_authorize_interleaved_display_and_debug() {
         let source = "in z: Int\n\
                       out b: Int\n\
@@ -1336,8 +1342,8 @@ mod tests {
             Some(&StreamType::Bool)
         );
         for errors in [
-            specification.clone().validate::<Local>().unwrap_err(),
-            specification.clone().validate::<Distributed>().unwrap_err(),
+            specification.clone().validate().unwrap_err(),
+            specification.clone().validate().unwrap_err(),
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
@@ -1374,7 +1380,7 @@ mod tests {
             assert!(span.start <= span.end);
             assert!(usize::try_from(span.end).unwrap() <= source.len());
         }
-        let errors = specification.validate::<Local>().unwrap_err();
+        let errors = specification.validate().unwrap_err();
         assert!(errors.iter().any(|error| matches!(
             error,
             SemanticError::DuplicateDeclaration { first, duplicate, .. }
@@ -1403,7 +1409,7 @@ mod tests {
         );
         annotation_only
             .clone()
-            .validate::<Local>()
+            .validate()
             .expect("annotation-only input is structurally valid");
 
         let missing_equation = DsrvSpecification::new(
@@ -1416,7 +1422,7 @@ mod tests {
         assert_eq!(missing_equation.to_string(), "out output\n");
         missing_equation
             .clone()
-            .validate::<Local>()
+            .validate()
             .expect("missing equations are a compiler boundary");
 
         let repeated_aux = DsrvSpecification::new(
@@ -1440,7 +1446,7 @@ mod tests {
         );
         assert!(
             repeated_aux
-                .validate::<Local>()
+                .validate()
                 .unwrap_err()
                 .iter()
                 .any(|error| matches!(
@@ -1566,7 +1572,7 @@ mod tests {
             [],
         );
         let errors = specification
-            .validate::<Local>()
+            .validate()
             .expect_err("runtime NoVal must not be source syntax");
         assert!(errors.iter().any(|error| matches!(
             error,
@@ -1674,8 +1680,8 @@ mod tests {
             prop_assert!(occurrences >= 2);
 
             for errors in [
-                specification.clone().validate::<Local>().unwrap_err(),
-                specification.clone().validate::<Distributed>().unwrap_err(),
+                specification.clone().validate().unwrap_err(),
+                specification.clone().validate().unwrap_err(),
             ] {
                 let duplicate_found = errors.iter().any(|error| matches!(
                     error,

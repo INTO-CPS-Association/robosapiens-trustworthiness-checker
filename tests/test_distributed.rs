@@ -69,8 +69,10 @@ async fn channel_output(
     (writer, stream)
 }
 
+/// Every specification here is monitored in a distribution, so it is written
+/// in Distributed DSRV.
 fn parse_spec(source: &str) -> trustworthiness_checker::DsrvSpecification {
-    (source)
+    format!("language distributed\n{source}")
         .parse::<DsrvSpecification>()
         .expect("test DSRV specification should parse")
 }

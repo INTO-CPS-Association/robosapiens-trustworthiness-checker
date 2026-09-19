@@ -276,7 +276,7 @@ mod tests {
     }
 
     fn aux_spec() -> DsrvSpecification {
-        let src = r#"
+        let src = r#"language distributed
 in c1
 in c2
 in c3

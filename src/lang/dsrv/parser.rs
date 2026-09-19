@@ -2044,9 +2044,16 @@ mod tests {
             ("monitored_at(x, node)", "monitored_at(x, node,)"),
             ("dist(x, node)", "dist(x, node,)"),
         ];
+        // A distributed context, so the distribution primitives parse too.
+        let context = parse_str("language distributed\n")
+            .unwrap()
+            .source_context()
+            .clone();
         for (without, with) in pairs {
-            let without = parse_expr(without).unwrap_or_else(|error| panic!("{without}: {error}"));
-            let with = parse_expr(with).unwrap_or_else(|error| panic!("{with}: {error}"));
+            let without = parse_expr_with_context(without, context.clone())
+                .unwrap_or_else(|error| panic!("{without}: {error}"));
+            let with = parse_expr_with_context(with, context.clone())
+                .unwrap_or_else(|error| panic!("{with}: {error}"));
             assert_eq!(
                 strip_span(&without),
                 strip_span(&with),

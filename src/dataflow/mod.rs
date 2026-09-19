@@ -731,6 +731,10 @@ mod stream_id;
 mod tests;
 pub mod typed;
 
+/// What the dataflow compiler evaluates. Every compile path admits a
+/// specification against this before lowering it.
+pub const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
 pub use typed::{
     TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,
     TypedInterface, TypedKind, TypedMonitor, TypedOutput, TypedScalar,

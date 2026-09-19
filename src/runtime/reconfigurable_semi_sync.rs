@@ -539,6 +539,7 @@ where
         let setup = SemiSyncRuntime::<AC, MS>::setup_evaluation(
             model,
             self.builder.starting_history.clone().unwrap_or_default(),
+            "reconf-semi-sync",
         )
         .await;
         let mut pending_builder = match setup {

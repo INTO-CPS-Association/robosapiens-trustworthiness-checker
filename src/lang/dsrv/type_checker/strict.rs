@@ -4,18 +4,17 @@
 use super::*;
 use crate::DsrvSpecification;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
-use crate::lang::dsrv::ast::{LanguageMode, Local, ValidatedDsrvSpecification};
+use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
 
 /// Strictly type-check a specification and attach type metadata to its nodes.
 pub fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
-    super::checker::check_specification::<Local>(spec)
+    super::checker::check_specification(spec)
 }
 
-pub fn check_validated_strict<M: LanguageMode>(
-    spec: ValidatedDsrvSpecification<M>,
-) -> SemanticResult<CheckedDsrvSpecification<M>> {
-    super::checker::check_specification::<M>(spec.into_specification())
-        .map(CheckedDsrvSpecification::into_mode)
+pub fn check_validated_strict(
+    spec: ValidatedDsrvSpecification,
+) -> SemanticResult<CheckedDsrvSpecification> {
+    super::checker::check_specification(spec.into_specification())
 }
 
 #[cfg(test)]

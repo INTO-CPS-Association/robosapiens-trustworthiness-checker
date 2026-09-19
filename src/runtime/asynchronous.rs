@@ -1188,6 +1188,9 @@ where
     await_input_completion: bool,
     /// Whether a standalone input driver should cancel output on success
     cancel_after_input_completion: bool,
+    /// A construct the semantics cannot evaluate: `run` reports it, and no
+    /// expression stream was built.
+    admission_error: Option<crate::core::UnsupportedConstruct>,
     #[allow(dead_code)]
     semantics_t: PhantomData<S>,
 }
@@ -1198,6 +1201,9 @@ pub struct AsyncRuntimeBuilder<AC: AsyncConfig, S: MonitoringSemantics<AC>> {
     pub(super) input: Option<crate::io::OpenedInput<AC::Val>>,
     pub(super) output_writer: Option<OutputWriter<AC::Val>>,
     pub(super) context_builder: Option<<<AC as AsyncConfig>::Ctx as StreamContext>::Builder>,
+    /// The runtime named in admission errors; runtimes built on this one
+    /// set their own.
+    pub(super) runtime_name: &'static str,
     semantics_t: PhantomData<S>,
 }
 
@@ -1212,8 +1218,15 @@ impl<AC: AsyncConfig, S: MonitoringSemantics<AC>> AsyncRuntimeBuilder<AC, S> {
                 .context_builder
                 .as_ref()
                 .map(|builder| builder.partial_clone()),
+            runtime_name: self.runtime_name,
             semantics_t: PhantomData,
         }
+    }
+
+    /// Name the runtime in admission errors, for runtimes built on this one.
+    pub(crate) fn runtime_name(mut self, name: &'static str) -> Self {
+        self.runtime_name = name;
+        self
     }
 }
 
@@ -1248,6 +1261,7 @@ where
             input: None,
             output_writer: None,
             context_builder: None,
+            runtime_name: "async",
             semantics_t: PhantomData,
         }
     }
@@ -1365,6 +1379,16 @@ where
                 })
                 .collect();
 
+            // Refuse, before building any expression stream, a construct the
+            // semantics cannot evaluate; `run` reports it.
+            let admission_error =
+                crate::core::admit(&model, S::CAPABILITIES, self.runtime_name).err();
+            let computed_txs = if admission_error.is_some() {
+                BTreeMap::new()
+            } else {
+                computed_txs
+            };
+
             // Send computed variable streams based on the context. Outputs are later exposed to the
             // output handler; aux variables remain internal but can be referenced by outputs.
             for (var, tx) in computed_txs {
@@ -1393,6 +1417,7 @@ where
                 cancellation_token,
                 await_input_completion: !input_vars.is_empty(),
                 cancel_after_input_completion: false,
+                admission_error,
                 semantics_t: PhantomData,
             };
             debug!("AsyncRuntimeBuilder: Build process complete, runner created");
@@ -1432,6 +1457,10 @@ where
     #[instrument(name="Running async Monitor", level=Level::INFO, skip(self))]
     async fn run_boxed(mut self: Box<Self>) -> anyhow::Result<()> {
         debug!("AsyncRuntime: Starting monitor execution");
+        if let Some(error) = self.admission_error.take() {
+            self.cancellation_token.cancel();
+            return Err(error.into());
+        }
         debug!("AsyncRuntime: Creating futures for input and output writer");
         let AsyncRuntime {
             mut input,
@@ -1642,6 +1671,7 @@ mod tests {
             cancellation_token,
             await_input_completion: false,
             cancel_after_input_completion: true,
+            admission_error: None,
             semantics_t: PhantomData,
         }
     }

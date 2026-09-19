@@ -9,8 +9,7 @@ use contiguous_tree::CloneTreeError;
 use tracing::debug;
 
 use crate::lang::dsrv::ast::{
-    DependencyKind, Distributed, DsrvSpecification, ExprView, SemanticEntry,
-    ValidatedDsrvSpecification,
+    DependencyKind, DsrvSpecification, ExprView, SemanticEntry, ValidatedDsrvSpecification,
 };
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::type_checker::SemanticErrors;
@@ -321,27 +320,34 @@ fn finish_localisation(
     spec
 }
 
-impl DsrvSpecification {
-    /// Validate this distributed specification, then localise it.
-    ///
-    /// Admission deliberately happens before dependency pruning or auxiliary expansion so those
-    /// rewrites cannot erase duplicate or conflicting declarations.
-    pub fn try_localise(
-        &self,
-        locality_spec: &impl LocalitySpec,
-    ) -> Result<Self, DsrvLocalisationError> {
-        let validated = self
-            .clone()
-            .validate::<Distributed>()
-            .map_err(Arc::new)
-            .map_err(DsrvLocalisationError::Validation)?;
-        validated.try_localise(locality_spec)
-    }
-}
+/// A specification admitted for distributed monitoring. Only
+/// [`DistributedDsrvSpecification::admit`] constructs one, so localisation
+/// always starts from validated declarations. Every dialect is admitted: the
+/// dialects are nested, and a Full or Core specification simply places no
+/// streams explicitly.
+#[derive(Clone, Debug)]
+pub struct DistributedDsrvSpecification(ValidatedDsrvSpecification);
 
-impl ValidatedDsrvSpecification<Distributed> {
-    /// Localise an already admitted distributed specification.
-    pub(crate) fn try_localise(
+impl DistributedDsrvSpecification {
+    /// Validate a specification for distributed monitoring.
+    ///
+    /// Admission deliberately happens before dependency pruning or auxiliary
+    /// expansion so those rewrites cannot erase duplicate or conflicting
+    /// declarations.
+    pub fn admit(specification: DsrvSpecification) -> Result<Self, DsrvLocalisationError> {
+        specification
+            .validate()
+            .map(Self)
+            .map_err(Arc::new)
+            .map_err(DsrvLocalisationError::Validation)
+    }
+
+    pub fn specification(&self) -> &DsrvSpecification {
+        self.0.specification()
+    }
+
+    /// Keep only what the local node monitors.
+    pub fn try_localise(
         &self,
         locality_spec: &impl LocalitySpec,
     ) -> Result<DsrvSpecification, DsrvLocalisationError> {
@@ -350,6 +356,16 @@ impl ValidatedDsrvSpecification<Distributed> {
         let spec = try_inline_aux(prune_to_dependency_closure(original.clone(), &local_vars))?;
         let local_set = local_vars.into_iter().collect::<BTreeSet<_>>();
         Ok(finish_localisation(spec, original, &local_set))
+    }
+}
+
+impl DsrvSpecification {
+    /// Admit this specification for distributed monitoring, then localise it.
+    pub fn try_localise(
+        &self,
+        locality_spec: &impl LocalitySpec,
+    ) -> Result<Self, DsrvLocalisationError> {
+        DistributedDsrvSpecification::admit(self.clone())?.try_localise(locality_spec)
     }
 }
 
@@ -380,7 +396,7 @@ mod tests {
     use crate::dataflow::DataflowMonitor;
     use crate::distributed::distribution_graphs::GenericDistributionGraph;
     use crate::dsrv_fixtures::spec_simple_add_decomposable;
-    use crate::lang::dsrv::ast::{Expr, Local, SemanticEntry};
+    use crate::lang::dsrv::ast::{Expr, SemanticEntry};
     use crate::lang::dsrv::span::strip_span_ref;
     use crate::{TypeCheckMode, Value};
     use proptest::prelude::*;
@@ -439,7 +455,7 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
 
-        assert!(spec.clone().validate::<Distributed>().is_err());
+        assert!(spec.clone().validate().is_err());
         assert!(matches!(
             spec.try_localise(&vec![VarName::new("y")]),
             Err(DsrvLocalisationError::Validation(_))
@@ -676,7 +692,7 @@ mod tests {
 
         let validated = localised
             .clone()
-            .validate::<Local>()
+            .validate()
             .expect("rewritten node must obtain a fresh local proof");
         let checked = validated
             .type_check(TypeCheckMode::Gradual)
@@ -871,7 +887,7 @@ mod tests {
     fn try_localise_reports_monitored_at_aux() {
         let helper: VarName = "helper".into();
         let output: VarName = "output".into();
-        let spec = "aux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)"
+        let spec = "language distributed\naux helper\nout output\nhelper = true\noutput = monitored_at(helper, A)"
             .parse::<DsrvSpecification>()
             .unwrap();
 
@@ -884,7 +900,7 @@ mod tests {
     #[test]
     fn try_localise_reports_dist() {
         let output: VarName = "output".into();
-        let spec = "out output\noutput = dist(A, B)"
+        let spec = "language distributed\nout output\noutput = dist(A, B)"
             .parse::<DsrvSpecification>()
             .unwrap();
 
@@ -985,10 +1001,10 @@ mod tests {
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
             let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
-            let Ok(validated) = spec.clone().validate::<Distributed>() else {
+            let Ok(admitted) = DistributedDsrvSpecification::admit(spec.clone()) else {
                 return Ok(());
             };
-            let localised_spec = validated.try_localise(&restricted_vars).unwrap();
+            let localised_spec = admitted.try_localise(&restricted_vars).unwrap();
 
             for var in localised_spec.output_vars.iter() {
                 assert!(restricted_vars.contains(var));

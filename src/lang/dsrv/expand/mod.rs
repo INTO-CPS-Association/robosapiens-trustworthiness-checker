@@ -130,7 +130,11 @@ pub(crate) fn expand_specification(
     let (builder, declarations, context) = expand_declarations(parsed, request)?;
     let mut specification = create_dsrv_spec(builder, declarations)?;
     specification.source_context = context;
-    if specification.source_context.language().dialect() == Dialect::Core {
+    let dialect = specification.source_context.language().dialect();
+    for node in specification.nodes() {
+        language::check_dialect_node(node, dialect)?;
+    }
+    if dialect == Dialect::Core {
         // A Core file is accepted only if it is Core throughout.
         specification = language::CoreDsrvSpecification::check(specification)?.into_specification();
     }
@@ -148,6 +152,13 @@ pub(crate) fn expand_expression(
     let expr = builder.finish(root).map_err(DsrvAstError::from)?;
     if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
+    }
+    {
+        use contiguous_tree::TreeCursorExt;
+        let dialect = context.language().dialect();
+        for node in expr.as_ref().postorder() {
+            language::check_dialect_node(node, dialect)?;
+        }
     }
     if context.language().dialect() == Dialect::Core {
         // Runtime sources of a Core specification stay within Core.

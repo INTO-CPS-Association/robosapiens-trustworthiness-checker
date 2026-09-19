@@ -515,7 +515,7 @@ where
 
     fn new() -> Self {
         DistAsyncRuntimeBuilder {
-            async_monitor_builder: AsyncRuntimeBuilder::new(),
+            async_monitor_builder: AsyncRuntimeBuilder::new().runtime_name("distributed"),
             var_msg_types: None,
             topic_mapping: None,
             context_builder: None,

@@ -113,6 +113,16 @@ impl Display for LangSpecification {
 impl Specification for LangSpecification {
     type Expr = ();
 
+    fn first_unsupported(
+        &self,
+        supported: crate::core::Capabilities,
+    ) -> Option<crate::core::Requirement> {
+        match self {
+            LangSpecification::Dsrv(spec) => Specification::first_unsupported(spec, supported),
+            LangSpecification::Mstlo(spec) => Specification::first_unsupported(spec, supported),
+        }
+    }
+
     fn input_vars(&self) -> BTreeSet<VarName> {
         match self {
             LangSpecification::Dsrv(spec) => spec.input_vars().clone(),
@@ -1837,7 +1847,7 @@ mod tests {
         output_writer: Option<OutputWriter<Value>>,
         output_pipeline: Option<OutputPipeline<Value>>,
     ) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
-        let spec = "in x\nout c\nc = monitored_at(x, A)"
+        let spec = "language distributed\nin x\nout c\nc = monitored_at(x, A)"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let mut builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()

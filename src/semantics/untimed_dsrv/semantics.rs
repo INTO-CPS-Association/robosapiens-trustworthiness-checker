@@ -462,6 +462,10 @@ impl<AC> MonitoringSemantics<AC> for UntimedDsrvSemantics
 where
     AC: AsyncConfig<Val = Value, Expr = Expr>,
 {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(expr: &Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> LocalStream<Value> {
         evaluate::<AC>(expr.clone(), owner, ctx)
     }
@@ -479,6 +483,10 @@ impl<AC> MonitoringSemantics<AC> for CheckedUntimedDsrvSemantics
 where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
+    // The distribution primitives panic here; runtimes refuse them before
+    // evaluation.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &AC::Ctx,

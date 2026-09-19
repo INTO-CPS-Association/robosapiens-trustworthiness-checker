@@ -14,10 +14,7 @@ use crate::{
         distribution_constraint::{ConstraintProfile, DistributionConstraintPlan},
         distribution_graphs::{LabelledDistributionGraph, NodeName},
     },
-    lang::dsrv::{
-        ast::{Distributed, ValidatedDsrvSpecification},
-        type_checker::SemanticErrors,
-    },
+    lang::dsrv::{ast::ValidatedDsrvSpecification, type_checker::SemanticErrors},
 };
 
 pub use crate::distributed::distribution_constraint::ConstraintLoweringError;
@@ -192,7 +189,7 @@ pub fn try_dist_constraint_event_stream(
     mut input_events: LocalStream<ConstraintInputBatch>,
 ) -> Result<LocalStream<bool>, DistConstraintEvaluatorError> {
     let validated = spec
-        .validate::<Distributed>()
+        .validate()
         .map_err(Arc::new)
         .map_err(DistConstraintEvaluatorError::Validation)?;
     let plan = lower_compact_constraints(&validated, constraints)?;
@@ -307,7 +304,7 @@ pub fn try_dist_constraint_input_vars(
 ) -> Result<BTreeSet<VarName>, DistConstraintEvaluatorError> {
     let validated = spec
         .clone()
-        .validate::<Distributed>()
+        .validate()
         .map_err(Arc::new)
         .map_err(DistConstraintEvaluatorError::Validation)?;
     Ok(
@@ -318,7 +315,7 @@ pub fn try_dist_constraint_input_vars(
 }
 
 fn lower_compact_constraints(
-    spec: &ValidatedDsrvSpecification<Distributed>,
+    spec: &ValidatedDsrvSpecification,
     constraints: impl IntoIterator<Item = VarName>,
 ) -> Result<DistributionConstraintPlan, ConstraintLoweringError> {
     DistributionConstraintPlan::lower(
@@ -368,7 +365,7 @@ mod tests {
     async fn dist_constraint_evaluator_evaluate_guarded_monitored_at(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let src = r#"
+        let src = r#"language distributed
 in gate
 out distX
 distX = if gate then monitored_at(x, "B") else true
@@ -400,7 +397,7 @@ distX = if gate then monitored_at(x, "B") else true
     async fn dist_constraint_evaluator_re_evaluate_on_input_change_after_labelling(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let src = r#"
+        let src = r#"language distributed
 in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
@@ -468,7 +465,7 @@ distX = gate
     async fn dist_constraint_evaluator_emits_repeated_false_for_fresh_input(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let src = r#"
+        let src = r#"language distributed
 in gate
 out distX
 distX = gate && monitored_at(x, "A")
@@ -503,7 +500,7 @@ distX = gate && monitored_at(x, "A")
     async fn dist_constraint_evaluator_support_input_independent_monitored_at(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let src = r#"
+        let src = r#"language distributed
 out distX
 distX = monitored_at(x, "B")
 "#;
@@ -584,7 +581,7 @@ distX = monitored_at(x, "B")
     async fn dist_constraint_evaluator_evaluate_each_input_batch(
         _executor: Rc<smol::LocalExecutor<'static>>,
     ) {
-        let src = r#"
+        let src = r#"language distributed
 in gate
 out distX
 distX = if gate then monitored_at(x, "A") else true
@@ -619,7 +616,7 @@ distX = if gate then monitored_at(x, "A") else true
     #[test]
     #[should_panic(expected = "dist(...) is unsupported")]
     fn dist_constraint_evaluator_panic_on_dist() {
-        let src = r#"
+        let src = r#"language distributed
 out distX
 distX = dist(A, B) == 1
 "#;

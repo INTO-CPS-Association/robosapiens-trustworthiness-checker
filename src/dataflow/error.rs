@@ -80,4 +80,6 @@ pub enum DataflowCompilationError {
         stream: VarName,
         reason: &'static str,
     },
+    #[error("{0}")]
+    Unsupported(#[from] crate::core::UnsupportedConstruct),
 }

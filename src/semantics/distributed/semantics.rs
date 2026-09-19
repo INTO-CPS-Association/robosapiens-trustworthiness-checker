@@ -17,6 +17,10 @@ impl<AC> MonitoringSemantics<AC> for DistributedSemantics
 where
     AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
 {
+    // The only semantics that evaluates the distribution primitives.
+    const CAPABILITIES: crate::core::Capabilities =
+        crate::core::Capabilities::NONE.with(crate::core::Capability::Distribution);
+
     fn to_async_stream(
         expr: &AC::Expr,
         ctx: &AC::Ctx,
@@ -33,6 +37,10 @@ impl<AC> MonitoringSemantics<AC> for DistributedExprSemantics
 where
     AC: AsyncConfig<Val = Value, Expr = Expr, Ctx = DistributedContext<AC>>,
 {
+    // The only semantics that evaluates the distribution primitives.
+    const CAPABILITIES: crate::core::Capabilities =
+        crate::core::Capabilities::NONE.with(crate::core::Capability::Distribution);
+
     fn to_async_stream(
         expr: &AC::Expr,
         ctx: &AC::Ctx,

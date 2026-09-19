@@ -1,3 +1,5 @@
+language distributed
+
 out x: Int
 out y: Int
 out z: Int

@@ -1286,7 +1286,6 @@ fn raw_facades_validate_before_lowering_and_tryfrom_forwards_valid_models() {
         "in x\nin x\nout y\ny = x",
         "out y\ny = missing",
         "in source: Str\nout y\ny = dynamic(source: Int, {missing})",
-        "out y\ny = dist(node1, node2)",
     ];
     for source in invalid_sources {
         let specification = source.parse::<DsrvSpecification>().unwrap();
@@ -1307,6 +1306,24 @@ fn raw_facades_validate_before_lowering_and_tryfrom_forwards_valid_models() {
             "semantic facade errors must not reach root compilation"
         );
     }
+
+    // A valid distributed specification is refused by dataflow's own
+    // capability admission, not by validation.
+    let distributed = "language distributed\nout y\ny = dist(node1, node2)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    for result in [
+        DataflowProgram::compile_untyped(distributed.clone()).map(|_| ()),
+        DataflowMonitor::compile_untyped(distributed).map(|_| ()),
+    ] {
+        match result {
+            Err(DataflowCompilationError::Unsupported(error)) => {
+                assert_eq!(error.requirement.construct, "`dist`");
+                assert_eq!(error.runtime, "dataflow");
+            }
+            other => panic!("dataflow must refuse `dist` at admission: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -1314,9 +1331,7 @@ fn proof_consuming_compilers_skip_repeated_admission_and_typechecking() {
     let source = "in x: Int\nout y: Int\ny = x + 1";
     crate::lang::dsrv::reset_test_pipeline_counts();
     let specification = source.parse::<DsrvSpecification>().unwrap();
-    let validated = specification
-        .validate::<crate::lang::dsrv::ast::Local>()
-        .unwrap();
+    let validated = specification.validate().unwrap();
     assert_eq!(
         crate::lang::dsrv::test_pipeline_counts(),
         (1, 0, 0),

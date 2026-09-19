@@ -112,6 +112,14 @@ impl<T: StreamData> RosStreamValue for T {}
 pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     type Expr;
 
+    /// The first construct, in declaration order, that needs a capability
+    /// outside `supported`. Languages whose constructs every runtime
+    /// evaluates keep the default.
+    fn first_unsupported(&self, supported: super::Capabilities) -> Option<super::Requirement> {
+        let _ = supported;
+        None
+    }
+
     fn input_vars(&self) -> BTreeSet<VarName>;
 
     fn output_vars(&self) -> BTreeSet<VarName>;

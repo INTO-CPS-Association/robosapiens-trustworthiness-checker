@@ -71,6 +71,11 @@ pub trait MonitoringSemantics<AC>: Clone + 'static
 where
     AC: AsyncConfig,
 {
+    /// The capabilities this semantics evaluates. Every semantics declares
+    /// them; runtimes admit a specification only if it needs no others, and
+    /// `runtime::capabilities` tests each declaration against the runtime.
+    const CAPABILITIES: crate::core::Capabilities;
+
     fn to_async_stream(
         expr: &AC::Expr,
         ctx: &AC::Ctx,

@@ -1,3 +1,5 @@
+language distributed
+
 // Run with: cargo run -- examples/distributed/mqtt_dist_echo.dsrv --input-map-mqtt-topics tb1 tb2 tb3 --output-mqtt-topics tb1Echo tb2Echo tb3Echo tb1SourceRobotId tb1NearbyRobotIds tb1NearbyRobotPoses tb1SourceRobotPose tb1Timestamp
 in tb1
 in tb2

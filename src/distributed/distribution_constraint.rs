@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn lowering_collects_transitive_inputs_and_monitored_streams_once() {
-        let spec = ("in gate\nout x\nout constraint\nhelper = gate && monitored_at(x, A)\nconstraint = helper").parse::<DsrvSpecification>()
+        let spec = ("language distributed\nin gate\nout x\nout constraint\nhelper = gate && monitored_at(x, A)\nconstraint = helper").parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
         let plan = DistributionConstraintPlan::lower(
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn lowering_reports_unsupported_form_with_span_and_display() {
-        let spec = ("out constraint\nconstraint = dist(A, B) == 1")
+        let spec = ("language distributed\nout constraint\nconstraint = dist(A, B) == 1")
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 

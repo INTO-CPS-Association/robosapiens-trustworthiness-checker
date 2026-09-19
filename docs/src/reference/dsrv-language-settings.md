@@ -37,8 +37,26 @@ In this release Core's `if` evaluates both branches, like Full DSRV's. Core's
 and will do so once lazy `if` is implemented; the two differ only when the
 branch not taken has no value yet.
 
-In this release `language distributed` is recorded but not yet enforced: Full
-DSRV still accepts `dist` and `monitored_at`.
+`dist` and `monitored_at` belong to Distributed DSRV. A file that uses them
+without `language distributed` is rejected at the construct. For
+
+```dsrv
+in x: Int
+out y: Bool
+y = monitored_at(x, a)
+```
+
+the checker reports
+
+```text
+invalid language settings: `monitored_at` at Span { start: 26, end: 44 } needs `language distributed`
+```
+
+Declaring the dialect makes the file valid; running it is a separate
+question. Only the distributed runtime evaluates the distribution
+primitives, and the others refuse such a specification before it runs (see
+[runtime capabilities](runtime-capabilities.md)). A Distributed file that
+does not use them runs anywhere Full DSRV runs.
 
 From Rust, `trustworthiness_checker::lang::dsrv::check_core_source` accepts a
 Core file and returns a `CoreDsrvSpecification`, a type that only a
