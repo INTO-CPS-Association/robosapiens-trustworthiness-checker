@@ -101,7 +101,8 @@ impl ScalarRegion {
             }
             let program = planned.program.as_ref();
             let graph = &program.graph;
-            if graph.contains_reconfigurable_expression()
+            // Fallible canonical boundaries cannot become static canonical islands.
+            if !program.uses_static_evaluation()
                 || graph.has_temporal_state()
                 || !planned.temporal.operations.is_empty()
                 || !planned.temporal.commits.is_empty()

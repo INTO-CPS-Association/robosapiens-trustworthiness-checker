@@ -28,7 +28,7 @@ impl Evaluator {
     pub(in crate::dataflow) fn evaluate_and_commit(
         &mut self,
         environment_values: &[Value],
-        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
+        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Result<Value, DataflowEvaluationError>>,
     ) -> Result<Value, DataflowEvaluationError> {
         self.evaluate_and_commit_with_history(environment_values, recursive_call, None)
     }
@@ -36,7 +36,7 @@ impl Evaluator {
     pub(in crate::dataflow) fn evaluate_and_commit_with_history(
         &mut self,
         environment_values: &[Value],
-        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
+        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Result<Value, DataflowEvaluationError>>,
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<Value, DataflowEvaluationError> {
         let value = self.evaluate_and_stage_with_context(
@@ -141,7 +141,8 @@ impl Evaluator {
                 state,
                 context,
                 history_access,
-            );
+            )
+            .expect("static canonical node evaluation cannot fail");
             state.node_values[index] = value;
         }
     }
@@ -170,7 +171,7 @@ impl Evaluator {
         &mut self,
         environment_values: &[Value],
         retained_environment_values: Option<&[Value]>,
-        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
+        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Result<Value, DataflowEvaluationError>>,
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<Value, DataflowEvaluationError> {
         let body = &self.program.graph;

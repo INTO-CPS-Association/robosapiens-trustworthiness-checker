@@ -2,7 +2,7 @@
 //!
 //! This is where the language actually happens: [`evaluate_node_with_history`] is the dispatch over
 //! every [`StreamOp`], and the `try_*` mirror is the same dispatch for graphs whose
-//! [`EvaluationMode`] is `Reconfigurable` and can therefore fail.
+//! [`EvaluationMode`] is `Fallible` (function application or reconfiguration).
 //!
 //! These are free functions over `(op, EvaluatorState, EvaluationEnvironment)` — they never see an
 //! `Evaluator` or a `StreamProgram`. The graph- and tick-level façade that calls them lives in
@@ -26,8 +26,8 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
     state: &mut EvaluatorState,
     context: EvaluationEnvironment<'_>,
     history_access: Option<HistoryAccess<'_>>,
-) -> Value {
-    match op {
+) -> Result<Value, DataflowEvaluationError> {
+    Ok(match op {
         StreamOp::Unary { op, arg } => {
             let arg = context.read_value(state, arg);
             let NodeState::UnaryLift { last_input } = &mut state.node_states[node_id.index()]
@@ -356,7 +356,7 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             };
             let func = retain_last_value(func, last_function);
             let args = lift_call_args(args, last_arguments);
-            evaluate_apply(func, args, active_function, callable)
+            evaluate_apply(func, args, active_function, callable)?
         }
         StreamOp::DirectApply {
             func,
@@ -384,9 +384,9 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                     evaluator,
                     environment_values,
                     history_access,
-                )
+                )?
             } else {
-                evaluate_direct_apply(func, args, context, evaluator, environment_values)
+                evaluate_direct_apply(func, args, context, evaluator, environment_values)?
             }
         }
         StreamOp::RecursiveApply { func, args } => {
@@ -400,7 +400,7 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 unreachable!("direct fix application node has incompatible runtime state")
             };
             let args = lift_call_args(args, last_arguments);
-            evaluate_recursive_apply(func, args, context)
+            evaluate_recursive_apply(func, args, context)?
         }
         StreamOp::RecursiveCall { args } => {
             let args = args
@@ -413,7 +413,7 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 unreachable!("recursive call node has incompatible runtime state")
             };
             let args = lift_call_args(args, last_arguments);
-            evaluate_recursive_call(args, context)
+            evaluate_recursive_call(args, context)?
         }
         StreamOp::Partial {
             func,
@@ -450,7 +450,7 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            evaluate_list_map(values.next().unwrap(), values.next().unwrap())
+            evaluate_list_map(values.next().unwrap(), values.next().unwrap())?
         }
         StreamOp::ListFilter { func, list } => {
             let values = vec![
@@ -458,7 +458,7 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            evaluate_list_filter(values.next().unwrap(), values.next().unwrap())
+            evaluate_list_filter(values.next().unwrap(), values.next().unwrap())?
         }
         StreamOp::ListFold { func, init, list } => {
             let values = vec![
@@ -471,12 +471,12 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 values.next().unwrap(),
                 values.next().unwrap(),
                 values.next().unwrap(),
-            )
+            )?
         }
 
         // Runtime-compiled expressions use the dynamic traversal.
         StreamOp::Reconfigurable(_) => unreachable!("dynamic node reached static evaluator"),
-    }
+    })
 }
 
 pub(in crate::dataflow) fn evaluate_nodes_with_history(
@@ -487,7 +487,8 @@ pub(in crate::dataflow) fn evaluate_nodes_with_history(
 ) {
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
-        let value = evaluate_node_with_history(node_id, op, state, context, history_access);
+        let value = evaluate_node_with_history(node_id, op, state, context, history_access)
+            .expect("static node evaluation cannot fail");
         state.node_values[index] = value;
     }
 }
@@ -579,6 +580,37 @@ pub(in crate::dataflow) fn try_evaluate_nodes_with_history(
     for (index, op) in nodes.iter().enumerate() {
         let node_id = NodeId::new(index);
         let value = match op {
+            StreamOp::DirectApply {
+                func,
+                args: argument_refs,
+            } => {
+                let args = argument_refs
+                    .iter()
+                    .map(|arg| context.read_value(state, arg))
+                    .collect();
+                let NodeState::PersistentCall {
+                    evaluator,
+                    environment_values,
+                    last_arguments,
+                } = &mut state.node_states[index]
+                else {
+                    unreachable!("direct apply node has incompatible runtime state")
+                };
+                let args = lift_call_args(args, last_arguments);
+                if let Some(history_access) = history_access {
+                    evaluate_direct_apply_with_history(
+                        func,
+                        args,
+                        argument_refs,
+                        context,
+                        evaluator,
+                        environment_values,
+                        history_access,
+                    )?
+                } else {
+                    evaluate_direct_apply(func, args, context, evaluator, environment_values)?
+                }
+            }
             StreamOp::Reconfigurable(spec) => {
                 let current = context.read_value(state, &spec.input);
                 let NodeState::Reconfigurable(expression) = &mut state.node_states[index] else {
@@ -596,7 +628,7 @@ pub(in crate::dataflow) fn try_evaluate_nodes_with_history(
             StreamOp::If { .. } => {
                 try_evaluate_lazy_if(node_id, op, state, context, history_access)?
             }
-            _ => evaluate_node_with_history(node_id, op, state, context, history_access),
+            _ => evaluate_node_with_history(node_id, op, state, context, history_access)?,
         };
         state.node_values[index] = value;
     }
@@ -623,6 +655,26 @@ fn try_evaluate_lazy_if(
         unreachable!("if node has incompatible runtime state")
     };
     let condition = retain_last_value(condition, &mut lazy_if.last_condition);
+
+    // Recursive functions must not evaluate the recursive, unselected branch.
+    if context.recursive_call.is_some() {
+        return match condition {
+            Value::Bool(true) => try_evaluate_branch(
+                then_branch,
+                lazy_if.then_state.as_mut(),
+                context,
+                history_access,
+            ),
+            Value::Bool(false) => try_evaluate_branch(
+                else_branch,
+                lazy_if.else_state.as_mut(),
+                context,
+                history_access,
+            ),
+            Value::NoVal | Value::Deferred => Ok(condition),
+            other => panic!("if condition must be bool, got {:?}", other),
+        };
+    }
 
     match condition {
         Value::Bool(true) => {
@@ -745,7 +797,7 @@ fn evaluate_direct_apply_with_history(
     evaluator: &mut Evaluator,
     environment_values: &mut [Value],
     history_access: HistoryAccess<'_>,
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     let capture_count = func.capture_slots.len();
     debug_assert_eq!(
         environment_values.len(),
@@ -764,12 +816,10 @@ fn evaluate_direct_apply_with_history(
     }
 
     let history_bindings = function_history_bindings(history_access, func, argument_refs);
-    evaluator
-        .evaluate_and_stage_with_history(
-            environment_values,
-            Some(history_access.with_bindings(&history_bindings)),
-        )
-        .expect("direct function programs cannot contain dynamic operators")
+    evaluator.evaluate_and_stage_with_history(
+        environment_values,
+        Some(history_access.with_bindings(&history_bindings)),
+    )
 }
 
 pub(in crate::dataflow) fn function_history_bindings(

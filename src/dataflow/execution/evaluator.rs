@@ -20,6 +20,7 @@ use super::super::history::HistoryId;
 use super::super::ir::{BoundRef, StreamProgram};
 use super::evaluator_state::EvaluatorState;
 use crate::core::Value;
+use crate::dataflow::DataflowEvaluationError;
 use ecow::EcoVec;
 use std::rc::Rc;
 
@@ -28,7 +29,8 @@ pub(in crate::dataflow) struct EvaluationEnvironment<'a> {
     pub(in crate::dataflow) environment_values: &'a [Value],
     pub(in crate::dataflow) environment_layout: &'a Rc<EnvironmentLayout>,
     pub(in crate::dataflow) retained_environment_values: Option<&'a [Value]>,
-    pub(in crate::dataflow) recursive_call: Option<&'a dyn Fn(EcoVec<Value>) -> Value>,
+    pub(in crate::dataflow) recursive_call:
+        Option<&'a dyn Fn(EcoVec<Value>) -> Result<Value, DataflowEvaluationError>>,
 }
 
 impl EvaluationEnvironment<'_> {

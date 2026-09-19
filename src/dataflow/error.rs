@@ -13,6 +13,8 @@ pub enum StreamProgramError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataflowEvaluationError {
+    #[error("function application failed: {0}")]
+    FunctionApplication(anyhow::Error),
     #[error("dataflow input contains {actual} values, expected {expected}")]
     InputCountMismatch { expected: usize, actual: usize },
     #[error("dataflow output contains {actual} values, expected {expected}")]

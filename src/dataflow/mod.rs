@@ -266,7 +266,7 @@
 //!
 //! The bound graph becomes an `ir::StreamProgram`. Its canonical execution data is the graph, an
 //! `Rc<EnvironmentLayout>`, an
-//! `EvaluationMode::{Static, Dynamic}` classification, and a cached `requires_temporal_commit`
+//! `EvaluationMode::{Static, Fallible}` classification, and a cached `requires_temporal_commit`
 //! flag. Sharing the program is important for function call sites and runtime-compiled programs:
 //! each `Evaluator` can own state without cloning operation vectors or layouts. The later
 //! [scheduled plans and native execution](#scheduled-plans-quickening-and-native-execution) section

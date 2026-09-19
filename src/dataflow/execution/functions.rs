@@ -80,24 +80,23 @@ impl RecursiveCall {
             environment_values: self.environment_template.clone(),
         }
     }
-    fn call_recursive(&self, args: EcoVec<Value>) -> anyhow::Result<Value> {
-        let recursive_call = |args| {
-            self.call_recursive(args)
-                .expect("direct recursive function application failed")
-        };
+    fn call_recursive(&self, args: EcoVec<Value>) -> Result<Value, DataflowEvaluationError> {
+        let recursive_call = |args| self.call_recursive(args);
         self.call_with_context(args, Some(&recursive_call))
     }
 
     fn call_with_context(
         &self,
         args: EcoVec<Value>,
-        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Value>,
-    ) -> anyhow::Result<Value> {
+        recursive_call: Option<&dyn Fn(EcoVec<Value>) -> Result<Value, DataflowEvaluationError>>,
+    ) -> Result<Value, DataflowEvaluationError> {
         if self.parameter_count != args.len() {
-            return Err(anyhow::anyhow!(
-                "Function expected {} arguments, got {}",
-                self.parameter_count,
-                args.len()
+            return Err(DataflowEvaluationError::FunctionApplication(
+                anyhow::anyhow!(
+                    "Function expected {} arguments, got {}",
+                    self.parameter_count,
+                    args.len()
+                ),
             ));
         }
 
@@ -118,10 +117,9 @@ impl RecursiveCall {
         frame.evaluator.reset();
         let value = frame
             .evaluator
-            .evaluate_and_commit(&frame.environment_values, recursive_call)
-            .expect("function programs cannot contain dynamic operators");
+            .evaluate_and_commit(&frame.environment_values, recursive_call);
         self.available_frames.borrow_mut().push(frame);
-        Ok(value)
+        value
     }
 }
 
@@ -130,9 +128,9 @@ pub(in crate::dataflow) fn evaluate_apply(
     args: EcoVec<Value>,
     active_function: &mut Option<RuntimeFunction>,
     callable: &mut Option<crate::core::RuntimeFunctionValueCallable>,
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special(std::iter::once(&func).chain(args.iter())) {
-        return value;
+        return Ok(value);
     }
     let Value::Function(function) = func else {
         panic!("Function application requires a function, got {}", func);
@@ -145,7 +143,7 @@ pub(in crate::dataflow) fn evaluate_apply(
         *active_function = Some(function.clone());
     }
     if let Some(callable) = callable {
-        return callable(args).expect("Function application failed");
+        return callable(args).map_err(function_error);
     }
     call_runtime_function_once(function, args)
 }
@@ -156,7 +154,7 @@ pub(in crate::dataflow) fn evaluate_direct_apply(
     context: EvaluationEnvironment<'_>,
     evaluator: &mut Evaluator,
     environment_values: &mut [Value],
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     let capture_count = func.capture_slots.len();
     debug_assert_eq!(
         environment_values.len(),
@@ -174,31 +172,28 @@ pub(in crate::dataflow) fn evaluate_direct_apply(
         *slot = value;
     }
 
-    evaluator
-        .evaluate_and_stage(environment_values)
-        .expect("direct function programs cannot contain dynamic operators")
+    evaluator.evaluate_and_stage(environment_values)
 }
 
 pub(in crate::dataflow) fn evaluate_recursive_apply(
     func: &StreamFunction,
     args: EcoVec<Value>,
     context: EvaluationEnvironment<'_>,
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special(args.iter()) {
-        return value;
+        return Ok(value);
     }
 
     let call = RecursiveCall::new(func, context);
     call.call_recursive(args)
-        .expect("direct recursive function application failed")
 }
 
 pub(in crate::dataflow) fn evaluate_recursive_call(
     args: EcoVec<Value>,
     context: EvaluationEnvironment<'_>,
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special(args.iter()) {
-        return value;
+        return Ok(value);
     }
     let recursive_call = context
         .recursive_call
@@ -232,22 +227,25 @@ pub(in crate::dataflow) fn evaluate_fix(func: Value, display: EcoString) -> Valu
     }
 }
 
-pub(in crate::dataflow) fn evaluate_list_map(func: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_map(
+    func: Value,
+    list: Value,
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special([&func, &list]) {
-        return value;
+        return Ok(value);
     }
     match (func, list) {
         (Value::Function(function), _) if function.requires_call_site_instance() => {
             panic!("temporal functions are not supported by List.map")
         }
-        (Value::Function(function), Value::List(values)) => Value::List(
+        (Value::Function(function), Value::List(values)) => Ok(Value::List(
             values
                 .into_iter()
                 .map(|value| {
                     call_runtime_function_once(function.clone(), EcoVec::from(vec![value]))
                 })
-                .collect(),
-        ),
+                .collect::<Result<_, _>>()?,
+        )),
         (func, list) => panic!(
             "List.map requires a function and list, got {} and {}",
             func, list
@@ -255,9 +253,12 @@ pub(in crate::dataflow) fn evaluate_list_map(func: Value, list: Value) -> Value 
     }
 }
 
-pub(in crate::dataflow) fn evaluate_list_filter(func: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_filter(
+    func: Value,
+    list: Value,
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special([&func, &list]) {
-        return value;
+        return Ok(value);
     }
     match (func, list) {
         (Value::Function(function), _) if function.requires_call_site_instance() => {
@@ -269,13 +270,13 @@ pub(in crate::dataflow) fn evaluate_list_filter(func: Value, list: Value) -> Val
                 match call_runtime_function_once(
                     function.clone(),
                     EcoVec::from(vec![value.clone()]),
-                ) {
+                )? {
                     Value::Bool(true) => filtered.push(value),
                     Value::Bool(false) => {}
                     other => panic!("List.filter returned non-bool value {}", other),
                 }
             }
-            Value::List(filtered)
+            Ok(Value::List(filtered))
         }
         (func, list) => panic!(
             "List.filter requires a function and list, got {} and {}",
@@ -284,9 +285,13 @@ pub(in crate::dataflow) fn evaluate_list_filter(func: Value, list: Value) -> Val
     }
 }
 
-pub(in crate::dataflow) fn evaluate_list_fold(func: Value, init: Value, list: Value) -> Value {
+pub(in crate::dataflow) fn evaluate_list_fold(
+    func: Value,
+    init: Value,
+    list: Value,
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(value) = propagated_special([&func, &init, &list]) {
-        return value;
+        return Ok(value);
     }
     match (func, init, list) {
         (Value::Function(function), _, _) if function.requires_call_site_instance() => {
@@ -294,9 +299,9 @@ pub(in crate::dataflow) fn evaluate_list_fold(func: Value, init: Value, list: Va
         }
         (Value::Function(function), mut acc, Value::List(values)) => {
             for value in values {
-                acc = call_runtime_function_once(function.clone(), EcoVec::from(vec![acc, value]));
+                acc = call_runtime_function_once(function.clone(), EcoVec::from(vec![acc, value]))?;
             }
-            acc
+            Ok(acc)
         }
         (func, _, list) => panic!(
             "List.fold requires a function and list, got {} and {}",
@@ -308,17 +313,21 @@ pub(in crate::dataflow) fn evaluate_list_fold(func: Value, init: Value, list: Va
 pub(in crate::dataflow) fn call_runtime_function_once(
     function: RuntimeFunction,
     args: EcoVec<Value>,
-) -> Value {
+) -> Result<Value, DataflowEvaluationError> {
     if let Some(callable) = function.instantiate_value() {
-        return callable(args).expect("Function application failed");
+        return callable(args).map_err(function_error);
     }
     if function.has_value_callable() {
-        return function
-            .call_value(args)
-            .expect("Function application failed");
+        return function.call_value(args).map_err(function_error);
     }
-    let mut stream = function.call(args).expect("Function application failed");
-    futures::executor::block_on(stream.next()).unwrap_or(Value::NoVal)
+    let mut stream = function.call(args).map_err(function_error)?;
+    Ok(futures::executor::block_on(stream.next()).unwrap_or(Value::NoVal))
+}
+
+fn function_error(error: anyhow::Error) -> DataflowEvaluationError {
+    error
+        .downcast::<DataflowEvaluationError>()
+        .unwrap_or_else(DataflowEvaluationError::FunctionApplication)
 }
 
 fn partial_function(
@@ -331,7 +340,7 @@ fn partial_function(
     let runtime_function = RuntimeFunction::native_value(display, move |args| {
         let mut all_args = applied.clone();
         all_args.extend(args);
-        Ok(call_runtime_function_once(function.clone(), all_args))
+        call_runtime_function_once(function.clone(), all_args).map_err(anyhow::Error::from)
     });
     if !stream_function.supports_value_calls() {
         return Value::Function(RuntimeFunction::native(
@@ -360,7 +369,7 @@ fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
         let mut all_args = EcoVec::new();
         all_args.push(Value::Function(self_function));
         all_args.extend(args);
-        Ok(call_runtime_function_once(function.clone(), all_args))
+        call_runtime_function_once(function.clone(), all_args).map_err(anyhow::Error::from)
     });
     let runtime_function = if function_for_stream.supports_value_calls() {
         runtime_function

@@ -1082,6 +1082,21 @@ fn dynamic_no_val_source_and_dependency_reuse_retained_outer_values() {
 }
 
 #[test]
+fn failed_function_application_is_an_evaluation_error() {
+    let spec = "in x\naux f\nout z\nf = \\a: Int -> a\nz = f(x, x)"
+        .parse::<DsrvSpecification>()
+        .unwrap();
+    let mut monitor = DataflowMonitor::compile_untyped(spec).unwrap();
+    let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+    let row = runtime_input_row(&monitor, &[("x", Value::Int(1))]);
+    let error = monitor.evaluate(&row, &mut output).unwrap_err().to_string();
+    assert!(
+        error.contains("Function expected 1 arguments, got 2"),
+        "{error}"
+    );
+}
+
+#[test]
 fn dataflow_delay_state_persists_across_evaluations() {
     let spec = "in x\nout z\nz = default(z[3], 0) + x"
         .parse::<DsrvSpecification>()
@@ -4044,6 +4059,7 @@ async fn dynamic_absent_source_reuses_the_retained_property_text(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum LifecycleErrorSignature {
+    FunctionApplication(String),
     InputCount { expected: usize, actual: usize },
     OutputCount { expected: usize, actual: usize },
     Parse { expression: String, message: String },
@@ -4104,6 +4120,9 @@ fn lifecycle_property_inputs(program: &DataflowProgram, rows: &[Vec<Value>]) -> 
 
 fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSignature {
     match error {
+        DataflowEvaluationError::FunctionApplication(error) => {
+            LifecycleErrorSignature::FunctionApplication(error.to_string())
+        }
         DataflowEvaluationError::InputCountMismatch { expected, actual } => {
             LifecycleErrorSignature::InputCount {
                 expected: *expected,

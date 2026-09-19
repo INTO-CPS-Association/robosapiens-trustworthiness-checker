@@ -291,7 +291,7 @@ impl PartialEq for StreamProgram {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EvaluationMode {
     Static,
-    Reconfigurable,
+    Fallible,
 }
 
 impl StreamProgram {
@@ -299,8 +299,8 @@ impl StreamProgram {
         graph: BoundEvaluationGraph,
         environment_layout: Rc<EnvironmentLayout>,
     ) -> Self {
-        let evaluation_mode = if graph.contains_reconfigurable_expression() {
-            EvaluationMode::Reconfigurable
+        let evaluation_mode = if graph_requires_fallible_evaluation(&graph) {
+            EvaluationMode::Fallible
         } else {
             EvaluationMode::Static
         };
@@ -366,6 +366,29 @@ fn graph_has_reconfigurable_expressions(graph: &BoundEvaluationGraph) -> bool {
             graph_has_reconfigurable_expressions(then_branch)
                 || graph_has_reconfigurable_expressions(else_branch)
         }
+        _ => false,
+    })
+}
+
+fn graph_requires_fallible_evaluation(graph: &BoundEvaluationGraph) -> bool {
+    graph.nodes.iter().any(|op| match op {
+        BoundOp::Reconfigurable(_)
+        | BoundOp::Apply { .. }
+        | BoundOp::RecursiveCall { .. }
+        | BoundOp::ListMap { .. }
+        | BoundOp::ListFilter { .. }
+        | BoundOp::ListFold { .. } => true,
+        BoundOp::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            graph_requires_fallible_evaluation(then_branch)
+                || graph_requires_fallible_evaluation(else_branch)
+        }
+        BoundOp::Function { func }
+        | BoundOp::DirectApply { func, .. }
+        | BoundOp::RecursiveApply { func, .. } => !func.program.uses_static_evaluation(),
         _ => false,
     })
 }

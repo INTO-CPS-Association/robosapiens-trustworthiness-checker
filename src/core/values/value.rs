@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use ecow::{EcoString, EcoVec};
 
 #[cfg(feature = "redis")]
-use redis::{FromRedisValue, ToRedisArgs, ToSingleRedisArg};
+use redis::FromRedisValue;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
@@ -273,26 +273,8 @@ impl DeferrableStreamData for Value {
     }
 }
 
-#[cfg(feature = "redis")]
-impl ToRedisArgs for Value {
-    fn write_redis_args<W>(&self, out: &mut W)
-    where
-        W: ?Sized + redis::RedisWrite,
-    {
-        match self.encode_json() {
-            Ok(json_str) => json_str.write_redis_args(out),
-            Err(_) => "null".write_redis_args(out),
-        }
-    }
-}
-
-// Note: Redis docs say: "This should be implemented only for types that are
-// serialized into exactly one value, otherwise the compiler can't ensure
-// the correctness of some commands."
-// This currently holds for the implementation of Value, but we should keep an eye out.
-#[cfg(feature = "redis")]
-impl ToSingleRedisArg for Value {}
-
+// Deliberately no ToRedisArgs: encoding can fail (for example, NoVal).
+// Redis writers must call the fallible JsonStreamValue::encode_json first.
 #[cfg(feature = "redis")]
 impl FromRedisValue for Value {
     fn from_redis_value(v: redis::Value) -> Result<Self, redis::ParsingError> {
@@ -403,6 +385,7 @@ impl TryFrom<JValue> for Value {
                     Ok(Value::Float(num.as_f64().unwrap()))
                 }
             }
+            JValue::String(val) if val == "⊥" => Ok(Value::Deferred),
             JValue::String(val) => Ok(Value::Str(val.into())),
             // If any element returns Err then this propagates it (because of collect)
             JValue::Array(vals) => vals
@@ -871,6 +854,13 @@ mod tests {
         let jv = json!(42);
         let v: Value = jv.try_into().unwrap();
         assert_eq!(v, Value::Int(42));
+    }
+
+    #[test]
+    fn test_json_try_into_deferred_matches_deserialization() {
+        let v: Value = json!("⊥").try_into().unwrap();
+        assert_eq!(v, Value::Deferred);
+        assert_eq!(serde_json::from_str::<Value>("\"⊥\"").unwrap(), v);
     }
 
     #[test]
