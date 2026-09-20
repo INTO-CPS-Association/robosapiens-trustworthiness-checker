@@ -149,6 +149,18 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             let initial = lower_expression(initial, builder);
             builder.push(UnboundOp::Init { input, initial })
         }
+        // Elaboration has settled the union, so the graph needs the tag and
+        // the payload it is built from, and no schema.
+        Constructor(payload, tag, _) => {
+            let payload = payload
+                .into_iter()
+                .next()
+                .map(|payload| lower_expression(payload, builder));
+            builder.push(UnboundOp::Constructor {
+                tag: tag.clone(),
+                payload,
+            })
+        }
         List(items) => {
             let items = lower_expressions(items, builder);
             builder.push(UnboundOp::List(items))
@@ -322,9 +334,6 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             let init = lower_expression(init, builder);
             let list = lower_expression(list, builder);
             builder.push(UnboundOp::ListFold { func, init, list })
-        }
-        Constructor(..) => {
-            panic!("elaboration resolves every constructor before a runtime lowers it")
         }
         MonitoredAt(_, _) | Dist(_, _) => {
             panic!("dataflow semantics does not support distributed AST operations")

@@ -32,6 +32,7 @@ const SEMANTICS: &[&str] = &["untimed", "typed-untimed", "gradual-typed-untimed"
 fn fixture(capability: Capability) -> (&'static str, &'static str) {
     match capability {
         Capability::Distribution => ("distribution.dsrv", "distribution.input"),
+        Capability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
     }
 }
 

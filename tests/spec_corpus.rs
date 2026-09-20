@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
-use trustworthiness_checker::lang::dsrv::{Dialect, LanguageConfig, TypeCheckOptions};
+use trustworthiness_checker::lang::dsrv::{Dialect, Edition, TypeCheckOptions};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -72,8 +72,12 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
             } else {
                 Dialect::Full
             };
+            // A shipped specification is read under the defaults, except for
+            // the dialect its constructs need and the experiments it declares.
+            let declares_experiments = source.contains("use experimental::");
             if language.dialect() != expected_dialect
-                || (expected_dialect == Dialect::Full && language != &LanguageConfig::default())
+                || language.edition() != Edition::BASE
+                || language.experiment_names().next().is_some() != declares_experiments
             {
                 unexpected.push(format!("{name} resolves to {language}"));
             }

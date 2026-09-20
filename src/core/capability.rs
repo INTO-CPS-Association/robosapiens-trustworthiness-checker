@@ -18,15 +18,18 @@ use crate::lang::dsrv::span::Span;
 pub enum Capability {
     /// The distribution primitives `dist` and `monitored_at`.
     Distribution,
+    /// Building and reading tagged union values.
+    TaggedUnions,
 }
 
 impl Capability {
     /// Every capability, in a stable order for tables and tests.
-    pub const ALL: &'static [Self] = &[Self::Distribution];
+    pub const ALL: &'static [Self] = &[Self::Distribution, Self::TaggedUnions];
 
     const fn bit(self) -> u32 {
         match self {
             Self::Distribution => 1 << 0,
+            Self::TaggedUnions => 1 << 1,
         }
     }
 
@@ -34,6 +37,7 @@ impl Capability {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Distribution => "distribution",
+            Self::TaggedUnions => "tagged unions",
         }
     }
 }

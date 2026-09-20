@@ -688,7 +688,7 @@ mod tests {
             writer.close().await.unwrap();
             assert_eq!(
                 String::from_utf8(output.borrow().clone()).unwrap(),
-                "x[0] = Int(1)\n"
+                "x[0] = 1\n"
             );
         });
     }

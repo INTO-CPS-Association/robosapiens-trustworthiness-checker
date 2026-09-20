@@ -1,3 +1,4 @@
+use crate::core::UnionValue;
 use crate::core::Value;
 use crate::core::values::operations as value_operations;
 use crate::core::{BinaryOperator, UnaryOperator};
@@ -564,6 +565,22 @@ pub fn neg(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Negate, v), v)
 }
 
+/// A union value with no payload, which is a constant like any other
+/// literal: it has nothing to wait for.
+pub fn nullary_constructor(tag: EcoString) -> LocalStream<Value> {
+    val(UnionValue::new(tag, None).into())
+}
+
+/// A union value built from its payload, lifted like any other unary
+/// operation: an absent payload leaves the last one in place, and a deferred
+/// payload defers the value.
+pub fn constructor(tag: EcoString, payload: LocalStream<Value>) -> LocalStream<Value> {
+    stream_lift1(
+        move |payload| UnionValue::new(tag.clone(), Some(payload)).into(),
+        payload,
+    )
+}
+
 pub fn abs(v: LocalStream<Value>) -> LocalStream<Value> {
     stream_lift1(|v| eval_unary(UnaryOperator::Absolute, v), v)
 }
@@ -584,6 +601,33 @@ mod combinator_tests {
 
     // Using this instead of fixture version to in case fixture version changed
     type TestCtx = Context<TestConfig>;
+
+    // A payload-bearing constructor lifts its operand like any other unary
+    // operation: an absent payload keeps the value it last built, and a
+    // deferred payload defers the whole value.
+    #[apply(async_test)]
+    async fn test_constructor_lifts_its_payload() {
+        let payload: LocalStream<Value> = Box::pin(stream::iter(vec![
+            Value::Int(1),
+            Value::NoVal,
+            Value::Int(2),
+            Value::Deferred,
+        ]));
+        let res: Vec<Value> = constructor("Moving".into(), payload).collect().await;
+        let moving = |value: i64| Value::from(UnionValue::new("Moving", Some(Value::Int(value))));
+        assert_eq!(res, vec![moving(1), moving(1), moving(2), Value::Deferred]);
+    }
+
+    // A nullary constructor is a constant: it has no operand to wait for.
+    #[apply(async_test)]
+    async fn test_nullary_constructor_is_constant() {
+        let res: Vec<Value> = nullary_constructor("Stopped".into())
+            .take(2)
+            .collect()
+            .await;
+        let stopped = Value::from(UnionValue::new("Stopped", None));
+        assert_eq!(res, vec![stopped.clone(), stopped]);
+    }
 
     #[apply(async_test)]
     async fn test_not() {

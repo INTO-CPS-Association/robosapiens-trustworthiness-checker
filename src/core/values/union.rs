@@ -439,8 +439,8 @@ mod tests {
         assert_eq!(value, value.clone());
         assert_eq!(value, Value::from(UnionValue::new("N", Some(Value::Unit))));
         assert_ne!(value, Value::from(UnionValue::new("N", None)));
-        assert_eq!(Value::Int(1).encode_stdout().unwrap(), "Int(1)");
-        assert!(value.encode_stdout().unwrap().starts_with("Union("));
+        assert_eq!(Value::Int(1).encode_stdout().unwrap(), "1");
+        assert_eq!(value.encode_stdout().unwrap(), "N(())");
     }
 
     #[test]

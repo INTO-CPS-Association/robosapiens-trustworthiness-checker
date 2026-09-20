@@ -627,6 +627,18 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, trigger, layout);
             descriptor.push(')');
         }
+        StreamOp::Constructor { tag, payload } => {
+            descriptor.push_str("constructor[");
+            append_identifier(descriptor, tag);
+            match payload {
+                Some(payload) => {
+                    descriptor.push_str(":of:");
+                    append_ref_descriptor(descriptor, payload, layout);
+                }
+                None => descriptor.push_str(":nullary"),
+            }
+            descriptor.push(']');
+        }
         StreamOp::List(items) | StreamOp::Tuple(items) => {
             descriptor.push_str(if matches!(operation, StreamOp::List(_)) {
                 "list["
@@ -1120,6 +1132,13 @@ pub(super) enum StreamOp<E: GraphReference> {
     },
     List(Vec<DataRef<E>>),
     Tuple(Vec<DataRef<E>>),
+    /// A union value. A nullary alternative has no payload to read, so it is
+    /// a constant; one that carries a payload lifts it like any other
+    /// operand.
+    Constructor {
+        tag: EcoString,
+        payload: Option<DataRef<E>>,
+    },
     Map(BTreeMap<EcoString, DataRef<E>>),
     LIndex {
         list: DataRef<E>,
@@ -1254,6 +1273,7 @@ impl<E: GraphReference> StreamOp<E> {
             | StreamOp::TGet { tuple: input, .. }
             | StreamOp::Fix { func: input, .. } => visit(input),
             StreamOp::Reconfigurable(ReconfigurableExpressionSpec { input, .. }) => visit(input),
+            StreamOp::Constructor { payload, .. } => payload.into_iter().for_each(&mut visit),
             StreamOp::List(items) | StreamOp::Tuple(items) => {
                 items.into_iter().for_each(&mut visit)
             }

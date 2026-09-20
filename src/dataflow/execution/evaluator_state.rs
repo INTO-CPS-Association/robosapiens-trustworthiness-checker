@@ -866,6 +866,10 @@ impl NodeState {
                 last_left: None,
                 last_right: None,
             },
+            // A nullary constructor reads nothing, so it keeps no operand.
+            StreamOp::Constructor { payload, .. } => Self::OperandLift {
+                last_operands: vec![None; payload.iter().count()],
+            },
             StreamOp::List(items) | StreamOp::Tuple(items) => Self::OperandLift {
                 last_operands: vec![None; items.len()],
             },

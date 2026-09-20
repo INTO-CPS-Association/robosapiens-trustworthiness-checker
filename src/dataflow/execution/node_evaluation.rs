@@ -9,6 +9,8 @@
 //! [`super::evaluator::lifecycle`], and the tick barrier they stage writes for lives in
 //! [`super::temporal_commit`].
 
+use crate::core::UnionValue;
+
 use super::super::history::{HistoryAccess, HistoryId};
 use super::super::ir::*;
 use super::super::*;
@@ -215,6 +217,16 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             let values = lift_value_operands(node_id, state, values);
             lift_many(values, |values| Value::List(EcoVec::from(values)))
         }
+        StreamOp::Constructor { tag, payload } => match payload {
+            Some(payload) => {
+                let value = context.read_value(state, payload);
+                let values = lift_value_operands(node_id, state, vec![value]);
+                lift_many(values, |values| {
+                    UnionValue::new(tag.clone(), Some(values[0].clone())).into()
+                })
+            }
+            None => UnionValue::new(tag.clone(), None).into(),
+        },
         StreamOp::Tuple(items) => {
             let values = items
                 .iter()

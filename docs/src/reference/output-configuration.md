@@ -6,13 +6,45 @@ Use a shortcut for one destination or `--output-config PATH` for explicit routin
 
 | Selector | Destination | Encoding |
 |---|---|---|
-| no output selector or `--output-stdout` | stdout | `name[index] = DebugValue` with zero-based logical output index |
+| no output selector or `--output-stdout` | stdout | `name[index] = value` with zero-based logical output index; the value is written as DSRV source (see [below](#values-written-to-stdout)) |
 | `--mqtt-output` / `--output-mqtt-file PATH` | MQTT | `{"value": <JSON value>}` |
 | `--redis-output` / `--output-redis-file PATH` | Redis Pub/Sub | JSON value without the MQTT envelope |
 | `--output-ros-file PATH` | ROS 2 | Message type supplied by each route format; requires `--features ros` |
 | `--output-config PATH` | JSON5 destination registry | Supports local and transport destinations |
 
 `--output-config` is checked before the shortcut selections. MQTT uses rumqttc and is available without an additional Cargo feature. MQTT output shortcuts use `--mqtt-protocol 3.1.1|5`, defaulting to `3.1.1`. Configured MQTT destinations use their own `protocol` field, defaulting to `3.1.1` when it is omitted.
+
+## Values written to stdout
+
+Each value is written as the DSRV expression that builds it, so a reported
+value can be pasted back into a specification:
+
+```text
+count[0] = 3
+average[0] = 1.5
+label[0] = "ready"
+samples[0] = [1, 2, 3]
+reading[0] = Map("model": 2, "entropy": 0.5)
+state[0] = Moving(3)
+```
+
+A union value is written as a bare constructor, without naming its union: the
+value carries no schema, and the type expected where it is used resolves the
+tag. It is source for a specification that has `use
+experimental::{tagged_unions}`, which is the only kind that could have built
+it.
+
+Two marks are not source, because they are states a running monitor is in
+rather than things a specification can say: `⊥` for a value that cannot yet
+be computed, and `no_val` for a stream that has no value this tick. A stream
+with no value is left out of the output rather than written, so only `⊥`
+appears in practice. A non-finite `Float` is written as `inf`, `-inf` or
+`NaN`, which DSRV has no literals for.
+
+A string is escaped the way the grammar spells escapes (`\t`, `\n`, `\'`,
+`\"`, `\\`). A string containing one of those characters does not yet read
+back as itself, because the parser keeps an escape as the characters that
+spell it rather than decoding it.
 
 ## File shape
 

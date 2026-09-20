@@ -283,7 +283,7 @@ impl JsonStreamValue for Value {
     }
 
     fn encode_stdout(&self) -> anyhow::Result<String> {
-        Ok(format!("{self:?}"))
+        Ok(self.dsrv_source())
     }
 }
 
@@ -488,6 +488,104 @@ impl From<()> for Value {
     fn from(_value: ()) -> Self {
         Value::Unit
     }
+}
+
+impl Value {
+    /// This value written as the DSRV expression that builds it, which is
+    /// what a monitor writes to stdout: a reader can paste a reported value
+    /// back into a specification.
+    ///
+    /// A constructor is written bare, without naming its union, because the
+    /// value carries no schema and none is needed: the type expected where
+    /// the value is used resolves the tag (`features.md` §12).
+    ///
+    /// Two values have no source form, because they are states a running
+    /// monitor is in rather than things a specification can say: `NoVal` and
+    /// `Deferred`. They keep their diagnostic marks, as do a non-finite
+    /// `Float` and a function with no recorded source.
+    pub fn dsrv_source(&self) -> String {
+        let mut source = String::new();
+        self.write_dsrv_source(&mut source)
+            .expect("writing to a String does not fail");
+        source
+    }
+
+    fn write_dsrv_source(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        match self {
+            Value::Int(value) => write!(out, "{value}"),
+            Value::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                write!(out, "{value:.1}")
+            }
+            Value::Float(value) => write!(out, "{value}"),
+            Value::Bool(value) => write!(out, "{value}"),
+            Value::Unit => write!(out, "()"),
+            Value::Str(value) => write_dsrv_string(out, value),
+            Value::Function(function) => write!(out, "{}", function.display_source()),
+            Value::Union(value) => {
+                write!(out, "{}", value.tag())?;
+                match value.payload() {
+                    Some(payload) => {
+                        out.write_char('(')?;
+                        payload.write_dsrv_source(out)?;
+                        out.write_char(')')
+                    }
+                    None => Ok(()),
+                }
+            }
+            Value::List(values) => {
+                out.write_char('[')?;
+                write_dsrv_sequence(out, values)?;
+                out.write_char(']')
+            }
+            Value::Tuple(values) => {
+                out.write_str("Tuple(")?;
+                write_dsrv_sequence(out, values)?;
+                out.write_char(')')
+            }
+            Value::Map(entries) => {
+                out.write_str("Map(")?;
+                for (index, (key, value)) in entries.iter().enumerate() {
+                    if index != 0 {
+                        out.write_str(", ")?;
+                    }
+                    write_dsrv_string(out, key)?;
+                    out.write_str(": ")?;
+                    value.write_dsrv_source(out)?;
+                }
+                out.write_char(')')
+            }
+            Value::Deferred => out.write_char('⊥'),
+            Value::NoVal => out.write_str("no_val"),
+        }
+    }
+}
+
+fn write_dsrv_sequence(out: &mut impl std::fmt::Write, values: &[Value]) -> std::fmt::Result {
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.write_str(", ")?;
+        }
+        value.write_dsrv_source(out)?;
+    }
+    Ok(())
+}
+
+/// A string literal, escaped the way the grammar spells escapes. A character
+/// DSRV has no escape for is written as it is, which is what the string
+/// literal rule accepts for everything but a quote, a backslash and a line
+/// break.
+fn write_dsrv_string(out: &mut impl std::fmt::Write, value: &str) -> std::fmt::Result {
+    out.write_char('"')?;
+    for character in value.chars() {
+        match character {
+            '"' => out.write_str("\\\"")?,
+            '\\' => out.write_str("\\\\")?,
+            '\n' => out.write_str("\\n")?,
+            '\t' => out.write_str("\\t")?,
+            other => out.write_char(other)?,
+        }
+    }
+    out.write_char('"')
 }
 
 impl Display for Value {
@@ -863,6 +961,91 @@ impl<'de> Deserialize<'de> for Value {
         }
 
         deserializer.deserialize_any(ValueVisitor)
+    }
+}
+
+#[cfg(test)]
+mod dsrv_source_tests {
+    use super::*;
+    use crate::core::UnionValue;
+    use crate::lang::dsrv::parser::parse_str;
+    use ecow::eco_vec;
+
+    /// A reported value, read back as the expression of a stream. The header
+    /// is the one the specification it came from must already carry for a
+    /// union value to have been built at all.
+    fn parse_reported(source: &str) -> String {
+        let specification =
+            format!("use experimental::{{tagged_unions}}\nout reported\nreported = {source}\n");
+        let parsed = parse_str(&specification)
+            .unwrap_or_else(|error| panic!("`{source}` should parse as DSRV: {error}"));
+        parsed
+            .var_expr_ref(&crate::VarName::from("reported"))
+            .expect("reported is defined")
+            .to_string()
+    }
+
+    fn round_trips(value: Value) {
+        let source = value.dsrv_source();
+        assert_eq!(
+            parse_reported(&source),
+            source,
+            "`{source}` did not print back as itself"
+        );
+    }
+
+    #[test]
+    fn reported_values_are_dsrv_source() {
+        for value in [
+            Value::Int(-3),
+            Value::Float(1.0),
+            Value::Float(1.5),
+            Value::Bool(true),
+            Value::Unit,
+            Value::Str("plain".into()),
+            Value::List(eco_vec![Value::Int(1), Value::Int(2)]),
+            Value::Tuple(eco_vec![Value::Int(1), Value::Bool(false)]),
+            Value::from(UnionValue::new("Stopped", None)),
+            Value::from(UnionValue::new("Moving", Some(Value::Int(3)))),
+            // A tag whose payload is itself a union, as a library writes it.
+            Value::from(UnionValue::new(
+                "Moved",
+                Some(Value::from(UnionValue::new("Idle", None))),
+            )),
+        ] {
+            round_trips(value);
+        }
+    }
+
+    // A reported string is escaped the way the grammar spells escapes, so it
+    // parses. It does not yet read back as the same string: the grammar
+    // keeps an escape as the characters that spell it rather than decoding
+    // it, so `\n` is a backslash and an `n`. Decoding is a separate fix;
+    // until it lands, a string carrying one of these characters is reported
+    // in a form that parses but means something else.
+    #[test]
+    fn a_reported_string_escapes_what_dsrv_escapes() {
+        let value = Value::Str("a\"b\\c\nd\te".into());
+        assert_eq!(value.dsrv_source(), r#""a\"b\\c\nd\te""#);
+        parse_reported(&value.dsrv_source());
+    }
+
+    #[test]
+    fn a_reported_map_names_its_keys_as_strings() {
+        let mut entries = BTreeMap::new();
+        entries.insert(EcoString::from("count"), Value::Int(2));
+        entries.insert(EcoString::from("on"), Value::Bool(true));
+        let value = Value::Map(entries);
+        assert_eq!(value.dsrv_source(), r#"Map("count": 2, "on": true)"#);
+        round_trips(value);
+    }
+
+    // The states a running monitor can be in are not things a specification
+    // can say, so they keep their marks rather than pretending to be source.
+    #[test]
+    fn runtime_states_keep_their_marks() {
+        assert_eq!(Value::Deferred.dsrv_source(), "⊥");
+        assert_eq!(Value::NoVal.dsrv_source(), "no_val");
     }
 }
 

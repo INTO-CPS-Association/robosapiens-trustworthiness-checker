@@ -477,3 +477,24 @@ fn a_bare_constructor_prints_without_a_qualifier() {
         assert_eq!(parse(&printed).to_string(), printed);
     }
 }
+
+// R16.7: union values compare like the other structured values, and an
+// operand of `==` has no expected type, so a tag there is qualified.
+#[test]
+fn union_values_compare_for_equality() {
+    let checked = check(&format!(
+        "{HEADER}type State = Union<Stopped, Moving: Int>\n\
+         in x: Int\nout same: Bool\nsame = State::Moving(x) == State::Stopped\n"
+    ));
+    assert_eq!(type_of(&checked, "same").to_string(), "Bool");
+
+    let errors = check_err(&format!(
+        "{HEADER}type State = Union<Stopped, Moving: Int>\n\
+         in x: Int\nout same: Bool\nsame = Moving(x) == Stopped\n"
+    ));
+    assert!(
+        matches!(&errors[0], SemanticError::UnresolvedType(error)
+            if *error.kind() == UnresolvedTypeKind::ConstructorUnion),
+        "{errors:?}"
+    );
+}

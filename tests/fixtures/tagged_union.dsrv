@@ -1,0 +1,9 @@
+use experimental::{tagged_unions}
+
+// Uses exactly one capability: tagged unions.
+type State = Union<Stopped, Moving: Int>
+
+in x: Int
+out state: State
+
+state = Moving(x)

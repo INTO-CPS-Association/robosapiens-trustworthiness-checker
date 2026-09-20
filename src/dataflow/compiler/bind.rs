@@ -368,6 +368,12 @@ fn bind_op(
             value: r!(value),
             trigger: r!(trigger),
         },
+        UnboundOp::Constructor { tag, payload } => BoundOp::Constructor {
+            tag,
+            payload: payload
+                .map(|payload| bind_ref(payload, environment, recursive_output))
+                .transpose()?,
+        },
         UnboundOp::List(items) => BoundOp::List(rs!(items)),
         UnboundOp::Tuple(items) => BoundOp::Tuple(rs!(items)),
         UnboundOp::Map(items) => BoundOp::Map(

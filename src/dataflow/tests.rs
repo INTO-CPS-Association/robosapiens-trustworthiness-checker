@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::BinaryOperator;
 use crate::core::Semantics;
+use crate::core::UnionValue;
 use crate::dataflow::StreamProgramError;
 use crate::dataflow::lifecycle_test_support::{
     LifecycleOperation, arb_lifecycle_case, arb_operation_schedule,
@@ -2133,6 +2134,41 @@ fn reconfigured_negative_integer_power_reports_source_context() {
         monitor.evaluate(&[Value::Str("2 ** 1".into())], &mut output),
         Err(DataflowEvaluationError::MonitorFailed)
     ));
+}
+
+// A constructor lifts its payload like any other operand, and the graph
+// agrees with the untimed evaluator that is its oracle.
+#[test]
+fn dataflow_builds_union_values_lifting_the_payload() {
+    let spec = elaborated(
+        "use experimental::{tagged_unions}\n\
+         type State = Union<Stopped, Moving: Int>\n\
+         in x: Int\n\
+         out moving: State\n\
+         out stopped: State\n\
+         moving = Moving(x)\n\
+         stopped = Stopped\n",
+    );
+    let inputs = BTreeMap::from([(
+        VarName::new("x"),
+        vec![Value::Int(1), Value::NoVal, Value::Int(3)],
+    )]);
+    let rows = eval_dataflow_spec(spec, inputs);
+    let moving = |value: i64| Value::from(UnionValue::new("Moving", Some(Value::Int(value))));
+    let stopped = Value::from(UnionValue::new("Stopped", None));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row[&VarName::new("moving")].clone())
+            .collect::<Vec<_>>(),
+        // The absent payload keeps the value the constructor last built.
+        vec![moving(1), moving(1), moving(3)]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row[&VarName::new("stopped")].clone())
+            .collect::<Vec<_>>(),
+        vec![stopped.clone(), stopped.clone(), stopped]
+    );
 }
 
 #[apply(async_test)]

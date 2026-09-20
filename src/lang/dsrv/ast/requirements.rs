@@ -10,14 +10,12 @@ pub(super) fn requirement(kind: &ExprKind) -> Option<(Capability, &'static str)>
     match kind {
         ExprKind::MonitoredAt(..) => Some((Capability::Distribution, "`monitored_at`")),
         ExprKind::Dist(..) => Some((Capability::Distribution, "`dist`")),
+        ExprKind::Constructor(..) => Some((Capability::TaggedUnions, "a union constructor")),
         ExprKind::If(..)
         | ExprKind::SIndex(..)
         | ExprKind::Val(..)
         | ExprKind::BinOp(..)
         | ExprKind::Var(..)
-        // A constructor never reaches a runtime: elaboration resolves it
-        // into a union value, which is where the capability is required.
-        | ExprKind::Constructor(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
         | ExprKind::Update(..)

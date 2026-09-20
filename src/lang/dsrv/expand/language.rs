@@ -166,6 +166,11 @@ impl LanguageConfig {
         self.dialect
     }
 
+    /// The edition whose defaults a specification is read under.
+    pub fn edition(&self) -> Edition {
+        self.edition
+    }
+
     /// Experiment names, for diagnostics such as the warning printed when a
     /// specification runs with experiments.
     pub fn experiment_names(&self) -> impl Iterator<Item = &'static str> + '_ {

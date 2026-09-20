@@ -473,8 +473,9 @@ where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
     // The distribution primitives panic here; runtimes refuse them before
-    // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    // evaluation. Constructors are built by the shared evaluation.
+    const CAPABILITIES: crate::core::Capabilities =
+        crate::core::Capabilities::NONE.with(crate::core::Capability::TaggedUnions);
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -498,8 +499,9 @@ where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
     // The distribution primitives panic here; runtimes refuse them before
-    // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    // evaluation. Constructors are built by the shared evaluation.
+    const CAPABILITIES: crate::core::Capabilities =
+        crate::core::Capabilities::NONE.with(crate::core::Capability::TaggedUnions);
 
     fn to_async_stream(
         expr: &CheckedExpr,

@@ -1218,8 +1218,8 @@ mod integration_tests {
         .expect("Failed to run CLI");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("w[0] = Int(3)"));
-        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(stdout.contains("w[0] = 3"));
+        assert!(stdout.contains("w[1] = 7"));
         assert!(!stdout.contains("v[0] ="));
         assert!(!stdout.contains("v[1] ="));
 
@@ -1265,8 +1265,8 @@ mod integration_tests {
         .expect("Failed to run CLI");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("z[0] = Int(3)"));
-        assert!(stdout.contains("z[1] = Int(7)"));
+        assert!(stdout.contains("z[0] = 3"));
+        assert!(stdout.contains("z[1] = 7"));
 
         assert!(
             output.status.success(),
@@ -1289,8 +1289,8 @@ mod integration_tests {
         .expect("Failed to run CLI");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("w[0] = Int(3)"));
-        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(stdout.contains("w[0] = 3"));
+        assert!(stdout.contains("w[1] = 7"));
         assert!(!stdout.contains("v[0] ="));
         assert!(!stdout.contains("v[1] ="));
 
@@ -1749,8 +1749,8 @@ mod integration_tests {
         .expect("Failed to run CLI");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("w[0] = Int(3)"));
-        assert!(stdout.contains("w[1] = Int(7)"));
+        assert!(stdout.contains("w[0] = 3"));
+        assert!(stdout.contains("w[1] = 7"));
         assert!(!stdout.contains("v[0] ="));
         assert!(!stdout.contains("v[1] ="));
 
@@ -2632,41 +2632,31 @@ mod integration_tests {
             (
                 "counter",
                 &[
-                    "z[0] = Int(1)",
-                    "z[1] = Int(2)",
-                    "z[2] = Int(3)",
-                    "z[3] = Int(4)",
-                    "z[4] = Int(6)",
-                    "z[5] = Int(9)",
+                    "z[0] = 1", "z[1] = 2", "z[2] = 3", "z[3] = 4", "z[4] = 6", "z[5] = 9",
                 ][..],
             ),
             (
                 "lifecycle_equal_time",
-                &[
-                    "seen[0] = Int(7)",
-                    "ticks[0] = Int(1)",
-                    "seen[1] = Int(7)",
-                    "ticks[1] = Int(2)",
-                ][..],
+                &["seen[0] = 7", "ticks[0] = 1", "seen[1] = 7", "ticks[1] = 2"][..],
             ),
             (
                 "lifecycle_lazy_recursive",
                 &[
-                    "past[0] = Deferred",
-                    "sum[0] = Int(10)",
-                    "branch[0] = Deferred",
-                    "past[1] = Deferred",
-                    "sum[1] = Int(30)",
-                    "branch[1] = Int(-1)",
-                    "past[2] = Int(10)",
-                    "sum[2] = Int(60)",
-                    "branch[2] = Int(20)",
-                    "past[3] = Int(20)",
-                    "sum[3] = Int(100)",
-                    "branch[3] = Int(20)",
+                    "past[0] = ⊥",
+                    "sum[0] = 10",
+                    "branch[0] = ⊥",
+                    "past[1] = ⊥",
+                    "sum[1] = 30",
+                    "branch[1] = -1",
+                    "past[2] = 10",
+                    "sum[2] = 60",
+                    "branch[2] = 20",
+                    "past[3] = 20",
+                    "sum[3] = 100",
+                    "branch[3] = 20",
                 ][..],
             ),
-            ("lifecycle_dynamic", &["z[0] = Int(2)", "z[1] = Int(9)"][..]),
+            ("lifecycle_dynamic", &["z[0] = 2", "z[1] = 9"][..]),
         ];
 
         for (stem, expected_lines) in cases {
@@ -2740,7 +2730,7 @@ mod integration_tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(
             stdout.lines().collect::<Vec<_>>(),
-            vec!["z[0] = Int(2)", "z[1] = Int(9)"]
+            vec!["z[0] = 2", "z[1] = 9"]
         );
         assert!(
             !stdout.contains("[2]"),

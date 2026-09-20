@@ -60,6 +60,12 @@ pub(crate) fn evaluate<'a>(
         MRemove(map, key) => mc::mremove(evaluate(map), key.clone()),
         MInsert(map, key, value) => mc::minsert(evaluate(map), key.clone(), evaluate(value)),
         MHasKey(map, key) => mc::mhas_key(evaluate(map), key.clone()),
+        // Elaboration has settled which union the tag belongs to, so the
+        // value carries the tag and its payload and nothing else.
+        Constructor(payload, tag, _) => match payload.into_iter().next() {
+            Some(payload) => mc::constructor(tag.clone(), evaluate(payload)),
+            None => mc::nullary_constructor(tag.clone()),
+        },
         Sin(value) => mc::sin(evaluate(value)),
         Cos(value) => mc::cos(evaluate(value)),
         Tan(value) => mc::tan(evaluate(value)),
