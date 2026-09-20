@@ -69,9 +69,11 @@ use super::ast::{
     Declaration, DsrvAstError, Expr, ExprBuilder, ExprId, ExprKind, ExprMetadata,
     UnvalidatedDsrvSpecification,
 };
+use super::source::SourceType;
 use super::source::{SourceContext, SourceResolveError};
 use super::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAscription};
+use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::lang::dsrv::ast::DsrvSpecification;
 use contiguous_tree::TreeCursor as _;
@@ -111,6 +113,13 @@ impl SourceAscription {
             Self::Ascribed(ty) => StreamTypeAscription::Ascribed(context.resolve_type(ty)?),
         })
     }
+
+    fn source_type(&self) -> Option<&SourceType> {
+        match self {
+            Self::Unascribed => None,
+            Self::Ascribed(ty) => Some(ty),
+        }
+    }
 }
 
 /// Resolve a parsed specification's names into semantic declarations.
@@ -131,20 +140,31 @@ pub(crate) fn expand_declarations(
                 }
                 .into());
             }
+            language::check_experiment_type(&alias.ty, &language)?;
             context.insert_source(alias.clone())?;
         }
     }
-    context.language(language);
+    context.language(language.clone());
     let context = Rc::new(context.build()?);
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
     let mut declarations = EcoVec::new();
     let mut equation_roots = EcoVec::new();
+    for declaration in &parsed_declarations {
+        let (construct, name, span) = match declaration {
+            ParsedDeclaration::Input(name, _, span) => ("the input", name, span),
+            ParsedDeclaration::Output(name, _, _, span) => ("the output", name, span),
+            ParsedDeclaration::Aux(name, _, _, span) => ("the auxiliary stream", name, span),
+            ParsedDeclaration::Equation(name, _, span) => ("the stream", name, span),
+            _ => continue,
+        };
+        language::check_declared_name(construct, &name.name(), *span, &language)?;
+    }
     for declaration in parsed_declarations {
         let resolved = match declaration {
             ParsedDeclaration::Input(name, ty, span) => Declaration::Input {
                 name,
-                annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
+                annotation: resolve_annotation(ty.as_ref(), &context)?,
                 span,
             },
             // A one-line definition declares the stream, then defines it:
@@ -152,7 +172,7 @@ pub(crate) fn expand_declarations(
             ParsedDeclaration::Output(name, ty, definition, span) => {
                 declarations.push(Declaration::Output {
                     name: name.clone(),
-                    annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
+                    annotation: resolve_annotation(ty.as_ref(), &context)?,
                     span,
                 });
                 if definition.is_none() {
@@ -165,7 +185,7 @@ pub(crate) fn expand_declarations(
             ParsedDeclaration::Aux(name, ty, definition, span) => {
                 declarations.push(Declaration::Aux {
                     name: name.clone(),
-                    annotation: ty.as_ref().map(|ty| context.resolve_type(ty)).transpose()?,
+                    annotation: resolve_annotation(ty.as_ref(), &context)?,
                     span,
                 });
                 if definition.is_none() {
@@ -185,7 +205,9 @@ pub(crate) fn expand_declarations(
                 span: alias.span,
             },
             // The header is expanded into the source context, not kept.
-            ParsedDeclaration::Language(..) | ParsedDeclaration::Edition(..) => continue,
+            ParsedDeclaration::Language(..)
+            | ParsedDeclaration::Edition(..)
+            | ParsedDeclaration::Use { .. } => continue,
         };
         declarations.push(resolved);
     }
@@ -195,6 +217,53 @@ pub(crate) fn expand_declarations(
         roots: equation_roots,
         context,
     })
+}
+
+/// Resolve a declared stream's annotation, refusing a type its file did not
+/// opt into.
+fn resolve_annotation(
+    ty: Option<&SourceType>,
+    context: &SourceContext,
+) -> Result<Option<StreamType>, DsrvExpandError> {
+    let Some(ty) = ty else { return Ok(None) };
+    language::check_experiment_type(ty, context.language())?;
+    Ok(Some(context.resolve_type(ty)?))
+}
+
+/// The types written inside an expression — a lambda parameter's, and the
+/// result a `dynamic` or `defer` ascribes — are checked before the tree is
+/// converted, so the conversion itself only resolves names.
+fn check_expression_types(
+    expression: ParsedExprRef<'_>,
+    context: &SourceContext,
+) -> Result<(), DsrvExpandError> {
+    use contiguous_tree::TreeCursorExt;
+    for node in expression.postorder() {
+        let types: Vec<&SourceType> = match node.kind() {
+            ParsedExprKind::Lambda(parameters, _) => {
+                for (name, _) in parameters {
+                    language::check_declared_name(
+                        "the lambda parameter",
+                        &name.name(),
+                        parsed::span_of(node),
+                        context.language(),
+                    )?;
+                }
+                parameters
+                    .iter()
+                    .filter_map(|(_, ty)| ty.as_ref())
+                    .collect()
+            }
+            ParsedExprKind::Dynamic(_, ascription, _) | ParsedExprKind::Defer(_, ascription, _) => {
+                ascription.source_type().into_iter().collect()
+            }
+            _ => continue,
+        };
+        for ty in types {
+            language::check_experiment_type(ty, context.language())?;
+        }
+    }
+    Ok(())
 }
 
 /// Expand a parsed specification into the core specification.
@@ -210,11 +279,12 @@ pub(crate) fn expand_specification(
     } = expand_declarations(parsed, request)?;
     let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
-    let dialect = specification.source_context.language().dialect();
+    let language = specification.source_context.language().clone();
     for node in specification.nodes() {
-        language::check_dialect_node(node, dialect)?;
+        language::check_experiment_node(node, &language)?;
+        language::check_dialect_node(node, language.dialect())?;
     }
-    if dialect == Dialect::Core {
+    if language.dialect() == Dialect::Core {
         // A Core file is accepted only if it is Core throughout.
         specification = language::CoreDsrvSpecification::check(specification)?.into_specification();
     }
@@ -235,9 +305,10 @@ pub(crate) fn expand_expression(
     }
     {
         use contiguous_tree::TreeCursorExt;
-        let dialect = context.language().dialect();
+        let language = context.language();
         for node in expr.as_ref().postorder() {
-            language::check_dialect_node(node, dialect)?;
+            language::check_experiment_node(node, language)?;
+            language::check_dialect_node(node, language.dialect())?;
         }
     }
     if context.language().dialect() == Dialect::Core {
@@ -306,6 +377,7 @@ pub(crate) fn expand_tree(
     builder: &mut ExprBuilder,
     context: &Rc<SourceContext>,
 ) -> Result<ExprId, DsrvExpandError> {
+    check_expression_types(expression, context)?;
     builder
         .try_transcode(expression, |node| {
             use ParsedExprKind::*;
@@ -318,7 +390,21 @@ pub(crate) fn expand_tree(
                 SIndex(a, offset) => ExprKind::SIndex(*node.child(*a), *offset),
                 Val(value) => ExprKind::Val(value.clone()),
                 BinOp(a, b, op) => ExprKind::BinOp(*node.child(*a), *node.child(*b), *op),
+                // Case decides: in a file that took on tagged unions, a
+                // capitalised name is a tag whose union elaboration settles,
+                // not a name expansion could resolve.
+                Var(name)
+                    if context.language().has(language::Feature::TaggedUnions)
+                        && language::is_tag_name(&name.name()) =>
+                {
+                    ExprKind::Constructor(EcoVec::new(), name.name().into(), None)
+                }
                 Var(name) => ExprKind::Var(name.clone()),
+                Constructor(payload, tag, qualifier) => ExprKind::Constructor(
+                    payload.iter().map(|id| *node.child(*id)).collect(),
+                    tag.clone(),
+                    qualifier.clone(),
+                ),
                 Dynamic(a, ty, scope) => {
                     ExprKind::Dynamic(*node.child(*a), ty.resolve(context)?, scope.clone())
                 }

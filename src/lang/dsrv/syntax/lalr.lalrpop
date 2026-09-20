@@ -4,7 +4,7 @@ use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
 use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
-use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, AliasDeclaration, TypeName};
+use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
 use crate::core::{BinaryOperator, VarName};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
@@ -27,7 +27,14 @@ match {
     _
 }
 
-RawIdent: &'input str = <s:r"[A-Za-z_][A-Za-z0-9_]*"> => s;
+// Case separates a tag from a name, so the two are separate terminals: a
+// capitalised name applied to a payload is a constructor, never a call.
+UpperIdent: &'input str = <s:r"[A-Z][A-Za-z0-9_]*"> => s;
+LowerIdent: &'input str = <s:r"[a-z_][A-Za-z0-9_]*"> => s;
+RawIdent: &'input str = {
+    UpperIdent,
+    LowerIdent,
+};
 Ident: VarName = <s:RawIdent> => VarName::from(s);
 Uint: u64 = <l:@L> <s:r"[0-9]+"> =>? u64::from_str(s)
     .map_err(|_| {
@@ -166,15 +173,23 @@ Literal: ExprKind = {
 SpannedParen: ExprId = "(" <e:Expr> ")" => e;
 
 // Identifier as an ExprKind (variable reference)
-SpannedIdentExprKind: ExprId = MakeSpanned<IdentExprKind>;
-IdentExprKind : ExprKind = {
-    Ident => ExprKind::Var(<>),
+SpannedLowerVar: ExprId = MakeSpanned<LowerVarExprKind>;
+LowerVarExprKind : ExprKind = {
+    <name:LowerIdent> => ExprKind::Var(VarName::from(name)),
+};
+
+// A capitalised name is a variable only in a file that has not taken on
+// tagged unions; expansion turns it into a constructor in one that has.
+SpannedUpperVar: ExprId = MakeSpanned<UpperVarExprKind>;
+UpperVarExprKind : ExprKind = {
+    <name:UpperIdent> => ExprKind::Var(VarName::from(name)),
 };
 
 // Helpers for indexing base (literal, ident, or paren)
 SIndexHelp: ExprId = {
     SpannedLiteral,
-    SpannedIdentExprKind,
+    SpannedLowerVar,
+    SpannedUpperVar,
     SpannedParen
 };
 
@@ -301,11 +316,23 @@ AtomBase: ExprId = {
     SpecialKeywords,
     SpannedLiteral,
     ContainerExpr,
-    SpannedIdentExprKind,
+    SpannedLowerVar,
     SpannedParen
 }
 
 
+
+// A constructor names its tag, and the union it belongs to when the writer
+// qualifies it. Parsing knows no schema: which union a tag belongs to, and
+// which alternative it selects, is settled when the expression is elaborated.
+UnionConstructor: ExprId = {
+    <l:@L> <qualifier:SourceName> "::" <tag:RawIdent> <r:@R> =>
+        builder.alloc(ExprKind::Constructor(EcoVec::new(), tag.into(), Some(qualifier)), Span::new(l as u32, r as u32)),
+    <l:@L> <qualifier:SourceName> "::" <tag:RawIdent> "(" <payload:Expr> <trailing:TrailingComma> ")" <r:@R> =>
+        builder.alloc(ExprKind::Constructor(EcoVec::from([payload]), tag.into(), Some(qualifier)), Span::new(l as u32, r as u32)),
+    <l:@L> <tag:UpperIdent> "(" <payload:Expr> <trailing:TrailingComma> ")" <r:@R> =>
+        builder.alloc(ExprKind::Constructor(EcoVec::from([payload]), tag.into(), None), Span::new(l as u32, r as u32)),
+};
 
 FieldName: EcoString = {
     <field: RawIdent> => field.into(),
@@ -314,9 +341,13 @@ FieldName: EcoString = {
 
 // Calls and field accesses allocate each prefix immediately, preserving postorder
 // construction and giving every generated node its exact source span.
-Atom: ExprId = {
+//
+// A constructor is not a function, so it never heads a call: in
+// `Tag(payload)` the parentheses belong to the constructor, which is why the
+// callee of a call is a `CallableAtom` rather than any atom.
+CallableAtom: ExprId = {
     AtomBase,
-    <base: Atom> "(" <args: DelimitedSepListOpt<Expr, ",">> ")" <r:@R> => {
+    <base: CallableAtom> "(" <args: DelimitedSepListOpt<Expr, ",">> ")" <r:@R> => {
         let start = builder.metadata(base).start;
         builder.alloc(ExprKind::Apply(base, args), Span::new(start, r as u32))
     },
@@ -324,6 +355,12 @@ Atom: ExprId = {
         let start = builder.metadata(base).start;
         builder.alloc(ExprKind::SGet(base, field), Span::new(start, r as u32))
     },
+}
+
+Atom: ExprId = {
+    CallableAtom,
+    UnionConstructor,
+    SpannedUpperVar,
 }
 
 // -----------------------------------------------------------------------------
@@ -481,6 +518,14 @@ StructPermissiveFields: EcoVec<(EcoString, SourceType)> = {
     },
 }
 
+// One alternative of a `Union<…>` type: a tag, and a payload type when it
+// carries one.
+UnionAlternative: SourceAlternative = {
+    <l:@L> <tag:RawIdent> <payload:TypeAnno?> <r:@R> => SourceAlternative {
+        tag: tag.into(), payload, span: Span::new(l as u32, r as u32),
+    },
+};
+
 SourceName: TypeName = <l:@L> <name:RawIdent> =>? TypeName::new(name).map_err(|_| {
     *user_error_location = Some(l);
     ParseError::User { error: "invalid or reserved type alias name" }
@@ -501,6 +546,7 @@ StreamTypKind: StreamType = {
     "List" "<" <inner: StreamTyp> ","? ">" => StreamType::List(Box::new(inner)),
     "Map" "<" <inner: StreamTyp> ","? ">" => StreamType::Map(Box::new(inner)),
     "Expr" "<" <inner: StreamTyp> ","? ">" => StreamType::Expr(Box::new(inner)),
+    "Union" "<" <alternatives:DelimitedSepListOpt<UnionAlternative, ",">> ">" => StreamType::Union(alternatives),
     "Struct" "<" <fields: StructPermissiveFields> ">" => StreamType::Struct(fields, true),
     "Struct" "<" <fields: DelimitedSepListOpt<StructTypeField, ",">> ">" => StreamType::Struct(fields, false),
     "(" <first: StreamTyp> "," ")" => {
@@ -576,11 +622,19 @@ AliasDecl: Declaration = {
 // they take are checked by the expansion stage.
 EditionDigits: &'input str = <s:r"[0-9]+"> => s;
 
+HeaderItem: (EcoString, Span) = {
+   <l:@L> <name:RawIdent> <r:@R> => (EcoString::from(name), Span::new(l as u32, r as u32)),
+};
+
 HeaderDecl: Declaration = {
    <l:@L> "language" <name:RawIdent> <r:@R> =>
        Declaration::Language(EcoString::from(name), Span::new(l as u32, r as u32)),
    <l:@L> "edition" <year:EditionDigits> "-" <month:EditionDigits> <r:@R> =>
        Declaration::Edition(EcoString::from(format!("{year}-{month}")), Span::new(l as u32, r as u32)),
+   <l:@L> "use" <namespace:RawIdent> "::" "{" <items:SepList<HeaderItem, ",">> "}" <r:@R> =>
+       Declaration::Use { namespace: EcoString::from(namespace), items: Some(items), span: Span::new(l as u32, r as u32) },
+   <l:@L> "use" <namespace:RawIdent> "::" "*" <r:@R> =>
+       Declaration::Use { namespace: EcoString::from(namespace), items: None, span: Span::new(l as u32, r as u32) },
 };
 
 Declaration: Declaration = {

@@ -119,6 +119,18 @@ impl Serialize for ReportValue<'_> {
                 }
                 map.end()
             }
+            Value::Union(value) => {
+                let mut map = serializer.serialize_map(Some(if value.payload().is_some() {
+                    2
+                } else {
+                    1
+                }))?;
+                map.serialize_entry("$tag", value.tag())?;
+                if let Some(payload) = value.payload() {
+                    map.serialize_entry("payload", &ReportValue(payload))?;
+                }
+                map.end()
+            }
             Value::Deferred => serialize_runtime_state(serializer, "deferred"),
             Value::NoVal => serialize_runtime_state(serializer, "no_val"),
         }

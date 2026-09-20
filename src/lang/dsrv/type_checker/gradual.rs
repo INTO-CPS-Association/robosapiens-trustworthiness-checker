@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::DsrvSpecification;
-use crate::core::StreamType;
+use crate::core::{StreamType, UnionPayload};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +62,20 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
                 && gradual_consistent(eret, aret)
         }
         (StreamType::Expr(e), TCType::Expr(a)) => gradual_consistent(e, a),
+        // Alternatives are canonically ordered, so two unions agree exactly
+        // when their tags and payloads line up in that order.
+        (StreamType::Union(expected), TCType::Union(actual)) => {
+            let (expected, actual) = (expected.alternatives(), actual.alternatives());
+            expected.len() == actual.len()
+                && expected.iter().zip(actual.iter()).all(|(e, a)| {
+                    e.tag() == a.tag()
+                        && match (e.payload(), a.payload()) {
+                            (UnionPayload::Nullary, UnionPayload::Nullary) => true,
+                            (UnionPayload::Of(e), UnionPayload::Of(a)) => gradual_consistent(e, a),
+                            _ => false,
+                        }
+                })
+        }
         (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
             ef.len() == af.len()
                 && ef

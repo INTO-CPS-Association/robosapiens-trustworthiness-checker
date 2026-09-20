@@ -28,6 +28,10 @@ pub enum TypeErrorKind {
     FunctionTypeMismatch,
     FunctionArityMismatch,
     ExpectedFunction,
+    ExpectedUnion,
+    UnknownUnionTag,
+    ConstructorPayloadArity,
+    ConstructorPayloadTypeMismatch,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -80,6 +84,7 @@ pub enum UnresolvedTypeKind {
     EmptyListHeadElementType,
     ListHeadElementType,
     VariableType,
+    ConstructorUnion,
 }
 
 #[derive(Debug, PartialEq, Eq)]

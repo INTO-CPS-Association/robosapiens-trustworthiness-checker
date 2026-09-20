@@ -12,11 +12,14 @@ mod syntax;
 pub mod type_checker;
 
 #[cfg(test)]
+mod tagged_union_tests;
+#[cfg(test)]
 pub(crate) mod test_support;
 
 pub use elaborate::ElaboratedDsrvSpecification;
 pub use expand::language::{
-    CoreDsrvSpecification, Dialect, Edition, LanguageConfig, LanguageError, LanguageRequest,
+    CoreDsrvSpecification, Dialect, Edition, Feature, LanguageConfig, LanguageError,
+    LanguageRequest,
 };
 pub use parser::{DsrvParseError, check_core_source};
 pub use pipeline::{DsrvPipelineError, TypeCheckMode, TypeCheckOptions};

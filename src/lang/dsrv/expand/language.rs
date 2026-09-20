@@ -1,9 +1,12 @@
-//! Language settings: the dialect and edition a specification declares,
-//! resolved once during expansion.
+//! Language settings: the dialect, edition and experiments a specification
+//! declares, resolved once during expansion.
 //!
-//! Later stages see the settings only as part of the source fingerprint,
-//! through the dialect (which decides admission) and through the header text.
+//! Expansion is the only stage that may branch on a feature, so the accessor
+//! that asks whether one is enabled is private to this module's parent. Later
+//! stages see the settings only as part of the source fingerprint, through
+//! the dialect (which decides admission) and through the header text.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -11,6 +14,7 @@ use ecow::EcoString;
 
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{Declaration, DsrvSpecification, ExprKind, ExprRef};
+use crate::lang::dsrv::source::{SourceType, SourceTypeKind};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
@@ -108,11 +112,52 @@ impl FromStr for Edition {
     }
 }
 
+/// An experiment a specification opts into with `use experimental::…`.
+///
+/// Only experiments whose constructs exist are listed; each feature commit
+/// adds its own variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub enum Feature {
+    TaggedUnions,
+}
+
+impl Feature {
+    /// Every current experiment, which is what `use experimental::*` enables.
+    pub const ALL: &'static [Self] = &[Self::TaggedUnions];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::TaggedUnions => "tagged_unions",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|feature| feature.name() == name)
+    }
+
+    fn known() -> String {
+        Self::ALL
+            .iter()
+            .map(|feature| feature.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The revision of the experiments in this release. Bump it whenever any
+/// experiment's meaning changes, so compiled code cached under one meaning is
+/// never reused under another.
+pub const EXPERIMENTAL_REVISION: u32 = 1;
+
 /// The resolved settings of one specification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct LanguageConfig {
     dialect: Dialect,
     edition: Edition,
+    experiments: BTreeSet<Feature>,
 }
 
 impl LanguageConfig {
@@ -121,9 +166,31 @@ impl LanguageConfig {
         self.dialect
     }
 
+    /// Experiment names, for diagnostics such as the warning printed when a
+    /// specification runs with experiments.
+    pub fn experiment_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.experiments.iter().map(|feature| feature.name())
+    }
+
+    /// The experimental revision these settings depend on: `None` without
+    /// experiments, since stable behaviour does not change between releases.
+    pub(crate) fn experimental_revision(&self) -> Option<u32> {
+        (!self.experiments.is_empty()).then_some(EXPERIMENTAL_REVISION)
+    }
+
+    /// Whether an experiment is on. Only expansion may ask.
+    #[allow(dead_code)] // The first gated feature is its first caller.
+    pub(super) fn has(&self, feature: Feature) -> bool {
+        self.experiments.contains(&feature)
+    }
+
     /// The header lines that declare these settings; empty for the defaults.
     pub(crate) fn header(&self) -> String {
-        let Self { dialect, edition } = self;
+        let Self {
+            dialect,
+            edition,
+            experiments,
+        } = self;
         let mut header = String::new();
         if let Some(name) = dialect.header_name() {
             header.push_str(&format!("language {name}\n"));
@@ -131,13 +198,26 @@ impl LanguageConfig {
         if *edition != Edition::BASE {
             header.push_str(&format!("edition {edition}\n"));
         }
+        if !experiments.is_empty() {
+            let names = experiments
+                .iter()
+                .map(|feature| feature.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            header.push_str(&format!("use experimental::{{{names}}}\n"));
+        }
         header
     }
 }
 
 impl fmt::Display for LanguageConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, edition {}", self.dialect, self.edition)
+        write!(f, "{}, edition {}", self.dialect, self.edition)?;
+        let names = self.experiment_names().collect::<Vec<_>>();
+        if !names.is_empty() {
+            write!(f, ", experiments {}", names.join(", "))?;
+        }
+        Ok(())
     }
 }
 
@@ -163,6 +243,18 @@ pub enum LanguageError {
         span: Span,
     },
 
+    #[error("unknown experimental feature `{name}` at {span:?}; current experiments: {known}")]
+    UnknownFeature {
+        name: EcoString,
+        known: String,
+        span: Span,
+    },
+
+    #[error(
+        "`use {namespace}::…` at {span:?} is not supported: only `use experimental::…` is, until modules exist"
+    )]
+    UnsupportedUse { namespace: EcoString, span: Span },
+
     #[error("a second `{keyword}` line at {span:?}; the first is at {first:?}")]
     DuplicateHeader {
         keyword: &'static str,
@@ -173,6 +265,9 @@ pub enum LanguageError {
     #[error("`{keyword}` at {span:?} must come before every other declaration")]
     HeaderAfterDeclaration { keyword: &'static str, span: Span },
 
+    #[error("Core DSRV accepts no experiments, but `use experimental` is declared at {span:?}")]
+    ExperimentsInCore { span: Span },
+
     #[error("the file declares {declared} but {requested} was requested")]
     RequestConflict { declared: String, requested: String },
 
@@ -181,6 +276,22 @@ pub enum LanguageError {
 
     #[error("{construct} at {span:?} needs `language distributed`")]
     NeedsDistributed { construct: &'static str, span: Span },
+
+    #[error(
+        "{construct} `{name}` at {span:?} is capitalised, and under `use experimental::tagged_unions` a capitalised name is a union tag"
+    )]
+    CapitalisedName {
+        construct: &'static str,
+        name: EcoString,
+        span: Span,
+    },
+
+    #[error("{construct} at {span:?} needs `use experimental::{feature}`")]
+    NeedsExperiment {
+        construct: &'static str,
+        feature: &'static str,
+        span: Span,
+    },
 }
 
 /// Read the header declarations and combine them with any outside request.
@@ -190,12 +301,15 @@ pub(crate) fn resolve_language(
 ) -> Result<LanguageConfig, LanguageError> {
     let mut dialect: Option<(Dialect, Span)> = None;
     let mut edition: Option<(Edition, Span)> = None;
+    let mut experiments = BTreeSet::new();
+    let mut experiments_span = None;
     let mut body_started = false;
 
     for declaration in declarations {
         let (keyword, span) = match declaration {
             ParsedDeclaration::Language(_, span) => ("language", *span),
             ParsedDeclaration::Edition(_, span) => ("edition", *span),
+            ParsedDeclaration::Use { span, .. } => ("use", *span),
             _ => {
                 body_started = true;
                 continue;
@@ -238,6 +352,35 @@ pub(crate) fn resolve_language(
                         })?;
                 edition = Some((resolved, *span));
             }
+            // Several `use` lines add up, so they are not duplicate headers.
+            ParsedDeclaration::Use {
+                namespace,
+                items,
+                span,
+            } => {
+                if namespace != "experimental" {
+                    return Err(LanguageError::UnsupportedUse {
+                        namespace: namespace.clone(),
+                        span: *span,
+                    });
+                }
+                experiments_span.get_or_insert(*span);
+                match items {
+                    None => experiments.extend(Feature::ALL.iter().copied()),
+                    Some(items) => {
+                        for (name, span) in items {
+                            let feature = Feature::from_name(name).ok_or_else(|| {
+                                LanguageError::UnknownFeature {
+                                    name: name.clone(),
+                                    known: Feature::known(),
+                                    span: *span,
+                                }
+                            })?;
+                            experiments.insert(feature);
+                        }
+                    }
+                }
+            }
             _ => unreachable!("only header declarations reach here"),
         }
     }
@@ -255,7 +398,14 @@ pub(crate) fn resolve_language(
         request.edition,
         |edition| format!("edition {edition}"),
     )?;
-    Ok(LanguageConfig { dialect, edition })
+    if let (Dialect::Core, Some(span)) = (dialect, experiments_span) {
+        return Err(LanguageError::ExperimentsInCore { span });
+    }
+    Ok(LanguageConfig {
+        dialect,
+        edition,
+        experiments,
+    })
 }
 
 /// A setting declared in the file wins only when the request agrees with it.
@@ -344,6 +494,104 @@ pub(crate) fn is_core_fragment(root: ExprRef<'_>) -> Result<(), LanguageError> {
 
 /// The distribution primitives belong to Distributed DSRV only. Core
 /// specifications report them through the Core check instead.
+/// Whether a name is a union tag rather than a stream or a binder. Case
+/// decides, in expressions as in patterns, so a mistyped tag is an unknown
+/// tag rather than a name that resolves to something else.
+pub(super) fn is_tag_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+}
+
+/// A name a file writes where only a lower-case one belongs. Reported at the
+/// declaration, because that is what has to change.
+pub(super) fn check_declared_name(
+    construct: &'static str,
+    name: &str,
+    span: Span,
+    language: &LanguageConfig,
+) -> Result<(), LanguageError> {
+    if !language.has(Feature::TaggedUnions) || !is_tag_name(name) {
+        return Ok(());
+    }
+    Err(LanguageError::CapitalisedName {
+        construct,
+        name: name.into(),
+        span,
+    })
+}
+
+/// Every construct an experiment gates is refused here unless its file opted
+/// in, so the rest of the front end never meets one it cannot handle.
+pub(crate) fn check_experiment_node(
+    node: ExprRef<'_>,
+    language: &LanguageConfig,
+) -> Result<(), LanguageError> {
+    let (construct, feature) = match node.kind() {
+        ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
+        _ => return Ok(()),
+    };
+    if language.has(feature) {
+        return Ok(());
+    }
+    Err(LanguageError::NeedsExperiment {
+        construct,
+        feature: feature.name(),
+        span: node.span(),
+    })
+}
+
+/// A source type may name a construct an experiment gates. Alias definitions
+/// and annotations are both checked before they resolve, so the gate reports
+/// the spelling the writer used, at its own span.
+pub(crate) fn check_experiment_type(
+    source: &SourceType,
+    language: &LanguageConfig,
+) -> Result<(), LanguageError> {
+    match &source.kind {
+        SourceTypeKind::Union(alternatives) => {
+            if !language.has(Feature::TaggedUnions) {
+                return Err(LanguageError::NeedsExperiment {
+                    construct: "a tagged union type",
+                    feature: Feature::TaggedUnions.name(),
+                    span: source.span,
+                });
+            }
+            for payload in alternatives
+                .iter()
+                .filter_map(|alternative| alternative.payload.as_ref())
+            {
+                check_experiment_type(payload, language)?;
+            }
+        }
+        SourceTypeKind::List(ty) | SourceTypeKind::Map(ty) | SourceTypeKind::Expr(ty) => {
+            check_experiment_type(ty, language)?;
+        }
+        SourceTypeKind::Tuple(types) => {
+            for ty in types {
+                check_experiment_type(ty, language)?;
+            }
+        }
+        SourceTypeKind::Struct(fields, _) => {
+            for (_, ty) in fields {
+                check_experiment_type(ty, language)?;
+            }
+        }
+        SourceTypeKind::Function(arguments, ret) => {
+            for ty in arguments {
+                check_experiment_type(ty, language)?;
+            }
+            check_experiment_type(ret, language)?;
+        }
+        SourceTypeKind::Named(_)
+        | SourceTypeKind::Int
+        | SourceTypeKind::Float
+        | SourceTypeKind::Str
+        | SourceTypeKind::Bool
+        | SourceTypeKind::Unit
+        | SourceTypeKind::Any => {}
+    }
+    Ok(())
+}
+
 pub(crate) fn check_dialect_node(node: ExprRef<'_>, dialect: Dialect) -> Result<(), LanguageError> {
     let construct = match node.kind() {
         ExprKind::MonitoredAt(..) => "`monitored_at`",
@@ -391,6 +639,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::Init(..)
         | ExprKind::Not(..)
         | ExprKind::Neg(..) => None,
+        ExprKind::Constructor(..) => Some("a union constructor"),
         ExprKind::Lambda(..) => Some("a lambda"),
         ExprKind::Apply(..) => Some("a function call"),
         ExprKind::Fix(..) => Some("`fix`"),
@@ -445,6 +694,7 @@ pub(crate) fn check_core_type(ty: &StreamType, span: Span) -> Result<(), Languag
         StreamType::Map(_) => "a map type",
         StreamType::Struct(..) => "a struct type",
         StreamType::Function(..) => "a function type",
+        StreamType::Union(..) => "a tagged union type",
     };
     Err(LanguageError::NotCore { construct, span })
 }
@@ -475,10 +725,11 @@ mod tests {
         }
     }
 
-    fn config(dialect: Dialect) -> LanguageConfig {
+    fn config(dialect: Dialect, experiments: &[Feature]) -> LanguageConfig {
         LanguageConfig {
             dialect,
             edition: Edition::BASE,
+            experiments: experiments.iter().copied().collect(),
         }
     }
 
@@ -486,18 +737,23 @@ mod tests {
 
     // R3.1-a
     #[test]
-    fn a_file_without_a_header_is_full_base_edition() {
+    fn a_file_without_a_header_is_full_base_edition_without_experiments() {
         assert_eq!(language_of(BODY), LanguageConfig::default());
-        assert_eq!(LanguageConfig::default(), config(Dialect::Full));
+        assert_eq!(LanguageConfig::default(), config(Dialect::Full, &[]));
     }
 
     // R3.1-b
     #[test]
     fn each_header_form_resolves() {
-        let cases: [(&str, LanguageConfig); 3] = [
-            ("language core\n", config(Dialect::Core)),
-            ("language distributed\n", config(Dialect::Distributed)),
-            ("edition 2026-09\n", config(Dialect::Full)),
+        let cases: [(&str, LanguageConfig); 5] = [
+            ("language core\n", config(Dialect::Core, &[])),
+            ("language distributed\n", config(Dialect::Distributed, &[])),
+            ("edition 2026-09\n", config(Dialect::Full, &[])),
+            (
+                "use experimental::{tagged_unions}\n",
+                config(Dialect::Full, &[Feature::TaggedUnions]),
+            ),
+            ("use experimental::*\n", config(Dialect::Full, Feature::ALL)),
         ];
         for (header, expected) in cases {
             assert_eq!(
@@ -507,8 +763,61 @@ mod tests {
             );
         }
         assert_eq!(
-            language_of(&format!("language distributed\nedition 2026-09\n{BODY}")),
-            config(Dialect::Distributed)
+            language_of(&format!(
+                "language distributed\nedition 2026-09\nuse experimental::{{tagged_unions}}\n{BODY}"
+            )),
+            config(Dialect::Distributed, &[Feature::TaggedUnions])
+        );
+    }
+
+    // R3.1-c: several `use` lines add up rather than conflicting.
+    #[test]
+    fn experiments_from_several_use_lines_add_up() {
+        assert_eq!(
+            language_of(&format!(
+                "use experimental::{{tagged_unions}}\nuse experimental::{{tagged_unions}}\n{BODY}"
+            )),
+            config(Dialect::Full, &[Feature::TaggedUnions])
+        );
+    }
+
+    // R3.1-d: the settings a specification prints parse back to themselves.
+    #[test]
+    fn printed_settings_parse_back() {
+        let source = format!("use experimental::{{tagged_unions}}\n{BODY}");
+        let specification = parse_str(&source).unwrap();
+        let printed = specification.to_string();
+        assert!(
+            printed.starts_with("use experimental::{tagged_unions}\n"),
+            "{printed}"
+        );
+        assert_eq!(
+            language_of(&printed),
+            config(Dialect::Full, &[Feature::TaggedUnions])
+        );
+    }
+
+    // R3.1-e: the fingerprint separates sources that differ only in their
+    // experiments, and records the revision their meaning depends on.
+    #[test]
+    fn experiments_change_the_source_fingerprint() {
+        let plain = parse_str(BODY).unwrap();
+        let experimental =
+            parse_str(&format!("use experimental::{{tagged_unions}}\n{BODY}")).unwrap();
+        assert_ne!(
+            plain.source_context().fingerprint(),
+            experimental.source_context().fingerprint()
+        );
+        assert_eq!(
+            plain.source_context().language().experimental_revision(),
+            None
+        );
+        assert_eq!(
+            experimental
+                .source_context()
+                .language()
+                .experimental_revision(),
+            Some(EXPERIMENTAL_REVISION)
         );
     }
 
@@ -553,6 +862,22 @@ mod tests {
             let error = language_error(&format!("{header}{BODY}"));
             assert!(check(&error), "{header}: {error}");
         }
+        let unknown = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
+        assert!(
+            matches!(&unknown, UnknownFeature { name, known, .. }
+                if name == "teleporting" && known == "tagged_unions"),
+            "{unknown}"
+        );
+        let namespace = language_error(&format!("use std::{{option}}\n{BODY}"));
+        assert!(
+            matches!(&namespace, UnsupportedUse { namespace, .. } if namespace == "std"),
+            "{namespace}"
+        );
+        let in_core = language_error(&format!(
+            "language core\nuse experimental::{{tagged_unions}}\n{BODY}"
+        ));
+        assert!(matches!(in_core, ExperimentsInCore { .. }), "{in_core}");
+
         let late = language_error(&format!("{BODY}edition 2026-09\n"));
         assert!(
             matches!(
@@ -569,7 +894,7 @@ mod tests {
     // R3.3
     #[test]
     fn header_keywords_are_reserved_but_the_names_they_take_are_not() {
-        for source in ["out edition\nedition = 1", "in language\n"] {
+        for source in ["out edition\nedition = 1", "in language\n", "in use\n"] {
             assert!(
                 matches!(parse_str(source), Err(DsrvParseError::Syntax(_))),
                 "{source}"
@@ -578,6 +903,7 @@ mod tests {
         for source in [
             "in core\nout y\ny = core",
             "in distributed\nout y\ny = distributed",
+            "in experimental\nout y\ny = experimental",
         ] {
             parse_str(source).unwrap_or_else(|error| panic!("{source}: {error}"));
         }
@@ -762,7 +1088,7 @@ mod tests {
                 .unwrap()
                 .source_context()
                 .language(),
-            &config(Dialect::Core)
+            &config(Dialect::Core, &[])
         );
         let error = language_error_with(&format!("language distributed\n{BODY}"), core);
         assert_eq!(

@@ -5,19 +5,23 @@
 //! before the immutable results are attached to checked expression cursors.
 
 use contiguous_tree::TreeCursorExt;
-use ecow::EcoVec;
+use ecow::{EcoString, EcoVec};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::errors::UnresolvedTypeKind;
 use super::{SemanticError, SemanticResult, TypeErrorKind};
 use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
-use crate::core::{BinaryOperator, BinaryOperatorKind, StreamType, StreamTypeAscription};
+use crate::core::{
+    BinaryOperator, BinaryOperatorKind, ClosedUnion, StreamType, StreamTypeAscription, UnionPayload,
+};
 use crate::lang::dsrv::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
     ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
     SyntaxLiteral,
 };
+use crate::lang::dsrv::source::TypeName;
 
 struct TypeContext<'types> {
     environment: Cow<'types, StreamTypeEnvironment>,
@@ -243,6 +247,20 @@ fn check(
             ));
         }
         Val(value) => (value_type(value, expected)?, None),
+        // A tag names an alternative, not a union, so which union it belongs
+        // to comes from the qualifier the writer gave or the type the
+        // expression is expected to have.
+        Constructor(payload, tag, qualifier) => (
+            check_constructor(
+                expr,
+                payload.into_iter().next(),
+                tag,
+                qualifier.as_ref(),
+                expected,
+                context,
+            )?,
+            None,
+        ),
         Var(var) => (
             context
                 .get(var)
@@ -1207,6 +1225,149 @@ fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
         Some(TCType::Float)
     } else {
         None
+    }
+}
+
+/// Resolve a constructor to the union it builds, and check its payload.
+///
+/// A qualifier names the union outright. Without one the expected type
+/// decides, as a tag in a pattern is decided by the scrutinee's type; where
+/// there is no expected type, or it is dynamic, there is nothing to resolve
+/// against and the constructor is reported rather than guessed at.
+fn check_constructor(
+    expr: ExprRef<'_>,
+    payload: Option<ExprRef<'_>>,
+    tag: &EcoString,
+    qualifier: Option<&TypeName>,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let union = match qualifier {
+        Some(qualifier) => union_named(expr, qualifier)?,
+        None => match expected {
+            Some(TCType::Union(schema)) => schema.clone(),
+            Some(TCType::Any) | None => {
+                return Err(SemanticError::unresolved_type_at(
+                    UnresolvedTypeKind::ConstructorUnion,
+                    format!(
+                        "`{tag}` needs a union to belong to: nothing here says which one{}",
+                        tags_found_in(expr, tag)
+                    ),
+                    expr.span(),
+                ));
+            }
+            Some(other) => {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::ExpectedUnion,
+                    format!("`{tag}` builds a union, but {other} is expected here"),
+                ));
+            }
+        },
+    };
+    let Some((_, alternative)) = union.alternative(tag) else {
+        let known = union
+            .alternatives()
+            .iter()
+            .map(|alternative| alternative.tag().as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(error(
+            expr,
+            TypeErrorKind::UnknownUnionTag,
+            format!(
+                "`{tag}` is not an alternative of {}, which has {known}{}",
+                TCType::Union(union.clone()),
+                tags_found_in(expr, tag)
+            ),
+        ));
+    };
+    match (alternative.payload(), payload) {
+        (UnionPayload::Nullary, None) => {}
+        (UnionPayload::Of(declared), Some(payload)) => {
+            // The payload is checked against the alternative's type, which
+            // is also what resolves a bare constructor written inside it. A
+            // plain disagreement is reported as this constructor's, so the
+            // message names the tag rather than only the types.
+            let actual = check(payload, Some(declared), context).map_err(|error| match &error {
+                SemanticError::TypeError(mismatch)
+                    if *mismatch.kind() == TypeErrorKind::AnnotationTypeMismatch =>
+                {
+                    SemanticError::type_error_at(
+                        TypeErrorKind::ConstructorPayloadTypeMismatch,
+                        format!("`{tag}` carries {declared}, and {}", mismatch.message()),
+                        mismatch.span().unwrap_or_else(|| payload.span()),
+                    )
+                }
+                _ => error,
+            })?;
+            if unify(&actual, declared).is_none() {
+                return Err(error(
+                    payload,
+                    TypeErrorKind::ConstructorPayloadTypeMismatch,
+                    format!("`{tag}` carries {declared}, got {actual}"),
+                ));
+            }
+        }
+        (UnionPayload::Nullary, Some(_)) => {
+            return Err(error(
+                expr,
+                TypeErrorKind::ConstructorPayloadArity,
+                format!("`{tag}` carries no payload"),
+            ));
+        }
+        (UnionPayload::Of(declared), None) => {
+            return Err(error(
+                expr,
+                TypeErrorKind::ConstructorPayloadArity,
+                format!("`{tag}` carries {declared}, which is missing"),
+            ));
+        }
+    }
+    Ok(TCType::Union(union))
+}
+
+/// The union a qualifier names, in the namespace the node was expanded in.
+fn union_named(
+    expr: ExprRef<'_>,
+    qualifier: &TypeName,
+) -> Result<ClosedUnion<TCType>, SemanticError> {
+    let named = expr
+        .source_context()
+        .and_then(|context| context.get(qualifier));
+    match named.map(TCType::from_stream_type) {
+        Some(TCType::Union(schema)) => Ok(schema),
+        Some(other) => Err(error(
+            expr,
+            TypeErrorKind::ExpectedUnion,
+            format!("{qualifier} is {other}, not a union"),
+        )),
+        None => Err(error(
+            expr,
+            TypeErrorKind::ExpectedUnion,
+            format!("{qualifier} names no type here"),
+        )),
+    }
+}
+
+/// The unions in scope that do have this tag, to say in a message where it
+/// could have come from.
+fn tags_found_in(expr: ExprRef<'_>, tag: &EcoString) -> String {
+    let Some(context) = expr.source_context() else {
+        return String::new();
+    };
+    let names: Vec<_> = context
+        .aliases()
+        .iter()
+        .filter(|(_, ty)| match ty {
+            StreamType::Union(schema) => schema.alternative(tag).is_some(),
+            _ => false,
+        })
+        .map(|(name, _)| name.to_string())
+        .collect();
+    match names.len() {
+        0 => String::new(),
+        _ => format!("; `{tag}` is an alternative of {}", names.join(", ")),
     }
 }
 

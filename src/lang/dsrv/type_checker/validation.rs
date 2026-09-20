@@ -228,6 +228,9 @@ pub fn extract_value_type(value: Value) -> TCType {
         Value::Bool(_) => TCType::Bool,
         Value::Float(_) => TCType::Float,
         Value::Unit => TCType::Unit,
+        // A runtime union carries no schema, so its type is not recoverable
+        // from the value alone; elaboration is what gives a constructor one.
+        Value::Union(_) => TCType::Unknown,
         Value::List(values) => {
             if values.is_empty() {
                 TCType::EmptyList

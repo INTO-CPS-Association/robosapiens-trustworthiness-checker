@@ -39,6 +39,18 @@ impl Display for ExprRef<'_> {
         match self.view() {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),
+            // Printed as written: a qualifier the writer gave is kept, and a
+            // nullary alternative takes no parentheses.
+            Constructor(payload, tag, qualifier) => {
+                if let Some(qualifier) = qualifier {
+                    write!(f, "{qualifier}::")?;
+                }
+                write!(f, "{tag}")?;
+                match payload.into_iter().next() {
+                    Some(payload) => write!(f, "({payload})"),
+                    None => Ok(()),
+                }
+            }
             BinOp(lhs, rhs, operator) => {
                 let negative_base = match lhs.view() {
                     super::ExprView::Neg(_) => true,

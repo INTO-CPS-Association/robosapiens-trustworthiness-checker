@@ -22,7 +22,7 @@ use super::checked::CheckedTypes;
 use crate::core::{BinaryOperator, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
-use crate::lang::dsrv::source::SourceContext;
+use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::span::Span;
 
 /// A literal that can occur in the syntax tree.
@@ -52,6 +52,8 @@ pub enum SyntaxLiteralError {
     Function,
     #[error("deferred runtime values cannot be represented as syntax literals")]
     Deferred,
+    #[error("runtime unions must be represented by a typed source constructor")]
+    RuntimeUnion,
 }
 
 impl SyntaxLiteral {
@@ -91,6 +93,7 @@ impl TryFrom<Value> for SyntaxLiteral {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
+            Value::Union(_) => Err(SyntaxLiteralError::RuntimeUnion),
             Value::Int(value) => Ok(Self::Int(value)),
             Value::Float(value) => Ok(Self::Float(value)),
             Value::Str(value) => Ok(Self::Str(value)),
@@ -276,6 +279,15 @@ contiguous_tree::tree_schema! {
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Var(variable: data(VarName)),
+        // A constructor before elaboration resolves it: a tag, the payload it
+        // is given (none for a nullary alternative), and the union named by a
+        // qualified spelling. No node after elaboration is one of these, so
+        // no runtime sees a tag whose union is unsettled.
+        Constructor(
+            payload: children,
+            tag: data(EcoString),
+            qualifier: data(Option<TypeName>),
+        ),
 
         Dynamic(
             source: child,
@@ -383,6 +395,12 @@ impl<'arena> ExprRef<'arena> {
 
     pub fn span(self) -> Span {
         self.node().source.span
+    }
+
+    /// The namespace this node was expanded in, which is where a
+    /// constructor's qualifier is looked up.
+    pub fn source_context(self) -> Option<&'arena SourceContext> {
+        self.node().source.context.as_deref()
     }
 
     /// Compare expression structure and payload while ignoring source metadata.

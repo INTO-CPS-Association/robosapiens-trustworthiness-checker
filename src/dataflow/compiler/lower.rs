@@ -323,6 +323,9 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             let list = lower_expression(list, builder);
             builder.push(UnboundOp::ListFold { func, init, list })
         }
+        Constructor(..) => {
+            panic!("elaboration resolves every constructor before a runtime lowers it")
+        }
         MonitoredAt(_, _) | Dist(_, _) => {
             panic!("dataflow semantics does not support distributed AST operations")
         }

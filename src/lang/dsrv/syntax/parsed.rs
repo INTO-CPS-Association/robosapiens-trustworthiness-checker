@@ -10,7 +10,7 @@ use crate::core::{BinaryOperator, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 
 use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
-use super::super::source::{AliasDeclaration, SourceType};
+use super::super::source::{AliasDeclaration, SourceType, TypeName};
 use super::super::span::Span;
 use super::DsrvSyntaxError;
 
@@ -34,6 +34,11 @@ contiguous_tree::tree_schema! {
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Var(variable: data(VarName)),
+        Constructor(
+            payload: children,
+            tag: data(EcoString),
+            qualifier: data(Option<TypeName>),
+        ),
         Dynamic(source: child, result_type: data(SourceAscription), scope: data(ReconfigurableExprScope)),
         Defer(source: child, result_type: data(SourceAscription), scope: data(ReconfigurableExprScope)),
         Update(value: child, update: child),
@@ -89,6 +94,12 @@ pub(crate) enum ParsedDeclaration {
     Language(EcoString, Span),
     /// `edition <year>-<month>`, as written.
     Edition(EcoString, Span),
+    /// `use <namespace>::{…}`, or `use <namespace>::*` when `items` is `None`.
+    Use {
+        namespace: EcoString,
+        items: Option<EcoVec<(EcoString, Span)>>,
+        span: Span,
+    },
 }
 
 /// The parsed forest is validated before any semantic node is allocated.

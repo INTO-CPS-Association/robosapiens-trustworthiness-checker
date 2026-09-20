@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, fmt};
 
 use ecow::{EcoString, EcoVec};
 
-use crate::core::StreamType;
+use crate::core::{ClosedUnion, StreamType, UnionAlternative, UnionPayload, UnionSchemaError};
 
 use super::expand::language::LanguageConfig;
 use super::span::Span;
@@ -94,6 +94,7 @@ impl TypeName {
                 | "Map"
                 | "Struct"
                 | "Expr"
+                | "Union"
                 | "type"
         ) {
             return Err(SourceResolveError::ReservedName { name });
@@ -128,6 +129,8 @@ pub enum SourceResolveError {
     },
     #[error("unknown type alias {name} at {span:?}")]
     UnknownAlias { name: TypeName, span: Span },
+    #[error("invalid union type at {span:?}: {cause}")]
+    Union { cause: UnionSchemaError, span: Span },
     #[error("cyclic type aliases {path:?} at {span:?}")]
     AliasCycle { path: Vec<TypeName>, span: Span },
 }
@@ -142,6 +145,20 @@ pub struct SourceFingerprint {
     aliases: BTreeMap<TypeName, StreamType>,
     /// Two sources with different language settings are different programs.
     language: LanguageConfig,
+    /// With experiments on, the same settings can mean different programs in
+    /// different releases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    experimental_revision: Option<u32>,
+}
+
+impl SourceFingerprint {
+    fn new(aliases: BTreeMap<TypeName, StreamType>, language: LanguageConfig) -> Self {
+        Self {
+            aliases,
+            experimental_revision: language.experimental_revision(),
+            language,
+        }
+    }
 }
 
 /// A namespace snapshot. Clones share immutable storage.
@@ -236,10 +253,7 @@ impl SourceContextBuilder {
             resolver.resolve(name, definition.span)?;
         }
         Ok(SourceContext {
-            fingerprint: Rc::new(SourceFingerprint {
-                aliases: resolver.expanded,
-                language: self.language,
-            }),
+            fingerprint: Rc::new(SourceFingerprint::new(resolver.expanded, self.language)),
         })
     }
 }
@@ -272,6 +286,15 @@ pub(crate) enum SourceTypeKind {
     Expr(Box<SourceType>),
     Struct(EcoVec<(EcoString, SourceType)>, bool),
     Function(EcoVec<SourceType>, Box<SourceType>),
+    Union(EcoVec<SourceAlternative>),
+}
+
+/// One alternative of a source-level union type, before its payload resolves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SourceAlternative {
+    pub tag: EcoString,
+    pub payload: Option<SourceType>,
+    pub span: Span,
 }
 
 impl From<StreamType> for SourceType {
@@ -299,6 +322,20 @@ impl From<StreamType> for SourceType {
             StreamType::Function(args, ret) => SourceTypeKind::Function(
                 args.into_iter().map(Into::into).collect(),
                 Box::new((*ret).into()),
+            ),
+            StreamType::Union(union) => SourceTypeKind::Union(
+                union
+                    .alternatives()
+                    .iter()
+                    .map(|alternative| SourceAlternative {
+                        tag: alternative.tag().clone(),
+                        payload: match alternative.payload() {
+                            UnionPayload::Nullary => None,
+                            UnionPayload::Of(ty) => Some(ty.clone().into()),
+                        },
+                        span: Span::default(),
+                    })
+                    .collect(),
             ),
         };
         Self {
@@ -374,6 +411,31 @@ fn resolve_type(
                 .collect::<Result<_, _>>()?,
             Box::new(resolve_type(ret, lookup)?),
         ),
+        SourceTypeKind::Union(alternatives) => {
+            let mut seen = BTreeMap::new();
+            let mut resolved = Vec::with_capacity(alternatives.len());
+            for alternative in alternatives {
+                if seen.insert(&alternative.tag, ()).is_some() {
+                    return Err(SourceResolveError::Union {
+                        cause: UnionSchemaError::DuplicateTag(alternative.tag.clone()),
+                        span: alternative.span,
+                    });
+                }
+                resolved.push(UnionAlternative::new(
+                    alternative.tag.clone(),
+                    match &alternative.payload {
+                        None => UnionPayload::Nullary,
+                        Some(ty) => UnionPayload::Of(resolve_type(ty, lookup)?),
+                    },
+                ));
+            }
+            StreamType::Union(ClosedUnion::new(resolved).map_err(|cause| {
+                SourceResolveError::Union {
+                    cause,
+                    span: source.span,
+                }
+            })?)
+        }
     })
 }
 

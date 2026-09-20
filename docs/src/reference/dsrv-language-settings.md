@@ -1,18 +1,21 @@
 # DSRV language settings
 
-A DSRV specification can say which language it is written in and which
-edition of that language. These settings come first in the file. A file that
-states neither is Full DSRV, edition `2026-09`, which is exactly how every
-existing specification is read.
+A DSRV specification can say which language it is written in, which edition
+of that language, and which experimental features it uses. These settings
+come first in the file. A file that states none of them is Full DSRV, edition
+`2026-09`, with no experiments, which is exactly how every existing
+specification is read.
 
 ```dsrv
-language core      // optional: core or distributed
-edition 2026-09    // optional
+language core                       // optional: core or distributed
+edition 2026-09                     // optional
+use experimental::{tagged_unions}   // optional
+use experimental::*                 // every current experiment
 ```
 
-`language` and `edition` are keywords everywhere, so they cannot be used as
-stream names. The words after them are not reserved: a stream may still be
-called `core` or `distributed`.
+`language`, `edition` and `use` are keywords everywhere, so they cannot be
+used as stream names. The words after them are not reserved: a stream may
+still be called `core` or `experimental`.
 
 ## Dialects
 
@@ -68,6 +71,30 @@ An edition fixes the language's default behaviours at a date, so a
 specification keeps its meaning when later releases change a default. The
 only edition is `2026-09`, the language as of September 2026. Naming an
 unknown edition is an error that lists the known ones.
+
+## Experiments
+
+`use experimental::{…}` opts into features that are still being designed.
+They may change or disappear between releases. When the checker runs a
+specification that uses any, it logs a warning naming them. Like the
+checker's other diagnostics, the warning is shown only when logging is
+enabled at warning level or above, for example with `RUST_LOG=warn`.
+`use experimental::*` enables every current experiment. Core DSRV accepts no
+experiments.
+
+| Feature | Contents |
+|---|---|
+| `tagged_unions` | `Union<…>` types and their constructors |
+
+Several `use experimental` lines add up. Any name that is not a current
+experiment is an error listing the ones there are, and `use` of any other
+namespace is rejected until modules exist.
+
+Two specifications whose settings differ, experiments included, are different
+programs: the source fingerprint that reconfiguration caches are keyed on
+carries the settings, and carries the release's experiment revision whenever
+any experiment is on, so work compiled under one meaning of an experiment is
+never reused under another.
 
 ## Command line
 

@@ -8,7 +8,7 @@ use anyhow::{self, Context};
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind, parser::ValueSource};
 use mstlo::Variables;
 use smol::LocalExecutor;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::{fmt, prelude::*};
@@ -115,8 +115,19 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let model = lalr_parse_file(cli.model.as_str(), cli.dsrv_language_request())
         .await
-        .map(LangSpecification::from)
         .context("Model file could not be parsed")?;
+    let experiments = model
+        .source_context()
+        .language()
+        .experiment_names()
+        .collect::<Vec<_>>();
+    if !experiments.is_empty() {
+        warn!(
+            "running with experimental DSRV features, which may change without notice: {}",
+            experiments.join(", ")
+        );
+    }
+    let model = LangSpecification::from(model);
     info!(%model, "Parsed model");
 
     // Localise the model to contain only the local variables (if needed)

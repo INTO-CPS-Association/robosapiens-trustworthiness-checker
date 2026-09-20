@@ -853,6 +853,18 @@ fn append_identifier(descriptor: &mut String, identifier: impl AsRef<str>) {
 
 fn append_value_descriptor(descriptor: &mut String, value: &Value) {
     match value {
+        Value::Union(value) => {
+            descriptor.push_str("union[");
+            append_identifier(descriptor, value.tag());
+            match value.payload() {
+                Some(payload) => {
+                    descriptor.push_str(":of:");
+                    append_value_descriptor(descriptor, payload);
+                }
+                None => descriptor.push_str(":nullary"),
+            }
+            descriptor.push(']');
+        }
         Value::Int(value) => {
             let _ = write!(descriptor, "int:{value}");
         }
@@ -956,8 +968,29 @@ fn append_tc_type(descriptor: &mut String, type_: &crate::lang::dsrv::type_check
         TCType::EmptyList => descriptor.push_str("empty-list"),
         TCType::EmptyMap => descriptor.push_str("empty-map"),
         TCType::Any => descriptor.push_str("any"),
+        TCType::Union(schema) => append_union_descriptor(descriptor, schema, append_tc_type),
         TCType::Unknown => descriptor.push_str("unknown"),
     }
+}
+
+fn append_union_descriptor<T: Clone>(
+    descriptor: &mut String,
+    schema: &crate::core::ClosedUnion<T>,
+    mut append_type: impl FnMut(&mut String, &T),
+) {
+    descriptor.push_str("union<");
+    for alternative in schema.alternatives() {
+        append_identifier(descriptor, alternative.tag());
+        match alternative.payload() {
+            crate::core::UnionPayload::Nullary => descriptor.push_str(":nullary;"),
+            crate::core::UnionPayload::Of(ty) => {
+                descriptor.push_str(":of:");
+                append_type(descriptor, ty);
+                descriptor.push(';');
+            }
+        }
+    }
+    descriptor.push('>');
 }
 
 fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
@@ -1011,6 +1044,9 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
             descriptor.push('>');
         }
         StreamType::Any => descriptor.push_str("any"),
+        StreamType::Union(schema) => {
+            append_union_descriptor(descriptor, schema, append_stream_type)
+        }
     }
 }
 

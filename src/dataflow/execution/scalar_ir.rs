@@ -728,7 +728,8 @@ fn scalar_value_kind(value: &Value) -> Option<ScalarKind> {
         Value::Int(_) => Some(ScalarKind::Int),
         Value::Float(_) => Some(ScalarKind::Float),
         Value::Bool(_) => Some(ScalarKind::Bool),
-        Value::NoVal
+        Value::Union(_)
+        | Value::NoVal
         | Value::Deferred
         | Value::Str(_)
         | Value::Function(_)

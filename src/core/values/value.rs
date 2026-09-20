@@ -8,6 +8,8 @@ use redis::FromRedisValue;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
+
+use super::{ClosedUnion, UnionValue};
 use std::fmt;
 
 use crate::core::{JsonStreamValue, LocalStream};
@@ -198,19 +200,42 @@ impl PartialEq for RuntimeFunction {
 // EcoVec instead of String and Vec. These types are essentially references
 // which allow mutation in place if there is only one reference to the data or
 // copy-on-write if there is more than one reference.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
     Float(f64),
     Str(EcoString),
     Bool(bool),
     Function(RuntimeFunction),
+    /// A tagged union value. Schema-free at run time: the schema lives in the
+    /// elaborated tree, which is what resolves a constructor.
+    Union(Rc<UnionValue>),
     List(EcoVec<Value>),
     Tuple(EcoVec<Value>),
     Map(BTreeMap<EcoString, Value>),
     Unit,     // Indicates the absence of a value
     Deferred, // Indicates a value that cannot yet be computed due to lack of history
     NoVal,    // Indicates no value for the current stream step (due to async stream inputs)
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Float(a), Self::Float(b)) => a == b,
+            (Self::Str(a), Self::Str(b)) => a == b,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Function(a), Self::Function(b)) => a == b,
+            (Self::List(a), Self::List(b)) | (Self::Tuple(a), Self::Tuple(b)) => a == b,
+            (Self::Map(a), Self::Map(b)) => a == b,
+            // Not `Rc` identity: a shared payload holding NaN is not equal to itself.
+            (Self::Union(a), Self::Union(b)) => a.as_ref() == b.as_ref(),
+            (Self::Unit, Self::Unit)
+            | (Self::Deferred, Self::Deferred)
+            | (Self::NoVal, Self::NoVal) => true,
+            _ => false,
+        }
+    }
 }
 
 impl StreamData for Value {
@@ -227,6 +252,7 @@ impl Value {
                 values.iter().any(Value::requires_json5_encoding)
             }
             Value::Map(values) => values.values().any(Value::requires_json5_encoding),
+            Value::Union(value) => value.payload().is_some_and(Value::requires_json5_encoding),
             _ => false,
         }
     }
@@ -393,6 +419,17 @@ impl TryFrom<JValue> for Value {
                 .map(|v| v.clone().try_into())
                 .collect::<Result<EcoVec<Value>, Self::Error>>()
                 .map(Value::List),
+            JValue::Object(mut vals) if vals.contains_key("$tag") => {
+                let tag = vals.remove("$tag").expect("union object contains $tag");
+                let JValue::String(tag) = tag else {
+                    return Err(anyhow!("union $tag must be a string"));
+                };
+                let payload = vals.remove("payload").map(Value::try_from).transpose()?;
+                if !vals.is_empty() {
+                    return Err(anyhow!("union object contains extra fields"));
+                }
+                Ok(UnionValue::new(tag, payload).into())
+            }
             JValue::Object(vals) => {
                 // Convert JValue::Object to Value::Map
                 let btree = vals
@@ -487,6 +524,14 @@ impl Display for Value {
                 write!(f, "Map({})", entries)
             }
             Value::Deferred => write!(f, "⊥"),
+            // Diagnostic only: a schema-free value cannot name a constructor.
+            Value::Union(value) => {
+                write!(f, "Union({:?}", value.tag())?;
+                if let Some(payload) = value.payload() {
+                    write!(f, ", {payload}")?;
+                }
+                write!(f, ")")
+            }
             Value::NoVal => write!(f, "no_val"),
             Value::Unit => write!(f, "()"),
         }
@@ -543,6 +588,7 @@ pub enum StreamType {
     /// Gradual/dynamic stream type. Values are represented as `Value` and checked at runtime when
     /// cast to a stricter type.
     Any,
+    Union(ClosedUnion<StreamType>),
 }
 
 impl Display for StreamType {
@@ -588,6 +634,7 @@ impl Display for StreamType {
                 write!(f, "({} -> {})", args, ret)
             }
             StreamType::Any => write!(f, "Any"),
+            StreamType::Union(schema) => write!(f, "{schema}"),
         }
     }
 }
@@ -678,11 +725,29 @@ impl Serialize for Value {
                 seq.end()
             }
             Value::Map(map) => {
+                if map.contains_key("$tag") {
+                    return Err(serde::ser::Error::custom(
+                        "Value::Map contains reserved union key $tag",
+                    ));
+                }
                 let mut m = serializer.serialize_map(Some(map.len()))?;
                 for (k, v) in map.iter() {
                     m.serialize_entry(k, v)?;
                 }
                 m.end()
+            }
+
+            Value::Union(value) => {
+                let mut map = serializer.serialize_map(Some(if value.payload().is_some() {
+                    2
+                } else {
+                    1
+                }))?;
+                map.serialize_entry("$tag", value.tag())?;
+                if let Some(payload) = value.payload() {
+                    map.serialize_entry("payload", payload)?;
+                }
+                map.end()
             }
         }
     }
@@ -768,8 +833,30 @@ impl<'de> Deserialize<'de> for Value {
                 A: MapAccess<'de>,
             {
                 let mut out = BTreeMap::new();
-                while let Some((k, v)) = map.next_entry::<String, Value>()? {
-                    out.insert(k.into(), v);
+                let mut duplicate = false;
+                let mut tag = None;
+                while let Some(key) = map.next_key::<EcoString>()? {
+                    if key == "$tag" {
+                        if tag.is_some() {
+                            duplicate = true;
+                        }
+                        tag = Some(map.next_value::<EcoString>()?);
+                    } else {
+                        let value = map.next_value::<Value>()?;
+                        if out.insert(key, value).is_some() {
+                            duplicate = true;
+                        }
+                    }
+                }
+                if let Some(tag) = tag {
+                    if duplicate {
+                        return Err(de::Error::custom("duplicate member in union object"));
+                    }
+                    let payload = out.remove("payload");
+                    if !out.is_empty() {
+                        return Err(de::Error::custom("union object contains extra fields"));
+                    }
+                    return Ok(UnionValue::new(tag, payload).into());
                 }
                 Ok(Value::Map(out))
             }

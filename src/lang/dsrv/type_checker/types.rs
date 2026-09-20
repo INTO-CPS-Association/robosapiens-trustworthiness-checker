@@ -4,7 +4,7 @@ use ecow::{EcoString, EcoVec};
 use itertools::Itertools;
 
 use crate::VarName;
-use crate::core::StreamType;
+use crate::core::{ClosedUnion, StreamType};
 use std::collections::BTreeMap;
 
 /// Global environment mapping stream variables to their declared or inferred types.
@@ -34,6 +34,8 @@ pub enum TCType {
     Any,
     /// Unknown non-container type used for special values such as Deferred/NoVal.
     Unknown,
+    /// A closed tagged union.
+    Union(ClosedUnion<TCType>),
 }
 
 impl TCType {
@@ -85,6 +87,7 @@ impl TCType {
                 Box::new(TCType::from_stream_type(ret)),
             ),
             StreamType::Any => TCType::Any,
+            StreamType::Union(schema) => TCType::Union(schema.map(TCType::from_stream_type)),
         }
     }
 
@@ -130,6 +133,10 @@ impl TCType {
                 Some(StreamType::Function(args, Box::new(ret)))
             }
             TCType::Any => Some(StreamType::Any),
+            TCType::Union(schema) => schema
+                .try_map(|ty| ty.to_stream_type().ok_or(()))
+                .ok()
+                .map(StreamType::Union),
             TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => None,
         }
     }
@@ -143,6 +150,7 @@ impl std::fmt::Display for TCType {
             TCType::Str => write!(f, "Str"),
             TCType::Bool => write!(f, "Bool"),
             TCType::Unit => write!(f, "Unit"),
+            TCType::Union(schema) => write!(f, "{schema}"),
             TCType::List(typ) => write!(f, "List<{}>", typ),
             TCType::Tuple(inner) => {
                 let len = inner.len();
