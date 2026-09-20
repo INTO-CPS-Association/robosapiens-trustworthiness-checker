@@ -21,8 +21,8 @@ use crate::lang::dsrv::ast::{
     ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
     SyntaxLiteral,
 };
+use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
-use crate::lang::dsrv::source::TypeName;
 
 struct TypeContext<'types> {
     environment: Cow<'types, StreamTypeEnvironment>,
@@ -1512,7 +1512,7 @@ fn check_constructor(
     expr: ExprRef<'_>,
     payload: Option<ExprRef<'_>>,
     tag: &EcoString,
-    qualifier: Option<&TypeName>,
+    qualifier: Option<&TypePath>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<TCType, SemanticError> {
@@ -1520,6 +1520,21 @@ fn check_constructor(
         Some(qualifier) => union_named(expr, qualifier)?,
         None => match expected {
             Some(TCType::Union(schema)) => schema.clone(),
+            // An imported tag names its union outright, but only where
+            // the expected type has not already said which one.
+            Some(TCType::Any) | None
+                if expr
+                    .source_context()
+                    .and_then(|context| context.constructor_union(tag))
+                    .is_some() =>
+            {
+                let path = expr
+                    .source_context()
+                    .and_then(|context| context.constructor_union(tag))
+                    .expect("just found")
+                    .clone();
+                union_named(expr, &path)?
+            }
             Some(TCType::Any) | None => {
                 return Err(SemanticError::unresolved_type_at(
                     UnresolvedTypeKind::ConstructorUnion,
@@ -1604,7 +1619,7 @@ fn check_constructor(
 /// The union a qualifier names, in the namespace the node was expanded in.
 fn union_named(
     expr: ExprRef<'_>,
-    qualifier: &TypeName,
+    qualifier: &TypePath,
 ) -> Result<ClosedUnion<TCType>, SemanticError> {
     let named = expr
         .source_context()

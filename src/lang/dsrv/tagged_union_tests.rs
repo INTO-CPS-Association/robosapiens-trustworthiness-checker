@@ -11,6 +11,7 @@ use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::lang::dsrv::LanguageError;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification, ExprView};
 use crate::lang::dsrv::parser::{DsrvParseError, check_core_source, parse_str};
+use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::pipeline::TypeCheckOptions;
 use crate::lang::dsrv::source::TypeName;
 use crate::lang::dsrv::type_checker::SemanticError;
@@ -130,7 +131,10 @@ fn a_constructor_keeps_its_tag_payload_and_qualifier() {
         panic!("expected a constructor, got {expression}");
     };
     assert_eq!(tag, "Moving");
-    assert_eq!(qualifier.as_ref().map(TypeName::as_str), Some("State"));
+    assert_eq!(
+        qualifier.as_ref().map(TypePath::to_string).as_deref(),
+        Some("State")
+    );
     assert_eq!(payload.into_iter().count(), 1);
 }
 

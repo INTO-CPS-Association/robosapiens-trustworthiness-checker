@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Error};
 
 use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
+use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::source::SourceTypeDisplay;
 
 use super::{
@@ -263,7 +264,10 @@ fn fmt_specification<'a>(
                 writeln!(f, "{name} = {expression}")?;
             }
             Declaration::TypeAlias { name, .. } => {
-                let ty = spec.source_context.get(name).ok_or(Error)?;
+                let ty = spec
+                    .source_context
+                    .get(&TypePath::local(name.clone()))
+                    .ok_or(Error)?;
                 writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
             }
         }

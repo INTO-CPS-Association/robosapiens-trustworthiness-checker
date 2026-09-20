@@ -5,6 +5,7 @@ use lalrpop_util::ParseError;
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
 use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
+use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree};
 use crate::core::{BinaryOperator, VarName};
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::span::Span;
@@ -448,12 +449,34 @@ PatternKindRule: PatternKind = {
 // qualifies it. Parsing knows no schema: which union a tag belongs to, and
 // which alternative it selects, is settled when the expression is elaborated.
 UnionConstructor: ExprId = {
-    <l:@L> <qualifier:SourceName> "::" <tag:RawIdent> <r:@R> =>
+    <l:@L> <qualifier:ConstructorQualifier> "::" <tag:RawIdent> <r:@R> =>
         builder.alloc(ExprKind::Constructor(EcoVec::new(), tag.into(), Some(qualifier)), Span::new(l as u32, r as u32)),
-    <l:@L> <qualifier:SourceName> "::" <tag:RawIdent> "(" <payload:Expr> <trailing:TrailingComma> ")" <r:@R> =>
+    <l:@L> <qualifier:ConstructorQualifier> "::" <tag:RawIdent> "(" <payload:Expr> <trailing:TrailingComma> ")" <r:@R> =>
         builder.alloc(ExprKind::Constructor(EcoVec::from([payload]), tag.into(), Some(qualifier)), Span::new(l as u32, r as u32)),
     <l:@L> <tag:UpperIdent> "(" <payload:Expr> <trailing:TrailingComma> ")" <r:@R> =>
         builder.alloc(ExprKind::Constructor(EcoVec::from([payload]), tag.into(), None), Span::new(l as u32, r as u32)),
+};
+
+// The union's own name, which is capitalised. That is what ends a module
+// path, and so what tells `Cycle::Idle` from `option::is_some`.
+QualifierName: TypeName = <l:@L> <name:UpperIdent> <r:@R> =>? TypeName::new(name).map_err(|_| {
+    *user_error_location = Some(l);
+    ParseError::User { error: "a union qualifier must be a capitalised name" }
+});
+
+ConstructorQualifier: TypePath = {
+    <name:QualifierName> => TypePath::local(name),
+    <l:@L> <module:(<LowerIdent> "::")+> <name:QualifierName> <r:@R> =>? {
+        let module = module
+            .into_iter()
+            .map(ModuleName::new)
+            .collect::<Result<EcoVec<_>, _>>()
+            .map_err(|_| {
+                *user_error_location = Some(l);
+                ParseError::User { error: "a module segment must be a lowercase name" }
+            })?;
+        Ok(TypePath::new(module, name))
+    },
 };
 
 FieldName: EcoString = {
@@ -648,6 +671,24 @@ UnionAlternative: SourceAlternative = {
     },
 };
 
+// A type may be named through a module. One segment is the type itself,
+// whatever its case, so a lowercase alias keeps working; only a path of
+// several segments splits into module and name.
+TypeRef: TypePath = {
+    <name:SourceName> => TypePath::local(name),
+    <l:@L> <module:(<LowerIdent> "::")+> <name:QualifierName> <r:@R> =>? {
+        let module = module
+            .into_iter()
+            .map(ModuleName::new)
+            .collect::<Result<EcoVec<_>, _>>()
+            .map_err(|_| {
+                *user_error_location = Some(l);
+                ParseError::User { error: "a module segment must be a lowercase name" }
+            })?;
+        Ok(TypePath::new(module, name))
+    },
+};
+
 SourceName: TypeName = <l:@L> <name:RawIdent> =>? TypeName::new(name).map_err(|_| {
     *user_error_location = Some(l);
     ParseError::User { error: "invalid or reserved type alias name" }
@@ -658,8 +699,8 @@ StreamTyp: SourceType = {
 };
 
 StreamTypKind: StreamType = {
-    <name:SourceName> => StreamType::Named(name, EcoVec::new()),
-    <name:SourceName> "<" <arguments:DelimitedSepListOpt<StreamTyp, ",">> ">" =>
+    <name:TypeRef> => StreamType::Named(name, EcoVec::new()),
+    <name:TypeRef> "<" <arguments:DelimitedSepListOpt<StreamTyp, ",">> ">" =>
         StreamType::Named(name, arguments),
     "Int" => StreamType::Int,
     "Str" => StreamType::Str,
@@ -744,10 +785,11 @@ AliasParameters: EcoVec<TypeName> = {
 };
 
 AliasDecl: Declaration = {
-   <l:@L> "type" <name:SourceName> <parameters:AliasParameters?> "=" <ty:StreamTyp> <r:@R> =>
+   <l:@L> <internal:"internal"?> "type" <name:SourceName> <parameters:AliasParameters?> "=" <ty:StreamTyp> <r:@R> =>
        Declaration::Alias(AliasDeclaration {
            name,
            parameters: parameters.unwrap_or_else(EcoVec::new),
+           internal: internal.is_some(),
            ty,
            span: Span::new(l as u32, r as u32),
        }),
@@ -757,23 +799,83 @@ AliasDecl: Declaration = {
 // they take are checked by the expansion stage.
 EditionDigits: &'input str = <s:r"[0-9]+"> => s;
 
-HeaderItem: (EcoString, Span) = {
-   <l:@L> <name:RawIdent> <r:@R> => (EcoString::from(name), Span::new(l as u32, r as u32)),
-};
-
 HeaderDecl: Declaration = {
    <l:@L> "language" <name:RawIdent> <r:@R> =>
        Declaration::Language(EcoString::from(name), Span::new(l as u32, r as u32)),
    <l:@L> "edition" <year:EditionDigits> "-" <month:EditionDigits> <r:@R> =>
        Declaration::Edition(EcoString::from(format!("{year}-{month}")), Span::new(l as u32, r as u32)),
-   <l:@L> "use" <namespace:RawIdent> "::" "{" <items:SepList<HeaderItem, ",">> "}" <r:@R> =>
-       Declaration::Use { namespace: EcoString::from(namespace), items: Some(items), span: Span::new(l as u32, r as u32) },
-   <l:@L> "use" <namespace:RawIdent> "::" "*" <r:@R> =>
-       Declaration::Use { namespace: EcoString::from(namespace), items: None, span: Span::new(l as u32, r as u32) },
+   <l:@L> "use" <tree:UseTree> <r:@R> =>
+       Declaration::Use { tree, span: Span::new(l as u32, r as u32) },
+};
+
+// A path segment is classified by case alone, so the parser never resolves
+// one. `self` is spelled like a lowercase name and is recognised here.
+UseSegment: PathSegment = {
+    <l:@L> <name:LowerIdent> <r:@R> =>? {
+        if name == "self" {
+            return Ok(PathSegment::Zelf);
+        }
+        ModuleName::new(name).map(PathSegment::Module).map_err(|_| {
+            *user_error_location = Some(l);
+            ParseError::User { error: "a module segment must be a lowercase name" }
+        })
+    },
+    <l:@L> <name:UpperIdent> <r:@R> =>? TypeName::new(name).map(PathSegment::Name).map_err(|_| {
+        *user_error_location = Some(l);
+        ParseError::User { error: "a type or tag segment must be a capitalised name" }
+    }),
+};
+
+UsePathSegments: EcoVec<PathSegment> = {
+    <segment:UseSegment> => EcoVec::from([segment]),
+    <path:UsePathSegments> "::" <segment:UseSegment> => {
+        let mut path = path;
+        path.push(segment);
+        path
+    },
+};
+
+// A group entry is itself a `use` relative to the enclosing path, so nesting
+// and `self` need no special case.
+UseTree: UseTree = {
+    <l:@L> <path:UsePathSegments> <r:@R> =>
+        UseTree::new(path, ImportKind::Item, Span::new(l as u32, r as u32)),
+    <l:@L> <path:UsePathSegments> "::" "*" <r:@R> =>
+        UseTree::new(path, ImportKind::Glob, Span::new(l as u32, r as u32)),
+    <l:@L> <path:UsePathSegments> "::" "{" <items:DelimitedSepListOpt<UseTree, ",">> "}" <r:@R> =>
+        UseTree::new(path, ImportKind::Group(items), Span::new(l as u32, r as u32)),
+};
+
+// A module path is all lowercase: `mod store`, or `mod a::b` for a
+// module nested a directory down.
+ModSegment: ModuleName = <l:@L> <name:LowerIdent> <r:@R> =>? {
+    if name == "self" {
+        *user_error_location = Some(l);
+        return Err(ParseError::User { error: "`self` does not name a module to declare" });
+    }
+    ModuleName::new(name).map_err(|_| {
+        *user_error_location = Some(l);
+        ParseError::User { error: "a module segment must be a lowercase name" }
+    })
+};
+
+ModPath: EcoVec<ModuleName> = {
+    <segment:ModSegment> => EcoVec::from([segment]),
+    <path:ModPath> "::" <segment:ModSegment> => {
+        let mut path = path;
+        path.push(segment);
+        path
+    },
+};
+
+ModDecl: Declaration = {
+    <l:@L> "mod" <path:ModPath> <r:@R> =>
+        Declaration::Mod { path, span: Span::new(l as u32, r as u32) },
 };
 
 Declaration: Declaration = {
     HeaderDecl,
+    ModDecl,
     InputDecl,
     OutputDecl,
     AuxDecl,

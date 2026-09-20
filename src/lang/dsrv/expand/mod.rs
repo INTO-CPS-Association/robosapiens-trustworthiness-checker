@@ -58,6 +58,7 @@
 //! and whether equations fit their types are validation's and the type
 //! checker's questions, asked of the assembled specification.
 
+pub(crate) mod graph;
 pub(crate) mod language;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +77,7 @@ use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAs
 use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::lang::dsrv::ast::DsrvSpecification;
+use crate::lang::dsrv::modules::ImportError;
 use contiguous_tree::TreeCursor as _;
 use language::{Dialect, LanguageError, LanguageRequest};
 
@@ -93,6 +95,24 @@ pub enum DsrvExpandError {
 
     #[error("invalid language settings: {0}")]
     Language(#[from] LanguageError),
+
+    #[error("invalid import: {0}")]
+    Import(#[from] ImportError),
+
+    #[error("modules import each other in a cycle: {path}")]
+    ModuleCycle { path: String },
+
+    #[error("no module {path} is declared, but {importer} imports it")]
+    UnknownModule { path: String, importer: String },
+
+    #[error("`{tag}` is not a constructor of {ty}")]
+    UnknownConstructor { tag: String, ty: String },
+
+    #[error("an exported type cannot be resolved where it was declared: {name}")]
+    UnknownExport { name: String },
+
+    #[error("{name} is internal to its module and cannot be imported")]
+    InternalImport { name: String },
 }
 
 /// A parsed specification's declarations, with names and types resolved.
@@ -127,11 +147,40 @@ pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
     request: LanguageRequest,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
+    expand_declarations_in(parsed, request, None)
+}
+
+/// Expand a file's declarations, optionally against a namespace built
+/// elsewhere — which is how a module's imports reach it.
+pub(crate) fn expand_declarations_in(
+    parsed: ParsedSpecification,
+    request: LanguageRequest,
+    supplied: Option<Rc<SourceContext>>,
+) -> Result<ExpandedDeclarations, DsrvExpandError> {
     let (expressions, parsed_declarations) = parsed.into_parts();
     let language = language::resolve_language(&parsed_declarations, request)?;
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     for declaration in &parsed_declarations {
+        // Importing an item is what `modules` adds; `use experimental` is
+        // the header line every file may write.
+        let module_construct = match declaration {
+            ParsedDeclaration::Use { tree, span } if !tree.is_experimental() => {
+                Some(("an import", *span))
+            }
+            ParsedDeclaration::Mod { span, .. } => Some(("a module declaration", *span)),
+            _ => None,
+        };
+        if let Some((construct, span)) = module_construct
+            && !language.has_modules()
+        {
+            return Err(LanguageError::NeedsExperiment {
+                construct,
+                feature: "modules",
+                span,
+            }
+            .into());
+        }
         if let ParsedDeclaration::Alias(alias) = declaration {
             if core {
                 return Err(LanguageError::NotCore {
@@ -141,11 +190,18 @@ pub(crate) fn expand_declarations(
                 .into());
             }
             language::check_alias(alias, &language)?;
-            context.insert_source(alias.clone())?;
+            if supplied.is_none() {
+                context.insert_source(alias.clone())?;
+            }
         }
     }
-    context.language(language.clone());
-    let context = Rc::new(context.build()?);
+    let context = match supplied {
+        Some(context) => context,
+        None => {
+            context.language(language.clone());
+            Rc::new(context.build()?)
+        }
+    };
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
     let mut declarations = EcoVec::new();
@@ -207,7 +263,8 @@ pub(crate) fn expand_declarations(
             // The header is expanded into the source context, not kept.
             ParsedDeclaration::Language(..)
             | ParsedDeclaration::Edition(..)
-            | ParsedDeclaration::Use { .. } => continue,
+            | ParsedDeclaration::Use { .. }
+            | ParsedDeclaration::Mod { .. } => continue,
         };
         declarations.push(resolved);
     }
@@ -267,6 +324,21 @@ fn check_expression_types(
 }
 
 /// Expand a parsed specification into the core specification.
+/// Expand a whole program: every module's namespace, then the root against
+/// its own.
+pub(crate) fn expand_program(
+    sources: crate::lang::dsrv::modules::ModuleSources,
+    request: LanguageRequest,
+) -> Result<DsrvSpecification, DsrvExpandError> {
+    let graph = graph::build_graph(&sources, request)?;
+    let context = graph
+        .get(&crate::lang::dsrv::modules::ModulePath::new())
+        .expect("the root has a namespace")
+        .clone();
+    let root = sources.into_root();
+    finish_specification(expand_declarations_in(root, request, Some(context))?)
+}
+
 pub(crate) fn expand_specification(
     parsed: ParsedSpecification,
     request: LanguageRequest,
@@ -277,6 +349,23 @@ pub(crate) fn expand_specification(
         roots,
         context,
     } = expand_declarations(parsed, request)?;
+    finish_specification(ExpandedDeclarations {
+        builder,
+        declarations,
+        roots,
+        context,
+    })
+}
+
+fn finish_specification(
+    expanded: ExpandedDeclarations,
+) -> Result<DsrvSpecification, DsrvExpandError> {
+    let ExpandedDeclarations {
+        builder,
+        declarations,
+        roots,
+        context,
+    } = expanded;
     let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
     let language = specification.source_context.language().clone();

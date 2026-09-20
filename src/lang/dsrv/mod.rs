@@ -3,7 +3,9 @@
 pub mod ast;
 mod elaborate;
 mod expand;
+pub mod modules;
 pub mod parser;
+pub mod path;
 pub mod patterns;
 mod pipeline;
 pub(crate) mod runtime_text;
@@ -16,6 +18,8 @@ pub mod type_checker;
 mod generic_tests;
 #[cfg(test)]
 mod match_tests;
+#[cfg(test)]
+mod module_tests;
 #[cfg(test)]
 mod tagged_union_tests;
 #[cfg(test)]

@@ -10,8 +10,9 @@ use crate::core::{BinaryOperator, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 
 use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
+use super::super::path::{ModuleName, TypePath, UseTree};
 use super::super::patterns::{MatchArm, MatchPattern};
-use super::super::source::{AliasDeclaration, SourceType, TypeName};
+use super::super::source::{AliasDeclaration, SourceType};
 use super::super::span::Span;
 use super::DsrvSyntaxError;
 
@@ -38,7 +39,7 @@ contiguous_tree::tree_schema! {
         Constructor(
             payload: children,
             tag: data(EcoString),
-            qualifier: data(Option<TypeName>),
+            qualifier: data(Option<TypePath>),
         ),
         Match(scrutinee: child, arms: children, shape: data(EcoVec<MatchArm>)),
         Matches(scrutinee: child, guard: children, pattern: data(MatchPattern)),
@@ -97,10 +98,15 @@ pub(crate) enum ParsedDeclaration {
     Language(EcoString, Span),
     /// `edition <year>-<month>`, as written.
     Edition(EcoString, Span),
-    /// `use <namespace>::{…}`, or `use <namespace>::*` when `items` is `None`.
+    /// `use <path>`, `use <path>::*` or `use <path>::{…}`, as written.
     Use {
-        namespace: EcoString,
-        items: Option<EcoVec<(EcoString, Span)>>,
+        tree: UseTree,
+        span: Span,
+    },
+    /// `mod <path>`, naming a submodule this file pulls in. The path is the
+    /// module's name, not a file: mapping it to one is the collector's work.
+    Mod {
+        path: EcoVec<ModuleName>,
         span: Span,
     },
 }
@@ -140,6 +146,10 @@ impl ParsedSpecification {
     }
 
     /// Hand the parsed forest and declarations to the expansion stage.
+    pub(crate) fn declarations(&self) -> &[ParsedDeclaration] {
+        &self.declarations
+    }
+
     pub(crate) fn into_parts(self) -> (ParsedExprForest, EcoVec<ParsedDeclaration>) {
         (self.expressions, self.declarations)
     }

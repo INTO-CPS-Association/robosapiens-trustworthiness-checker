@@ -4,6 +4,10 @@
 //! [`super::expand`]; these functions run both stages for existing callers.
 
 use super::ast::AstShared as Rc;
+use crate::lang::dsrv::modules::{
+    ImportError, ModuleCollector, ModuleSources, module_file, show_path,
+};
+use crate::lang::dsrv::path::ModuleName;
 
 use anyhow::Error;
 #[cfg(test)]
@@ -44,6 +48,12 @@ pub enum DsrvParseError {
 
     #[error("invalid language settings: {0}")]
     Language(#[from] LanguageError),
+
+    #[error("invalid import: {0}")]
+    Import(#[from] ImportError),
+
+    #[error("invalid module structure: {0}")]
+    Modules(String),
 }
 
 impl From<DsrvSyntaxError> for DsrvParseError {
@@ -62,6 +72,14 @@ impl From<DsrvExpandError> for DsrvParseError {
             DsrvExpandError::Ast(error) => Self::Ast(error),
             DsrvExpandError::Transcode(error) => Self::Transcode(error),
             DsrvExpandError::Language(error) => Self::Language(error),
+            DsrvExpandError::Import(error) => Self::Import(error),
+            // The message is the whole of these; nothing downstream
+            // discriminates them further.
+            other @ (DsrvExpandError::ModuleCycle { .. }
+            | DsrvExpandError::UnknownModule { .. }
+            | DsrvExpandError::UnknownConstructor { .. }
+            | DsrvExpandError::UnknownExport { .. }
+            | DsrvExpandError::InternalImport { .. }) => Self::Modules(other.to_string()),
         }
     }
 }
@@ -97,6 +115,48 @@ pub fn parse_str_with(
         syntax::parse_specification(input)?,
         request,
     )?)
+}
+
+/// Read a program and every module it declares.
+///
+/// This is the one place modules touch the filesystem: the collector asks
+/// for each module in turn and this loop answers, so everything above it
+/// stays sans-IO.
+pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSources> {
+    use anyhow::Context;
+
+    let directory = std::path::Path::new(file)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_owned();
+    let root = smol::fs::read_to_string(file)
+        .await
+        .with_context(|| format!("reading {file}"))?;
+    let mut collector = ModuleCollector::new(&root)?;
+    while let Some(path) = collector.next_request().map(<[ModuleName]>::to_vec) {
+        let location = directory.join(module_file(&path));
+        let source = smol::fs::read_to_string(&location).await.with_context(|| {
+            format!(
+                "reading module {} from {}",
+                show_path(&path),
+                location.display()
+            )
+        })?;
+        collector.supply(&source)?;
+    }
+    Ok(collector.finish()?)
+}
+
+/// Read a program, its modules included, and expand it.
+///
+/// A file that declares no module expands exactly as `parse_file_with`
+/// does; one that declares modules has their namespaces built first.
+pub async fn parse_program_file(
+    file: &str,
+    request: LanguageRequest,
+) -> anyhow::Result<DsrvSpecification> {
+    let sources = collect_modules_from_file(file).await?;
+    Ok(expand::expand_program(sources, request)?)
 }
 
 pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
@@ -196,6 +256,7 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
 mod source_tests {
     use super::*;
     use crate::lang::dsrv::ast::ExprView;
+    use crate::lang::dsrv::path::TypePath;
     use crate::lang::dsrv::source::TypeName;
 
     #[test]
@@ -488,7 +549,8 @@ mod source_tests {
             parse_str("type _ = Int type Count = _ in Count: Count out _: _ _ = Count").unwrap();
         assert_eq!(spec.type_annotation(&"_".into()), Some(&StreamType::Int));
         assert_eq!(
-            spec.source_context().get(&TypeName::new("_").unwrap()),
+            spec.source_context()
+                .get(&TypePath::local(TypeName::new("_").unwrap())),
             Some(&StreamType::Int)
         );
     }

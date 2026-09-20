@@ -9,6 +9,7 @@
 //! Type checking does not construct another AST. [`CheckedExprRef`] traverses
 //! the same expression tree while carrying immutable [`CheckedTypes`].
 
+use crate::lang::dsrv::path::TypePath;
 use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
@@ -23,7 +24,7 @@ use crate::core::{BinaryOperator, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
-use crate::lang::dsrv::source::{SourceContext, TypeName};
+use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
 
 /// A literal that can occur in the syntax tree.
@@ -287,7 +288,7 @@ contiguous_tree::tree_schema! {
         Constructor(
             payload: children,
             tag: data(EcoString),
-            qualifier: data(Option<TypeName>),
+            qualifier: data(Option<TypePath>),
         ),
         // The scrutinee, then each arm's guard (when it has one) and body,
         // in the order they were written. `shape` says which children

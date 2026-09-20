@@ -14,6 +14,7 @@ use ecow::EcoString;
 
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{Declaration, DsrvSpecification, ExprKind, ExprRef};
+use crate::lang::dsrv::path::{ImportKind, PathSegment, UseTree};
 use crate::lang::dsrv::source::{AliasDeclaration, SourceType, SourceTypeKind};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::ParsedDeclaration;
@@ -121,17 +122,24 @@ pub enum Feature {
     TaggedUnions,
     PatternMatching,
     Generics,
+    Modules,
 }
 
 impl Feature {
     /// Every current experiment, which is what `use experimental::*` enables.
-    pub const ALL: &'static [Self] = &[Self::TaggedUnions, Self::PatternMatching, Self::Generics];
+    pub const ALL: &'static [Self] = &[
+        Self::TaggedUnions,
+        Self::PatternMatching,
+        Self::Generics,
+        Self::Modules,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::TaggedUnions => "tagged_unions",
             Self::PatternMatching => "pattern_matching",
             Self::Generics => "generics",
+            Self::Modules => "modules",
         }
     }
 
@@ -189,6 +197,11 @@ impl LanguageConfig {
 
     /// Whether an experiment is on. Only expansion may ask.
     #[allow(dead_code)] // The first gated feature is its first caller.
+    /// Whether imports beyond `use experimental` are available.
+    pub(crate) fn has_modules(&self) -> bool {
+        self.has(Feature::Modules)
+    }
+
     pub(super) fn has(&self, feature: Feature) -> bool {
         self.experiments.contains(&feature)
     }
@@ -259,11 +272,6 @@ pub enum LanguageError {
         span: Span,
     },
 
-    #[error(
-        "`use {namespace}::…` at {span:?} is not supported: only `use experimental::…` is, until modules exist"
-    )]
-    UnsupportedUse { namespace: EcoString, span: Span },
-
     #[error("a second `{keyword}` line at {span:?}; the first is at {first:?}")]
     DuplicateHeader {
         keyword: &'static str,
@@ -303,6 +311,48 @@ pub enum LanguageError {
     },
 }
 
+/// The experiments one `use experimental::…` line enables.
+///
+/// The name may be grouped, starred or written on its own, so
+/// `use experimental::{a, b}`, `use experimental::*` and
+/// `use experimental::a` all read the same way.
+fn experimental_features(tree: &UseTree) -> Result<Vec<Feature>, LanguageError> {
+    match (tree.path(), tree.kind()) {
+        ([_], ImportKind::Glob) => Ok(Feature::ALL.to_vec()),
+        ([_], ImportKind::Group(items)) => items.iter().map(named_experiment).collect(),
+        ([_, PathSegment::Module(name)], ImportKind::Item) => {
+            experiment_by_name(name.as_str(), tree.span()).map(|feature| vec![feature])
+        }
+        _ => Err(unknown_experiment(tree)),
+    }
+}
+
+/// One entry of `use experimental::{…}`, which is a plain lowercase name.
+fn named_experiment(item: &UseTree) -> Result<Feature, LanguageError> {
+    match (item.sole_segment(), item.kind()) {
+        (Some(PathSegment::Module(name)), ImportKind::Item) => {
+            experiment_by_name(name.as_str(), item.span())
+        }
+        _ => Err(unknown_experiment(item)),
+    }
+}
+
+fn experiment_by_name(name: &str, span: Span) -> Result<Feature, LanguageError> {
+    Feature::from_name(name).ok_or_else(|| LanguageError::UnknownFeature {
+        name: name.into(),
+        known: Feature::known(),
+        span,
+    })
+}
+
+fn unknown_experiment(tree: &UseTree) -> LanguageError {
+    LanguageError::UnknownFeature {
+        name: tree.to_string().into(),
+        known: Feature::known(),
+        span: tree.span(),
+    }
+}
+
 /// Read the header declarations and combine them with any outside request.
 pub(crate) fn resolve_language(
     declarations: &[ParsedDeclaration],
@@ -317,8 +367,19 @@ pub(crate) fn resolve_language(
     for declaration in declarations {
         let (keyword, span) = match declaration {
             ParsedDeclaration::Language(_, span) => ("language", *span),
+            // `mod` pulls a file into the program, so it stays in the header
+            // region (S6) even though an item import no longer does (S9).
+            ParsedDeclaration::Mod { span, .. } => ("mod", *span),
             ParsedDeclaration::Edition(_, span) => ("edition", *span),
-            ParsedDeclaration::Use { span, .. } => ("use", *span),
+            // An item import populates a namespace rather than configuring
+            // the file, so it belongs to the body and may sit anywhere (S9).
+            ParsedDeclaration::Use { tree, span } => {
+                if !tree.is_experimental() {
+                    body_started = true;
+                    continue;
+                }
+                ("use experimental", *span)
+            }
             _ => {
                 body_started = true;
                 continue;
@@ -361,35 +422,15 @@ pub(crate) fn resolve_language(
                         })?;
                 edition = Some((resolved, *span));
             }
-            // Several `use` lines add up, so they are not duplicate headers.
-            ParsedDeclaration::Use {
-                namespace,
-                items,
-                span,
-            } => {
-                if namespace != "experimental" {
-                    return Err(LanguageError::UnsupportedUse {
-                        namespace: namespace.clone(),
-                        span: *span,
-                    });
-                }
+            // Several `use experimental` lines add up, so they are not
+            // duplicate headers.
+            ParsedDeclaration::Use { tree, span } => {
                 experiments_span.get_or_insert(*span);
-                match items {
-                    None => experiments.extend(Feature::ALL.iter().copied()),
-                    Some(items) => {
-                        for (name, span) in items {
-                            let feature = Feature::from_name(name).ok_or_else(|| {
-                                LanguageError::UnknownFeature {
-                                    name: name.clone(),
-                                    known: Feature::known(),
-                                    span: *span,
-                                }
-                            })?;
-                            experiments.insert(feature);
-                        }
-                    }
-                }
+                experiments.extend(experimental_features(tree)?);
             }
+            // Which files `mod` names is the collector's work, not the
+            // language configuration's.
+            ParsedDeclaration::Mod { .. } => {}
             _ => unreachable!("only header declarations reach here"),
         }
     }
@@ -534,6 +575,18 @@ pub(crate) fn check_experiment_node(
     node: ExprRef<'_>,
     language: &LanguageConfig,
 ) -> Result<(), LanguageError> {
+    // A qualifier that reaches through a module needs `modules`, whatever
+    // the constructor itself needs.
+    if let ExprKind::Constructor(_, _, Some(qualifier)) = node.kind()
+        && qualifier.is_qualified()
+        && !language.has(Feature::Modules)
+    {
+        return Err(LanguageError::NeedsExperiment {
+            construct: "a module-qualified name",
+            feature: Feature::Modules.name(),
+            span: node.span(),
+        });
+    }
     let (construct, feature) = match node.kind() {
         ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
         ExprKind::Match(..) => ("`match`", Feature::PatternMatching),
@@ -559,6 +612,13 @@ pub(crate) fn check_alias(
     alias: &AliasDeclaration,
     language: &LanguageConfig,
 ) -> Result<(), LanguageError> {
+    if alias.internal && !language.has(Feature::Modules) {
+        return Err(LanguageError::NeedsExperiment {
+            construct: "an internal type alias",
+            feature: Feature::Modules.name(),
+            span: alias.span,
+        });
+    }
     if !alias.parameters.is_empty() && !language.has(Feature::Generics) {
         return Err(LanguageError::NeedsExperiment {
             construct: "a generic type alias",
@@ -609,7 +669,15 @@ pub(crate) fn check_experiment_type(
             check_experiment_type(ret, language)?;
         }
         // Applying a name is what generics adds; naming one always worked.
-        SourceTypeKind::Named(_, arguments) => {
+        // Reaching through a module is what `modules` adds.
+        SourceTypeKind::Named(name, arguments) => {
+            if name.is_qualified() && !language.has(Feature::Modules) {
+                return Err(LanguageError::NeedsExperiment {
+                    construct: "a module-qualified type",
+                    feature: Feature::Modules.name(),
+                    span: source.span,
+                });
+            }
             if !arguments.is_empty() {
                 if !language.has(Feature::Generics) {
                     return Err(LanguageError::NeedsExperiment {
@@ -908,12 +976,20 @@ mod tests {
         let unknown = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
         assert!(
             matches!(&unknown, UnknownFeature { name, known, .. }
-                if name == "teleporting" && known == "tagged_unions, pattern_matching, generics"),
+                if name == "teleporting" && known == "tagged_unions, pattern_matching, generics, modules"),
             "{unknown}"
         );
+        // An import of anything but `experimental` is an ordinary item
+        // import, which needs `modules` rather than being unsupported.
         let namespace = language_error(&format!("use std::{{option}}\n{BODY}"));
         assert!(
-            matches!(&namespace, UnsupportedUse { namespace, .. } if namespace == "std"),
+            matches!(
+                &namespace,
+                NeedsExperiment {
+                    feature: "modules",
+                    ..
+                }
+            ),
             "{namespace}"
         );
         let in_core = language_error(&format!(
