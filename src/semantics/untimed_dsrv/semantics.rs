@@ -16,6 +16,7 @@ use crate::core::{
     to_typed_partial_stream,
 };
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView, SyntaxLiteral};
+use crate::lang::dsrv::runtime_text::{RuntimeText, RuntimeTextTyping};
 use crate::lang::dsrv::type_checker::TCType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
@@ -79,6 +80,21 @@ where
     ))
 }
 
+/// What text supplied to this `dynamic` or `defer` node is checked against:
+/// the type and environment elaboration gave the node. Absent only where no
+/// elaborated node stands behind it, such as an expression a test builds.
+fn runtime_text(node: ExprRef<'_>, expression: &ScopedExpr) -> RuntimeText {
+    let typing = expression.typ(node).cloned().and_then(|expected| {
+        expression
+            .shared_type_environment()
+            .map(|environment| RuntimeTextTyping {
+                environment: AstShared::clone(environment),
+                expected,
+            })
+    });
+    RuntimeText::new(node.metadata().context.clone().unwrap_or_default(), typing)
+}
+
 pub(super) fn evaluate_ref<'a, AC>(
     node: ExprRef<'a>,
     expression: &ScopedExpr,
@@ -118,22 +134,14 @@ where
             }
         }
         Dynamic(source, _, scope) => {
-            let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
-                expression
-                    .shared_type_environment()
-                    .map(|info| (AstShared::clone(info), expected))
-            });
+            let text = runtime_text(node, expression);
             let e = evaluate(source);
-            dynamic::dynamic_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
+            dynamic::dynamic::<AC>(ctx, e, scope.clone(), owner, 1, text)
         }
         Defer(source, _, scope) => {
-            let dynamic_type = expression.typ(node).cloned().and_then(|expected| {
-                expression
-                    .shared_type_environment()
-                    .map(|info| (AstShared::clone(info), expected))
-            });
+            let text = runtime_text(node, expression);
             let e = evaluate(source);
-            dynamic::defer_checked::<AC>(ctx, e, scope.clone(), owner, 1, dynamic_type)
+            dynamic::defer::<AC>(ctx, e, scope.clone(), owner, 1, text)
         }
         Lambda(params, body) => {
             let params_display = params

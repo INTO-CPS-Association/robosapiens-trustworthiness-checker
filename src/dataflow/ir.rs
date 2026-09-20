@@ -1029,8 +1029,12 @@ pub(super) struct ReconfigurableExpressionSpec<E> {
     /// The complete immutable source namespace captured by the owning AST.
     /// Runtime source must resolve against this context, not a fresh default.
     pub(super) source_context: AstShared<SourceContext>,
-    /// Type information for typed graphs; `None` for untyped graphs.
+    /// Type information for this node; absent only where no elaborated node
+    /// stands behind it, such as a graph a test builds from a bare `Expr`.
     pub(super) typing: Option<ReconfigurableExpressionTyping>,
+    /// Whether accepted text is lowered into a graph that specialises on its
+    /// types, as the enclosing graph does.
+    pub(super) specialise: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

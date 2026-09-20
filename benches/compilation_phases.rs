@@ -7,7 +7,7 @@ use std::time::Duration;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use trustworthiness_checker::Value;
 use trustworthiness_checker::core::{Semantics, StreamType};
-use trustworthiness_checker::dataflow::DataflowMonitor;
+use trustworthiness_checker::dataflow::{DataflowMonitor, DataflowProgram};
 use trustworthiness_checker::lang::core::dependency_graph::{
     DependencyGraphRoots, DependencyGraphSpec,
 };
@@ -17,7 +17,10 @@ use trustworthiness_checker::lang::dsrv::parser::{
     parse_expr, parse_str, parse_syntax_for_benchmark,
 };
 use trustworthiness_checker::lang::dsrv::type_checker::type_check;
-use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification, VarName};
+use trustworthiness_checker::{
+    CheckedDsrvSpecification, DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions,
+    VarName,
+};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -444,9 +447,56 @@ fn localisation(c: &mut Criterion) {
     group.finish();
 }
 
+/// Accepting one `dynamic` or `defer` text: parsing it in the node's source
+/// context, checking it against the node's elaborated typing, and lowering it
+/// (item 8f).
+fn runtime_text_acceptance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("runtime_text_acceptance");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    for operator in ["dynamic", "defer"] {
+        let source = format!("in source: Str\nin x: Int\nout z: Int\nz = {operator}(source: Int)");
+        let specification =
+            ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
+                .expect("benchmark specification should parse and check");
+        let program = DataflowProgram::compile_checked(specification)
+            .expect("benchmark specification should compile");
+        let monitor = DataflowMonitor::from_program(program.clone());
+        let row = monitor
+            .input_vars()
+            .iter()
+            .map(|variable| {
+                if variable == &VarName::new("source") {
+                    Value::Str("x + 1".into())
+                } else {
+                    Value::Int(1)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        group.bench_function(BenchmarkId::from_parameter(operator), |b| {
+            b.iter_batched(
+                || DataflowMonitor::from_program(program.clone()),
+                |mut monitor| {
+                    let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+                    monitor
+                        .evaluate(black_box(&row), &mut output)
+                        .expect("benchmark text should be accepted");
+                    black_box(output)
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     compilation_phases,
+    runtime_text_acceptance,
     indexed_arena_comparison,
     specification_import,
     ast_traversal,

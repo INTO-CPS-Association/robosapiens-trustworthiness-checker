@@ -1,13 +1,27 @@
 use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
 use crate::core::Value;
-use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
-use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
+use crate::lang::dsrv::ast::ReconfigurableExprScope;
+use crate::lang::dsrv::runtime_text::RuntimeText;
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{LocalStream, VarName};
 use async_stream::stream;
 use futures::StreamExt;
 use tracing::{debug, info};
+
+/// Check runtime text on arrival and prepare it for evaluation. Text that
+/// does not check is refused, as text that does not parse always was.
+fn accept_text(text: &RuntimeText, source: &str, owner: Option<&VarName>) -> ScopedExpr {
+    let checked = text
+        .accept(source)
+        .unwrap_or_else(|error| panic!("{error}"));
+    debug!("Runtime text accepted as {:?}", checked.expr());
+    let expression = ScopedExpr::checked(checked);
+    match owner {
+        Some(owner) => expression.with_owner(owner.clone()),
+        None => expression,
+    }
+}
 
 pub fn dynamic<AC>(
     ctx: &AC::Ctx,
@@ -15,20 +29,7 @@ pub fn dynamic<AC>(
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-) -> LocalStream<AC::Val>
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    dynamic_checked::<AC>(ctx, eval_stream, scope, owner, history_length, None)
-}
-
-pub(crate) fn dynamic_checked<AC>(
-    ctx: &AC::Ctx,
-    eval_stream: LocalStream<AC::Val>,
-    scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
-    history_length: usize,
-    checked: Option<(AstShared<StreamTypeEnvironment>, TCType)>,
+    text: RuntimeText,
 ) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
@@ -101,27 +102,8 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = crate::lang::dsrv::parser::parse_expr(s.as_ref())
-                        .expect("Invalid dynamic str");
-                    let eval_output_stream = if let Some((environment, expected)) = checked.clone() {
-                        let expr = check_expression(expr, &expected, &environment)
-                            .unwrap_or_else(|errors| {
-                                panic!("Dynamic expression failed type checking: {errors:?}")
-                            });
-                        debug!("Dynamic evaluated to checked expression {:?}", expr);
-                        let expression = match owner.as_ref() {
-                            Some(owner) => ScopedExpr::checked(expr.clone()).with_owner(owner.clone()),
-                            None => ScopedExpr::checked(expr),
-                        };
-                        evaluate_scope::<AC>(expression, &subcontext)
-                    } else {
-                        debug!("Dynamic evaluated to expression {:?}", expr);
-                        let expression = match owner.as_ref() {
-                            Some(owner) => ScopedExpr::unchecked(expr.clone()).with_owner(owner.clone()),
-                            None => ScopedExpr::unchecked(expr),
-                        };
-                        evaluate_scope::<AC>(expression, &subcontext)
-                    };
+                    let expression = accept_text(&text, s.as_ref(), owner.as_ref());
+                    let eval_output_stream = evaluate_scope::<AC>(expression, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream
@@ -148,20 +130,7 @@ pub fn defer<AC>(
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
     history_length: usize,
-) -> LocalStream<AC::Val>
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    defer_checked::<AC>(ctx, eval_stream, scope, owner, history_length, None)
-}
-
-pub(crate) fn defer_checked<AC>(
-    ctx: &AC::Ctx,
-    eval_stream: LocalStream<AC::Val>,
-    scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
-    history_length: usize,
-    checked: Option<(AstShared<StreamTypeEnvironment>, TCType)>,
+    text: RuntimeText,
 ) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value>,
@@ -193,27 +162,8 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expr = crate::lang::dsrv::parser::parse_expr(s.as_ref())
-                        .expect("Invalid defer str");
-                    let tmp_stream = if let Some((environment, expected)) = checked.clone() {
-                        let expr = check_expression(expr, &expected, &environment)
-                            .unwrap_or_else(|errors| {
-                                panic!("Deferred expression failed type checking: {errors:?}")
-                            });
-                        debug!("Defer evaluated to checked expression {:?}", expr);
-                        let expression = match owner.as_ref() {
-                            Some(owner) => ScopedExpr::checked(expr.clone()).with_owner(owner.clone()),
-                            None => ScopedExpr::checked(expr),
-                        };
-                        evaluate_scope::<AC>(expression, &subcontext)
-                    } else {
-                        debug!("Defer evaluated to expression {:?}", expr);
-                        let expression = match owner.as_ref() {
-                            Some(owner) => ScopedExpr::unchecked(expr.clone()).with_owner(owner.clone()),
-                            None => ScopedExpr::unchecked(expr),
-                        };
-                        evaluate_scope::<AC>(expression, &subcontext)
-                    };
+                    let expression = accept_text(&text, s.as_ref(), owner.as_ref());
+                    let tmp_stream = evaluate_scope::<AC>(expression, &subcontext);
                     let mut tmp_stream = stream_lift_base(tmp_stream);
                     // Advance the subcontext to make a new set of input values
                     // available for the dynamic stream

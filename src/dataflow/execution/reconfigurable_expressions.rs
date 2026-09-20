@@ -8,7 +8,7 @@ use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::evaluator_state::*;
 use super::lifting::retain_last_value;
 use crate::lang::dsrv::ast::AstShared;
-use crate::lang::dsrv::{parser::parse_expr_with_context, type_checker::check_expression};
+use crate::lang::dsrv::runtime_text::{RuntimeText, RuntimeTextTyping};
 
 pub(in crate::dataflow) fn evaluate_reconfigurable_expression(
     current: Value,
@@ -335,27 +335,37 @@ fn compile_dynamic_expression(
     spec: &BoundReconfigurableExpressionSpec,
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<CompiledReconfigurableExpression, DataflowEvaluationError> {
-    let context = AstShared::clone(&spec.source_context);
-    let expr = parse_expr_with_context(source_text.as_ref(), context).map_err(|error| {
+    // Text is checked on arrival whether or not this graph consults types:
+    // against the type and environment elaboration gave the node, or, where
+    // lowering erased them, against `Any` (see RuntimeText).
+    let text = RuntimeText::new(
+        AstShared::clone(&spec.source_context),
+        spec.typing.as_ref().map(
+            |ReconfigurableExpressionTyping {
+                 environment,
+                 expected_type,
+             }| RuntimeTextTyping {
+                environment: AstShared::clone(environment),
+                expected: expected_type.clone(),
+            },
+        ),
+    );
+    let expr = text.parse(source_text.as_ref()).map_err(|error| {
         DataflowEvaluationError::ReconfigurableExpressionParse {
             expression: source_text.clone(),
             message: error.to_string(),
         }
     })?;
-    let mut graph = if let Some(ReconfigurableExpressionTyping {
-        environment,
-        expected_type,
-    }) = &spec.typing
-    {
-        let expr = check_expression(expr, expected_type, environment).map_err(|errors| {
-            DataflowEvaluationError::ReconfigurableExpressionType {
-                expression: source_text.clone(),
-                message: format!("{errors:?}"),
-            }
-        })?;
-        build_checked_expression_graph(expr)
+    let checked = text.check(source_text.as_ref(), expr).map_err(|error| {
+        DataflowEvaluationError::ReconfigurableExpressionType {
+            expression: source_text.clone(),
+            message: error.to_string(),
+        }
+    })?;
+    let mut graph = if spec.specialise {
+        build_checked_expression_graph(checked)
     } else {
-        build_expression_graph(expr)
+        build_expression_graph(checked.expr().clone())
     };
     let allowed_vars = spec.scope.allowed_variables();
     graph.restrict_reconfigurable_scopes(allowed_vars);
@@ -424,6 +434,7 @@ mod tests {
                 crate::lang::dsrv::source::SourceContext::default(),
             ),
             typing: None,
+            specialise: false,
         };
         (spec, environment)
     }
@@ -455,6 +466,7 @@ mod tests {
             source_context: crate::lang::dsrv::ast::AstShared::new(
                 crate::lang::dsrv::source::SourceContext::default(),
             ),
+            specialise: typing.is_some(),
             typing,
         }
     }
@@ -802,16 +814,21 @@ mod tests {
         let (spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &[]);
         let mut state = ReconfigurableExpressionState::default();
 
+        // The ascription makes the nested source check, so the refusal comes
+        // from lowering rather than from checking the text.
         let result = update_active_expression_with_change(
-            "dynamic(\"1\")".into(),
+            "dynamic(\"1\": Int)".into(),
             &spec,
             &mut state,
             &environment,
         );
-        assert!(matches!(
-            result,
-            Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(DataflowEvaluationError::UnsupportedNestedReconfiguration)
+            ),
+            "{result:?}"
+        );
         assert!(state.active_expression.is_none());
         assert!(state.template_cache.is_empty());
     }

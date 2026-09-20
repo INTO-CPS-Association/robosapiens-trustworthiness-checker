@@ -410,6 +410,7 @@ fn bind_op(
                 kind: spec.kind,
                 source_context: crate::lang::dsrv::ast::AstShared::clone(&spec.source_context),
                 typing: spec.typing,
+                specialise: spec.specialise,
             })
         }
         UnboundOp::Function { func } => BoundOp::Function {

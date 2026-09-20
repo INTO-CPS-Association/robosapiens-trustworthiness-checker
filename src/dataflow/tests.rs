@@ -1919,6 +1919,27 @@ fn dataflow_evaluation_failures_poison_the_monitor() {
 }
 
 #[test]
+fn untimed_dataflow_refuses_runtime_text_that_does_not_check() {
+    // `untimed` evaluation does not consult the elaborated types, but the
+    // text it is given is checked against them all the same.
+    let spec = elaborated("in source: Str\nout z: Int\nz = dynamic(source: Int)");
+    let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
+    let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+
+    let error = monitor
+        .evaluate(&[Value::Str("true".into())], &mut output)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            crate::dataflow::DataflowEvaluationError::ReconfigurableExpressionType { .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(output, [Value::NoVal], "failed ticks publish no output row");
+}
+
+#[test]
 fn checked_dataflow_dynamic_type_failures_poison_the_monitor() {
     let spec = elaborated("in source: Str\nout z: Int\nz = dynamic(source: Int)");
     let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();

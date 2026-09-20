@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::{RuntimeFunction, Value};
-use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprView};
+use crate::lang::dsrv::ast::{AstShared, CheckedExpr, ExprRef, ExprView};
+use crate::lang::dsrv::runtime_text::{RuntimeText, RuntimeTextTyping};
 use crate::semantics::distributed::combinators as dist_mc;
 use crate::semantics::untimed_dsrv::{combinators as mc, core_evaluation};
 use crate::semantics::{AsyncConfig, MonitoringSemantics};
@@ -46,12 +47,16 @@ where
         ctx: &AC::Ctx,
         owner: Option<VarName>,
     ) -> LocalStream<AC::Val> {
-        evaluate_expr::<AC>(expr.expr().as_ref(), ctx, owner)
+        evaluate_expr::<AC>(expr.expr().as_ref(), expr, ctx, owner)
     }
 }
 
 fn evaluate_expr<'a, AC>(
     expr: ExprRef<'a>,
+    // The elaborated expression this node belongs to: runtime text is checked
+    // against the type and environment elaboration gave the node, as in every
+    // other runtime, although evaluation here does not consult those types.
+    checked: &CheckedExpr,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
 ) -> LocalStream<AC::Val>
@@ -60,7 +65,16 @@ where
 {
     use ExprView::*;
 
-    let evaluate = |child| evaluate_expr::<AC>(child, ctx, owner.clone());
+    let evaluate = |child| evaluate_expr::<AC>(child, checked, ctx, owner.clone());
+    let runtime_text = |node: ExprRef<'a>| {
+        RuntimeText::new(
+            node.metadata().context.clone().unwrap_or_default(),
+            Some(RuntimeTextTyping {
+                environment: AstShared::clone(checked.as_ref().shared_type_environment()),
+                expected: checked.cursor(node).typ().clone(),
+            }),
+        )
+    };
     if let Some(stream) = core_evaluation::evaluate(expr, &evaluate) {
         return stream;
     }
@@ -86,12 +100,14 @@ where
         }
         Var(v) => mc::var::<AC>(ctx, v.clone()),
         Dynamic(source, _, scope) => {
+            let text = runtime_text(expr);
             let e = evaluate(source);
-            mc::dynamic::<AC>(ctx, e, scope.clone(), owner.clone(), 10)
+            mc::dynamic::<AC>(ctx, e, scope.clone(), owner.clone(), 10, text)
         }
         Defer(source, _, scope) => {
+            let text = runtime_text(expr);
             let e = evaluate(source);
-            mc::defer::<AC>(ctx, e, scope.clone(), owner.clone(), 10)
+            mc::defer::<AC>(ctx, e, scope.clone(), owner.clone(), 10, text)
         }
         LMap(_, _) | LFilter(_, _) | LFold(_, _, _) => {
             panic!("higher-order list operations require typed DSRV semantics")

@@ -178,6 +178,7 @@ fn dynamic_program_with_variables(
             crate::lang::dsrv::source::SourceContext::default(),
         ),
         typing: None,
+        specialise: false,
     };
     let mut nodes = (0..prefix_nodes)
         .map(|index| BoundOp::Binary {

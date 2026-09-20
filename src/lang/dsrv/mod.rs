@@ -5,6 +5,7 @@ mod elaborate;
 mod expand;
 pub mod parser;
 mod pipeline;
+pub(crate) mod runtime_text;
 pub mod source;
 pub mod span;
 mod syntax;

@@ -2542,7 +2542,10 @@ fn lifecycle_reset_after_evaluator_error_clears_poison_and_staging() {
 
 #[test]
 fn lifecycle_dynamic_error_variants_preserve_prefix_and_reset_to_nominal() {
-    for (source, expected_error) in [("(", "parse"), ("x > 0", "type"), ("unknown", "context")] {
+    // `z` is declared, so it checks, but it is the node's own stream and so
+    // outside its scope: checking on arrival now refuses an undeclared name
+    // such as `unknown` before the scope is considered.
+    for (source, expected_error) in [("(", "parse"), ("x > 0", "type"), ("z", "context")] {
         let program = if expected_error == "type" {
             let checked = elaborated(
                 "in x: Int\nin y: Int\nin source: Str\nout z: Int\naux sum: Int\n\

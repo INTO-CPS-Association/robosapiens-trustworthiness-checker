@@ -21,6 +21,8 @@ use tracing::debug;
 
 #[cfg(test)]
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
+#[cfg(test)]
+use crate::lang::dsrv::runtime_text::RuntimeText;
 
 pub use super::dynamic::{defer, dynamic};
 
@@ -636,8 +638,14 @@ mod combinator_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![2.into(), 4.into()];
@@ -650,8 +658,14 @@ mod combinator_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x * x".into(), "x * x".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -667,8 +681,14 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x+1 until we get a non-deferred value
@@ -685,8 +705,14 @@ mod combinator_tests {
         ]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 10);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Evaluates to Deferred when we get Deferred
@@ -716,8 +742,14 @@ mod combinator_tests {
             5.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -736,7 +768,14 @@ mod combinator_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter(vec!["x + 1".into(), "x + 2".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 2);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            2,
+            RuntimeText::default(),
+        );
         let _ = with_timeout(ctx.run(), 1, "ctx.run()")
             .await
             .expect("ctx.run() timed out");
@@ -754,7 +793,14 @@ mod combinator_tests {
             Box::pin(stream::iter(vec!["x * x".into(), "x * x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![4.into(), 9.into()];
@@ -767,7 +813,14 @@ mod combinator_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, "x + 1".into()]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 4.into()];
@@ -785,7 +838,14 @@ mod combinator_tests {
         ])) as LocalStream<Value>;
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into(), 4.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, 3.into(), 4.into(), 5.into()];
@@ -798,7 +858,14 @@ mod combinator_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter(vec![Value::Deferred, Value::Deferred]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 10);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 10);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::Deferred, Value::Deferred];
@@ -836,8 +903,14 @@ mod combinator_tests {
             vec![x, y],
             10,
         );
-        let res_stream =
-            defer::<TestConfig>(&ctx, e, eco_vec!["x".into(), "y".into()].into(), None, 10);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into(), "y".into()].into(),
+            None,
+            10,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = with_timeout(res_stream.collect(), 10, "res_stream.collect")
             .await
@@ -1673,8 +1746,14 @@ mod noval_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -1687,8 +1766,14 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1 until we get a non-deferred value
@@ -1716,8 +1801,14 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1758,8 +1849,14 @@ mod noval_tests {
             7.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream =
-            dynamic::<TestConfig>(&ctx, e, ReconfigurableExprScope::Automatic, None, 1);
+        let res_stream = dynamic::<TestConfig>(
+            &ctx,
+            e,
+            ReconfigurableExprScope::Automatic,
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![
@@ -1779,7 +1876,14 @@ mod noval_tests {
         let e: LocalStream<Value> = Box::pin(stream::iter([Value::NoVal, Value::NoVal]));
         let x = Box::pin(stream::iter(vec![2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 1);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![Value::NoVal, Value::NoVal];
@@ -1792,7 +1896,14 @@ mod noval_tests {
             Box::pin(stream::iter(["x + 1".into(), Value::NoVal, "42".into()]));
         let x = Box::pin(stream::iter(vec![1.into(), 2.into(), 3.into()]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 1);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         // Continues evaluating to x + 1
@@ -1820,7 +1931,14 @@ mod noval_tests {
             6.into(),
         ]));
         let mut ctx = TestCtx::new(executor.clone(), vec!["x".into()], vec![x], 1);
-        let res_stream = defer::<TestConfig>(&ctx, e, eco_vec!["x".into()].into(), None, 1);
+        let res_stream = defer::<TestConfig>(
+            &ctx,
+            e,
+            eco_vec!["x".into()].into(),
+            None,
+            1,
+            RuntimeText::default(),
+        );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
         let exp: Vec<Value> = vec![

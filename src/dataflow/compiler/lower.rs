@@ -12,14 +12,25 @@ use crate::lang::dsrv::type_checker::TCType;
 struct EvaluationGraphBuilder {
     nodes: Vec<UnboundOp>,
     scalar_signatures: Vec<Option<ScalarSignature>>,
+    /// Whether the graph consults the elaborated types to specialise scalar
+    /// operations. An unspecialised graph still carries each `dynamic` and
+    /// `defer` node's typing, so text arriving there is checked as it is
+    /// everywhere else.
+    specialise: bool,
 }
 
 impl EvaluationGraphBuilder {
-    fn new() -> Self {
+    fn new(specialise: bool) -> Self {
         Self {
             nodes: Vec::new(),
             scalar_signatures: Vec::new(),
+            specialise,
         }
+    }
+
+    /// The elaborated type of `expr`, where this graph specialises on types.
+    fn scalar_typ<'a>(&self, expr: ExprCursor<'a>) -> Option<&'a TCType> {
+        if self.specialise { expr.typ() } else { None }
     }
 
     fn push(&mut self, op: UnboundOp) -> UnboundRef {
@@ -42,24 +53,33 @@ impl EvaluationGraphBuilder {
     }
 }
 
-fn lower_branch(expr: ExprCursor<'_>) -> UnboundEvaluationGraph {
-    let mut builder = EvaluationGraphBuilder::new();
+fn lower_branch(expr: ExprCursor<'_>, specialise: bool) -> UnboundEvaluationGraph {
+    let mut builder = EvaluationGraphBuilder::new(specialise);
     let output = lower_expression(expr, &mut builder);
     builder.finish(output)
 }
 
 pub(in crate::dataflow) fn build_expression_graph(expr: Expr) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(ExprCursor::unchecked(expr.as_ref()))
+    build_graph_from_cursor(ExprCursor::unchecked(expr.as_ref()), false)
 }
 
 pub(in crate::dataflow) fn build_checked_expression_graph(
     expr: CheckedExpr,
 ) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(expr.as_ref().erased())
+    build_graph_from_cursor(expr.as_ref().erased(), true)
 }
 
-fn build_graph_from_cursor(expr: ExprCursor<'_>) -> UnboundEvaluationGraph {
-    let mut builder = EvaluationGraphBuilder::new();
+/// Lower an elaborated expression without specialising on its types, as
+/// `untimed` evaluation does. The types stay available to the `dynamic` and
+/// `defer` nodes, which check the text they are given.
+pub(in crate::dataflow) fn build_unspecialised_expression_graph(
+    expr: CheckedExpr,
+) -> UnboundEvaluationGraph {
+    build_graph_from_cursor(expr.as_ref().erased(), false)
+}
+
+fn build_graph_from_cursor(expr: ExprCursor<'_>, specialise: bool) -> UnboundEvaluationGraph {
+    let mut builder = EvaluationGraphBuilder::new(specialise);
     let output = lower_expression(expr, &mut builder);
     builder.finish(output)
 }
@@ -67,12 +87,16 @@ fn build_graph_from_cursor(expr: ExprCursor<'_>) -> UnboundEvaluationGraph {
 fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) -> UnboundRef {
     use ExprView::*;
 
-    let result_kind = scalar_kind(expr.typ());
+    let result_kind = scalar_kind(builder.scalar_typ(expr));
     match expr.view() {
         Val(value) => UnboundRef::Const(value.clone().into_runtime_value()),
         Var(var) => UnboundRef::External(var.clone()),
         BinOp(lhs, rhs, op) => {
-            let signature = scalar_binary_signature(lhs.typ(), rhs.typ(), result_kind);
+            let signature = scalar_binary_signature(
+                builder.scalar_typ(lhs),
+                builder.scalar_typ(rhs),
+                result_kind,
+            );
             let lhs = lower_expression(lhs, builder);
             let rhs = lower_expression(rhs, builder);
             builder.push_with_signature(UnboundOp::Binary { op, lhs, rhs }, signature)
@@ -85,8 +109,8 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
         Abs(arg) => lower_unary(builder, UnaryOperator::Absolute, arg, result_kind),
         If(cond, then_value, else_value) => {
             let cond = lower_expression(cond, builder);
-            let then_branch = lower_branch(then_value);
-            let else_branch = lower_branch(else_value);
+            let then_branch = lower_branch(then_value, builder.specialise);
+            let else_branch = lower_branch(else_value, builder.specialise);
             builder.push(UnboundOp::If {
                 cond,
                 then_branch,
@@ -246,7 +270,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             )
         }
         Lambda(params, body) => {
-            let func = lower_function(params.clone(), body);
+            let func = lower_function(params.clone(), body, builder.specialise);
             builder.push(UnboundOp::Function { func })
         }
         Apply(func, args) => {
@@ -254,7 +278,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
                 return value;
             }
             if let Lambda(params, body) = func.view() {
-                let function = lower_function(params.clone(), body);
+                let function = lower_function(params.clone(), body, builder.specialise);
                 let args = lower_expressions(args, builder);
                 return builder.push(UnboundOp::DirectApply {
                     func: function,
@@ -311,7 +335,7 @@ fn lower_unary(
     arg: ExprCursor<'_>,
     output: Option<ScalarKind>,
 ) -> UnboundRef {
-    let signature = scalar_unary_signature(arg.typ(), output);
+    let signature = scalar_unary_signature(builder.scalar_typ(arg), output);
     let arg = lower_expression(arg, builder);
     builder.push_with_signature(UnboundOp::Unary { op, arg }, signature)
 }
@@ -365,6 +389,7 @@ fn lower_reconfigurable_expression(
     source_context: AstShared<crate::lang::dsrv::source::SourceContext>,
     typing: Option<ReconfigurableExpressionTyping>,
 ) -> UnboundRef {
+    let specialise = builder.specialise;
     let input = lower_expression(input, builder);
     builder.push(UnboundOp::Reconfigurable(
         UnboundReconfigurableExpressionSpec {
@@ -373,6 +398,7 @@ fn lower_reconfigurable_expression(
             kind,
             source_context,
             typing,
+            specialise,
         },
     ))
 }
@@ -380,6 +406,7 @@ fn lower_reconfigurable_expression(
 fn lower_function(
     params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: ExprCursor<'_>,
+    specialise: bool,
 ) -> UnboundFunction {
     let params_display = params
         .iter()
@@ -388,7 +415,7 @@ fn lower_function(
         .join(", ");
     let display = format!("\\{} -> {}", params_display, body.expr()).into();
     let params = params.into_iter().map(|(name, _)| name).collect();
-    let body = build_graph_from_cursor(body);
+    let body = build_graph_from_cursor(body, specialise);
     UnboundFunction::new(params, body, display)
 }
 
@@ -412,7 +439,7 @@ fn try_lower_recursive_apply<'arena>(
         .skip(1)
         .map(|(name, _)| name.clone())
         .collect();
-    let mut body = build_graph_from_cursor(body);
+    let mut body = build_graph_from_cursor(body, builder.specialise);
     specialize_recursive_self_calls(&mut body, self_name);
     let args = lower_expressions(args, builder);
     Some(lower_recursive_apply(

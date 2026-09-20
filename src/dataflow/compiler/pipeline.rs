@@ -31,9 +31,7 @@ impl DataflowProgram {
             Semantics::Untimed => {
                 #[cfg(test)]
                 DataflowProgram::record_root_compile(false);
-                Self::compile_specification(specification, |expression| {
-                    build_expression_graph(expression.expr().clone())
-                })
+                Self::compile_specification(specification, build_unspecialised_expression_graph)
             }
             _ => Self::compile_checked(specification),
         }
