@@ -46,6 +46,25 @@ Struct field names in types can be quoted, as in
 [source-context architecture](../architecture/dsrv-source-contexts.md) for
 how aliases reach runtime expressions.
 
+### Generic aliases
+
+Under `use experimental::{generics}`, an alias can take type parameters:
+`type Boxed<A> = Struct<value: A, count: Int>`. A use supplies one argument
+per parameter, as in `in x: Boxed<Str>`, and an argument can be any type,
+including another application: `Boxed<Boxed<Int>>`.
+
+A generic alias has no type of its own, so it is resolved once per use rather
+than once for the file: an alias that is declared and never used need not
+resolve at all. Supplying the wrong number of arguments is an error, as is
+naming a generic alias with none or applying arguments to one that takes none.
+Arguments are resolved before they are substituted, so an argument that names
+the alias being applied is not a cycle; an alias whose own body reaches itself
+still is.
+
+Parameters are positional and scoped to the alias that declares them. They are
+capitalised like any other type name, and a parameter shadows a declared alias
+of the same name within that body.
+
 ## Tagged unions and `match`
 
 Both are experimental, so a file that uses them declares them (see

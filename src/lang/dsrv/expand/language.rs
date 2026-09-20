@@ -14,7 +14,7 @@ use ecow::EcoString;
 
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{Declaration, DsrvSpecification, ExprKind, ExprRef};
-use crate::lang::dsrv::source::{SourceType, SourceTypeKind};
+use crate::lang::dsrv::source::{AliasDeclaration, SourceType, SourceTypeKind};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
@@ -120,16 +120,18 @@ impl FromStr for Edition {
 pub enum Feature {
     TaggedUnions,
     PatternMatching,
+    Generics,
 }
 
 impl Feature {
     /// Every current experiment, which is what `use experimental::*` enables.
-    pub const ALL: &'static [Self] = &[Self::TaggedUnions, Self::PatternMatching];
+    pub const ALL: &'static [Self] = &[Self::TaggedUnions, Self::PatternMatching, Self::Generics];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::TaggedUnions => "tagged_unions",
             Self::PatternMatching => "pattern_matching",
+            Self::Generics => "generics",
         }
     }
 
@@ -551,6 +553,22 @@ pub(crate) fn check_experiment_node(
 /// A source type may name a construct an experiment gates. Alias definitions
 /// and annotations are both checked before they resolve, so the gate reports
 /// the spelling the writer used, at its own span.
+/// A type alias's own declaration, which takes parameters only under
+/// `generics`, plus everything its body needs.
+pub(crate) fn check_alias(
+    alias: &AliasDeclaration,
+    language: &LanguageConfig,
+) -> Result<(), LanguageError> {
+    if !alias.parameters.is_empty() && !language.has(Feature::Generics) {
+        return Err(LanguageError::NeedsExperiment {
+            construct: "a generic type alias",
+            feature: Feature::Generics.name(),
+            span: alias.span,
+        });
+    }
+    check_experiment_type(&alias.ty, language)
+}
+
 pub(crate) fn check_experiment_type(
     source: &SourceType,
     language: &LanguageConfig,
@@ -590,8 +608,22 @@ pub(crate) fn check_experiment_type(
             }
             check_experiment_type(ret, language)?;
         }
-        SourceTypeKind::Named(_)
-        | SourceTypeKind::Int
+        // Applying a name is what generics adds; naming one always worked.
+        SourceTypeKind::Named(_, arguments) => {
+            if !arguments.is_empty() {
+                if !language.has(Feature::Generics) {
+                    return Err(LanguageError::NeedsExperiment {
+                        construct: "a generic type",
+                        feature: Feature::Generics.name(),
+                        span: source.span,
+                    });
+                }
+                for argument in arguments {
+                    check_experiment_type(argument, language)?;
+                }
+            }
+        }
+        SourceTypeKind::Int
         | SourceTypeKind::Float
         | SourceTypeKind::Str
         | SourceTypeKind::Bool
@@ -876,7 +908,7 @@ mod tests {
         let unknown = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
         assert!(
             matches!(&unknown, UnknownFeature { name, known, .. }
-                if name == "teleporting" && known == "tagged_unions, pattern_matching"),
+                if name == "teleporting" && known == "tagged_unions, pattern_matching, generics"),
             "{unknown}"
         );
         let namespace = language_error(&format!("use std::{{option}}\n{BODY}"));

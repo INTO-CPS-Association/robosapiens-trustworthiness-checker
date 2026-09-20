@@ -129,6 +129,13 @@ pub enum SourceResolveError {
     },
     #[error("unknown type alias {name} at {span:?}")]
     UnknownAlias { name: TypeName, span: Span },
+    #[error("{name} at {span:?} takes {expected} type arguments, given {found}")]
+    AliasArity {
+        name: TypeName,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
     #[error("invalid union type at {span:?}: {cause}")]
     Union { cause: UnionSchemaError, span: Span },
     #[error("cyclic type aliases {path:?} at {span:?}")]
@@ -143,6 +150,11 @@ pub enum SourceResolveError {
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct SourceFingerprint {
     aliases: BTreeMap<TypeName, StreamType>,
+    /// Generic aliases have no type until they are used, so the namespace
+    /// carries them as written. Changing one changes the program even when
+    /// nothing has used it yet, as changing an unused alias does.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    generic: BTreeMap<TypeName, AliasDeclaration>,
     /// Two sources with different language settings are different programs.
     language: LanguageConfig,
     /// With experiments on, the same settings can mean different programs in
@@ -152,9 +164,14 @@ pub struct SourceFingerprint {
 }
 
 impl SourceFingerprint {
-    fn new(aliases: BTreeMap<TypeName, StreamType>, language: LanguageConfig) -> Self {
+    fn new(
+        aliases: BTreeMap<TypeName, StreamType>,
+        generic: BTreeMap<TypeName, AliasDeclaration>,
+        language: LanguageConfig,
+    ) -> Self {
         Self {
             aliases,
+            generic,
             experimental_revision: language.experimental_revision(),
             language,
         }
@@ -194,13 +211,9 @@ impl SourceContext {
         &self,
         source: &SourceType,
     ) -> Result<StreamType, SourceResolveError> {
-        resolve_type(source, &mut |name, span| {
-            self.get(name)
-                .cloned()
-                .ok_or_else(|| SourceResolveError::UnknownAlias {
-                    name: name.clone(),
-                    span,
-                })
+        let mut active = Vec::new();
+        resolve_type(source, &mut |name, arguments, span| {
+            instantiate(self, name, arguments, span, &mut active)
         })
     }
 }
@@ -217,6 +230,7 @@ impl SourceContextBuilder {
     pub fn insert(&mut self, name: TypeName, ty: StreamType) -> Result<(), SourceResolveError> {
         self.insert_source(AliasDeclaration {
             name,
+            parameters: EcoVec::new(),
             ty: SourceType::from(ty),
             span: Span::default(),
         })
@@ -244,36 +258,55 @@ impl SourceContextBuilder {
     }
 
     pub fn build(self) -> Result<SourceContext, SourceResolveError> {
+        let generic: BTreeMap<TypeName, AliasDeclaration> = self
+            .definitions
+            .iter()
+            .filter(|(_, declaration)| !declaration.parameters.is_empty())
+            .map(|(name, declaration)| (name.clone(), declaration.clone()))
+            .collect();
         let mut resolver = AliasResolver {
             definitions: &self.definitions,
+            generic: &generic,
             expanded: BTreeMap::new(),
             active: Vec::new(),
         };
         for (name, definition) in &self.definitions {
-            resolver.resolve(name, definition.span)?;
+            // A generic alias has no type of its own; its uses have one each.
+            if definition.parameters.is_empty() {
+                resolver.resolve(name, &[], definition.span)?;
+            }
         }
         Ok(SourceContext {
-            fingerprint: Rc::new(SourceFingerprint::new(resolver.expanded, self.language)),
+            fingerprint: Rc::new(SourceFingerprint::new(
+                resolver.expanded,
+                generic,
+                self.language,
+            )),
         })
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct AliasDeclaration {
     pub name: TypeName,
+    /// The type parameters the alias takes, in order. An alias with none is
+    /// a type; an alias with parameters is a way of making one.
+    pub parameters: EcoVec<TypeName>,
     pub ty: SourceType,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct SourceType {
     pub kind: SourceTypeKind,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) enum SourceTypeKind {
-    Named(TypeName),
+    /// A name, with the type arguments it is applied to. A name standing on
+    /// its own is applied to none.
+    Named(TypeName, EcoVec<SourceType>),
     Int,
     Float,
     Str,
@@ -290,7 +323,7 @@ pub(crate) enum SourceTypeKind {
 }
 
 /// One alternative of a source-level union type, before its payload resolves.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct SourceAlternative {
     pub tag: EcoString,
     pub payload: Option<SourceType>,
@@ -347,12 +380,23 @@ impl From<StreamType> for SourceType {
 
 struct AliasResolver<'a> {
     definitions: &'a BTreeMap<TypeName, AliasDeclaration>,
+    /// The subset of `definitions` taking parameters, which have no type of
+    /// their own and resolve once per use site.
+    generic: &'a BTreeMap<TypeName, AliasDeclaration>,
     expanded: BTreeMap<TypeName, StreamType>,
     active: Vec<TypeName>,
 }
 
 impl AliasResolver<'_> {
-    fn resolve(&mut self, name: &TypeName, span: Span) -> Result<StreamType, SourceResolveError> {
+    fn resolve(
+        &mut self,
+        name: &TypeName,
+        arguments: &[SourceType],
+        span: Span,
+    ) -> Result<StreamType, SourceResolveError> {
+        if !arguments.is_empty() {
+            return self.instantiate(name, arguments, span);
+        }
         if let Some(ty) = self.expanded.get(name) {
             return Ok(ty.clone());
         }
@@ -369,20 +413,203 @@ impl AliasResolver<'_> {
                     span,
                 })?;
         self.active.push(name.clone());
-        let result = resolve_type(&definition.ty, &mut |name, span| self.resolve(name, span));
+        let result = resolve_type(&definition.ty, &mut |name, arguments, span| {
+            self.resolve(name, arguments, span)
+        });
         self.active.pop();
         let ty = result?;
         self.expanded.insert(name.clone(), ty.clone());
         Ok(ty)
     }
+
+    fn resolve_source(&mut self, source: &SourceType) -> Result<StreamType, SourceResolveError> {
+        resolve_type(source, &mut |name, arguments, span| {
+            self.resolve(name, arguments, span)
+        })
+    }
+
+    /// A generic alias resolves per use site rather than once, so its result
+    /// is not cached under its name.
+    fn instantiate(
+        &mut self,
+        name: &TypeName,
+        arguments: &[SourceType],
+        span: Span,
+    ) -> Result<StreamType, SourceResolveError> {
+        let declaration =
+            self.generic
+                .get(name)
+                .ok_or_else(|| match self.definitions.get(name) {
+                    Some(_) => SourceResolveError::AliasArity {
+                        name: name.clone(),
+                        expected: 0,
+                        found: arguments.len(),
+                        span,
+                    },
+                    None => SourceResolveError::UnknownAlias {
+                        name: name.clone(),
+                        span,
+                    },
+                })?;
+        if let Some(start) = self.active.iter().position(|active| active == name) {
+            let mut path = self.active[start..].to_vec();
+            path.push(name.clone());
+            return Err(SourceResolveError::AliasCycle { path, span });
+        }
+        let declaration = declaration.clone();
+        let arguments = arguments
+            .iter()
+            .map(|argument| self.resolve_source(argument))
+            .collect::<Result<EcoVec<_>, _>>()?;
+        let body = substitute(&declaration, &arguments, span)?;
+        self.active.push(name.clone());
+        let result = resolve_type(&body, &mut |name, arguments, span| {
+            self.resolve(name, arguments, span)
+        });
+        self.active.pop();
+        result
+    }
+}
+
+/// The same instantiation against a namespace that is already built.
+fn instantiate(
+    context: &SourceContext,
+    name: &TypeName,
+    arguments: &[SourceType],
+    span: Span,
+    active: &mut Vec<TypeName>,
+) -> Result<StreamType, SourceResolveError> {
+    let generic = &context.fingerprint.generic;
+    if arguments.is_empty() {
+        return match context.get(name) {
+            Some(ty) => Ok(ty.clone()),
+            None => Err(match generic.get(name) {
+                Some(declaration) => SourceResolveError::AliasArity {
+                    name: name.clone(),
+                    expected: declaration.parameters.len(),
+                    found: 0,
+                    span,
+                },
+                None => SourceResolveError::UnknownAlias {
+                    name: name.clone(),
+                    span,
+                },
+            }),
+        };
+    }
+    let declaration = generic.get(name).ok_or_else(|| match context.get(name) {
+        Some(_) => SourceResolveError::AliasArity {
+            name: name.clone(),
+            expected: 0,
+            found: arguments.len(),
+            span,
+        },
+        None => SourceResolveError::UnknownAlias {
+            name: name.clone(),
+            span,
+        },
+    })?;
+    if let Some(start) = active.iter().position(|entry| entry == name) {
+        let mut path = active[start..].to_vec();
+        path.push(name.clone());
+        return Err(SourceResolveError::AliasCycle { path, span });
+    }
+    let arguments = arguments
+        .iter()
+        .map(|argument| {
+            resolve_type(argument, &mut |name, arguments, span| {
+                instantiate(context, name, arguments, span, active)
+            })
+        })
+        .collect::<Result<EcoVec<_>, _>>()?;
+    let body = substitute(declaration, &arguments, span)?;
+    active.push(name.clone());
+    let result = resolve_type(&body, &mut |name, arguments, span| {
+        instantiate(context, name, arguments, span, active)
+    });
+    active.pop();
+    result
+}
+
+/// A generic alias's body with its parameters replaced by the arguments it
+/// was applied to.
+///
+/// The arguments are the use site's own source types, so they resolve in the
+/// scope that wrote them rather than in the alias's.
+fn substitute(
+    declaration: &AliasDeclaration,
+    arguments: &[StreamType],
+    span: Span,
+) -> Result<SourceType, SourceResolveError> {
+    if declaration.parameters.len() != arguments.len() {
+        return Err(SourceResolveError::AliasArity {
+            name: declaration.name.clone(),
+            expected: declaration.parameters.len(),
+            found: arguments.len(),
+            span,
+        });
+    }
+    let bound: BTreeMap<&TypeName, &StreamType> =
+        declaration.parameters.iter().zip(arguments).collect();
+    Ok(substituted(&declaration.ty, &bound))
+}
+
+fn substituted(source: &SourceType, bound: &BTreeMap<&TypeName, &StreamType>) -> SourceType {
+    let kind = match &source.kind {
+        // A parameter stands for the argument itself, so a parameter applied
+        // to nothing becomes whatever was passed, however complex.
+        SourceTypeKind::Named(name, arguments) if arguments.is_empty() => match bound.get(name) {
+            Some(argument) => return (*argument).clone().into(),
+            None => SourceTypeKind::Named(name.clone(), EcoVec::new()),
+        },
+        SourceTypeKind::Named(name, arguments) => SourceTypeKind::Named(
+            name.clone(),
+            arguments.iter().map(|ty| substituted(ty, bound)).collect(),
+        ),
+        SourceTypeKind::List(ty) => SourceTypeKind::List(Box::new(substituted(ty, bound))),
+        SourceTypeKind::Map(ty) => SourceTypeKind::Map(Box::new(substituted(ty, bound))),
+        SourceTypeKind::Expr(ty) => SourceTypeKind::Expr(Box::new(substituted(ty, bound))),
+        SourceTypeKind::Tuple(types) => {
+            SourceTypeKind::Tuple(types.iter().map(|ty| substituted(ty, bound)).collect())
+        }
+        SourceTypeKind::Struct(fields, open) => SourceTypeKind::Struct(
+            fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), substituted(ty, bound)))
+                .collect(),
+            *open,
+        ),
+        SourceTypeKind::Function(arguments, result) => SourceTypeKind::Function(
+            arguments.iter().map(|ty| substituted(ty, bound)).collect(),
+            Box::new(substituted(result, bound)),
+        ),
+        SourceTypeKind::Union(alternatives) => SourceTypeKind::Union(
+            alternatives
+                .iter()
+                .map(|alternative| SourceAlternative {
+                    tag: alternative.tag.clone(),
+                    payload: alternative
+                        .payload
+                        .as_ref()
+                        .map(|ty| substituted(ty, bound)),
+                    span: alternative.span,
+                })
+                .collect(),
+        ),
+        kind => kind.clone(),
+    };
+    SourceType {
+        kind,
+        span: source.span,
+    }
 }
 
 fn resolve_type(
     source: &SourceType,
-    lookup: &mut impl FnMut(&TypeName, Span) -> Result<StreamType, SourceResolveError>,
+    lookup: &mut impl FnMut(&TypeName, &[SourceType], Span) -> Result<StreamType, SourceResolveError>,
 ) -> Result<StreamType, SourceResolveError> {
     Ok(match &source.kind {
-        SourceTypeKind::Named(name) => lookup(name, source.span)?,
+        SourceTypeKind::Named(name, arguments) => lookup(name, arguments, source.span)?,
         SourceTypeKind::Int => StreamType::Int,
         SourceTypeKind::Float => StreamType::Float,
         SourceTypeKind::Str => StreamType::Str,
@@ -467,7 +694,7 @@ mod tests {
 
     fn named(s: &str, span: Span) -> SourceType {
         SourceType {
-            kind: SourceTypeKind::Named(name(s)),
+            kind: SourceTypeKind::Named(name(s), EcoVec::new()),
             span,
         }
     }
@@ -475,6 +702,7 @@ mod tests {
     fn declaration(s: &str, ty: SourceType) -> AliasDeclaration {
         AliasDeclaration {
             name: name(s),
+            parameters: EcoVec::new(),
             span: ty.span,
             ty,
         }

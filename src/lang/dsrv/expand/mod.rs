@@ -140,7 +140,7 @@ pub(crate) fn expand_declarations(
                 }
                 .into());
             }
-            language::check_experiment_type(&alias.ty, &language)?;
+            language::check_alias(alias, &language)?;
             context.insert_source(alias.clone())?;
         }
     }
