@@ -73,6 +73,7 @@ where
     let runtime_text = |node: ExprRef<'a>| {
         RuntimeText::new(
             node.metadata().context.clone().unwrap_or_default(),
+            node.metadata().callable.clone().unwrap_or_default(),
             Some(RuntimeTextTyping {
                 environment: AstShared::clone(checked.as_ref().shared_type_environment()),
                 expected: checked.cursor(node).typ().clone(),

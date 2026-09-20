@@ -92,7 +92,11 @@ fn runtime_text(node: ExprRef<'_>, expression: &ScopedExpr) -> RuntimeText {
                 expected,
             })
     });
-    RuntimeText::new(node.metadata().context.clone().unwrap_or_default(), typing)
+    RuntimeText::new(
+        node.metadata().context.clone().unwrap_or_default(),
+        node.metadata().callable.clone().unwrap_or_default(),
+        typing,
+    )
 }
 
 pub(super) fn evaluate_ref<'a, AC>(

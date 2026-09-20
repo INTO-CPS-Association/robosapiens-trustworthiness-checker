@@ -107,6 +107,7 @@ impl SharedReconfigurableExpressionCacheEntry {
         let allowed_variables = spec.scope.allowed_variables();
         &*self.template.source_text == &*source_text
             && self.template.source_context.fingerprint() == spec.source_context.fingerprint()
+            && *self.template.callable == *spec.callable
             && Rc::ptr_eq(&self.environment, environment)
             && self.template.nested_environment_slots.iter().all(|slot| {
                 environment
@@ -199,6 +200,7 @@ pub(in crate::dataflow) fn prepare_active_expression_with_change(
         .find(|template| {
             template.source_text == source_text
                 && template.source_context.fingerprint() == spec.source_context.fingerprint()
+                && *template.callable == *spec.callable
                 && Rc::ptr_eq(&template.program.environment_layout, environment)
         })
         .cloned()
@@ -321,6 +323,7 @@ fn compile_reconfigurable_expression_template(
     Ok(Rc::new(ReconfigurableExpressionTemplate {
         source_text,
         source_context: AstShared::clone(&spec.source_context),
+        callable: AstShared::clone(&spec.callable),
         program: compiled.program,
         nested_dependency_slots: compiled.nested_dependency_slots,
         nested_environment_slots: compiled.nested_environment_slots,
@@ -340,6 +343,7 @@ fn compile_dynamic_expression(
     // lowering erased them, against `Any` (see RuntimeText).
     let text = RuntimeText::new(
         AstShared::clone(&spec.source_context),
+        AstShared::clone(&spec.callable),
         spec.typing.as_ref().map(
             |ReconfigurableExpressionTyping {
                  environment,
@@ -430,6 +434,7 @@ mod tests {
                 allowed_variables: variables.into_iter().collect(),
             },
             kind,
+            callable: Default::default(),
             source_context: crate::lang::dsrv::ast::AstShared::new(
                 crate::lang::dsrv::source::SourceContext::default(),
             ),
@@ -461,6 +466,7 @@ mod tests {
     ) -> BoundReconfigurableExpressionSpec {
         BoundReconfigurableExpressionSpec {
             input: BoundRef::Const(Value::NoVal),
+            callable: Default::default(),
             scope,
             kind,
             source_context: crate::lang::dsrv::ast::AstShared::new(

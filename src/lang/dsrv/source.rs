@@ -133,6 +133,9 @@ pub enum SourceResolveError {
     },
     #[error("unknown type alias {name} at {span:?}")]
     UnknownAlias { name: TypePath, span: Span },
+
+    #[error("`{name}` at {span:?} names no function: a module-qualified value must name a `def`")]
+    UnknownModuleItem { name: EcoString, span: Span },
     #[error("{name} at {span:?} takes {expected} type arguments, given {found}")]
     AliasArity {
         name: TypePath,

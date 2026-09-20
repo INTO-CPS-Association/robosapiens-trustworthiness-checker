@@ -2,7 +2,7 @@
 
 pub mod ast;
 mod elaborate;
-mod expand;
+pub(crate) mod expand;
 pub mod modules;
 pub mod parser;
 pub mod path;

@@ -174,6 +174,7 @@ fn dynamic_program_with_variables(
             allowed_variables: variables.into_iter().collect(),
         },
         kind: ReconfigurableExpressionKind::Dynamic,
+        callable: Default::default(),
         source_context: crate::lang::dsrv::ast::AstShared::new(
             crate::lang::dsrv::source::SourceContext::default(),
         ),

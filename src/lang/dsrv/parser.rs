@@ -79,7 +79,11 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::UnknownModule { .. }
             | DsrvExpandError::UnknownConstructor { .. }
             | DsrvExpandError::UnknownExport { .. }
-            | DsrvExpandError::InternalImport { .. }) => Self::Modules(other.to_string()),
+            | DsrvExpandError::InternalImport { .. }
+            | DsrvExpandError::Inlined(_)
+            | DsrvExpandError::UnknownFunction { .. }
+            | DsrvExpandError::RecursiveFunction { .. }
+            | DsrvExpandError::FunctionArity { .. }) => Self::Modules(other.to_string()),
         }
     }
 }
@@ -97,8 +101,17 @@ pub fn parse_expr_with_context(
     input: &str,
     context: Rc<SourceContext>,
 ) -> Result<Expr, DsrvParseError> {
+    parse_expr_with_functions(input, context, Rc::default())
+}
+
+/// Parse runtime text that may call a `def`.
+pub(crate) fn parse_expr_with_functions(
+    input: &str,
+    context: Rc<SourceContext>,
+    callable: Rc<expand::functions::Callable>,
+) -> Result<Expr, DsrvParseError> {
     let parsed = syntax::parse_expression(input)?;
-    Ok(expand::expand_expression(&parsed, &context)?)
+    Ok(expand::expand_expression(&parsed, &context, &callable)?)
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {

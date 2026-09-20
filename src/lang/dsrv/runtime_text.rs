@@ -2,14 +2,16 @@
 //!
 //! Every runtime checks such text when it arrives and refuses text that does
 //! not check, whether it then consults the types or not. The text is parsed
-//! in the source context of the node it was supplied to, and checked against
-//! the type and environment elaboration gave that node.
+//! in the source context of the node it was supplied to, may call the same
+//! defs that node's file could, and is checked against the type and
+//! environment elaboration gave that node.
 
 use std::collections::BTreeMap;
 
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr};
-use crate::lang::dsrv::parser::{DsrvParseError, parse_expr_with_context};
+use crate::lang::dsrv::expand::functions::Callable;
+use crate::lang::dsrv::parser::{DsrvParseError, parse_expr_with_functions};
 use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::type_checker::{
     SemanticErrors, StreamTypeEnvironment, TCType, check_expression,
@@ -27,6 +29,8 @@ pub(crate) struct RuntimeTextTyping {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeText {
     context: AstShared<SourceContext>,
+    /// The defs the node's file could call, which its text may call too.
+    callable: AstShared<Callable>,
     /// `None` only where no elaborated node stands behind the text: an
     /// expression built directly by a test, or one nested inside text that is
     /// itself evaluated without types. Such text is checked with every
@@ -51,20 +55,29 @@ pub(crate) enum RuntimeTextError {
 }
 
 impl RuntimeText {
-    /// Runtime text for a node with `context`, checked against `typing`.
+    /// Runtime text for a node with `context` that may call `callable`,
+    /// checked against `typing`.
     pub(crate) fn new(
         context: AstShared<SourceContext>,
+        callable: AstShared<Callable>,
         typing: Option<RuntimeTextTyping>,
     ) -> Self {
-        Self { context, typing }
+        Self {
+            context,
+            callable,
+            typing,
+        }
     }
 
     pub(crate) fn parse(&self, text: &str) -> Result<Expr, RuntimeTextError> {
-        parse_expr_with_context(text, AstShared::clone(&self.context)).map_err(|error| {
-            RuntimeTextError::Parse {
-                text: text.to_owned(),
-                error,
-            }
+        parse_expr_with_functions(
+            text,
+            AstShared::clone(&self.context),
+            AstShared::clone(&self.callable),
+        )
+        .map_err(|error| RuntimeTextError::Parse {
+            text: text.to_owned(),
+            error,
         })
     }
 

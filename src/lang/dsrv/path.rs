@@ -17,6 +17,7 @@ use std::fmt;
 
 use ecow::{EcoString, EcoVec};
 
+use crate::VarName;
 use crate::lang::dsrv::source::{SourceResolveError, TypeName};
 use crate::lang::dsrv::span::Span;
 
@@ -123,6 +124,39 @@ impl PathSegment {
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// A value reached through a module: `a::b::name`.
+///
+/// Only the parsed tree carries one. A `def` is inlined during expansion, so
+/// no qualified value survives into the core AST.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub struct ValuePath {
+    module: EcoVec<ModuleName>,
+    name: VarName,
+}
+
+impl ValuePath {
+    pub fn new(module: EcoVec<ModuleName>, name: VarName) -> Self {
+        Self { module, name }
+    }
+
+    pub fn module(&self) -> &[ModuleName] {
+        &self.module
+    }
+
+    pub fn name(&self) -> &VarName {
+        &self.name
+    }
+}
+
+impl fmt::Display for ValuePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for segment in &self.module {
+            write!(f, "{segment}::")?;
+        }
+        write!(f, "{}", self.name)
     }
 }
 

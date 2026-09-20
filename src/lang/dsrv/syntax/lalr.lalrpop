@@ -5,7 +5,7 @@ use lalrpop_util::ParseError;
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
 use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
-use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree};
+use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree, ValuePath};
 use crate::core::{BinaryOperator, VarName};
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::span::Span;
@@ -180,6 +180,19 @@ SpannedParen: ExprId = "(" <e:Expr> ")" => e;
 SpannedLowerVar: ExprId = MakeSpanned<LowerVarExprKind>;
 LowerVarExprKind : ExprKind = {
     <name:LowerIdent> => ExprKind::Var(VarName::from(name)),
+    // A value reached through a module. The leading lowercase run is the
+    // module path and the last segment is the item, as everywhere else.
+    <l:@L> <module:(<LowerIdent> "::")+> <name:LowerIdent> =>? {
+        let module = module
+            .into_iter()
+            .map(ModuleName::new)
+            .collect::<Result<EcoVec<_>, _>>()
+            .map_err(|_| {
+                *user_error_location = Some(l);
+                ParseError::User { error: "a module segment must be a lowercase name" }
+            })?;
+        Ok(ExprKind::ModuleItem(ValuePath::new(module, VarName::from(name))))
+    },
 };
 
 // A capitalised name is a variable only in a file that has not taken on
@@ -868,6 +881,26 @@ ModPath: EcoVec<ModuleName> = {
     },
 };
 
+DefParam: (VarName, SourceType) = <name:Ident> ":" <ty:StreamTyp> => (name, ty);
+
+// A pure function. Its body is an ordinary expression, so it joins the
+// forest like any other definition and must be consumed in declaration
+// order by expansion.
+DefDecl: Declaration = {
+   <l:@L> <internal:"internal"?> "def" <name:Ident> <tp:AliasParameters?>
+       "(" <parameters:DelimitedSepListOpt<DefParam, ",">> ")" "->" <result:StreamTyp>
+       "=" <body:Expr> <r:@R> =>
+       Declaration::Def {
+           name,
+           type_parameters: tp.unwrap_or_else(EcoVec::new),
+           parameters,
+           result,
+           body,
+           internal: internal.is_some(),
+           span: Span::new(l as u32, r as u32),
+       },
+};
+
 ModDecl: Declaration = {
     <l:@L> "mod" <path:ModPath> <r:@R> =>
         Declaration::Mod { path, span: Span::new(l as u32, r as u32) },
@@ -876,6 +909,7 @@ ModDecl: Declaration = {
 Declaration: Declaration = {
     HeaderDecl,
     ModDecl,
+    DefDecl,
     InputDecl,
     OutputDecl,
     AuxDecl,

@@ -3,6 +3,7 @@ use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
+use crate::lang::dsrv::expand::functions::Callable;
 use crate::lang::dsrv::patterns::MatchPattern;
 use crate::lang::dsrv::source::SourceContext;
 
@@ -764,6 +765,10 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
                 &serde_json::to_string(spec.source_context.fingerprint())
                     .expect("source fingerprints are serializable"),
             );
+            // Nothing is written where no def is callable, which is every
+            // program that has not taken on the `functions` experiment.
+            descriptor.push_str(",defs=");
+            spec.callable.describe(descriptor);
             descriptor.push(')');
         }
         StreamOp::Function { func }
@@ -1100,6 +1105,9 @@ pub(super) struct ReconfigurableExpressionSpec<E> {
     /// The complete immutable source namespace captured by the owning AST.
     /// Runtime source must resolve against this context, not a fresh default.
     pub(super) source_context: AstShared<SourceContext>,
+    /// The defs the owning AST could call. Runtime source may call them too,
+    /// so they travel with the context rather than being resolved afresh.
+    pub(super) callable: AstShared<Callable>,
     /// Type information for this node; absent only where no elaborated node
     /// stands behind it, such as a graph a test builds from a bare `Expr`.
     pub(super) typing: Option<ReconfigurableExpressionTyping>,

@@ -10,9 +10,9 @@ use crate::core::{BinaryOperator, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 
 use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
-use super::super::path::{ModuleName, TypePath, UseTree};
+use super::super::path::{ModuleName, TypePath, UseTree, ValuePath};
 use super::super::patterns::{MatchArm, MatchPattern};
-use super::super::source::{AliasDeclaration, SourceType};
+use super::super::source::{AliasDeclaration, SourceType, TypeName};
 use super::super::span::Span;
 use super::DsrvSyntaxError;
 
@@ -36,6 +36,9 @@ contiguous_tree::tree_schema! {
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Var(variable: data(VarName)),
+        // A value named through a module. Expansion inlines the def it
+        // names, so this never reaches the core AST.
+        ModuleItem(path: data(ValuePath)),
         Constructor(
             payload: children,
             tag: data(EcoString),
@@ -103,6 +106,17 @@ pub(crate) enum ParsedDeclaration {
         tree: UseTree,
         span: Span,
     },
+    /// `def <name>(<args>) -> <type> = <body>`: a pure function, inlined at
+    /// each call site rather than evaluated.
+    Def {
+        name: VarName,
+        type_parameters: EcoVec<TypeName>,
+        parameters: EcoVec<(VarName, SourceType)>,
+        result: SourceType,
+        body: ParsedExprId,
+        internal: bool,
+        span: Span,
+    },
     /// `mod <path>`, naming a submodule this file pulls in. The path is the
     /// module's name, not a file: mapping it to one is the collector's work.
     Mod {
@@ -127,7 +141,8 @@ impl ParsedSpecification {
             .filter_map(|declaration| match declaration {
                 ParsedDeclaration::Equation(_, root, _)
                 | ParsedDeclaration::Output(_, _, Some(root), _)
-                | ParsedDeclaration::Aux(_, _, Some(root), _) => Some(*root),
+                | ParsedDeclaration::Aux(_, _, Some(root), _)
+                | ParsedDeclaration::Def { body: root, .. } => Some(*root),
                 _ => None,
             });
         let expressions = builder
@@ -148,6 +163,14 @@ impl ParsedSpecification {
     /// Hand the parsed forest and declarations to the expansion stage.
     pub(crate) fn declarations(&self) -> &[ParsedDeclaration] {
         &self.declarations
+    }
+
+    /// The root trees, in declaration order.
+    ///
+    /// The forest is shared storage, so this clones handles rather than
+    /// trees.
+    pub(crate) fn roots(&self) -> Vec<ParsedExpr> {
+        self.expressions.clone().into_roots().collect()
     }
 
     pub(crate) fn into_parts(self) -> (ParsedExprForest, EcoVec<ParsedDeclaration>) {

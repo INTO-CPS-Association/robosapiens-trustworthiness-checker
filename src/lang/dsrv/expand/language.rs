@@ -123,6 +123,7 @@ pub enum Feature {
     PatternMatching,
     Generics,
     Modules,
+    Functions,
 }
 
 impl Feature {
@@ -132,6 +133,7 @@ impl Feature {
         Self::PatternMatching,
         Self::Generics,
         Self::Modules,
+        Self::Functions,
     ];
 
     pub fn name(self) -> &'static str {
@@ -140,6 +142,7 @@ impl Feature {
             Self::PatternMatching => "pattern_matching",
             Self::Generics => "generics",
             Self::Modules => "modules",
+            Self::Functions => "functions",
         }
     }
 
@@ -197,6 +200,11 @@ impl LanguageConfig {
 
     /// Whether an experiment is on. Only expansion may ask.
     #[allow(dead_code)] // The first gated feature is its first caller.
+    /// Whether `def` is available.
+    pub(crate) fn has_functions(&self) -> bool {
+        self.has(Feature::Functions)
+    }
+
     /// Whether imports beyond `use experimental` are available.
     pub(crate) fn has_modules(&self) -> bool {
         self.has(Feature::Modules)
@@ -976,7 +984,9 @@ mod tests {
         let unknown = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
         assert!(
             matches!(&unknown, UnknownFeature { name, known, .. }
-                if name == "teleporting" && known == "tagged_unions, pattern_matching, generics, modules"),
+                if name == "teleporting"
+                    && known
+                        == "tagged_unions, pattern_matching, generics, modules, functions"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item

@@ -10,7 +10,8 @@ use crate::VarName;
 use crate::lang::dsrv::LanguageError;
 use crate::lang::dsrv::ast::{DsrvSpecification, ExprView};
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str};
-use crate::lang::dsrv::path::TypePath;
+use crate::lang::dsrv::path::{ModuleName, TypePath};
+use crate::lang::dsrv::runtime_text::RuntimeText;
 
 use test_log::test;
 
@@ -31,6 +32,41 @@ fn qualifier_of(source: &str) -> Option<String> {
         panic!("expected a constructor, got {expression}");
     };
     qualifier.as_ref().map(TypePath::to_string)
+}
+
+/// Expand a program of several files, supplying each module from `sources`
+/// as the collector asks for it.
+fn program(root: &str, sources: &[(&str, &str)]) -> DsrvSpecification {
+    use crate::lang::dsrv::modules::{ModuleCollector, show_path};
+    let mut collector = ModuleCollector::new(root).expect("a parsable root");
+    while let Some(path) = collector.next_request().map(<[ModuleName]>::to_vec) {
+        let wanted = show_path(&path);
+        let source = sources
+            .iter()
+            .find(|(name, _)| *name == wanted)
+            .unwrap_or_else(|| panic!("no source for {wanted}"))
+            .1;
+        collector.supply(source).expect("a parsable module");
+    }
+    crate::lang::dsrv::expand::expand_program(
+        collector.finish().expect("collected"),
+        crate::lang::dsrv::expand::language::LanguageRequest::default(),
+    )
+    .expect("expands")
+}
+
+/// The runtime text of `var`'s expression: what text supplied to that node
+/// would be checked and expanded against.
+fn runtime_text_at(spec: &DsrvSpecification, var: &str) -> RuntimeText {
+    let metadata = spec
+        .var_expr_ref(&VarName::from(var))
+        .expect("the variable is defined")
+        .metadata();
+    RuntimeText::new(
+        metadata.context.clone().unwrap_or_default(),
+        metadata.callable.clone().unwrap_or_default(),
+        None,
+    )
 }
 
 fn language_error(source: &str) -> LanguageError {
@@ -499,4 +535,311 @@ fn an_internal_alias_is_an_ordinary_type_in_its_own_file() {
         spec.type_annotations().get(&VarName::from("x")),
         Some(&crate::core::StreamType::Int),
     );
+}
+
+// ---------------------------------------------------------------------------
+// `def`: pure functions
+// ---------------------------------------------------------------------------
+
+const FUNCTIONS: &str = "use experimental::{functions}\n";
+
+/// Every `def` the library writes, in the four shapes it uses.
+#[test]
+fn a_def_parses_in_every_shape_the_library_uses() {
+    for source in [
+        format!("{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\n"),
+        format!("use experimental::{{functions, generics}}\ndef id<T>(v: T) -> T = v\nin x: Int\n"),
+        format!("{FUNCTIONS}def ap(f: (Int -> Bool), n: Int) -> Bool = f(n)\nin x: Int\n"),
+        format!(
+            "use experimental::{{functions, modules}}\ninternal def hid(n: Int) -> Int = n\nin x: Int\n"
+        ),
+    ] {
+        parse_specification(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// A def owns a parsed root. If expansion did not consume it in declaration
+/// order, every later equation would silently take the wrong tree — which
+/// type-checks and gives wrong answers.
+#[test]
+fn an_equation_after_a_def_still_takes_its_own_expression() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = x + 1\n"
+    ))
+    .expect("parses");
+    let printed = spec
+        .var_expr_ref(&VarName::from("y"))
+        .expect("y is defined")
+        .to_string();
+    assert!(printed.contains('+'), "y kept its own body, got {printed}");
+}
+
+#[test]
+fn a_def_needs_the_functions_experiment() {
+    let error = language_error("def twice(n: Int) -> Int = n * 2\nin x: Int\n");
+    assert!(
+        matches!(
+            &error,
+            LanguageError::NeedsExperiment {
+                feature: "functions",
+                ..
+            }
+        ),
+        "got {error:?}",
+    );
+}
+
+#[test]
+fn an_internal_def_needs_the_modules_experiment_too() {
+    let error = language_error(&format!(
+        "{FUNCTIONS}internal def hid(n: Int) -> Int = n\nin x: Int\n"
+    ));
+    assert!(
+        matches!(
+            &error,
+            LanguageError::NeedsExperiment {
+                feature: "modules",
+                ..
+            }
+        ),
+        "got {error:?}",
+    );
+}
+
+/// Text supplied at runtime is expanded where the node stands, so it may
+/// call the defs that node's file could. The body is inlined into the text
+/// exactly as it is into an equation.
+#[test]
+fn text_supplied_at_runtime_may_call_a_def() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n"
+    ))
+    .expect("parses");
+    let expr = runtime_text_at(&spec, "y")
+        .parse("twice(x)")
+        .expect("the text may call twice");
+    let printed = expr.to_string();
+    assert!(
+        printed.contains('*') && !printed.contains("twice"),
+        "the call was inlined, got {printed}",
+    );
+}
+
+/// A file that declares no def leaves its nodes carrying nothing, so a call
+/// in its runtime text names a variable, as it did before defs existed.
+#[test]
+fn text_supplied_at_runtime_calls_nothing_where_no_def_was_declared() {
+    let spec = parse_str("in x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n").expect("parses");
+    let expr = runtime_text_at(&spec, "y")
+        .parse("twice(x)")
+        .expect("parses");
+    assert!(
+        expr.to_string().contains("twice"),
+        "the name was left alone, got {expr}",
+    );
+}
+
+/// What runtime text may call is part of the node, not of the program: a
+/// def declared after the node is still one the node's file declared.
+#[test]
+fn text_supplied_at_runtime_may_call_a_def_declared_after_the_node() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}in x: Int\nout y: Int\ny = dynamic(\"1\": Int)\ndef twice(n: Int) -> Int = n * 2\n"
+    ))
+    .expect("parses");
+    let expr = runtime_text_at(&spec, "y")
+        .parse("twice(x)")
+        .expect("the text may call twice");
+    assert!(expr.to_string().contains('*'), "got {expr}");
+}
+
+/// Runtime text a def's own body supplies is expanded the same way, so a
+/// def may be called from inside text nested in a call to another.
+#[test]
+fn text_nested_in_runtime_text_may_call_a_def_in_turn() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n"
+    ))
+    .expect("parses");
+    let outer = runtime_text_at(&spec, "y")
+        .parse("dynamic(\"1\": Int)")
+        .expect("the text may name another dynamic");
+    let metadata = outer.as_ref().metadata();
+    let inner = RuntimeText::new(
+        metadata.context.clone().unwrap_or_default(),
+        metadata.callable.clone().unwrap_or_default(),
+        None,
+    );
+    let expr = inner
+        .parse("twice(x)")
+        .expect("the nested text may call it");
+    assert!(expr.to_string().contains('*'), "got {expr}");
+}
+
+/// The runtime text of a node in a file that took defs from elsewhere may
+/// call them too, by the same names its own expressions could.
+#[test]
+fn text_supplied_at_runtime_may_call_an_imported_def() {
+    let spec = program(
+        "use experimental::{modules, functions}\nmod store\nuse store::*\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n",
+        &[(
+            "store",
+            "use experimental::{modules, functions}\ndef twice(n: Int) -> Int = n * 2\n",
+        )],
+    );
+    for text in ["twice(x)", "store::twice(x)"] {
+        let expr = runtime_text_at(&spec, "y")
+            .parse(text)
+            .unwrap_or_else(|error| panic!("{text}: {error}"));
+        let printed = expr.to_string();
+        assert!(
+            printed.contains('*') && !printed.contains("twice"),
+            "{text} was inlined, got {printed}",
+        );
+    }
+}
+
+/// What a module keeps to itself stays hidden from the text supplied to
+/// another module's node, as it is from that module's own expressions (S12).
+#[test]
+fn text_supplied_at_runtime_cannot_call_an_internal_def() {
+    let spec = program(
+        "use experimental::{modules, functions}\nmod store\nuse store::*\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n",
+        &[(
+            "store",
+            "use experimental::{modules, functions}\ninternal def twice(n: Int) -> Int = n * 2\n",
+        )],
+    );
+    let expr = runtime_text_at(&spec, "y")
+        .parse("twice(x)")
+        .expect("parses");
+    assert!(
+        expr.to_string().contains("twice"),
+        "the name was left alone, got {expr}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A value named through a module
+// ---------------------------------------------------------------------------
+
+/// Restricting the constructor qualifier to capitalised names left a
+/// lowercase-qualified call unparseable. It parses again, as a module item.
+#[test]
+fn a_value_may_be_named_through_a_module() {
+    let source = format!(
+        "use experimental::{{modules, functions}}\nin x: Int\nout y: Int\ny = store::twice(x)\n"
+    );
+    parse_specification(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+}
+
+#[test]
+fn a_module_item_and_a_constructor_qualifier_are_told_apart() {
+    // `a::b` is an item; `a::B::C` keeps the qualifier list going.
+    for source in [
+        "use experimental::{modules, functions}\nin x: Int\nout y: Int\ny = lib::inner::twice(x)\n",
+        "use experimental::{modules, tagged_unions}\nin x: Int\nout y: Any\ny = lib::inner::Colour::Red\n",
+    ] {
+        parse_specification(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Until a def is inlined, a qualified value names nothing; the message says
+/// so rather than reporting an unknown variable.
+#[test]
+fn a_module_item_naming_no_function_is_refused() {
+    let error = resolve_error("in x: Int\nout y: Int\ny = store::twice(x)\n");
+    assert!(
+        matches!(&error, SourceResolveError::UnknownModuleItem { name, .. }
+            if name == "store::twice"),
+        "got {error:?}",
+    );
+}
+
+#[test]
+fn naming_a_value_through_a_module_needs_the_experiment() {
+    let error = language_error(
+        "use experimental::{functions}\nin x: Int\nout y: Int\ny = store::twice(x)\n",
+    );
+    assert!(
+        matches!(
+            &error,
+            LanguageError::NeedsExperiment {
+                feature: "modules",
+                ..
+            }
+        ),
+        "got {error:?}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Inlining a call to a def
+// ---------------------------------------------------------------------------
+
+/// A call becomes an immediate lambda application, so the body appears at
+/// the call site rather than the name.
+#[test]
+fn a_call_to_a_def_is_inlined() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = twice(x)\n"
+    ))
+    .expect("parses");
+    let printed = spec
+        .var_expr_ref(&VarName::from("y"))
+        .expect("y is defined")
+        .to_string();
+    assert!(
+        printed.contains('*') && !printed.contains("twice"),
+        "expected the body, got {printed}",
+    );
+}
+
+#[test]
+fn a_def_may_be_called_more_than_once() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = twice(x) + twice(x)\n"
+    ))
+    .expect("parses");
+    let printed = spec
+        .var_expr_ref(&VarName::from("y"))
+        .expect("y is defined")
+        .to_string();
+    assert_eq!(
+        printed.matches('*').count(),
+        2,
+        "one body per call: {printed}"
+    );
+}
+
+#[test]
+fn a_def_may_call_another_def() {
+    let spec = parse_str(&format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\ndef quad(n: Int) -> Int = twice(twice(n))\nin x: Int\nout y: Int\ny = quad(x)\n"
+    ))
+    .expect("parses");
+    let printed = spec
+        .var_expr_ref(&VarName::from("y"))
+        .expect("y is defined")
+        .to_string();
+    assert!(
+        !printed.contains("quad") && !printed.contains("twice"),
+        "got {printed}"
+    );
+}
+
+#[test]
+fn a_def_defined_in_terms_of_itself_is_refused() {
+    let source = format!(
+        "{FUNCTIONS}def loop(n: Int) -> Int = loop(n)\nin x: Int\nout y: Int\ny = loop(x)\n"
+    );
+    assert!(parse_str(&source).is_err(), "recursion must be refused");
+}
+
+#[test]
+fn calling_a_def_with_the_wrong_number_of_arguments_is_refused() {
+    let source = format!(
+        "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = twice(x, x)\n"
+    );
+    assert!(parse_str(&source).is_err(), "arity must be checked");
 }

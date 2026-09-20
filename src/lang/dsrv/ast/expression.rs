@@ -23,6 +23,7 @@ use super::checked::CheckedTypes;
 use crate::core::{BinaryOperator, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
+use crate::lang::dsrv::expand::functions::Callable;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
@@ -234,12 +235,16 @@ impl Display for SyntaxLiteral {
 // Keep the syntax literal independently thread-safe in every configuration.
 static_assertions::assert_impl_all!(SyntaxLiteral: Send, Sync);
 
-/// Source-only ownership. Equality continues to compare spans, but not
-/// namespace snapshots.
+/// Source-only ownership. Equality continues to compare spans, but neither
+/// namespace nor function snapshots.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExprMetadata {
     pub span: Span,
     pub context: Option<super::AstShared<SourceContext>>,
+    /// The defs text supplied to this node may call. `None` where the
+    /// program declared none, which is every program until it takes on the
+    /// `functions` experiment.
+    pub callable: Option<super::AstShared<Callable>>,
 }
 
 impl PartialEq for ExprMetadata {

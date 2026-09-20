@@ -40,7 +40,10 @@ pub(crate) fn build_graph(
 }
 
 /// Every module a file imports from, as absolute paths.
-fn imports_in(path: &ModulePath, sources: &ModuleSources) -> Result<Vec<Import>, DsrvExpandError> {
+pub(super) fn imports_in(
+    path: &ModulePath,
+    sources: &ModuleSources,
+) -> Result<Vec<Import>, DsrvExpandError> {
     let parsed = sources
         .get(path)
         .expect("every path in the graph was collected");
@@ -61,7 +64,9 @@ fn imports_in(path: &ModulePath, sources: &ModuleSources) -> Result<Vec<Import>,
 ///
 /// A cycle is an error naming the path (S13): alias-only modules would
 /// sometimes admit a fixpoint, but the simpler rule is the agreed one.
-fn dependency_order(sources: &ModuleSources) -> Result<Vec<ModulePath>, DsrvExpandError> {
+pub(super) fn dependency_order(
+    sources: &ModuleSources,
+) -> Result<Vec<ModulePath>, DsrvExpandError> {
     let mut order = Vec::new();
     let mut done: BTreeSet<ModulePath> = BTreeSet::new();
     let mut active: Vec<ModulePath> = Vec::new();
@@ -888,4 +893,113 @@ fn resolved_template(
         kind,
         span: ty.span,
     })
+}
+
+#[cfg(test)]
+mod function_tests {
+    use super::*;
+
+    use crate::lang::dsrv::expand::functions::build_function_table;
+    use crate::lang::dsrv::modules::ModuleCollector;
+    use crate::lang::dsrv::path::ModuleName;
+    use test_log::test;
+
+    const F: &str = "use experimental::{modules, functions}\n";
+
+    fn table_of(root: &str, sources: &[(&str, &str)]) -> Result<(), DsrvExpandError> {
+        let mut collector = ModuleCollector::new(root).expect("a parsable root");
+        while let Some(path) = collector.next_request().map(<[ModuleName]>::to_vec) {
+            let wanted = show_path(&path);
+            let source = sources
+                .iter()
+                .find(|(name, _)| *name == wanted)
+                .unwrap_or_else(|| panic!("no source for {wanted}"))
+                .1;
+            collector.supply(source).expect("a parsable module");
+        }
+        build_function_table(&collector.finish().expect("collected")).map(|_| ())
+    }
+
+    #[test]
+    fn a_modules_defs_reach_the_table() {
+        table_of(
+            &format!("{F}mod store\nin x: Int\n"),
+            &[("store", &format!("{F}def twice(n: Int) -> Int = n * 2\n"))],
+        )
+        .expect("built");
+    }
+
+    /// A def may call one from a module it imports, and the body stored for
+    /// it is already inlined.
+    #[test]
+    fn a_def_may_call_an_imported_def() {
+        table_of(
+            &format!("{F}mod a\nmod b\nin x: Int\n"),
+            &[
+                (
+                    "a",
+                    &format!("{F}use b::*\ndef quad(n: Int) -> Int = twice(twice(n))\n"),
+                ),
+                ("b", &format!("{F}def twice(n: Int) -> Int = n * 2\n")),
+            ],
+        )
+        .expect("built");
+    }
+
+    #[test]
+    fn a_def_may_be_called_through_its_module() {
+        table_of(
+            &format!("{F}mod a\nmod b\nin x: Int\n"),
+            &[
+                (
+                    "a",
+                    &format!("{F}use b\ndef quad(n: Int) -> Int = b::twice(b::twice(n))\n"),
+                ),
+                ("b", &format!("{F}def twice(n: Int) -> Int = n * 2\n")),
+            ],
+        )
+        .expect("built");
+    }
+
+    /// S12 for functions: a glob skips an internal def silently, exactly as
+    /// it skips an internal type. The call is left alone and fails later as
+    /// an unknown name.
+    #[test]
+    fn a_glob_does_not_bring_an_internal_def() {
+        table_of(
+            &format!("{F}mod a\nmod b\nin x: Int\n"),
+            &[
+                ("a", &format!("{F}use b::*\ndef quad(n: Int) -> Int = n\n")),
+                (
+                    "b",
+                    &format!("{F}internal def twice(n: Int) -> Int = n * 2\n"),
+                ),
+            ],
+        )
+        .expect("a glob simply skips it");
+    }
+
+    /// Naming it outright is the case that must be refused, and the message
+    /// names the function.
+    #[test]
+    fn calling_an_internal_def_through_its_module_is_refused() {
+        let error = table_of(
+            &format!("{F}mod a\nmod b\nin x: Int\n"),
+            &[
+                (
+                    "a",
+                    &format!("{F}use b\ndef quad(n: Int) -> Int = b::twice(n)\n"),
+                ),
+                (
+                    "b",
+                    &format!("{F}internal def twice(n: Int) -> Int = n * 2\n"),
+                ),
+            ],
+        )
+        .expect_err("internal stays home");
+        assert!(
+            matches!(&error, DsrvExpandError::UnknownFunction { name } if name == "b::twice"),
+            "got {error:?}",
+        );
+    }
 }

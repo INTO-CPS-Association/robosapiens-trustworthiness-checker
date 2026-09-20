@@ -58,7 +58,9 @@
 //! and whether equations fit their types are validation's and the type
 //! checker's questions, asked of the assembled specification.
 
+pub(crate) mod functions;
 pub(crate) mod graph;
+pub(crate) mod inline;
 pub(crate) mod language;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,8 +79,9 @@ use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAs
 use crate::core::StreamType;
 use crate::core::StreamTypeAscription;
 use crate::lang::dsrv::ast::DsrvSpecification;
-use crate::lang::dsrv::modules::ImportError;
+use crate::lang::dsrv::modules::{ImportError, ModulePath};
 use contiguous_tree::TreeCursor as _;
+use functions::Callable;
 use language::{Dialect, LanguageError, LanguageRequest};
 
 /// A failure while expanding a parsed specification.
@@ -104,6 +107,22 @@ pub enum DsrvExpandError {
 
     #[error("no module {path} is declared, but {importer} imports it")]
     UnknownModule { path: String, importer: String },
+
+    #[error("inlining produced an invalid expression: {0}")]
+    Inlined(String),
+
+    #[error("`{name}` names no function")]
+    UnknownFunction { name: String },
+
+    #[error("`{name}` is defined in terms of itself; a `def` may not recurse")]
+    RecursiveFunction { name: String },
+
+    #[error("`{name}` takes {expected} arguments, given {found}")]
+    FunctionArity {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
 
     #[error("`{tag}` is not a constructor of {ty}")]
     UnknownConstructor { tag: String, ty: String },
@@ -147,7 +166,7 @@ pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
     request: LanguageRequest,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
-    expand_declarations_in(parsed, request, None)
+    expand_declarations_in(parsed, request, None, None)
 }
 
 /// Expand a file's declarations, optionally against a namespace built
@@ -156,12 +175,15 @@ pub(crate) fn expand_declarations_in(
     parsed: ParsedSpecification,
     request: LanguageRequest,
     supplied: Option<Rc<SourceContext>>,
+    callable: Option<Rc<Callable>>,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
-    let (expressions, parsed_declarations) = parsed.into_parts();
-    let language = language::resolve_language(&parsed_declarations, request)?;
+    let language = language::resolve_language(parsed.declarations(), request)?;
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
-    for declaration in &parsed_declarations {
+    // What a file may write is settled before anything is inlined, so a
+    // file that may not declare a def is refused for declaring one rather
+    // than for how the call it wrote then reads.
+    for declaration in parsed.declarations() {
         // Importing an item is what `modules` adds; `use experimental` is
         // the header line every file may write.
         let module_construct = match declaration {
@@ -169,6 +191,13 @@ pub(crate) fn expand_declarations_in(
                 Some(("an import", *span))
             }
             ParsedDeclaration::Mod { span, .. } => Some(("a module declaration", *span)),
+            // An internal def is hidden from importers, which only modules
+            // have; the def itself needs `functions`.
+            ParsedDeclaration::Def {
+                internal: true,
+                span,
+                ..
+            } => Some(("an internal function", *span)),
             _ => None,
         };
         if let Some((construct, span)) = module_construct
@@ -178,6 +207,16 @@ pub(crate) fn expand_declarations_in(
                 construct,
                 feature: "modules",
                 span,
+            }
+            .into());
+        }
+        if let ParsedDeclaration::Def { span, .. } = declaration
+            && !language.has_functions()
+        {
+            return Err(LanguageError::NeedsExperiment {
+                construct: "a function",
+                feature: "functions",
+                span: *span,
             }
             .into());
         }
@@ -195,6 +234,28 @@ pub(crate) fn expand_declarations_in(
             }
         }
     }
+    // A program of several files was handed a table built over all of them;
+    // a program of one file builds its own, so text supplied to it at
+    // runtime can call the defs that file declared.
+    let callable = match callable {
+        // A program whose modules declared no def leaves its nodes carrying
+        // nothing, as a program without the experiment does.
+        Some(callable) if !callable.is_empty() => Some(callable),
+        Some(_) => None,
+        None if declares_a_def(parsed.declarations()) => Some(Rc::new(Callable::new(
+            Rc::new(functions::single_file_table(&parsed)?),
+            &ModulePath::new(),
+            parsed.declarations(),
+        )?)),
+        None => None,
+    };
+    // A call to a def becomes an immediate lambda application before any
+    // name is resolved, which is where the pipeline puts inlining.
+    let scope = callable
+        .as_ref()
+        .map_or_else(inline::Scope::default, |callable| callable.scope());
+    let parsed = inline::inline_functions(parsed, scope)?;
+    let (expressions, parsed_declarations) = parsed.into_parts();
     let context = match supplied {
         Some(context) => context,
         None => {
@@ -235,7 +296,12 @@ pub(crate) fn expand_declarations_in(
                     continue;
                 }
                 let expression = roots.next().expect("each definition owns one parsed root");
-                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                equation_roots.push(expand_tree(
+                    expression.as_ref(),
+                    &mut builder,
+                    &context,
+                    callable.as_ref(),
+                )?);
                 Declaration::Equation { name, span }
             }
             ParsedDeclaration::Aux(name, ty, definition, span) => {
@@ -248,18 +314,35 @@ pub(crate) fn expand_declarations_in(
                     continue;
                 }
                 let expression = roots.next().expect("each definition owns one parsed root");
-                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                equation_roots.push(expand_tree(
+                    expression.as_ref(),
+                    &mut builder,
+                    &context,
+                    callable.as_ref(),
+                )?);
                 Declaration::Equation { name, span }
             }
             ParsedDeclaration::Equation(name, _, span) => {
                 let expression = roots.next().expect("each equation owns one parsed root");
-                equation_roots.push(expand_tree(expression.as_ref(), &mut builder, &context)?);
+                equation_roots.push(expand_tree(
+                    expression.as_ref(),
+                    &mut builder,
+                    &context,
+                    callable.as_ref(),
+                )?);
                 Declaration::Equation { name, span }
             }
             ParsedDeclaration::Alias(alias) => Declaration::TypeAlias {
                 name: alias.name,
                 span: alias.span,
             },
+            // A def is inlined at its call sites rather than kept as a
+            // declaration, but it owns a root and must consume it here so
+            // the remaining declarations still line up with theirs.
+            ParsedDeclaration::Def { .. } => {
+                roots.next().expect("each def owns one parsed root");
+                continue;
+            }
             // The header is expanded into the source context, not kept.
             ParsedDeclaration::Language(..)
             | ParsedDeclaration::Edition(..)
@@ -274,6 +357,14 @@ pub(crate) fn expand_declarations_in(
         roots: equation_roots,
         context,
     })
+}
+
+/// Whether a file declares a function, which is what makes a table worth
+/// building for it.
+fn declares_a_def(declarations: &[ParsedDeclaration]) -> bool {
+    declarations
+        .iter()
+        .any(|declaration| matches!(declaration, ParsedDeclaration::Def { .. }))
 }
 
 /// Resolve a declared stream's annotation, refusing a type its file did not
@@ -296,6 +387,18 @@ fn check_expression_types(
 ) -> Result<(), DsrvExpandError> {
     use contiguous_tree::TreeCursorExt;
     for node in expression.postorder() {
+        // Naming a value through a module is what `modules` adds. The
+        // check belongs here because `ModuleItem` is a parsed kind that
+        // inlining resolves away, so no core node carries it.
+        if matches!(node.kind(), ParsedExprKind::ModuleItem(_)) && !context.language().has_modules()
+        {
+            return Err(LanguageError::NeedsExperiment {
+                construct: "a value named through a module",
+                feature: "modules",
+                span: parsed::span_of(node),
+            }
+            .into());
+        }
         let types: Vec<&SourceType> = match node.kind() {
             ParsedExprKind::Lambda(parameters, _) => {
                 for (name, _) in parameters {
@@ -335,8 +438,16 @@ pub(crate) fn expand_program(
         .get(&crate::lang::dsrv::modules::ModulePath::new())
         .expect("the root has a namespace")
         .clone();
+    let table = Rc::new(functions::build_function_table(&sources)?);
+    let root_path = ModulePath::new();
+    let callable = Callable::new(table, &root_path, sources.root_declarations())?;
     let root = sources.into_root();
-    finish_specification(expand_declarations_in(root, request, Some(context))?)
+    finish_specification(expand_declarations_in(
+        root,
+        request,
+        Some(context),
+        Some(Rc::new(callable)),
+    )?)
 }
 
 pub(crate) fn expand_specification(
@@ -385,9 +496,18 @@ fn finish_specification(
 pub(crate) fn expand_expression(
     parsed: &ParsedExpr,
     context: &Rc<SourceContext>,
+    callable: &Rc<Callable>,
 ) -> Result<Expr, DsrvExpandError> {
+    // Runtime text may call a def, so it is inlined first, exactly as a
+    // file's own expressions are.
+    let scope = callable.scope();
+    let inlined = inline::standalone(parsed.as_ref(), &scope)?;
+    let parsed = &inlined;
+    // Text nested inside this text may call a def in turn, so what this
+    // text could call travels on into it.
+    let onwards = (!callable.is_empty()).then(|| Rc::clone(callable));
     let mut builder = ExprBuilder::with_capacity(parsed.as_ref().subtree_ids().len());
-    let root = expand_tree(parsed.as_ref(), &mut builder, context)?;
+    let root = expand_tree(parsed.as_ref(), &mut builder, context, onwards.as_ref())?;
     let expr = builder.finish(root).map_err(DsrvAstError::from)?;
     if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
@@ -465,6 +585,7 @@ pub(crate) fn expand_tree(
     expression: ParsedExprRef<'_>,
     builder: &mut ExprBuilder,
     context: &Rc<SourceContext>,
+    callable: Option<&Rc<Callable>>,
 ) -> Result<ExprId, DsrvExpandError> {
     check_expression_types(expression, context)?;
     builder
@@ -473,6 +594,7 @@ pub(crate) fn expand_tree(
             let metadata = ExprMetadata {
                 span: parsed::span_of(node.cursor()),
                 context: Some(context.clone()),
+                callable: callable.cloned(),
             };
             let kind = match node.cursor().kind() {
                 If(a, b, c) => ExprKind::If(*node.child(*a), *node.child(*b), *node.child(*c)),
@@ -489,6 +611,14 @@ pub(crate) fn expand_tree(
                     ExprKind::Constructor(EcoVec::new(), name.name().into(), None)
                 }
                 Var(name) => ExprKind::Var(name.clone()),
+                // Inlining replaces a qualified value with the def it names,
+                // so one reaching here named none.
+                ModuleItem(path) => {
+                    return Err(SourceResolveError::UnknownModuleItem {
+                        name: path.to_string().into(),
+                        span: metadata.span,
+                    });
+                }
                 Match(scrutinee, arms, shape) => ExprKind::Match(
                     *node.child(*scrutinee),
                     arms.iter().map(|id| *node.child(*id)).collect(),
