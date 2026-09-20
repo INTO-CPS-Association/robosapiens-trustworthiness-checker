@@ -39,6 +39,27 @@ impl Display for ExprRef<'_> {
         match self.view() {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),
+            Match(scrutinee, arms, shape) => {
+                write!(f, "match({scrutinee}) {{ ")?;
+                let mut children = arms.into_iter();
+                for arm in shape.iter() {
+                    write!(f, "{}", arm.pattern)?;
+                    if arm.guarded {
+                        let guard = children.next().expect("a guarded arm has its guard");
+                        write!(f, " if {guard}")?;
+                    }
+                    let body = children.next().expect("an arm has a body");
+                    write!(f, " -> {body}, ")?;
+                }
+                f.write_str("}")
+            }
+            Matches(scrutinee, guard, pattern) => {
+                write!(f, "matches({scrutinee}, {pattern}")?;
+                if let Some(guard) = guard.into_iter().next() {
+                    write!(f, " if {guard}")?;
+                }
+                f.write_str(")")
+            }
             // Printed as written: a qualifier the writer gave is kept, and a
             // nullary alternative takes no parentheses.
             Constructor(payload, tag, qualifier) => {

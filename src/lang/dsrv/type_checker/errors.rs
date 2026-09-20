@@ -32,6 +32,11 @@ pub enum TypeErrorKind {
     UnknownUnionTag,
     ConstructorPayloadArity,
     ConstructorPayloadTypeMismatch,
+    PatternTypeMismatch,
+    OrPatternBindings,
+    MatchArmTypeMismatch,
+    MatchNotExhaustive,
+    MatchWithoutArms,
 }
 
 #[derive(Debug, PartialEq, Eq)]

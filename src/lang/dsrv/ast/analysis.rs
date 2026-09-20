@@ -15,7 +15,14 @@ pub(crate) enum DependencyKind {
 
 enum DependencyTraversalEvent<'arena> {
     Expression(ExprRef<'arena>),
-    LeaveBindings(&'arena [(VarName, crate::core::StreamTypeAscription)]),
+    /// One `match` arm: what its pattern binds, and the guard and body that
+    /// see those names. Arms are entered one at a time, so an arm's binders
+    /// are not in scope in any other arm.
+    Arm {
+        binders: Vec<&'arena VarName>,
+        children: Vec<ExprRef<'arena>>,
+    },
+    LeaveBindings(Vec<&'arena VarName>),
 }
 
 impl<'arena> ExprRef<'arena> {
@@ -70,11 +77,35 @@ impl<'arena> ExprRef<'arena> {
                         pending.push(DependencyTraversalEvent::Expression(source));
                     }
                     Lambda(params, body) => {
-                        for (name, _) in params {
-                            *binding_depths.entry(name).or_default() += 1;
+                        let binders: Vec<&VarName> = params.iter().map(|(name, _)| name).collect();
+                        for name in &binders {
+                            *binding_depths.entry(*name).or_default() += 1;
                         }
-                        pending.push(DependencyTraversalEvent::LeaveBindings(params));
+                        pending.push(DependencyTraversalEvent::LeaveBindings(binders));
                         pending.push(DependencyTraversalEvent::Expression(body));
+                    }
+                    // Every arm's names are depended on, whichever arm a
+                    // value selects, because the graph is built once and the
+                    // selection is not known until the value arrives.
+                    Match(scrutinee, arms, shape) => {
+                        let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
+                        let mut place = 0;
+                        for arm in shape.iter() {
+                            let taken = arm.children();
+                            pending.push(DependencyTraversalEvent::Arm {
+                                binders: arm.pattern.bound_name_refs(),
+                                children: children[place..place + taken].to_vec(),
+                            });
+                            place += taken;
+                        }
+                        pending.push(DependencyTraversalEvent::Expression(scrutinee));
+                    }
+                    Matches(scrutinee, guard, pattern) => {
+                        pending.push(DependencyTraversalEvent::Arm {
+                            binders: pattern.bound_name_refs(),
+                            children: guard.into_iter().collect(),
+                        });
+                        pending.push(DependencyTraversalEvent::Expression(scrutinee));
                     }
                     _ => pending.extend(
                         expr.children()
@@ -82,11 +113,23 @@ impl<'arena> ExprRef<'arena> {
                             .map(DependencyTraversalEvent::Expression),
                     ),
                 },
-                DependencyTraversalEvent::LeaveBindings(params) => {
-                    for (name, _) in params {
+                DependencyTraversalEvent::Arm { binders, children } => {
+                    for name in &binders {
+                        *binding_depths.entry(*name).or_default() += 1;
+                    }
+                    pending.push(DependencyTraversalEvent::LeaveBindings(binders));
+                    pending.extend(
+                        children
+                            .into_iter()
+                            .rev()
+                            .map(DependencyTraversalEvent::Expression),
+                    );
+                }
+                DependencyTraversalEvent::LeaveBindings(binders) => {
+                    for name in binders {
                         let depth = binding_depths
                             .get_mut(name)
-                            .expect("leaving an active lambda binding");
+                            .expect("leaving an active binding");
                         *depth -= 1;
                         if *depth == 0 {
                             binding_depths.remove(name);

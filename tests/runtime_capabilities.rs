@@ -33,6 +33,7 @@ fn fixture(capability: Capability) -> (&'static str, &'static str) {
     match capability {
         Capability::Distribution => ("distribution.dsrv", "distribution.input"),
         Capability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
+        Capability::PatternMatching => ("pattern_matching.dsrv", "pattern_matching.input"),
     }
 }
 

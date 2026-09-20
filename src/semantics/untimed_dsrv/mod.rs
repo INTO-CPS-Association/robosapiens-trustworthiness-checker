@@ -1,5 +1,6 @@
 //! Untimed DSRV evaluation shared by checked and unchecked expressions.
 
+pub(crate) mod atemporal;
 pub(super) mod combinators;
 pub(crate) mod core_evaluation;
 pub(super) mod dynamic;

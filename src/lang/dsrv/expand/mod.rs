@@ -400,6 +400,16 @@ pub(crate) fn expand_tree(
                     ExprKind::Constructor(EcoVec::new(), name.name().into(), None)
                 }
                 Var(name) => ExprKind::Var(name.clone()),
+                Match(scrutinee, arms, shape) => ExprKind::Match(
+                    *node.child(*scrutinee),
+                    arms.iter().map(|id| *node.child(*id)).collect(),
+                    shape.clone(),
+                ),
+                Matches(scrutinee, guard, pattern) => ExprKind::Matches(
+                    *node.child(*scrutinee),
+                    guard.iter().map(|id| *node.child(*id)).collect(),
+                    pattern.clone(),
+                ),
                 Constructor(payload, tag, qualifier) => ExprKind::Constructor(
                     payload.iter().map(|id| *node.child(*id)).collect(),
                     tag.clone(),

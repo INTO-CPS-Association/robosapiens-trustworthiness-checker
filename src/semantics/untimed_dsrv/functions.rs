@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::{cell::RefCell, rc::Rc};
 
+use super::atemporal::{Scope, eval_atemporal};
 use super::combinators as mc;
 use super::semantics::evaluate_scope;
 use super::shared_output::SharedOutput;
@@ -316,6 +318,113 @@ pub(crate) fn bind_expression_for_benchmark(
         .expect("benchmark fixture has matching function arity");
     std::hint::black_box(&framed);
     framed.environment.as_ref().map_or(0, Rc::strong_count)
+}
+
+/// An expression that decides within a tick, such as a `match`.
+///
+/// The names it could read are read once per tick, whichever arm turns out
+/// to be selected, and the expression is then evaluated over values. Reading
+/// every arm's names rather than the selected arm's is what keeps the stream
+/// advancing at the same rate as the rest of the specification, and is the
+/// rule the dependency graph already states.
+pub(super) fn eval_within_tick<AC>(expression: ScopedExpr, ctx: &AC::Ctx) -> LocalStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let mut names = Vec::new();
+    let mut streams = Vec::new();
+    for name in expression.expr.as_ref().free_variables() {
+        // A name a pattern binds is not a stream; it comes from the match.
+        let stream = expression
+            .resolve_stream(&name)
+            .or_else(|| ctx.var(&name))
+            .map(mc::stream_lift_base);
+        if let Some(stream) = stream {
+            names.push(name);
+            streams.push(stream);
+        }
+    }
+    let expr = expression.expr.clone();
+    let evaluate = move |bound: &BTreeMap<VarName, Value>| {
+        eval_atemporal(expr.as_ref(), bound)
+            .unwrap_or_else(|error| panic!("expression failed within its tick: {error}"))
+    };
+    // With nothing to read, the value is the same every tick.
+    if streams.is_empty() {
+        return mc::val(evaluate(&BTreeMap::new()));
+    }
+    Box::pin(stream! {
+        loop {
+            let mut bound = BTreeMap::new();
+            for (name, stream) in names.iter().zip(streams.iter_mut()) {
+                match stream.next().await {
+                    Some(value) => {
+                        bound.insert(name.clone(), value);
+                    }
+                    None => return,
+                }
+            }
+            yield evaluate(&bound);
+        }
+    })
+}
+
+/// A collection callback evaluated within the tick that calls it.
+///
+/// The callback runs once per element, so its body cannot be a stream: there
+/// is nothing to advance it per element, and the names it reads from around
+/// it must hold what they hold this tick. Those names are read once per
+/// tick, from subscriptions this holds, and the body is then evaluated for
+/// each element over values alone.
+struct AtemporalCallback {
+    parameters: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
+    body: Expr,
+    captures: Vec<(VarName, LocalStream<Value>)>,
+}
+
+impl AtemporalCallback {
+    /// Whether this function can be run within a tick, and the means to do
+    /// it. A body that reads history cannot, and neither can one still
+    /// carrying lexical bindings, which only the stream path resolves.
+    fn of<AC>(function: &RuntimeFunction) -> Option<Self>
+    where
+        AC: AsyncConfig<Val = Value>,
+    {
+        let definition = function.language_payload::<UntimedFunctionDef<AC>>()?;
+        if definition.temporal || definition.body.environment.is_some() {
+            return None;
+        }
+        Some(Self {
+            parameters: definition.params.clone(),
+            body: definition.body.expr.clone(),
+            captures: definition
+                .captures
+                .iter()
+                .map(|(name, stream)| (name.clone(), stream.subscribe()))
+                .collect(),
+        })
+    }
+
+    /// Read every captured name once, for the tick about to be evaluated.
+    async fn read_captures(&mut self) -> BTreeMap<VarName, Value> {
+        let mut values = BTreeMap::new();
+        for (name, stream) in &mut self.captures {
+            let value = stream.next().await.unwrap_or(Value::NoVal);
+            values.insert(name.clone(), value);
+        }
+        values
+    }
+
+    /// Apply the callback to one element, with the tick's captured values.
+    fn apply(&self, captures: &BTreeMap<VarName, Value>, arguments: Vec<Value>) -> Value {
+        let mut bound = captures.clone();
+        for ((name, _), value) in self.parameters.iter().zip(arguments) {
+            bound.insert(name.clone(), value);
+        }
+        let scope = Scope { bound, outer: None };
+        eval_atemporal(self.body.as_ref(), &scope)
+            .unwrap_or_else(|error| panic!("collection callback failed: {error}"))
+    }
 }
 
 fn eval_function_once(
@@ -641,6 +750,7 @@ where
 {
     let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
     let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
+    let mut callback: Option<Option<AtemporalCallback>> = None;
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             match (func_value, list_value) {
@@ -649,8 +759,18 @@ where
                 (Value::Function(function), Value::List(values)) => {
                     reject_temporal_collection_function::<AC>(&function, "List.map");
                     let mut mapped = EcoVec::new();
-                    for value in values {
-                        mapped.push(eval_function_once(function.clone(), EcoVec::from(vec![value])).await);
+                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
+                        Some(callback) => {
+                            let captures = callback.read_captures().await;
+                            for value in values {
+                                mapped.push(callback.apply(&captures, vec![value]));
+                            }
+                        }
+                        None => {
+                            for value in values {
+                                mapped.push(eval_function_once(function.clone(), EcoVec::from(vec![value])).await);
+                            }
+                        }
                     }
                     yield Value::List(mapped);
                 }
@@ -670,6 +790,7 @@ where
 {
     let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
     let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
+    let mut callback: Option<Option<AtemporalCallback>> = None;
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             match (func_value, list_value) {
@@ -678,11 +799,24 @@ where
                 (Value::Function(function), Value::List(values)) => {
                     reject_temporal_collection_function::<AC>(&function, "List.filter");
                     let mut filtered = EcoVec::new();
-                    for value in values {
-                        match eval_function_once(function.clone(), EcoVec::from(vec![value.clone()])).await {
-                            Value::Bool(true) => filtered.push(value),
-                            Value::Bool(false) => {}
-                            other => panic!("List.filter returned non-bool value {}", other),
+                    let keep = |kept: Value, value: Value, filtered: &mut EcoVec<Value>| match kept {
+                        Value::Bool(true) => filtered.push(value),
+                        Value::Bool(false) => {}
+                        other => panic!("List.filter returned non-bool value {}", other),
+                    };
+                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
+                        Some(callback) => {
+                            let captures = callback.read_captures().await;
+                            for value in values {
+                                let kept = callback.apply(&captures, vec![value.clone()]);
+                                keep(kept, value, &mut filtered);
+                            }
+                        }
+                        None => {
+                            for value in values {
+                                let kept = eval_function_once(function.clone(), EcoVec::from(vec![value.clone()])).await;
+                                keep(kept, value, &mut filtered);
+                            }
                         }
                     }
                     yield Value::List(filtered);
@@ -705,6 +839,7 @@ where
     let mut func_stream = mc::stream_lift_base(evaluate_scope::<AC>(func_expr, ctx));
     let mut init_stream = mc::stream_lift_base(evaluate_scope::<AC>(init_expr, ctx));
     let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
+    let mut callback: Option<Option<AtemporalCallback>> = None;
     Box::pin(stream! {
         while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
             match (func_value, init, list_value) {
@@ -712,8 +847,18 @@ where
                 (Value::Deferred, _, _) | (_, Value::Deferred, _) | (_, _, Value::Deferred) => yield Value::Deferred,
                 (Value::Function(function), mut acc, Value::List(values)) => {
                     reject_temporal_collection_function::<AC>(&function, "List.fold");
-                    for value in values {
-                        acc = eval_function_once(function.clone(), EcoVec::from(vec![acc, value])).await;
+                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
+                        Some(callback) => {
+                            let captures = callback.read_captures().await;
+                            for value in values {
+                                acc = callback.apply(&captures, vec![acc, value]);
+                            }
+                        }
+                        None => {
+                            for value in values {
+                                acc = eval_function_once(function.clone(), EcoVec::from(vec![acc, value])).await;
+                            }
+                        }
                     }
                     yield acc;
                 }

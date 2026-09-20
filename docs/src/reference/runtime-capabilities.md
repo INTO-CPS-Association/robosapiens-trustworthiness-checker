@@ -17,14 +17,14 @@ for each capability, under every `--semantics` value, so it records what this
 build does:
 
 <!-- runtime-capabilities:start -->
-| Runtime | distribution | tagged unions |
-|---|---|---|
-| `async` | no | yes |
-| `dataflow` | no | yes |
-| `distributed` | not checked automatically (needs distribution settings) | not checked automatically (needs distribution settings) |
-| `semi-sync` | no | yes |
-| `reconf-semi-sync` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
-| `reconf-dataflow` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
+| Runtime | distribution | tagged unions | pattern matching |
+|---|---|---|---|
+| `async` | no | yes | yes |
+| `dataflow` | no | yes | yes |
+| `distributed` | not checked automatically (needs distribution settings) | not checked automatically (needs distribution settings) | not checked automatically (needs distribution settings) |
+| `semi-sync` | no | yes | yes |
+| `reconf-semi-sync` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
+| `reconf-dataflow` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
 <!-- runtime-capabilities:end -->
 
 Text supplied while a specification runs, through `dynamic` or `defer`, is

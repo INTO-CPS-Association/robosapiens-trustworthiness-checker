@@ -6,6 +6,7 @@ use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeNa
 use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
 use crate::core::{BinaryOperator, VarName};
+use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::span::Span;
 use crate::distributed::distribution_graphs::NodeName;
 
@@ -48,12 +49,14 @@ Int: i64 = <l:@L> <s:r"[0-9]+"> =>? i64::from_str(s)
         *user_error_location = Some(l);
         ParseError::User { error: "integer literal is out of range" }
     });
-MalformedFloat: SyntaxLiteral = <l:@L> <_s:r"[0-9]+\.[0-9]*(?:\.[0-9]+)+"> =>?
+MalformedFloat: SyntaxLiteral = <l:@L> <_s:r"[0-9]+\.[0-9]+(?:\.[0-9]+)+"> =>?
     {
         *user_error_location = Some(l);
         Err(ParseError::User { error: "invalid float literal" })
     };
-Float: f64 = <l:@L> <s:r"[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)|[0-9]+\.[0-9]*"> =>? {
+// A Float names its fraction: `1.0`, not `1.`. Leaving the point bare would
+// take the first dot of a range, and `1.` says nothing `1.0` does not.
+Float: f64 = <l:@L> <s:r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)|[0-9]+\.[0-9]+"> =>? {
     let value = f64::from_str(s).map_err(|_| {
         *user_error_location = Some(l);
         ParseError::User { error: "invalid float literal" }
@@ -312,6 +315,8 @@ SpecialKeywords: ExprId = {
 // -----------------------------------------------------------------------------
 
 AtomBase: ExprId = {
+    MatchExpr,
+    MatchesExpr,
     SIndex,
     SpecialKeywords,
     SpannedLiteral,
@@ -321,6 +326,123 @@ AtomBase: ExprId = {
 }
 
 
+
+// -----------------------------------------------------------------------------
+// Match
+// -----------------------------------------------------------------------------
+
+// An arm contributes its guard, when it has one, then its body, so the node's
+// children read in the order the arm was written.
+MatchArmRule: (MatchArm, Option<ExprId>, ExprId) = {
+    <pattern:Pattern> <guard:("if" <Expr>)?> "->" <body:Expr> =>
+        (MatchArm { pattern, guarded: guard.is_some() }, guard, body),
+};
+
+MatchExpr: ExprId = {
+    <l:@L> "match" "(" <scrutinee:Expr> ","? ")" "{" <arms:DelimitedSepListOpt<MatchArmRule, ",">> "}" <r:@R> => {
+        let mut shape = EcoVec::new();
+        let mut children = EcoVec::new();
+        for (arm, guard, body) in arms {
+            if let Some(guard) = guard {
+                children.push(guard);
+            }
+            children.push(body);
+            shape.push(arm);
+        }
+        builder.alloc(ExprKind::Match(scrutinee, children, shape), Span::new(l as u32, r as u32))
+    },
+};
+
+MatchesExpr: ExprId = {
+    <l:@L> "matches" "(" <scrutinee:Expr> "," <pattern:Pattern> <guard:("if" <Expr>)?> ","? ")" <r:@R> =>
+        builder.alloc(
+            ExprKind::Matches(scrutinee, guard.into_iter().collect(), pattern),
+            Span::new(l as u32, r as u32),
+        ),
+};
+
+// -----------------------------------------------------------------------------
+// Patterns
+// -----------------------------------------------------------------------------
+
+// Alternatives of an or-pattern. A single alternative is the pattern itself,
+// so `p | q` is the only thing that builds an `Or`.
+Pattern: MatchPattern = {
+    <l:@L> <first:PatternPrimary> <rest:("|" <PatternPrimary>)*> <r:@R> => {
+        if rest.is_empty() {
+            first
+        } else {
+            let mut alternatives = EcoVec::from([first]);
+            alternatives.extend(rest);
+            MatchPattern::new(PatternKind::Or(alternatives), Span::new(l as u32, r as u32))
+        }
+    },
+};
+
+PatternField: (EcoString, MatchPattern) = {
+    <name:RawIdent> ":" <pattern:Pattern> => (name.into(), pattern),
+    // Field shorthand: `{ a }` binds the field to its own name.
+    <l:@L> <name:LowerIdent> <r:@R> => (
+        name.into(),
+        MatchPattern::new(PatternKind::Bind(VarName::from(name)), Span::new(l as u32, r as u32)),
+    ),
+};
+
+// `{ a: p, .. }` names the fields it cares about; without `..` it names them
+// all.
+PatternFields: (EcoVec<(EcoString, MatchPattern)>, bool) = {
+    ".." ","? => (EcoVec::new(), true),
+    <mut fields:(<PatternField> ",")*> <field:PatternField> "," ".." ","? => {
+        fields.push(field);
+        (fields.into(), true)
+    },
+    <fields:DelimitedSepListOpt<PatternField, ",">> => (fields, false),
+};
+
+PatternInt: i64 = {
+    <value:Int> => value,
+    "-" <value:Int> => -value,
+};
+
+PatternPrimary: MatchPattern = {
+    <l:@L> <kind:PatternKindRule> <r:@R> => MatchPattern::new(kind, Span::new(l as u32, r as u32)),
+};
+
+PatternKindRule: PatternKind = {
+    // `_` binds nothing; any other lower-case name binds the value.
+    <name:LowerIdent> => if name == "_" {
+        PatternKind::Wildcard
+    } else {
+        PatternKind::Bind(VarName::from(name))
+    },
+    <name:LowerIdent> "@" <inner:PatternPrimary> =>
+        PatternKind::As(VarName::from(name), Box::new(inner)),
+    <tag:UpperIdent> => PatternKind::Tag { tag: tag.into(), payload: None },
+    <tag:UpperIdent> "(" <payload:Pattern> ","? ")" =>
+        PatternKind::Tag { tag: tag.into(), payload: Some(Box::new(payload)) },
+    "(" <mut first:(<Pattern> ",")+> <last:Pattern?> ")" => {
+        if let Some(last) = last {
+            first.push(last);
+        }
+        PatternKind::Tuple(first.into())
+    },
+    "[" <items:DelimitedSepListOpt<Pattern, ",">> "]" => PatternKind::List(items),
+    "{" <fields:PatternFields> "}" =>
+        PatternKind::Struct { fields: fields.0, rest: fields.1 },
+    <value:PatternInt> => PatternKind::Literal(SyntaxLiteral::Int(value)),
+    <start:PatternInt> ".." <end:PatternInt> =>
+        PatternKind::Range { start, end, inclusive: false },
+    <start:PatternInt> "..=" <end:PatternInt> =>
+        PatternKind::Range { start, end, inclusive: true },
+
+    <value:String> => PatternKind::Literal(SyntaxLiteral::Str(value)),
+    <value:Bool> => PatternKind::Literal(SyntaxLiteral::Bool(value)),
+    "(" ")" => PatternKind::Literal(SyntaxLiteral::Unit),
+    <l:@L> <_value:Float> =>? {
+        *user_error_location = Some(l);
+        Err(ParseError::User { error: "a Float is not a pattern: compare it with an operator instead" })
+    },
+};
 
 // A constructor names its tag, and the union it belongs to when the writer
 // qualifies it. Parsing knows no schema: which union a tag belongs to, and

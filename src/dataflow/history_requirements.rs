@@ -292,6 +292,7 @@ fn analyse_operation(
         | BoundOp::When { .. }
         | BoundOp::Update { .. }
         | BoundOp::Latch { .. }
+        | BoundOp::Match { .. }
         | BoundOp::Constructor { .. }
         | BoundOp::List(..)
         | BoundOp::Tuple(..)

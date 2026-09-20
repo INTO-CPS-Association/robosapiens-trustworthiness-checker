@@ -111,6 +111,33 @@ pub(in crate::dataflow) enum NodeState {
     },
     Reconfigurable(Box<ReconfigurableExpressionState>),
     LazyIf(LazyIfState),
+    /// One call state per arm: an arm is a program, and only the selected
+    /// one runs, so each keeps the state of its own invocations.
+    Match(Vec<MatchArmState>),
+}
+
+#[derive(Clone)]
+pub(in crate::dataflow) struct MatchArmState {
+    pub(in crate::dataflow) guard: Option<Box<ArmCall>>,
+    pub(in crate::dataflow) body: Box<ArmCall>,
+}
+
+#[derive(Clone)]
+pub(in crate::dataflow) struct ArmCall {
+    pub(in crate::dataflow) evaluator: Evaluator,
+    pub(in crate::dataflow) environment_values: Vec<Value>,
+}
+
+impl ArmCall {
+    fn of(function: &StreamFunction) -> Box<Self> {
+        Box::new(Self {
+            evaluator: Evaluator::new(Rc::clone(&function.program)),
+            environment_values: vec![
+                Value::NoVal;
+                function.capture_slots.len() + function.parameters.len()
+            ],
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -652,6 +679,15 @@ impl EvaluatorState {
                         .else_state
                         .for_each_active_body_history_requirement(&mut *visit);
                 }
+                NodeState::Match(arms) => {
+                    for call in arms
+                        .iter()
+                        .flat_map(|arm| arm.guard.iter().chain(std::iter::once(&arm.body)))
+                    {
+                        call.evaluator
+                            .for_each_active_body_history_requirement(&mut *visit);
+                    }
+                }
                 _ => {}
             }
         }
@@ -937,6 +973,14 @@ impl NodeState {
                 function: None,
                 captures: Rc::new(RefCell::new(vec![Value::NoVal; func.capture_slots.len()])),
             },
+            StreamOp::Match { arms, .. } => Self::Match(
+                arms.iter()
+                    .map(|arm| MatchArmState {
+                        guard: arm.guard.as_ref().map(ArmCall::of),
+                        body: ArmCall::of(&arm.body),
+                    })
+                    .collect(),
+            ),
             StreamOp::DirectApply { func, args } => Self::PersistentCall {
                 evaluator: Evaluator::new(Rc::clone(&func.program)),
                 environment_values: vec![
@@ -1036,6 +1080,17 @@ impl NodeState {
                 **expression = ReconfigurableExpressionState::default()
             }
             Self::LazyIf(lazy_if) => lazy_if.reset(),
+            // Nothing an arm's invocation left behind survives a reset,
+            // which is what a fresh run of the specification means.
+            Self::Match(arms) => {
+                for call in arms
+                    .iter_mut()
+                    .flat_map(|arm| arm.guard.iter_mut().chain(std::iter::once(&mut arm.body)))
+                {
+                    call.evaluator.reset();
+                    call.environment_values.fill(Value::NoVal);
+                }
+            }
         }
     }
 }

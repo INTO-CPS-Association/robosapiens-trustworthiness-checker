@@ -46,6 +46,76 @@ Struct field names in types can be quoted, as in
 [source-context architecture](../architecture/dsrv-source-contexts.md) for
 how aliases reach runtime expressions.
 
+## Tagged unions and `match`
+
+Both are experimental, so a file that uses them declares them (see
+[language settings](dsrv-language-settings.md)):
+
+```dsrv
+use experimental::{tagged_unions, pattern_matching}
+
+type State = Union<Stopped, Moving: Int>
+```
+
+A union names its alternatives. An alternative either carries a payload,
+written after its tag, or carries none. Alternatives are a set, so
+`Union<Stopped, Moving: Int>` and `Union<Moving: Int, Stopped>` are the same
+type, and a repeated tag is rejected.
+
+**Tags are capitalised, and names that bind are not.** In a file that has
+taken on `tagged_unions`, a capitalised name in an expression is a tag, so
+that file cannot also name a stream or a lambda parameter with a capital,
+and says so where the name is declared.
+
+**Constructors** are written as the tag, with the payload in parentheses when
+the alternative carries one:
+
+```dsrv
+aux state: State
+state = Moving(speed)
+```
+
+Which union a tag belongs to comes from the type the expression is expected
+to have, so libraries can share tag names. Where nothing says which union is
+meant — an operand of `==`, or a `match` scrutinee — the union is named:
+`State::Moving(speed)`. A tag that cannot be resolved is reported, and the
+message names the unions in scope that do have it.
+
+**`match`** decides between arms, and only the selected arm is evaluated:
+
+```dsrv
+out speed: Int
+speed = match(state) {
+  Moving(n) if n > limit -> limit,
+  Moving(n) -> n,
+  Stopped -> 0,
+}
+```
+
+A pattern is a tag with an optional payload pattern, a tuple `(a, b)`, a list
+`[a, b]`, a struct `{ field: p, .. }`, an `Int`, `Str`, `Bool` or `Unit`
+literal, an `Int` range (`1..5`, `1..=5`), alternatives joined by `|`, a
+lower-case name that binds what it matched, `name @ pattern`, or `_`. A
+`Float` is not a pattern: comparing one with an operator says what was meant.
+Or-alternatives bind the same names, and a name a pattern binds is in scope
+for that arm's guard and body only.
+
+Arms must leave no value unmatched: a union names every alternative, and
+anything else ends with a pattern that matches whatever it is given. An arm
+with a guard covers nothing, because its guard may refuse the value its
+pattern matched.
+
+**`matches(e, p)`**, with an optional guard, reports whether one pattern
+selects:
+
+```dsrv
+out moving: Bool
+moving = matches(state, Moving(n) if n > 0)
+```
+
+A scrutinee that has no value gives the `match` no value either, rather than
+falling through to a later arm, and so does a guard without one.
+
 ## Operators
 
 The operators, from highest to lowest precedence, are:
@@ -90,8 +160,9 @@ keyword spelling `and`:
 Integer source magnitudes are limited to `i64::MAX`, so literals range from
 `-9223372036854775807` through `9223372036854775807`.
 
-Floats include `0.5`, `1.`, `1e6`, `1E-6`, and `1.5e+3`; a digit is required
-before the decimal point. Leading-zero mantissas are allowed. Float underflow
+Floats include `0.5`, `1e6`, `1E-6`, and `1.5e+3`; a digit is required on
+each side of the decimal point, so `1.0` is a Float and `1.` is not.
+Leading-zero mantissas are allowed. Float underflow
 rounds to signed zero, while a source literal that overflows to infinity is
 rejected. `NaN`, `inf`, and `Infinity` remain identifiers rather than numeric
 literals.

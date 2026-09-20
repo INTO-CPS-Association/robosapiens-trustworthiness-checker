@@ -10,6 +10,7 @@ use crate::core::{BinaryOperator, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 
 use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
+use super::super::patterns::{MatchArm, MatchPattern};
 use super::super::source::{AliasDeclaration, SourceType, TypeName};
 use super::super::span::Span;
 use super::DsrvSyntaxError;
@@ -39,6 +40,8 @@ contiguous_tree::tree_schema! {
             tag: data(EcoString),
             qualifier: data(Option<TypeName>),
         ),
+        Match(scrutinee: child, arms: children, shape: data(EcoVec<MatchArm>)),
+        Matches(scrutinee: child, guard: children, pattern: data(MatchPattern)),
         Dynamic(source: child, result_type: data(SourceAscription), scope: data(ReconfigurableExprScope)),
         Defer(source: child, result_type: data(SourceAscription), scope: data(ReconfigurableExprScope)),
         Update(value: child, update: child),

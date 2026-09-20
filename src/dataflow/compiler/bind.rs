@@ -211,6 +211,15 @@ impl UnboundEvaluationGraph {
                     }
                     inputs.extend(captures);
                 }
+                UnboundOp::Match { arms, .. } => {
+                    for function in arms.iter().flat_map(arm_functions) {
+                        let mut captures = function.graph.free_vars(recursive_output);
+                        for param in &function.parameters {
+                            captures.remove(param);
+                        }
+                        inputs.extend(captures);
+                    }
+                }
                 _ => {}
             }
         }
@@ -244,6 +253,17 @@ impl UnboundEvaluationGraph {
                         captures.remove(param);
                     }
                     inputs.extend(captures);
+                }
+                // An arm runs in the tick that selects it, so its names are
+                // read in that tick, as a direct call's are.
+                UnboundOp::Match { arms, .. } => {
+                    for function in arms.iter().flat_map(arm_functions) {
+                        let mut captures = function.graph.same_tick_free_vars(recursive_output);
+                        for param in &function.parameters {
+                            captures.remove(param);
+                        }
+                        inputs.extend(captures);
+                    }
                 }
                 UnboundOp::Function { func } | UnboundOp::RecursiveApply { func, .. } => {
                     let mut captures = func.graph.free_vars(recursive_output);
@@ -368,6 +388,22 @@ fn bind_op(
             value: r!(value),
             trigger: r!(trigger),
         },
+        UnboundOp::Match { scrutinee, arms } => BoundOp::Match {
+            scrutinee: bind_ref(scrutinee, environment, recursive_output)?,
+            arms: arms
+                .into_iter()
+                .map(|arm| {
+                    Ok(MatchArmProgram {
+                        pattern: arm.pattern,
+                        guard: arm
+                            .guard
+                            .map(|guard| bind_function(guard, environment, recursive_output))
+                            .transpose()?,
+                        body: bind_function(arm.body, environment, recursive_output)?,
+                    })
+                })
+                .collect::<Result<_, StreamProgramError>>()?,
+        },
         UnboundOp::Constructor { tag, payload } => BoundOp::Constructor {
             tag,
             payload: payload
@@ -462,6 +498,11 @@ fn bind_op(
             list: r!(list),
         },
     })
+}
+
+/// An arm's guard, when it has one, and its body.
+fn arm_functions(arm: &MatchArmProgram<VarName>) -> impl Iterator<Item = &UnboundFunction> {
+    arm.guard.iter().chain(std::iter::once(&arm.body))
 }
 
 fn bind_function(

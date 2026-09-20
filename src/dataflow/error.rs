@@ -34,6 +34,11 @@ pub enum DataflowEvaluationError {
     #[error("dynamic/defer expected a string property, got {0}")]
     InvalidExpressionSource(String),
 
+    #[error("a match guard is a Bool, got {0}")]
+    MatchGuardNotBool(String),
+    #[error("no match arm matched {0}")]
+    MatchUnmatched(String),
+
     #[error("invalid dynamically compiled stream program: {0}")]
     InvalidDynamicProgram(StreamProgramError),
     #[error("runtime dependency cycle contains stream `{0}`")]

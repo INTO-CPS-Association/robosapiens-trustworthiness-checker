@@ -21,6 +21,7 @@ use crate::lang::dsrv::ast::{
     ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
     SyntaxLiteral,
 };
+use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::source::TypeName;
 
 struct TypeContext<'types> {
@@ -247,6 +248,61 @@ fn check(
             ));
         }
         Val(value) => (value_type(value, expected)?, None),
+        Match(scrutinee, arms, shape) => {
+            let scrutinee_type = check(scrutinee, None, context)?;
+            let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
+            let mut place = 0;
+            let mut result: Option<TCType> = None;
+            for arm in shape.iter() {
+                let bindings = bind_pattern(&arm.pattern, &scrutinee_type, expr)?;
+                let frame = context.local_bindings.len();
+                context.local_bindings.extend(bindings);
+                let checked = (|context: &mut TypeContext<'_>| {
+                    if arm.guarded {
+                        let guard = children[place];
+                        place += 1;
+                        let guard_type = check(guard, Some(&TCType::Bool), context)?;
+                        require(guard_type, &TCType::Bool, guard)?;
+                    }
+                    let body = children[place];
+                    place += 1;
+                    check(body, expected, context)
+                })(context);
+                context.local_bindings.truncate(frame);
+                let body_type = checked?;
+                result = Some(match result {
+                    None => body_type,
+                    Some(previous) => unify(&previous, &body_type).ok_or_else(|| {
+                        error(
+                            expr,
+                            TypeErrorKind::MatchArmTypeMismatch,
+                            format!("one arm has type {previous}, another {body_type}"),
+                        )
+                    })?,
+                });
+            }
+            let Some(result) = result else {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::MatchWithoutArms,
+                    "a `match` decides between arms, and this one has none".to_owned(),
+                ));
+            };
+            check_exhaustive(expr, shape, &scrutinee_type)?;
+            (result, None)
+        }
+        Matches(scrutinee, guard, pattern) => {
+            let scrutinee_type = check(scrutinee, None, context)?;
+            let bindings = bind_pattern(pattern, &scrutinee_type, expr)?;
+            if let Some(guard) = guard.into_iter().next() {
+                let frame = context.local_bindings.len();
+                context.local_bindings.extend(bindings);
+                let checked = check(guard, Some(&TCType::Bool), context);
+                context.local_bindings.truncate(frame);
+                require(checked?, &TCType::Bool, guard)?;
+            }
+            (TCType::Bool, None)
+        }
         // A tag names an alternative, not a union, so which union it belongs
         // to comes from the qualifier the writer gave or the type the
         // expression is expected to have.
@@ -1226,6 +1282,224 @@ fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
     } else {
         None
     }
+}
+
+/// What a pattern binds, and their types, when matched against `scrutinee`.
+///
+/// A pattern that cannot describe a value of that type is reported here,
+/// where the shape is known, rather than as a mismatch in the arm's body.
+fn bind_pattern(
+    pattern: &MatchPattern,
+    scrutinee: &TCType,
+    expr: ExprRef<'_>,
+) -> Result<Vec<(VarName, StreamType)>, SemanticError> {
+    let mut bindings = Vec::new();
+    collect_pattern_bindings(pattern, scrutinee, expr, &mut bindings)?;
+    Ok(bindings)
+}
+
+fn collect_pattern_bindings(
+    pattern: &MatchPattern,
+    scrutinee: &TCType,
+    expr: ExprRef<'_>,
+    bindings: &mut Vec<(VarName, StreamType)>,
+) -> Result<(), SemanticError> {
+    let bind = |bindings: &mut Vec<(VarName, StreamType)>, name: &VarName, typ: &TCType| {
+        bindings.push((
+            name.clone(),
+            typ.to_stream_type().unwrap_or(StreamType::Any),
+        ));
+    };
+    let mismatch = |wanted: &str| {
+        Err(error(
+            expr,
+            TypeErrorKind::PatternTypeMismatch,
+            format!("`{pattern}` matches {wanted}, but the value here is {scrutinee}"),
+        ))
+    };
+    match &pattern.kind {
+        PatternKind::Wildcard => {}
+        PatternKind::Bind(name) => bind(bindings, name, scrutinee),
+        PatternKind::As(name, inner) => {
+            bind(bindings, name, scrutinee);
+            collect_pattern_bindings(inner, scrutinee, expr, bindings)?;
+        }
+        PatternKind::Tag { tag, payload } => {
+            let TCType::Union(schema) = scrutinee else {
+                if *scrutinee == TCType::Any {
+                    return Ok(());
+                }
+                return mismatch("a union");
+            };
+            let Some((_, alternative)) = schema.alternative(tag) else {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::UnknownUnionTag,
+                    format!("`{tag}` is not an alternative of {scrutinee}"),
+                ));
+            };
+            match (alternative.payload(), payload) {
+                (UnionPayload::Nullary, None) => {}
+                (UnionPayload::Of(declared), Some(payload)) => {
+                    collect_pattern_bindings(payload, declared, expr, bindings)?;
+                }
+                (UnionPayload::Nullary, Some(_)) => {
+                    return Err(error(
+                        expr,
+                        TypeErrorKind::ConstructorPayloadArity,
+                        format!("`{tag}` carries no payload"),
+                    ));
+                }
+                (UnionPayload::Of(declared), None) => {
+                    return Err(error(
+                        expr,
+                        TypeErrorKind::ConstructorPayloadArity,
+                        format!("`{tag}` carries {declared}, which this pattern does not name"),
+                    ));
+                }
+            }
+        }
+        PatternKind::Tuple(items) => match scrutinee {
+            TCType::Any => {}
+            TCType::Tuple(types) if types.len() == items.len() => {
+                for (item, typ) in items.iter().zip(types.iter()) {
+                    collect_pattern_bindings(item, typ, expr, bindings)?;
+                }
+            }
+            _ => return mismatch("a tuple of that width"),
+        },
+        PatternKind::List(items) => match scrutinee {
+            TCType::Any | TCType::EmptyList => {}
+            TCType::List(element) => {
+                for item in items {
+                    collect_pattern_bindings(item, element, expr, bindings)?;
+                }
+            }
+            _ => return mismatch("a list"),
+        },
+        PatternKind::Struct { fields, .. } => match scrutinee {
+            TCType::Any => {}
+            TCType::Struct(declared, _) => {
+                for (name, pattern) in fields {
+                    let Some((_, typ)) = declared.iter().find(|(field, _)| field == name) else {
+                        return Err(error(
+                            expr,
+                            TypeErrorKind::StructUnknownField,
+                            format!("{scrutinee} has no field `{name}`"),
+                        ));
+                    };
+                    collect_pattern_bindings(pattern, typ, expr, bindings)?;
+                }
+            }
+            TCType::Map(value) => {
+                for (_, pattern) in fields {
+                    collect_pattern_bindings(pattern, value, expr, bindings)?;
+                }
+            }
+            _ => return mismatch("a struct"),
+        },
+        PatternKind::Literal(value) => {
+            let literal = match value {
+                SyntaxLiteral::Int(_) => TCType::Int,
+                SyntaxLiteral::Str(_) => TCType::Str,
+                SyntaxLiteral::Bool(_) => TCType::Bool,
+                _ => TCType::Unit,
+            };
+            if *scrutinee != TCType::Any && unify(scrutinee, &literal).is_none() {
+                return mismatch(&literal.to_string());
+            }
+        }
+        PatternKind::Range { .. } => {
+            if *scrutinee != TCType::Any && *scrutinee != TCType::Int {
+                return mismatch("an Int");
+            }
+        }
+        // Every alternative sees the same value, so each must bind the same
+        // names with the same types for the arm to have one meaning.
+        PatternKind::Or(alternatives) => {
+            let mut first: Option<Vec<(VarName, StreamType)>> = None;
+            for alternative in alternatives {
+                let mut bound = Vec::new();
+                collect_pattern_bindings(alternative, scrutinee, expr, &mut bound)?;
+                bound.sort_by(|left, right| left.0.cmp(&right.0));
+                match &first {
+                    None => first = Some(bound),
+                    Some(expected) if *expected == bound => {}
+                    Some(expected) => {
+                        return Err(error(
+                            expr,
+                            TypeErrorKind::OrPatternBindings,
+                            format!(
+                                "`{alternative}` binds {}, while an earlier alternative binds {}",
+                                names_of(&bound),
+                                names_of(expected)
+                            ),
+                        ));
+                    }
+                }
+            }
+            bindings.extend(first.unwrap_or_default());
+        }
+    }
+    Ok(())
+}
+
+fn names_of(bindings: &[(VarName, StreamType)]) -> String {
+    if bindings.is_empty() {
+        return "nothing".to_owned();
+    }
+    bindings
+        .iter()
+        .map(|(name, _)| name.name())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether the arms leave a value unmatched.
+///
+/// A guarded arm does not count: its guard may refuse the value it matched,
+/// so something after it still has to catch that value.
+fn check_exhaustive(
+    expr: ExprRef<'_>,
+    shape: &[MatchArm],
+    scrutinee: &TCType,
+) -> Result<(), SemanticError> {
+    let unguarded = shape.iter().filter(|arm| !arm.guarded);
+    if unguarded.clone().any(|arm| arm.pattern.is_irrefutable()) {
+        return Ok(());
+    }
+    let TCType::Union(schema) = scrutinee else {
+        // Only a union is covered by naming its alternatives; anything else
+        // needs a pattern that matches whatever it is given.
+        return Err(error(
+            expr,
+            TypeErrorKind::MatchNotExhaustive,
+            format!("a `match` on {scrutinee} needs an arm that matches every value, such as `_`"),
+        ));
+    };
+    let covered: BTreeSet<&str> = unguarded
+        .filter_map(|arm| match &arm.pattern.kind {
+            PatternKind::Tag { tag, payload } => payload
+                .as_ref()
+                .is_none_or(|payload| payload.is_irrefutable())
+                .then_some(tag.as_str()),
+            _ => None,
+        })
+        .collect();
+    let missing: Vec<&str> = schema
+        .alternatives()
+        .iter()
+        .map(|alternative| alternative.tag().as_str())
+        .filter(|tag| !covered.contains(tag))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(error(
+        expr,
+        TypeErrorKind::MatchNotExhaustive,
+        format!("no arm matches {}", missing.join(", ")),
+    ))
 }
 
 /// Resolve a constructor to the union it builds, and check its payload.

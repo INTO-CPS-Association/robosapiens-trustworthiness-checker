@@ -7,6 +7,7 @@ use super::super::ir::*;
 use super::super::*;
 use crate::core::UnaryOperator;
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, ExprCursor, ExprView};
+use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::type_checker::TCType;
 
 struct EvaluationGraphBuilder {
@@ -51,6 +52,26 @@ impl EvaluationGraphBuilder {
     fn finish(self, output: UnboundRef) -> UnboundEvaluationGraph {
         UnboundEvaluationGraph::new(self.nodes, self.scalar_signatures, output)
     }
+}
+
+/// One arm's guard or body, as a program of the names its pattern binds.
+fn lower_arm(arm: &MatchArm, expr: ExprCursor<'_>, specialise: bool) -> UnboundFunction {
+    UnboundFunction::new(
+        arm.pattern.bound_names().into_iter().collect(),
+        lower_branch(expr, specialise),
+        format!("{} -> …", arm.pattern).into(),
+    )
+}
+
+/// An arm whose body is a constant, which is what `matches` reports.
+fn constant_arm(arm: &MatchArm, value: Value, specialise: bool) -> UnboundFunction {
+    let builder = EvaluationGraphBuilder::new(specialise);
+    let output = UnboundRef::Const(value.clone());
+    UnboundFunction::new(
+        arm.pattern.bound_names().into_iter().collect(),
+        builder.finish(output),
+        format!("{} -> {}", arm.pattern, value.dsrv_source()).into(),
+    )
 }
 
 fn lower_branch(expr: ExprCursor<'_>, specialise: bool) -> UnboundEvaluationGraph {
@@ -334,6 +355,61 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             let init = lower_expression(init, builder);
             let list = lower_expression(list, builder);
             builder.push(UnboundOp::ListFold { func, init, list })
+        }
+        Match(scrutinee, arms, shape) => {
+            let scrutinee = lower_expression(scrutinee, builder);
+            let children: Vec<ExprCursor<'_>> = arms.into_iter().collect();
+            let mut place = 0;
+            let arms = shape
+                .iter()
+                .map(|arm| {
+                    let guard = arm.guarded.then(|| {
+                        let guard = lower_arm(arm, children[place], builder.specialise);
+                        place += 1;
+                        guard
+                    });
+                    let body = lower_arm(arm, children[place], builder.specialise);
+                    place += 1;
+                    MatchArmProgram {
+                        pattern: arm.pattern.clone(),
+                        guard,
+                        body,
+                    }
+                })
+                .collect();
+            builder.push(UnboundOp::Match { scrutinee, arms })
+        }
+        // `matches` asks whether one arm is selected, so it compiles to a
+        // `match` that reports that.
+        Matches(scrutinee, guard, pattern) => {
+            let span = pattern.span;
+            let scrutinee = lower_expression(scrutinee, builder);
+            let guard_expr = guard.into_iter().next();
+            let arm = MatchArm {
+                pattern: pattern.clone(),
+                guarded: guard_expr.is_some(),
+            };
+            let guard = guard_expr.map(|guard| lower_arm(&arm, guard, builder.specialise));
+            let arms = vec![
+                MatchArmProgram {
+                    pattern: pattern.clone(),
+                    guard,
+                    body: constant_arm(&arm, Value::Bool(true), builder.specialise),
+                },
+                MatchArmProgram {
+                    pattern: MatchPattern::new(PatternKind::Wildcard, span),
+                    guard: None,
+                    body: constant_arm(
+                        &MatchArm {
+                            pattern: MatchPattern::new(PatternKind::Wildcard, span),
+                            guarded: false,
+                        },
+                        Value::Bool(false),
+                        builder.specialise,
+                    ),
+                },
+            ];
+            builder.push(UnboundOp::Match { scrutinee, arms })
         }
         MonitoredAt(_, _) | Dist(_, _) => {
             panic!("dataflow semantics does not support distributed AST operations")

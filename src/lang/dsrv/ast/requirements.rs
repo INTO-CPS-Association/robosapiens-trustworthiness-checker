@@ -11,6 +11,8 @@ pub(super) fn requirement(kind: &ExprKind) -> Option<(Capability, &'static str)>
         ExprKind::MonitoredAt(..) => Some((Capability::Distribution, "`monitored_at`")),
         ExprKind::Dist(..) => Some((Capability::Distribution, "`dist`")),
         ExprKind::Constructor(..) => Some((Capability::TaggedUnions, "a union constructor")),
+        ExprKind::Match(..) => Some((Capability::PatternMatching, "`match`")),
+        ExprKind::Matches(..) => Some((Capability::PatternMatching, "`matches`")),
         ExprKind::If(..)
         | ExprKind::SIndex(..)
         | ExprKind::Val(..)

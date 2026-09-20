@@ -737,8 +737,9 @@ pub mod typed;
 
 /// What the dataflow compiler evaluates. Every compile path admits a
 /// specification against this before lowering it.
-pub const CAPABILITIES: crate::core::Capabilities =
-    crate::core::Capabilities::NONE.with(crate::core::Capability::TaggedUnions);
+pub const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
+    .with(crate::core::Capability::TaggedUnions)
+    .with(crate::core::Capability::PatternMatching);
 
 pub use typed::{
     TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,

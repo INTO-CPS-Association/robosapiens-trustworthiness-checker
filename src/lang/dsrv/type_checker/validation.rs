@@ -103,6 +103,36 @@ fn validate_expression(
             context.bindings.truncate(frame_start);
             result
         }
+        // What a pattern binds is in scope for that arm's guard and body,
+        // and nowhere else.
+        Match(scrutinee, arms, shape) => {
+            validate_expression(scrutinee, context)?;
+            let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
+            let mut place = 0;
+            for arm in shape.iter() {
+                let frame_start = context.bindings.len();
+                context.bindings.extend(arm.pattern.bound_names());
+                let mut result = Ok(());
+                for _ in 0..arm.children() {
+                    result = result.and(validate_expression(children[place], context));
+                    place += 1;
+                }
+                context.bindings.truncate(frame_start);
+                result?;
+            }
+            Ok(())
+        }
+        Matches(scrutinee, guard, pattern) => {
+            validate_expression(scrutinee, context)?;
+            let Some(guard) = guard.into_iter().next() else {
+                return Ok(());
+            };
+            let frame_start = context.bindings.len();
+            context.bindings.extend(pattern.bound_names());
+            let result = validate_expression(guard, context);
+            context.bindings.truncate(frame_start);
+            result
+        }
         Dynamic(source, _, scope) | Defer(source, _, scope) => {
             validate_runtime_scope(expression, scope, context)?;
             validate_expression(source, context)

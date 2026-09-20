@@ -893,6 +893,61 @@ active = List.get(robot.flags, 0)
     Ok(())
 }
 
+/// A list callback that reads a stream from around it, over a run longer
+/// than the channels between streams are deep.
+///
+/// The callback is invoked once per element per tick, and a name it did not
+/// bind has to come from the stream the specification declares. Reading that
+/// stream must not depend on anything advancing inside the call, because
+/// nothing does.
+#[apply(async_test)]
+async fn list_callbacks_reading_an_outer_stream_run_past_the_channel_bounds(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let spec = r#"
+in tick: Int
+in bias: Int
+out mapped: List<Int>
+aux xs: List<Int>
+xs = List(tick, tick + 1)
+mapped = List.map(\x: Int -> x + bias, xs)
+"#;
+    const TICKS: i64 = 32;
+
+    let outputs = run_typed_runtime(
+        executor,
+        spec,
+        BTreeMap::from([
+            (
+                "tick".into(),
+                (0..TICKS).map(Value::Int).collect::<Vec<_>>(),
+            ),
+            (
+                "bias".into(),
+                (0..TICKS).map(|tick| Value::Int(100 * tick)).collect(),
+            ),
+        ]),
+    )
+    .await?;
+
+    assert_eq!(outputs.len(), TICKS as usize);
+    for (row_number, row) in &outputs {
+        let tick = *row_number as i64;
+        assert_eq!(
+            row[&VarName::from("mapped")],
+            Value::List(
+                vec![
+                    Value::Int(tick + 100 * tick),
+                    Value::Int(tick + 1 + 100 * tick)
+                ]
+                .into()
+            ),
+            "tick {tick}"
+        );
+    }
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_typed_runtime_object_literals_assign_to_maps_and_structs(
     executor: Rc<LocalExecutor<'static>>,

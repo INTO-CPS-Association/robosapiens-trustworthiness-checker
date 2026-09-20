@@ -6,7 +6,7 @@ use super::dynamic;
 pub(crate) use super::functions::bind_expression_for_benchmark;
 use super::functions::{
     ScopedExpr, eval_apply, eval_fix, eval_list_filter, eval_list_fold, eval_list_map,
-    eval_partial, make_function,
+    eval_partial, eval_within_tick, make_function,
 };
 use super::typed_combinators as typed;
 use crate::VarName;
@@ -143,6 +143,12 @@ where
             let e = evaluate(source);
             dynamic::defer::<AC>(ctx, e, scope.clone(), owner, 1, text)
         }
+        // An arm runs only when its pattern selects it, which a stream
+        // cannot advance for, so the whole `match` is one stream: it reads
+        // the names its arms could use, then decides and evaluates within
+        // the tick. Reading every arm's names, selected or not, is what the
+        // dependency graph already assumes.
+        Match(..) | Matches(..) => eval_within_tick::<AC>(own_child(node), ctx),
         Lambda(params, body) => {
             let params_display = params
                 .iter()
@@ -473,9 +479,11 @@ where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
     // The distribution primitives panic here; runtimes refuse them before
-    // evaluation. Constructors are built by the shared evaluation.
-    const CAPABILITIES: crate::core::Capabilities =
-        crate::core::Capabilities::NONE.with(crate::core::Capability::TaggedUnions);
+    // evaluation. Constructors are built by the shared evaluation, and a
+    // `match` decides within its tick.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
+        .with(crate::core::Capability::TaggedUnions)
+        .with(crate::core::Capability::PatternMatching);
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -499,9 +507,11 @@ where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr>,
 {
     // The distribution primitives panic here; runtimes refuse them before
-    // evaluation. Constructors are built by the shared evaluation.
-    const CAPABILITIES: crate::core::Capabilities =
-        crate::core::Capabilities::NONE.with(crate::core::Capability::TaggedUnions);
+    // evaluation. Constructors are built by the shared evaluation, and a
+    // `match` decides within its tick.
+    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
+        .with(crate::core::Capability::TaggedUnions)
+        .with(crate::core::Capability::PatternMatching);
 
     fn to_async_stream(
         expr: &CheckedExpr,

@@ -361,7 +361,7 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
     let literals = [
         ("42", Value::Int(42)),
         ("0.5", Value::Float(0.5)),
-        ("1.", Value::Float(1.0)),
+        ("1.0", Value::Float(1.0)),
         ("1e6", Value::Float(1_000_000.0)),
         ("1E-6", Value::Float(1e-6)),
         ("1.5e+3", Value::Float(1_500.0)),

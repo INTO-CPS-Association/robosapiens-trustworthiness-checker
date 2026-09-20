@@ -85,6 +85,7 @@ experiments.
 | Feature | Contents |
 |---|---|
 | `tagged_unions` | `Union<…>` types and their constructors |
+| `pattern_matching` | `match`, `matches`, and the patterns both take |
 
 Several `use experimental` lines add up. Any name that is not a current
 experiment is an error listing the ones there are, and `use` of any other

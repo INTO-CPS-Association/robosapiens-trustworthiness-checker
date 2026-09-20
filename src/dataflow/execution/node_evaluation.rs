@@ -10,6 +10,7 @@
 //! [`super::temporal_commit`].
 
 use crate::core::UnionValue;
+use crate::lang::dsrv::patterns::{ArmSelection, Bindings, GuardOutcome, MatchPattern, select_arm};
 
 use super::super::history::{HistoryAccess, HistoryId};
 use super::super::ir::*;
@@ -216,6 +217,53 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 .collect::<Vec<_>>();
             let values = lift_value_operands(node_id, state, values);
             lift_many(values, |values| Value::List(EcoVec::from(values)))
+        }
+        // The scrutinee decides one arm, that arm's program is called with
+        // what its pattern bound, and no other arm runs.
+        StreamOp::Match { scrutinee, arms } => {
+            let value = context.read_value(state, scrutinee);
+            let NodeState::Match(arm_states) = &mut state.node_states[node_id.index()] else {
+                unreachable!("match node has incompatible runtime state")
+            };
+            let patterns: Vec<MatchPattern> = arms.iter().map(|arm| arm.pattern.clone()).collect();
+            let mut failure = None;
+            let selection = select_arm(&patterns, &value, |index, bindings| {
+                let guard = arms[index].guard.as_ref()?;
+                let call = arm_states[index]
+                    .guard
+                    .as_mut()
+                    .expect("a guarded arm has its call state");
+                Some(match call_arm(guard, call, bindings, context) {
+                    Ok(Value::Bool(true)) => GuardOutcome::True,
+                    Ok(Value::Bool(false)) => GuardOutcome::False,
+                    Ok(value @ (Value::NoVal | Value::Deferred)) => GuardOutcome::Absent(value),
+                    Ok(other) => {
+                        failure = Some(DataflowEvaluationError::MatchGuardNotBool(
+                            other.to_string(),
+                        ));
+                        GuardOutcome::False
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        GuardOutcome::False
+                    }
+                })
+            });
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            match selection {
+                ArmSelection::Selected { arm, bindings } => call_arm(
+                    &arms[arm].body,
+                    &mut arm_states[arm].body,
+                    &bindings,
+                    context,
+                )?,
+                ArmSelection::Absent(value) => value,
+                ArmSelection::Unmatched => {
+                    return Err(DataflowEvaluationError::MatchUnmatched(value.to_string()));
+                }
+            }
         }
         StreamOp::Constructor { tag, payload } => match payload {
             Some(payload) => {
@@ -503,6 +551,32 @@ pub(in crate::dataflow) fn evaluate_nodes_with_history(
             .expect("static node evaluation cannot fail");
         state.node_values[index] = value;
     }
+}
+
+/// Call one arm's program with the names its pattern bound.
+fn call_arm(
+    function: &StreamFunction,
+    call: &mut ArmCall,
+    bindings: &Bindings,
+    context: EvaluationEnvironment<'_>,
+) -> Result<Value, DataflowEvaluationError> {
+    let arguments = function
+        .parameters
+        .iter()
+        .map(|parameter| {
+            bindings
+                .iter()
+                .find_map(|(name, value)| (name == parameter).then(|| value.clone()))
+                .unwrap_or(Value::NoVal)
+        })
+        .collect();
+    evaluate_direct_apply(
+        function,
+        arguments,
+        context,
+        &mut call.evaluator,
+        &mut call.environment_values,
+    )
 }
 
 fn evaluate_lazy_if_with_history(

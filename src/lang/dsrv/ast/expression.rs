@@ -22,6 +22,7 @@ use super::checked::CheckedTypes;
 use crate::core::{BinaryOperator, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
+use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::span::Span;
 
@@ -288,6 +289,13 @@ contiguous_tree::tree_schema! {
             tag: data(EcoString),
             qualifier: data(Option<TypeName>),
         ),
+        // The scrutinee, then each arm's guard (when it has one) and body,
+        // in the order they were written. `shape` says which children
+        // belong to which arm, and carries each arm's pattern.
+        Match(scrutinee: child, arms: children, shape: data(EcoVec<MatchArm>)),
+        // `matches(e, p)`, which is `match` over one pattern reported as a
+        // Bool, kept as itself so a specification prints back as written.
+        Matches(scrutinee: child, guard: children, pattern: data(MatchPattern)),
 
         Dynamic(
             source: child,

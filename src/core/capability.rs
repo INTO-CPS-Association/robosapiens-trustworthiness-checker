@@ -20,16 +20,23 @@ pub enum Capability {
     Distribution,
     /// Building and reading tagged union values.
     TaggedUnions,
+    /// Selecting a `match` arm and binding what its pattern matched.
+    PatternMatching,
 }
 
 impl Capability {
     /// Every capability, in a stable order for tables and tests.
-    pub const ALL: &'static [Self] = &[Self::Distribution, Self::TaggedUnions];
+    pub const ALL: &'static [Self] = &[
+        Self::Distribution,
+        Self::TaggedUnions,
+        Self::PatternMatching,
+    ];
 
     const fn bit(self) -> u32 {
         match self {
             Self::Distribution => 1 << 0,
             Self::TaggedUnions => 1 << 1,
+            Self::PatternMatching => 1 << 2,
         }
     }
 
@@ -38,6 +45,7 @@ impl Capability {
         match self {
             Self::Distribution => "distribution",
             Self::TaggedUnions => "tagged unions",
+            Self::PatternMatching => "pattern matching",
         }
     }
 }

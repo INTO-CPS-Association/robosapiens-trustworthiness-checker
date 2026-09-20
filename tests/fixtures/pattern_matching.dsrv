@@ -1,0 +1,14 @@
+use experimental::{tagged_unions, pattern_matching}
+
+// Uses exactly one capability beyond tagged unions: pattern matching.
+type State = Union<Stopped, Moving: Int>
+
+in x: Int
+aux state: State
+out speed: Int
+
+state = Moving(x)
+speed = match(state) {
+  Moving(n) -> n,
+  Stopped -> 0,
+}

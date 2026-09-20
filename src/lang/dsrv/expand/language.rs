@@ -119,15 +119,17 @@ impl FromStr for Edition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum Feature {
     TaggedUnions,
+    PatternMatching,
 }
 
 impl Feature {
     /// Every current experiment, which is what `use experimental::*` enables.
-    pub const ALL: &'static [Self] = &[Self::TaggedUnions];
+    pub const ALL: &'static [Self] = &[Self::TaggedUnions, Self::PatternMatching];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::TaggedUnions => "tagged_unions",
+            Self::PatternMatching => "pattern_matching",
         }
     }
 
@@ -532,6 +534,8 @@ pub(crate) fn check_experiment_node(
 ) -> Result<(), LanguageError> {
     let (construct, feature) = match node.kind() {
         ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
+        ExprKind::Match(..) => ("`match`", Feature::PatternMatching),
+        ExprKind::Matches(..) => ("`matches`", Feature::PatternMatching),
         _ => return Ok(()),
     };
     if language.has(feature) {
@@ -645,6 +649,8 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::Not(..)
         | ExprKind::Neg(..) => None,
         ExprKind::Constructor(..) => Some("a union constructor"),
+        ExprKind::Match(..) => Some("`match`"),
+        ExprKind::Matches(..) => Some("`matches`"),
         ExprKind::Lambda(..) => Some("a lambda"),
         ExprKind::Apply(..) => Some("a function call"),
         ExprKind::Fix(..) => Some("`fix`"),
@@ -870,7 +876,7 @@ mod tests {
         let unknown = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
         assert!(
             matches!(&unknown, UnknownFeature { name, known, .. }
-                if name == "teleporting" && known == "tagged_unions"),
+                if name == "teleporting" && known == "tagged_unions, pattern_matching"),
             "{unknown}"
         );
         let namespace = language_error(&format!("use std::{{option}}\n{BODY}"));

@@ -4,6 +4,7 @@ pub mod ast;
 mod elaborate;
 mod expand;
 pub mod parser;
+pub mod patterns;
 mod pipeline;
 pub(crate) mod runtime_text;
 pub mod source;
@@ -11,6 +12,8 @@ pub mod span;
 mod syntax;
 pub mod type_checker;
 
+#[cfg(test)]
+mod match_tests;
 #[cfg(test)]
 mod tagged_union_tests;
 #[cfg(test)]

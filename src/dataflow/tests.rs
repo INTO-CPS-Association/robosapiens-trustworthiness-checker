@@ -2136,6 +2136,53 @@ fn reconfigured_negative_integer_power_reports_source_context() {
     ));
 }
 
+// Only the selected arm runs, an arm reads both what its pattern bound and
+// what it captured from around the match, and a guard decides between arms
+// whose patterns both matched.
+#[test]
+fn dataflow_selects_one_match_arm() {
+    let spec = elaborated(
+        "use experimental::{tagged_unions, pattern_matching}\n\
+         type State = Union<Stopped, Moving: Int>\n\
+         in x: Int\n\
+         in bias: Int\n\
+         aux state: State\n\
+         out speed: Int\n\
+         out fast: Bool\n\
+         state = Moving(x)\n\
+         speed = match(state) {\n\
+           Moving(n) if n > 1 -> n * 10 + bias,\n\
+           Moving(n) -> n + bias,\n\
+           Stopped -> 0,\n\
+         }\n\
+         fast = matches(state, Moving(n) if n > 1)\n",
+    );
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("x"),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        ),
+        (
+            VarName::new("bias"),
+            vec![Value::Int(100), Value::Int(200), Value::Int(300)],
+        ),
+    ]);
+    let rows = eval_dataflow_spec(spec, inputs);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row[&VarName::new("speed")].clone())
+            .collect::<Vec<_>>(),
+        // 1 is not fast, so it takes the second arm; 2 and 3 are.
+        vec![Value::Int(101), Value::Int(220), Value::Int(330)]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row[&VarName::new("fast")].clone())
+            .collect::<Vec<_>>(),
+        vec![Value::Bool(false), Value::Bool(true), Value::Bool(true)]
+    );
+}
+
 // A constructor lifts its payload like any other operand, and the graph
 // agrees with the untimed evaluator that is its oracle.
 #[test]
@@ -4047,6 +4094,8 @@ enum LifecycleErrorSignature {
     UnsupportedNestedReconfiguration,
     RevisionOverflow,
     MonitorFailed,
+    MatchGuardNotBool(String),
+    MatchUnmatched(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4098,6 +4147,12 @@ fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSi
     match error {
         DataflowEvaluationError::FunctionApplication(error) => {
             LifecycleErrorSignature::FunctionApplication(error.to_string())
+        }
+        DataflowEvaluationError::MatchGuardNotBool(value) => {
+            LifecycleErrorSignature::MatchGuardNotBool(value.clone())
+        }
+        DataflowEvaluationError::MatchUnmatched(value) => {
+            LifecycleErrorSignature::MatchUnmatched(value.clone())
         }
         DataflowEvaluationError::InputCountMismatch { expected, actual } => {
             LifecycleErrorSignature::InputCount {

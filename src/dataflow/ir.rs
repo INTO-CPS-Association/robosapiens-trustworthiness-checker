@@ -3,6 +3,7 @@ use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
+use crate::lang::dsrv::patterns::MatchPattern;
 use crate::lang::dsrv::source::SourceContext;
 
 use std::fmt::Write as _;
@@ -114,6 +115,16 @@ pub(super) struct StreamFunction {
     pub(super) program: Rc<StreamProgram>,
     pub(super) display: EcoString,
     pub(super) capture_slots: Vec<EnvironmentSlot>,
+}
+
+/// One arm of a `match`, compiled as a program of the names its pattern
+/// binds: the pattern decides whether the arm is selected, and the guard and
+/// body are then called with what it bound.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct MatchArmProgram<E: GraphReference> {
+    pub(super) pattern: MatchPattern,
+    pub(super) guard: Option<E::Function>,
+    pub(super) body: E::Function,
 }
 
 pub(super) trait GraphReference: Clone + std::fmt::Debug + PartialEq {
@@ -627,6 +638,18 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, trigger, layout);
             descriptor.push(')');
         }
+        StreamOp::Match { scrutinee, arms } => {
+            descriptor.push_str("match(");
+            append_ref_descriptor(descriptor, scrutinee, layout);
+            for arm in arms {
+                let _ = write!(descriptor, "){{{}", arm.pattern);
+                if arm.guard.is_some() {
+                    descriptor.push_str(" if …");
+                }
+                descriptor.push(';');
+            }
+            descriptor.push('}');
+        }
         StreamOp::Constructor { tag, payload } => {
             descriptor.push_str("constructor[");
             append_identifier(descriptor, tag);
@@ -1132,6 +1155,12 @@ pub(super) enum StreamOp<E: GraphReference> {
     },
     List(Vec<DataRef<E>>),
     Tuple(Vec<DataRef<E>>),
+    /// Only the selected arm runs, so each arm is its own program and none
+    /// of the others is evaluated.
+    Match {
+        scrutinee: DataRef<E>,
+        arms: Vec<MatchArmProgram<E>>,
+    },
     /// A union value. A nullary alternative has no payload to read, so it is
     /// a constant; one that carries a payload lifts it like any other
     /// operand.
@@ -1273,6 +1302,9 @@ impl<E: GraphReference> StreamOp<E> {
             | StreamOp::TGet { tuple: input, .. }
             | StreamOp::Fix { func: input, .. } => visit(input),
             StreamOp::Reconfigurable(ReconfigurableExpressionSpec { input, .. }) => visit(input),
+            // Only the scrutinee is an operand: an arm reads through its
+            // own program's captures, not through this node's children.
+            StreamOp::Match { scrutinee, .. } => visit(scrutinee),
             StreamOp::Constructor { payload, .. } => payload.into_iter().for_each(&mut visit),
             StreamOp::List(items) | StreamOp::Tuple(items) => {
                 items.into_iter().for_each(&mut visit)
