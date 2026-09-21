@@ -210,7 +210,9 @@ pub enum ModuleCollectError {
     #[error("module {path} was declared but never supplied")]
     MissingModule { path: String },
 
-    #[error("in module {path}: {source}")]
+    // `show_path` already spells the root as a phrase, so the message reads
+    // around the path rather than putting "module" in front of it.
+    #[error("{path} does not parse: {source}")]
     Syntax {
         path: String,
         #[source]
@@ -481,6 +483,20 @@ mod tests {
         assert!(
             matches!(&error, ModuleCollectError::Syntax { path, .. } if path == "a"),
             "got {error:?}",
+        );
+    }
+
+    /// The root has no name of its own, so a message about it must not read
+    /// "in module the root module".
+    #[test]
+    fn a_syntax_error_in_the_root_reads_as_a_sentence() {
+        let Err(error) = ModuleCollector::new("this is not dsrv @@@") else {
+            panic!("a syntax error");
+        };
+        let message = error.to_string();
+        assert!(
+            message.starts_with("the root module does not parse:"),
+            "got {message}",
         );
     }
 

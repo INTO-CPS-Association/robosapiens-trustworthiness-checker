@@ -22,7 +22,7 @@ use trustworthiness_checker::io::{
     InputConfigFile, InputPipeline, InputPolicy, InputReduction, InputSource, InputSources,
     InputWindow, RedisKnowledgeConfig,
 };
-use trustworthiness_checker::lang::dsrv::parser::parse_file_with as lalr_parse_file;
+use trustworthiness_checker::lang::dsrv::parser::parse_program_file as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
 use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};

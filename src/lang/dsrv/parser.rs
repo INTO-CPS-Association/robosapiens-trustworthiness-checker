@@ -162,25 +162,14 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
 
 /// Read a program, its modules included, and expand it.
 ///
-/// A file that declares no module expands exactly as `parse_file_with`
-/// does; one that declares modules has their namespaces built first.
+/// A file that declares no module expands as a program of one; one that
+/// declares modules has their namespaces built first, in dependency order.
 pub async fn parse_program_file(
     file: &str,
     request: LanguageRequest,
 ) -> anyhow::Result<DsrvSpecification> {
     let sources = collect_modules_from_file(file).await?;
     Ok(expand::expand_program(sources, request)?)
-}
-
-pub async fn parse_file(file: &str) -> anyhow::Result<DsrvSpecification> {
-    crate::io::file::parse_file(parse_str, file).await
-}
-
-pub async fn parse_file_with(
-    file: &str,
-    request: LanguageRequest,
-) -> anyhow::Result<DsrvSpecification> {
-    crate::io::file::parse_file(|input: &str| parse_str_with(input, request), file).await
 }
 
 /// Accept a Core DSRV file. A file without a `language` line is read as Core;
