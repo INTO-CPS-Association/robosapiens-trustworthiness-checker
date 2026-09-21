@@ -1071,6 +1071,46 @@ fn annotations_are_bound_to_storage_and_scope() {
 }
 
 #[test]
+fn sparse_annotations_hold_only_annotated_nodes_of_their_storage_range() {
+    let mut arena = Arena::default();
+    let first_root = arena.push_tree(TestNode(vec![]));
+    let second_child = arena.push_tree(TestNode(vec![]));
+    let second_root = arena.push_tree(TestNode(vec![second_child]));
+    let forest = Forest::new(TestStorage(arena), [first_root, second_root]).unwrap();
+    let nodes = forest.nodes().collect::<Vec<_>>();
+
+    let mut subtree = forest.handle(1).sparse_annotations_builder();
+    assert_eq!(
+        subtree.insert(nodes[0], "outside"),
+        Err(AnnotationError::CursorOutsideScope { index: 0 })
+    );
+    assert_eq!(subtree.insert(nodes[2], "first"), Ok(None));
+    assert_eq!(subtree.insert(nodes[2], "root"), Ok(Some("first")));
+    let subtree = subtree.finish();
+    assert_eq!(subtree.len(), 1);
+    assert_eq!(subtree.try_get(nodes[2]), Ok(Some(&"root")));
+    assert_eq!(subtree.try_get(nodes[1]), Ok(None));
+    assert_eq!(
+        subtree.try_get(nodes[0]),
+        Err(AnnotationError::CursorOutsideScope { index: 0 })
+    );
+
+    let empty = forest.sparse_annotations_builder::<()>().finish();
+    assert!(empty.is_empty());
+    assert!(empty.shares_storage_with(&subtree));
+    assert_eq!(empty.try_get(nodes[0]), Ok(None));
+
+    let mut other_arena = Arena::default();
+    let other_root = other_arena.push_tree(TestNode(vec![]));
+    let other = Forest::new(TestStorage(other_arena), [other_root]).unwrap();
+    assert_eq!(
+        empty.try_get(other.cursor(0)),
+        Err(AnnotationError::CursorOutsideScope { index: 0 })
+    );
+    assert!(!empty.shares_storage_with(&other.sparse_annotations_builder::<()>().finish()));
+}
+
+#[test]
 #[should_panic(expected = "subtree root is not a descendant of the owning root")]
 fn tree_handles_reject_sibling_roots_as_subtrees() {
     let mut arena = Arena::default();

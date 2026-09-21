@@ -2,7 +2,9 @@
 
 use std::fmt;
 
-use crate::{Forest, NodeAnnotationsBuilder, TreeHandle, TreeStorage};
+use crate::{
+    Forest, NodeAnnotationsBuilder, SparseNodeAnnotationsBuilder, TreeHandle, TreeStorage,
+};
 
 /// A failure while associating sorted unique keys with forest roots.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,6 +192,10 @@ impl<Key: Ord, Storage: TreeStorage> ForestMap<Key, Storage> {
 
     pub fn annotations_builder<T>(&self) -> NodeAnnotationsBuilder<Storage, T> {
         self.forest.annotations_builder()
+    }
+
+    pub fn sparse_annotations_builder<T>(&self) -> SparseNodeAnnotationsBuilder<Storage, T> {
+        self.forest.sparse_annotations_builder()
     }
 
     pub fn into_forest(self) -> Forest<Storage> {

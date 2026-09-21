@@ -2,7 +2,10 @@
 
 use std::{iter::FusedIterator, ops::Range};
 
-use crate::{ArenaId, ForestError, NodeAnnotationsBuilder, Shared, TreeCursor, TreeStorage};
+use crate::{
+    ArenaId, ForestError, NodeAnnotationsBuilder, Shared, SparseNodeAnnotationsBuilder, TreeCursor,
+    TreeStorage,
+};
 
 /// An owning root into shared tree storage.
 pub struct TreeHandle<Storage: TreeStorage> {
@@ -71,6 +74,16 @@ impl<Storage: TreeStorage> TreeHandle<Storage> {
             .expect("an owning tree always contains its root")
             .index();
         NodeAnnotationsBuilder::new(Shared::clone(&self.storage), start, len)
+    }
+
+    pub fn sparse_annotations_builder<T>(&self) -> SparseNodeAnnotationsBuilder<Storage, T> {
+        let mut ids = self.cursor().subtree_ids();
+        let len = ids.len();
+        let start = ids
+            .next()
+            .expect("an owning tree always contains its root")
+            .index();
+        SparseNodeAnnotationsBuilder::new(Shared::clone(&self.storage), start, len)
     }
 
     pub fn into_storage_and_root(self) -> (Storage, Storage::Id)
@@ -162,6 +175,14 @@ impl<Storage: TreeStorage> Forest<Storage> {
 
     pub fn annotations_builder<T>(&self) -> NodeAnnotationsBuilder<Storage, T> {
         NodeAnnotationsBuilder::new(Shared::clone(&self.storage), 0, self.storage.node_count())
+    }
+
+    pub fn sparse_annotations_builder<T>(&self) -> SparseNodeAnnotationsBuilder<Storage, T> {
+        SparseNodeAnnotationsBuilder::new(
+            Shared::clone(&self.storage),
+            0,
+            self.storage.node_count(),
+        )
     }
 
     pub fn into_handles(self) -> ForestHandles<Storage> {

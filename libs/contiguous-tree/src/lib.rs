@@ -89,7 +89,10 @@ mod storage;
 mod transform;
 mod traversal;
 
-pub use annotations::{AnnotationError, NodeAnnotations, NodeAnnotationsBuilder};
+pub use annotations::{
+    AnnotationError, NodeAnnotations, NodeAnnotationsBuilder, SparseNodeAnnotations,
+    SparseNodeAnnotationsBuilder,
+};
 pub use arena::{Arena, ForestError};
 pub use builder::{BuildError, ForestBuilder};
 pub use cursor::{ContextCursor, StorageIdentity, TreeCursor};

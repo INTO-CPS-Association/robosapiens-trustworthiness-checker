@@ -651,6 +651,12 @@ pub(super) fn expand(
                 self.tree.annotations_builder()
             }
 
+            #schema_visibility fn sparse_annotations_builder<T>(
+                &self,
+            ) -> #runtime::SparseNodeAnnotationsBuilder<#arena, T> {
+                self.tree.sparse_annotations_builder()
+            }
+
 
 
             #visibility fn as_ref(&self) -> #reference<'_> {
@@ -711,6 +717,12 @@ pub(super) fn expand(
                 &self,
             ) -> #runtime::NodeAnnotationsBuilder<#arena, T> {
                 self.forest.annotations_builder()
+            }
+
+            #schema_visibility fn sparse_annotations_builder<T>(
+                &self,
+            ) -> #runtime::SparseNodeAnnotationsBuilder<#arena, T> {
+                self.forest.sparse_annotations_builder()
             }
 
 
@@ -812,6 +824,12 @@ pub(super) fn expand(
                 &self,
             ) -> #runtime::NodeAnnotationsBuilder<#arena, T> {
                 self.map.annotations_builder()
+            }
+
+            #schema_visibility fn sparse_annotations_builder<T>(
+                &self,
+            ) -> #runtime::SparseNodeAnnotationsBuilder<#arena, T> {
+                self.map.sparse_annotations_builder()
             }
 
 
