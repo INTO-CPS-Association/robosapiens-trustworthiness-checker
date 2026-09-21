@@ -9,8 +9,10 @@ use sat_solver::sat::literal::PackedLiteral;
 use sat_solver::sat::solver::{Solver, SolverImpls};
 use tracing::{info, warn};
 
+#[cfg(test)]
+use crate::DsrvSpecification;
 use crate::{
-    DsrvSpecification, ElaboratedDsrvSpecification, Value, VarName,
+    ElaboratedDsrvSpecification, Value, VarName,
     core::{BinaryOperator, BinaryOperatorKind},
     distributed::{
         distribution_constraint::{
@@ -127,7 +129,7 @@ where
         let dist_constraint_set = dist_constraints.iter().cloned().collect::<HashSet<_>>();
         let localised_dist_spec = spec.try_localise(&dist_constraints)?;
         let constraint_plan = DistributionConstraintPlan::lower(
-            &localised_dist_spec,
+            localised_dist_spec.source().unchecked(),
             dist_constraints.iter().cloned(),
             ConstraintProfile::Sat,
         )?;
@@ -143,7 +145,12 @@ where
         let binding_plans = binding_roots
             .into_iter()
             .filter_map(|root| {
-                DistributionConstraintPlan::lower(&spec, [root], ConstraintProfile::Sat).ok()
+                DistributionConstraintPlan::lower(
+                    spec.source().unchecked(),
+                    [root],
+                    ConstraintProfile::Sat,
+                )
+                .ok()
             })
             .collect::<Vec<_>>();
         let required_planning_inputs = required_planning_bindings(&constraint_plan, &binding_plans)
@@ -236,7 +243,7 @@ where
         }
 
         // Keep only bindings needed by localised constraint evaluation inputs.
-        let local_input_set = spec.input_vars.iter().cloned().collect::<HashSet<_>>();
+        let local_input_set = spec.input_vars().iter().cloned().collect::<HashSet<_>>();
         for (k, v) in context_bindings_full_spec {
             if local_input_set.contains(&k) {
                 state.value_bindings.insert(k, v);
@@ -1209,9 +1216,7 @@ mod tests {
     #[apply(crate::async_test)]
     async fn sat_solver_finds_valid_assignment(_executor: Rc<LocalExecutor<'static>>) {
         let spec_src = "language distributed\nin x\nout c\nc = monitored_at(x, A)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -1238,9 +1243,7 @@ mod tests {
     ) {
         let spec_src =
             "language distributed\nin x\nout c\nc = (monitored_at(x, A) && monitored_at(x, B))";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -1287,7 +1290,7 @@ mod tests {
         for (source, root, satisfiable, symbolic, check_direct) in cases {
             let spec = source
                 .parse::<DsrvSpecification>()
-                .expect("inequality constraint should parse");
+                .expect("test DSRV specification should parse");
             let plan = DistributionConstraintPlan::lower(
                 &spec,
                 [VarName::new(root)],
@@ -1332,9 +1335,7 @@ mod tests {
     #[apply(crate::async_test)]
     async fn sat_solver_handles_if_then_else_monitored_at(_executor: Rc<LocalExecutor<'static>>) {
         let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -1372,7 +1373,7 @@ out x
 out distX
 distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x, B))) else true
 "#;
-        let spec = (spec_src)
+        let spec = spec_src
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let graph = simple_dist_graph();
@@ -1405,9 +1406,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
     #[test]
     fn sat_solver_panics_on_unsupported_dist_constraint() {
         let spec_src = "language distributed\nin x\nout c\nc = dist(A, B)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let _solver =
@@ -1424,9 +1423,8 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_returns_structured_error_for_unsupported_constraint() {
-        let spec = ("language distributed\nin x\nout c\nc = dist(A, B)")
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec =
+            crate::dsrv_fixtures::elaborated("language distributed\nin x\nout c\nc = dist(A, B)");
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1445,31 +1443,10 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
     }
 
     #[test]
-    fn sat_solver_validates_before_localising_duplicate_declarations() {
-        let spec = "in x: Int\nin x: Bool\nout y\ny = x"
-            .parse::<DsrvSpecification>()
-            .unwrap();
-
-        let result =
-            SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
-                vec!["y".into()],
-                vec!["y".into()],
-                spec,
-                None,
-            );
-
-        assert!(matches!(
-            result,
-            Err(SatSolverConstructionError::Localisation(
-                DsrvLocalisationError::Validation(_)
-            ))
-        ));
-    }
-
-    #[test]
     fn sat_solver_lowers_constraints_at_the_localised_boundary() {
-        let spec = ("language distributed\nin x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)").parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\nin x\nout upstream\nout c\nupstream = x[1]\nc = (upstream == 1) && monitored_at(x, A)",
+        );
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1495,10 +1472,9 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_returns_localisation_error_for_monitored_at_aux() {
-        let spec =
-            ("language distributed\naux helper\nout c\nhelper = true\nc = monitored_at(helper, A)")
-                .parse::<DsrvSpecification>()
-                .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\naux helper\nout c\nhelper = true\nc = monitored_at(helper, A)",
+        );
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1518,9 +1494,7 @@ distX = if (b1 || b2) then ((b1 && monitored_at(x, A)) || (b2 && monitored_at(x,
 
     #[test]
     fn sat_solver_try_new_wraps_localised_constraint_lowering_errors() {
-        let spec = ("in x\nout c\nc = x[1]")
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated("in x\nout c\nc = x[1]");
 
         let result =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1555,9 +1529,7 @@ c2 = (Map.get(Map("k": 2), "k") == 2)
 c3 = Map.has_key(Map.insert(Map("a": 1), "b", 3), "b")
 c4 = !Map.has_key(Map.remove(Map("z": 7), "z"), "z")
 c5 = monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -1608,9 +1580,7 @@ c3 = (List.concat(List(1), List(2, 3)) == List(1, 2, 3))
 c4 = (List.head(List(7, 8)) == 7)
 c5 = (List.tail(List(7, 8)) == List(8))
 c6 = (List.len(List(9, 10, 11)) == 3) && monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -1655,9 +1625,7 @@ in m
 out x
 out c
 c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let mut row = BTreeMap::<VarName, Value>::new();
         row.insert(
@@ -1699,9 +1667,7 @@ in xs
 out x
 out c
 c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let mut row = BTreeMap::<VarName, Value>::new();
         row.insert(
@@ -1780,7 +1746,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     fn sat_compiler_rejects_non_boolean_constant_constraint_expr() {
         let spec_src = "out c\nc = (1 + 2)";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -1811,7 +1777,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
         let spec_src =
             "language distributed\nin x\nout c1\nout c2\nc1 = monitored_at(x, A)\nc2 = c1";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -1844,7 +1810,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     fn sat_compiler_uses_replay_bound_bool_for_var_to_lit() {
         let spec_src = "in b\nout c\nc = b";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -1875,7 +1841,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     fn sat_compiler_allows_unresolved_input_vars_as_symbolic_literals() {
         let spec_src = "in b\nin c\nout d\nd = (b && c)";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -1907,7 +1873,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn unresolved_input_occurrences_share_one_sat_identity() {
-        let spec = ("in gate\nout c\nc = gate && !gate")
+        let spec = "in gate\nout c\nc = gate && !gate"
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
         let graph = simple_dist_graph();
@@ -1933,8 +1899,9 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn solver_requires_bindings_only_for_non_symbolic_input_expressions() {
-        let spec = ("language distributed\nin gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\nin gate\nin threshold\nout x\nout c\nc = gate && (threshold < 5) && monitored_at(x, A)",
+        );
 
         let solver =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -1950,8 +1917,9 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
 
     #[test]
     fn solver_waits_for_leaf_bindings_when_a_required_local_input_is_derived() {
-        let spec = ("language distributed\nin threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)").parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\nin threshold\nout upstream\nout x\nout c\nupstream = threshold + 1\nc = (upstream < 5) && monitored_at(x, A)",
+        );
 
         let solver =
             SatMonitoredAtDistConstraintSolver::<DistributedSemantics, TestDistConfig>::try_new(
@@ -2073,7 +2041,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     fn sat_compiler_rejects_time_indexed_expressions() {
         let spec_src = "in x\nout c\nc = x[1]";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -2097,7 +2065,7 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
     fn sat_compiler_rejects_non_constant_non_boolean_arithmetic_constraint() {
         let spec_src = "in x\nout c\nc = (x + 1)";
         let s = spec_src;
-        let spec = (s)
+        let spec = s
             .parse::<DsrvSpecification>()
             .expect("test DSRV specification should parse");
 
@@ -2138,9 +2106,7 @@ c = (Map.get(m, "k") == 7)
     && (List.get(xs, 1) == 42)
     && (n == 5)
     && monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let mut row0 = BTreeMap::<VarName, Value>::new();
         row0.insert(
@@ -2208,9 +2174,7 @@ c5 = (1.0 <= 1)
 c6 = (2.0 >= 2)
 c7 = ("a" < "b")
 c8 = (true >= false) && monitored_at(x, A)"#;
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -2256,9 +2220,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         _executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "language distributed\nin c\nout w\nout distW\ndistW = if c then monitored_at(w, A) else monitored_at(w, B)";
-        let spec = (spec_src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src);
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
             TestDistConfig,
@@ -2372,9 +2334,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
         let spec_src_ref = spec_src.as_str();
-        let spec = (spec_src_ref)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src_ref);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -2433,9 +2393,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
         let spec_src_ref = spec_src.as_str();
-        let spec = (spec_src_ref)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src_ref);
 
         let mut latest_row = BTreeMap::<VarName, Value>::new();
         for i in 0..constrain_count {
@@ -2521,9 +2479,7 @@ c8 = (true >= false) && monitored_at(x, A)"#;
         let (spec_src, output_vars, dist_constraints) =
             make_large_sat_spec(node_count, stream_count, constrain_count);
         let spec_src_ref = spec_src.as_str();
-        let spec = (spec_src_ref)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(spec_src_ref);
 
         let solver = Rc::new(SatMonitoredAtDistConstraintSolver::<
             DistributedSemantics,
@@ -2913,9 +2869,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
             output_vars.clone(),
             {
                 let spec_src = spec.as_str();
-                spec_src
-                    .parse::<DsrvSpecification>()
-                    .expect("fixed property-test spec should parse")
+                crate::dsrv_fixtures::elaborated(spec_src)
             },
             Some(sat_planning_context),
         ));
@@ -2928,9 +2882,7 @@ d3 = if (if a then (h1 && !h2) else (h1 || h2) || c3) then monitored_at(s3, C) e
         .flatten();
 
         let spec_src = spec.as_str();
-        let parsed_spec = spec_src
-            .parse::<DsrvSpecification>()
-            .expect("fixed property-test spec should parse");
+        let parsed_spec = crate::dsrv_fixtures::elaborated(spec_src);
 
         let executor = Rc::new(LocalExecutor::new());
         let monitor_builder =
@@ -3131,9 +3083,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         .trim();
 
         let src = spec_src;
-        let parsed = (src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let parsed = crate::dsrv_fixtures::elaborated(src);
         let localised = parsed.localise(&vec![
             VarName::new("d1"),
             VarName::new("d2"),
@@ -3141,7 +3091,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         ]);
 
         assert_eq!(
-            localised.input_vars,
+            *localised.input_vars(),
             BTreeSet::from(["c1".into(), "c2".into(), "c3".into()])
         );
         assert!(localised.var_expr_ref(&VarName::new("h1")).is_none());
@@ -3150,7 +3100,7 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         let d3_expr = localised
             .var_expr_ref(&VarName::new("d3"))
             .expect("d3 expression should be present after localisation");
-        let d3_inputs = d3_expr.free_variables();
+        let d3_inputs = d3_expr.expr().free_variables();
         assert!(
             !d3_inputs.contains(&VarName::new("h1")) && !d3_inputs.contains(&VarName::new("h2")),
             "localised d3 should not reference aux vars h1/h2 anymore"
@@ -3185,9 +3135,7 @@ d3 = if (h3 || c3) then monitored_at(s3, C) else monitored_at(s3, A)
         .trim();
 
         let s = spec_src;
-        let spec = (s)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
+        let spec = crate::dsrv_fixtures::elaborated(s);
 
         let graph = graph_3_nodes_with_weights(1, 1, 1);
 

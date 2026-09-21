@@ -151,8 +151,10 @@
 //!     alert = total > 20\n\
 //!     total = default(total[1], 0) + scaled\n\
 //!     scaled = x * 2";
-//! let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-//!     .expect("valid DSRV specification");
+//! let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL);
+//! let (spec, warnings) = report.expect("valid DSRV syntax").into_parts();
+//! assert!(warnings.is_empty());
+//! let spec = spec.expect("valid DSRV specification");
 //! let mut monitor = DataflowMonitor::compile_checked(spec).expect("valid dataflow");
 //! let outputs = monitor.output_vars().to_vec();
 //! let output_index = |name: &str| {
@@ -533,7 +535,10 @@
 //! let source = "in bias: Int\nin n: Int\nout direct: Int\nout recursive: Int\n\
 //!     direct = (\\x: Int -> x + bias)(n)\n\
 //!     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else self(k - 1) + 1)(n)";
-//! let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL).unwrap();
+//! let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL);
+//! let (spec, warnings) = report.unwrap().into_parts();
+//! assert!(warnings.is_empty());
+//! let spec = spec.unwrap();
 //! let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! let input_vars = monitor.input_vars().to_vec();
 //! let output_vars = monitor.output_vars().to_vec();
@@ -599,12 +604,11 @@
 //! an incompatible `x[0]` body, and then starts another `x[1]` evaluator:
 //!
 //! ```
-//! # use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+//! # use trustworthiness_checker::{Value, VarName};
 //! # use trustworthiness_checker::dataflow::DataflowMonitor;
-//! # let spec = ElaboratedDsrvSpecification::parse_with(
+//! # let spec = trustworthiness_checker::dsrv_fixtures::elaborated(
 //! #     "in source: Str\nin x: Int\nout z: Int\nz = dynamic(source: Int)",
-//! #     TypeCheckOptions::GRADUAL,
-//! # ).unwrap();
+//! # );
 //! # let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! # let input_vars = monitor.input_vars().to_vec();
 //! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {
@@ -641,12 +645,11 @@
 //! `x[1]` evaluator, and a later `Deferred` source does not interrupt its history:
 //!
 //! ```
-//! # use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+//! # use trustworthiness_checker::{Value, VarName};
 //! # use trustworthiness_checker::dataflow::DataflowMonitor;
-//! # let spec = ElaboratedDsrvSpecification::parse_with(
+//! # let spec = trustworthiness_checker::dsrv_fixtures::elaborated(
 //! #     "in source: Str\nin x: Int\nout z: Int\nz = defer(source: Int)",
-//! #     TypeCheckOptions::GRADUAL,
-//! # ).unwrap();
+//! # );
 //! # let mut monitor = DataflowMonitor::compile_checked(spec).unwrap();
 //! # let input_vars = monitor.input_vars().to_vec();
 //! # let row = |source: Value, x: i64| input_vars.iter().map(|var| {

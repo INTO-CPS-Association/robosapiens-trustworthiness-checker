@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use trustworthiness_checker::cli::diagnostics::present_warnings;
 use trustworthiness_checker::core::StreamType;
 use trustworthiness_checker::{DsrvSpecification, TypeCheckOptions};
 
@@ -75,8 +76,9 @@ fn main() -> Result<()> {
     let untyped = spec_source
         .parse::<DsrvSpecification>()
         .map_err(|error| anyhow!("failed to parse {}: {error:?}", args.spec.display()))?;
-    let typed = untyped
-        .type_check(TypeCheckOptions::STRICT)
+    let (typed, warnings) = untyped.check(TypeCheckOptions::STRICT).into_parts();
+    present_warnings(&args.spec.display().to_string(), &spec_source, &warnings)?;
+    let typed = typed
         .map_err(|error| anyhow!("failed to type-check {}: {error:?}", args.spec.display()))?;
 
     let mut annotations = match args.annotations.as_deref() {

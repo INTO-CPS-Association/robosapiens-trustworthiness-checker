@@ -84,6 +84,7 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
             let checks = specification
                 .clone()
                 .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .result()
                 .is_ok();
             match (checks, ILL_TYPED.contains(&name.as_str())) {
                 (true, false) | (false, true) => {}

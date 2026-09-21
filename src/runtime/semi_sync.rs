@@ -1433,6 +1433,7 @@ mod tests {
 
     use crate::async_test;
     use crate::core::Runtime;
+    use crate::dsrv_fixtures::WithoutWarnings;
     use crate::dsrv_fixtures::elaborated;
     use crate::io::testing::{channel_output, null_output};
     use crate::io::{controlled, map, output::AsyncFnSink};
@@ -1667,6 +1668,7 @@ mod tests {
             BTreeSet::new(),
         )
         .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .unwrap();
         let (output_writer, closes) = recording_writer(Some(OutputError::backend("close failed")));
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()
@@ -1724,6 +1726,7 @@ mod tests {
             BTreeSet::new(),
         )
         .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .unwrap();
         let (output_writer, closes) = recording_writer(None);
         let monitor: TestRuntime = SemiSyncRuntimeBuilder::new()

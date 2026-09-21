@@ -7,7 +7,7 @@ use crate::io::{
 };
 use crate::lang::core::{DependencyGraphExpr, DependencyGraphSpec};
 use crate::runtime::{
-    RuntimeBuilder,
+    ReplacementPreparation, RuntimeBuilder,
     semi_sync::{ExprEvalutor, SemiSyncContext, SemiSyncRuntime},
 };
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
@@ -42,7 +42,7 @@ where
     input_config: Option<InputConfiguration>,
     use_context_transfer: bool,
     starting_history: Option<BTreeMap<VarName, Vec<AC::Val>>>,
-    parse_spec: Option<fn(&str) -> anyhow::Result<AC::Spec>>,
+    prepare_replacement: Option<ReplacementPreparation<AC::Spec>>,
     setup_error: Option<String>,
     _marker: (std::marker::PhantomData<MS>, std::marker::PhantomData<AC>),
 }
@@ -69,7 +69,7 @@ where
             input_config: None,
             use_context_transfer: true,
             starting_history: None,
-            parse_spec: None,
+            prepare_replacement: None,
             setup_error: None,
             _marker: (std::marker::PhantomData, std::marker::PhantomData),
         }
@@ -250,8 +250,13 @@ where
     AC::Val: DeferrableStreamData,
     MS: MonitoringSemantics<AC>,
 {
-    pub fn parse_spec(mut self, parse_spec: fn(&str) -> anyhow::Result<AC::Spec>) -> Self {
-        self.parse_spec = Some(parse_spec);
+    /// Prepare each replacement specification: parse, check and elaborate
+    /// it, handling its diagnostics.
+    pub fn prepare_replacement(
+        mut self,
+        prepare: impl Fn(&str) -> anyhow::Result<AC::Spec> + 'static,
+    ) -> Self {
+        self.prepare_replacement = Some(Rc::new(prepare));
         self
     }
 
@@ -427,11 +432,11 @@ where
         request: ReconfigurationRequest,
     ) -> anyhow::Result<Option<ReconfSemiSyncRuntimeBuilder<AC, MS>>> {
         request.validate_structure()?;
-        let parse_spec = self
-            .builder
-            .parse_spec
-            .ok_or_else(|| anyhow!("reconfiguration parser is not configured"))?;
-        let next_model = parse_spec(&request.specification)
+        let prepare_replacement =
+            self.builder.prepare_replacement.clone().ok_or_else(|| {
+                anyhow!("reconfiguration replacement preparation is not configured")
+            })?;
+        let next_model = prepare_replacement(&request.specification)
             .map_err(|error| anyhow!("failed to parse reconfiguration command: {error}"))?;
         let old_model = self.builder.model_ref()?.clone();
         self.log_model_changes(&old_model, &next_model);
@@ -804,8 +809,7 @@ mod tests {
     const FINITE_FIRST_OUTPUT_MODEL: &str = "in x: Int\nout z: Int\nz = 1";
 
     fn parse_spec(source: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-            .map_err(anyhow::Error::from)
+        crate::dsrv_fixtures::replacement_preparation(TypeCheckOptions::GRADUAL)(source)
     }
 
     fn channel_input() -> (
@@ -837,7 +841,7 @@ mod tests {
         output: OutputPipeline<Value>,
     ) -> TestRuntime {
         ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
-            .parse_spec(parse_spec)
+            .prepare_replacement(parse_spec)
             .executor(executor)
             .model(elaborated(&model))
             .input_pipeline(InputPipeline::new(input))

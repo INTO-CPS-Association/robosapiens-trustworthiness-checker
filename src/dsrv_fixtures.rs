@@ -1,6 +1,7 @@
 use crate::{
-    ElaboratedDsrvSpecification, InputStream, TypeCheckOptions, Value,
+    CheckedDsrvSpecification, ElaboratedDsrvSpecification, InputStream, TypeCheckOptions, Value,
     io::map,
+    lang::dsrv::diagnostics::{SemanticAnalysisReport, SemanticErrors, SemanticWarning},
     runtime::{
         asynchronous::AsyncRuntime,
         builder::{DistValueConfig, ValueConfig},
@@ -21,11 +22,87 @@ pub type TestSemantics = UntimedDsrvSemantics;
 // Default monitor runner to use in tests
 pub type TestRuntime = AsyncRuntime<TestConfig, TestSemantics>;
 
-/// Parse a specification, check it gradually and elaborate it, as every
-/// runtime requires. Panics if it does not parse or check.
-pub fn elaborated(source: &str) -> ElaboratedDsrvSpecification {
-    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+/// The result of a semantic analysis report for a fixture that is expected
+/// to prove no warning. Panics if the report carries any.
+pub trait WithoutWarnings<T> {
+    fn without_warnings(self) -> Result<T, SemanticErrors>;
+}
+
+impl<T> WithoutWarnings<T> for SemanticAnalysisReport<T> {
+    #[track_caller]
+    fn without_warnings(self) -> Result<T, SemanticErrors> {
+        let (result, warnings) = self.into_parts();
+        assert!(
+            warnings.is_empty(),
+            "fixture proved unexpected warnings: {warnings:?}"
+        );
+        result
+    }
+}
+
+/// Parse and check a specification with `options`. Panics if it does not
+/// parse or check, or if checking warns.
+#[track_caller]
+pub fn checked_with(source: &str, options: TypeCheckOptions) -> CheckedDsrvSpecification {
+    CheckedDsrvSpecification::parse_with(source, options)
         .unwrap_or_else(|error| panic!("{error}\n{source}"))
+        .without_warnings()
+        .unwrap_or_else(|errors| panic!("{errors:?}\n{source}"))
+}
+
+/// Parse a specification and check it strictly. Panics if it does not parse
+/// or check, or if checking warns.
+#[track_caller]
+pub fn checked(source: &str) -> CheckedDsrvSpecification {
+    checked_with(source, TypeCheckOptions::STRICT)
+}
+
+/// Parse, check and elaborate a specification with `options`. Panics if it
+/// does not parse or check, or if checking warns.
+#[track_caller]
+pub fn elaborated_with(source: &str, options: TypeCheckOptions) -> ElaboratedDsrvSpecification {
+    ElaboratedDsrvSpecification::parse_with(source, options)
+        .unwrap_or_else(|error| panic!("{error}\n{source}"))
+        .without_warnings()
+        .unwrap_or_else(|errors| panic!("{errors:?}\n{source}"))
+}
+
+/// Check and elaborate a specification as a runtime with `semantics`
+/// requires. Panics if it does not check, or if checking warns.
+#[track_caller]
+pub fn elaborate_for(
+    spec: crate::DsrvSpecification,
+    semantics: crate::core::Semantics,
+) -> ElaboratedDsrvSpecification {
+    spec.check_and_elaborate(crate::runtime::builder::type_check_options(semantics))
+        .without_warnings()
+        .unwrap_or_else(|errors| panic!("specification should check: {errors:?}"))
+}
+
+/// Parse a specification, check it gradually and elaborate it, as every
+/// runtime requires. Panics if it does not parse or check, or if checking
+/// warns.
+#[track_caller]
+pub fn elaborated(source: &str) -> ElaboratedDsrvSpecification {
+    elaborated_with(source, TypeCheckOptions::GRADUAL)
+}
+
+/// Present a fixture's warnings by refusing them: fixtures are expected to
+/// prove none.
+pub fn refuse_warnings(warnings: &[SemanticWarning]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        warnings.is_empty(),
+        "fixture proved unexpected warnings: {warnings:?}"
+    );
+    Ok(())
+}
+
+/// A replacement preparation for reconfigurable runtimes that checks with
+/// `options` and refuses any warning.
+pub fn replacement_preparation(
+    options: TypeCheckOptions,
+) -> impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static {
+    move |source| crate::runtime::builder::prepare_replacement(source, options, refuse_warnings)
 }
 
 pub fn empty_input_stream() -> InputStream<Value> {

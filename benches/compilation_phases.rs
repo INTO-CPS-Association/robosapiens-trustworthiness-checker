@@ -458,9 +458,10 @@ fn runtime_text_acceptance(c: &mut Criterion) {
 
     for operator in ["dynamic", "defer"] {
         let source = format!("in source: Str\nin x: Int\nout z: Int\nz = {operator}(source: Int)");
-        let specification =
-            ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
-                .expect("benchmark specification should parse and check");
+        let specification = trustworthiness_checker::dsrv_fixtures::elaborated_with(
+            &source,
+            TypeCheckOptions::GRADUAL,
+        );
         let program = DataflowProgram::compile_checked(specification)
             .expect("benchmark specification should compile");
         let monitor = DataflowMonitor::from_program(program.clone());

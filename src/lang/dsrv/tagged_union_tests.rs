@@ -7,15 +7,15 @@
 
 use crate::VarName;
 use crate::core::{StreamType, UnionPayload};
-use crate::lang::dsrv::ElaboratedDsrvSpecification;
+use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::LanguageError;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification, ExprView};
+use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind, UnresolvedTypeKind};
 use crate::lang::dsrv::parser::{DsrvParseError, check_core_source, parse_str};
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::pipeline::TypeCheckOptions;
 use crate::lang::dsrv::source::TypeName;
-use crate::lang::dsrv::type_checker::SemanticError;
-use crate::lang::dsrv::type_checker::{TCType, TypeErrorKind, UnresolvedTypeKind};
+use crate::lang::dsrv::type_checker::TCType;
 
 use test_log::test;
 
@@ -34,13 +34,15 @@ fn language_error(source: &str) -> LanguageError {
 
 fn check(source: &str) -> CheckedDsrvSpecification {
     parse(source)
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
 }
 
 fn check_err(source: &str) -> Vec<SemanticError> {
     parse(source)
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .err()
         .unwrap_or_else(|| panic!("{source}: expected checking to fail"))
 }
@@ -378,8 +380,7 @@ fn elaboration_keeps_a_resolved_constructor() {
         "{HEADER}type State = Union<Stopped, Moving: Int>\n\
          out y: State\ny = State::Moving(3)\n"
     );
-    let elaborated = ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
-        .unwrap_or_else(|error| panic!("{source}: {error}"));
+    let elaborated = crate::dsrv_fixtures::elaborated_with(&source, TypeCheckOptions::GRADUAL);
     assert!(
         elaborated.to_string().contains("y = State::Moving(3)"),
         "{elaborated}"

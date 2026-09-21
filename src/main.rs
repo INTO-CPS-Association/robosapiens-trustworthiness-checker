@@ -16,6 +16,7 @@ use trustworthiness_checker::cli::adapters::{
     DistributionModeBuilder, RedisKnowledgeOverrides, apply_redis_knowledge_overrides,
     input_source, output_pipeline, redis_knowledge_config_from_cli,
 };
+use trustworthiness_checker::cli::diagnostics::{REPLACEMENT_LABEL, present_warnings};
 use trustworthiness_checker::core::{Runtime, RuntimeSpec};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
@@ -25,12 +26,12 @@ use trustworthiness_checker::io::{
 use trustworthiness_checker::lang::dsrv::parser::parse_program_file as lalr_parse_file;
 use trustworthiness_checker::lang::mstlo::MstloSpecification;
 use trustworthiness_checker::runtime::GeneralRuntimeBuilder;
-use trustworthiness_checker::runtime::builder::{DistributionMode, LangSpecification};
+use trustworthiness_checker::runtime::builder::{
+    DistributionMode, LangSpecification, prepare_replacement, type_check_options,
+};
 use trustworthiness_checker::runtime::mstlo::MstloTimedValue;
 use trustworthiness_checker::{self as tc, Specification};
-use trustworthiness_checker::{
-    DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName,
-};
+use trustworthiness_checker::{Value, VarName};
 
 use macro_rules_attribute::apply;
 use smol_macros::main as smol_main;
@@ -85,6 +86,16 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
     let builder = builder.semantics(cli.semantics);
 
+    // A DSRV model and every live replacement are checked as the chosen
+    // semantics requires, and their warnings shown, before any runtime sees
+    // them.
+    let options = type_check_options(cli.semantics);
+    let builder = builder.prepare_replacement(move |source| {
+        prepare_replacement(source, options, |warnings| {
+            present_warnings(REPLACEMENT_LABEL, source, warnings)
+        })
+    });
+
     let builder = builder.runtime(runtime);
 
     let builder = if let Some(topic) = cli.reconf_topic.clone() {
@@ -113,9 +124,10 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let model = lalr_parse_file(cli.model.as_str(), cli.dsrv_language_request())
+    let program = lalr_parse_file(cli.model.as_str(), cli.dsrv_language_request())
         .await
         .context("Model file could not be parsed")?;
+    let model = program.specification;
     let experiments = model
         .source_context()
         .language()
@@ -127,21 +139,26 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             experiments.join(", ")
         );
     }
-    let model = LangSpecification::from(model);
     info!(%model, "Parsed model");
+    let (checked, warnings) = model.check_and_elaborate(options).into_parts();
+    present_warnings(cli.model.as_str(), &program.root_source, &warnings)?;
+    let model =
+        checked.map_err(|errors| anyhow::anyhow!("Model failed type checking: {errors:?}"))?;
 
-    // Localise the model to contain only the local variables (if needed)
-    let model = match (&builder.distribution_mode, model) {
-        (DistributionMode::LocalMonitor(locality_mode), LangSpecification::Dsrv(model)) => {
+    // Localise the checked model to contain only the local variables (if
+    // needed); localisation keeps every node's type, so it is not rechecked.
+    let model = match &builder.distribution_mode {
+        DistributionMode::LocalMonitor(locality_mode) => {
             debug!(?locality_mode, "Localising model");
-            let model = admit_distributed(model)?
+            let model = model
                 .try_localise(locality_mode)
                 .context("Distributed model failed localisation")?;
             info!(?model, output_vars=?model.output_vars(), input_vars=?model.input_vars(), "Localised model");
-            LangSpecification::Dsrv(model.source().unchecked().clone())
+            model
         }
-        (_, model) => model,
+        _ => model,
     };
+    let model = LangSpecification::from(model);
 
     let builder = builder.model(model.clone());
 
@@ -152,12 +169,12 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
             (Some(constraints), LangSpecification::Dsrv(model)) if !constraints.is_empty() => {
                 let localized_constraint_vars: Vec<VarName> =
                     constraints.iter().cloned().map(VarName::from).collect();
-                let localized = admit_distributed(model.clone())?
+                let localized = model
                     .try_localise(&localized_constraint_vars)
                     .context("Distribution constraints failed localisation")?;
                 let mut input_vars = localized.input_vars().clone();
                 input_vars.extend(dist_constraint_input_vars(
-                    model,
+                    model.source().unchecked(),
                     &localized_constraint_vars,
                 ));
                 input_vars
@@ -418,13 +435,4 @@ fn init_tracing(log_file: Option<&str>) -> anyhow::Result<WorkerGuard> {
         .init();
 
     Ok(guard)
-}
-
-/// Check a distributed model gradually and elaborate it before localising it.
-fn admit_distributed(model: DsrvSpecification) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    model
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
-        .map_err(|errors| {
-            anyhow::anyhow!("Distributed model failed gradual type checking: {errors:?}")
-        })
 }

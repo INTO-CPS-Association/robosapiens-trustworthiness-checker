@@ -533,10 +533,7 @@ mod tests {
     use crate::core::StreamTypeAscription;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::parser::parse_expr;
-    use crate::lang::dsrv::{
-        TypeCheckOptions,
-        ast::{CheckedDsrvSpecification, Expr},
-    };
+    use crate::lang::dsrv::{TypeCheckOptions, ast::Expr};
     use crate::runtime::asynchronous::Context;
     use crate::runtime::builder::ValueConfig;
     use crate::semantics::StreamContext;
@@ -552,7 +549,7 @@ mod tests {
 
         let source =
             "in property: Str\nout result: Int\nresult = (\\p: Str -> dynamic(p : Int))(property)";
-        let checked = source.parse::<CheckedDsrvSpecification>().unwrap();
+        let checked = crate::dsrv_fixtures::checked(source);
         let expression = ScopedExpr::checked(checked.var_expr(&"result".into()).unwrap());
         let Apply(function, mut args) = expression.as_ref().view() else {
             panic!("expected application");
@@ -582,11 +579,10 @@ mod tests {
     async fn checked_float_arithmetic_and_comparison_are_specialized(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let checked = CheckedDsrvSpecification::parse_with(
+        let checked = crate::dsrv_fixtures::checked_with(
             "out result: Bool\nresult = (1.5 + 2.0) < 4.0",
             TypeCheckOptions::STRICT,
-        )
-        .unwrap();
+        );
         let expression = checked.var_expr(&"result".into()).unwrap();
         let context = Context::<ValueConfig>::new(executor, Vec::new(), Vec::new(), 0);
 
@@ -604,11 +600,10 @@ mod tests {
     async fn checked_float_default_repeats_known_values_across_no_val(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let checked = CheckedDsrvSpecification::parse_with(
+        let checked = crate::dsrv_fixtures::checked_with(
             "in x: Float\nout result: Float\nresult = default(x, 2.0)",
             TypeCheckOptions::STRICT,
-        )
-        .unwrap();
+        );
         let expression = checked.var_expr(&"result".into()).unwrap();
         let input = Box::pin(futures::stream::iter([Value::Float(1.0), Value::NoVal]));
         let mut context = Context::<ValueConfig>::new(executor, vec!["x".into()], vec![input], 0);

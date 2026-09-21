@@ -1,5 +1,4 @@
 use anyhow::Context as _;
-use async_trait::async_trait;
 use std::rc::Rc;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,7 +14,7 @@ use crate::ExecutionPolicy;
 use crate::dataflow::ContextTransferPolicy;
 use crate::io::{MsgTypeMapping, TopicMapping};
 use crate::{
-    DsrvSpecification, Runtime, Specification, Value, VarName,
+    Runtime, Specification, Value, VarName,
     cli::{
         adapters::DistributionModeBuilder,
         args::{MstloAlgorithm, MstloSynchronizationStrategy},
@@ -27,11 +26,12 @@ use crate::{
     distributed::distribution_graphs::LabelledDistributionGraph,
     io::{InputPipeline, OpenedInput, OutputPipeline, mqtt::MqttProtocol},
     lang::dsrv::{
-        DsrvPipelineError, ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions,
-        ast::CheckedExpr,
+        ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions, ast::CheckedExpr,
+        diagnostics::SemanticWarning,
     },
     lang::mstlo::MstloSpecification,
     runtime::{
+        ReplacementPreparation,
         dataflow::{
             DataflowRuntimeBuilder, ReconfigurableDataflowRuntimeBuilder, ReconfigurationAckSink,
         },
@@ -80,14 +80,17 @@ define_config!(DistValueConfig, Val = Value, Expr = CheckedExpr, Ctx = Distribut
 #[rustfmt::skip]
 define_config!(SemiSyncValueConfig, Val = Value, Expr = CheckedExpr, Ctx = SemiSyncContext, Spec = ElaboratedDsrvSpecification);
 
+/// A specification ready to run. A DSRV specification has already been
+/// checked and elaborated, so its diagnostics were handled before any runtime
+/// was built.
 #[derive(Clone, Debug)]
 pub enum LangSpecification {
-    Dsrv(DsrvSpecification),
+    Dsrv(ElaboratedDsrvSpecification),
     Mstlo(MstloSpecification),
 }
 
-impl From<DsrvSpecification> for LangSpecification {
-    fn from(spec: DsrvSpecification) -> Self {
+impl From<ElaboratedDsrvSpecification> for LangSpecification {
+    fn from(spec: ElaboratedDsrvSpecification) -> Self {
         Self::Dsrv(spec)
     }
 }
@@ -269,40 +272,46 @@ impl<
     }
 }
 
-enum ElaboratingRuntime<Mon> {
-    Ready(Mon),
-    Error(anyhow::Error),
-}
-
-#[async_trait(?Send)]
-impl<Mon> Runtime for ElaboratingRuntime<Mon>
-where
-    Mon: Runtime + 'static,
-{
-    async fn run_boxed(self: Box<Self>) -> anyhow::Result<()> {
-        match *self {
-            Self::Ready(runtime) => Box::new(runtime).run_boxed().await,
-            Self::Error(error) => Err(error),
-        }
+/// The checking policy a DSRV runtime with `semantics` expects its
+/// specification to have been checked with. `typed-untimed` checks strictly;
+/// the other two check gradually, and `untimed` evaluates without consulting
+/// the types.
+pub fn type_check_options(semantics: Semantics) -> TypeCheckOptions {
+    match semantics {
+        Semantics::TypedUntimed => TypeCheckOptions::STRICT,
+        _ => TypeCheckOptions::GRADUAL,
     }
 }
 
-/// Checks each specification, strictly or gradually, and elaborates it
-/// before the wrapped runtime builder receives it. A specification that does
-/// not check is reported when the runtime runs.
-struct ElaboratingBuilder<Builder> {
-    builder: Builder,
-    options: TypeCheckOptions,
-    type_check_error: Option<anyhow::Error>,
+/// Refuse a specification checked more permissively than `semantics`
+/// requires: a gradually checked specification cannot run under
+/// `typed-untimed`. A strictly checked one runs under any semantics.
+pub fn ensure_check_mode(
+    semantics: Semantics,
+    spec: &ElaboratedDsrvSpecification,
+) -> anyhow::Result<()> {
+    let required = type_check_options(semantics).mode;
+    if required == TypeCheckMode::Strict && spec.check_mode() == TypeCheckMode::Gradual {
+        anyhow::bail!(
+            "{semantics:?} semantics requires a strictly checked specification, \
+             but this one was checked gradually"
+        );
+    }
+    Ok(())
 }
 
-impl<Builder> ElaboratingBuilder<Builder> {
-    fn new(builder: Builder, options: TypeCheckOptions) -> Self {
-        Self {
-            builder,
-            options,
-            type_check_error: None,
-        }
+/// The application's preparation, with each replacement admitted as the
+/// initial specification was, whatever policy the preparation used. Nothing
+/// is rechecked.
+fn admit_replacements(
+    semantics: Semantics,
+    prepare: ReplacementPreparation<ElaboratedDsrvSpecification>,
+) -> impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static {
+    move |source| {
+        let replacement = prepare(source)?;
+        ensure_check_mode(semantics, &replacement)
+            .context("Reconfigured specification cannot run in this runtime")?;
+        Ok(replacement)
     }
 }
 
@@ -313,29 +322,25 @@ fn type_check_failure(options: TypeCheckOptions) -> &'static str {
     }
 }
 
-/// Parse, check and elaborate a replacement specification for a
-/// reconfigurable runtime, as its initial specification was.
-fn parse_and_elaborate(
-    input: &str,
+/// Parse, check and elaborate the text of a live replacement, as a
+/// [`ReplacementPreparation`] does. `present` receives the replacement's
+/// warnings once, in report order, whether or not it checked, and before the
+/// outcome is decided; a failure to present them fails the preparation.
+pub fn prepare_replacement(
+    source: &str,
     options: TypeCheckOptions,
+    present: impl FnOnce(&[SemanticWarning]) -> anyhow::Result<()>,
 ) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    ElaboratedDsrvSpecification::parse_with(input, options).map_err(|error| match error {
-        DsrvPipelineError::Parse(error) => {
-            anyhow::Error::new(error).context("Failed to parse reconfigured specification")
-        }
-        DsrvPipelineError::TypeCheck(errors) => anyhow::anyhow!(
+    let report = ElaboratedDsrvSpecification::parse_with(source, options)
+        .context("Failed to parse reconfigured specification")?;
+    let (result, warnings) = report.into_parts();
+    present(&warnings).context("Failed to present reconfigured specification warnings")?;
+    result.map_err(|errors| {
+        anyhow::anyhow!(
             "Reconfigured spec failed {}: {errors:?}",
             type_check_failure(options)
-        ),
+        )
     })
-}
-
-fn parse_strictly_elaborated_spec(input: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    parse_and_elaborate(input, TypeCheckOptions::STRICT)
-}
-
-fn parse_gradually_elaborated_spec(input: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    parse_and_elaborate(input, TypeCheckOptions::GRADUAL)
 }
 
 fn configure_reconfigurable_dataflow_builder(
@@ -397,79 +402,6 @@ where
     match reconf_topic {
         Some(topic) => builder.reconf_topic(topic),
         None => builder,
-    }
-}
-
-impl<
-    V: StreamData,
-    Mon: Runtime + 'static,
-    MonBuilder: RuntimeBuilder<ElaboratedDsrvSpecification, V, Runtime = Mon> + 'static,
-> RuntimeBuilder<DsrvSpecification, V> for ElaboratingBuilder<MonBuilder>
-{
-    type Runtime = ElaboratingRuntime<Mon>;
-
-    fn new() -> Self {
-        Self::new(MonBuilder::new(), TypeCheckOptions::GRADUAL)
-    }
-
-    fn executor(self, ex: Rc<LocalExecutor<'static>>) -> Self {
-        Self {
-            builder: self.builder.executor(ex),
-            ..self
-        }
-    }
-
-    fn model(self, model: DsrvSpecification) -> Self {
-        let Self {
-            builder,
-            options,
-            type_check_error,
-        } = self;
-        match model.check_and_elaborate(options) {
-            Ok(model) => Self {
-                builder: builder.model(model),
-                options,
-                type_check_error,
-            },
-            Err(errors) => Self {
-                builder,
-                options,
-                type_check_error: type_check_error.or_else(|| {
-                    Some(anyhow::anyhow!(
-                        "Model failed {}: {errors:?}",
-                        type_check_failure(options)
-                    ))
-                }),
-            },
-        }
-    }
-
-    fn input(self, input: OpenedInput<V>) -> Self {
-        Self {
-            builder: self.builder.input(input),
-            ..self
-        }
-    }
-
-    fn output_writer(self, writer: OutputWriter<V>) -> Self {
-        Self {
-            builder: self.builder.output_writer(writer),
-            ..self
-        }
-    }
-
-    fn build(self) -> LocalBoxFuture<'static, Self::Runtime> {
-        let Self {
-            builder,
-            type_check_error,
-            ..
-        } = self;
-        Box::pin(async move {
-            match type_check_error {
-                Some(error) => ElaboratingRuntime::Error(error),
-                None => ElaboratingRuntime::Ready(builder.build().await),
-            }
-        })
     }
 }
 
@@ -758,6 +690,7 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub mstlo_algorithm: Algorithm,
     pub mstlo_synchronization_strategy: SynchronizationStrategy,
     pub mstlo_variables: Variables,
+    replacement_preparation: Option<ReplacementPreparation<ElaboratedDsrvSpecification>>,
 }
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
@@ -788,6 +721,7 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             mstlo_algorithm: Algorithm::default(),
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
             mstlo_variables: Variables::new(),
+            replacement_preparation: None,
         }
     }
 
@@ -980,9 +914,21 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             ..self
         }
     }
+
+    /// How a reconfigurable DSRV runtime prepares each live replacement; see
+    /// [`prepare_replacement`]. Reconfigurable runtimes require one.
+    pub fn prepare_replacement(
+        self,
+        prepare: impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static,
+    ) -> Self {
+        Self {
+            replacement_preparation: Some(Rc::new(prepare)),
+            ..self
+        }
+    }
 }
 
-impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
+impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
     pub fn input_pipeline(self, pipeline: InputPipeline<Value>) -> anyhow::Result<Self> {
         Ok(Self {
             input_pipeline: Some(pipeline),
@@ -1032,32 +978,35 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
             .model
             .ok_or_else(|| anyhow::anyhow!("Model/spec must be set"))?;
         match model {
-            LangSpecification::Dsrv(spec) => GeneralRuntimeBuilder::<DsrvSpecification, Value> {
-                executor: self.executor,
-                model: Some(spec),
-                input: self.input,
-                input_pipeline: self.input_pipeline,
-                output_writer: self.output_writer,
-                output_pipeline: self.output_pipeline,
-                shutdown_timeout: self.shutdown_timeout,
-                runtime: self.runtime,
-                semantics: self.semantics,
-                distribution_mode: self.distribution_mode,
-                distribution_mode_builder: self.distribution_mode_builder,
-                scheduler_mode: self.scheduler_mode,
-                mqtt_protocol: self.mqtt_protocol,
-                reconf_topic: self.reconf_topic,
-                use_context_transfer: self.use_context_transfer,
-                var_msg_types: self.var_msg_types,
-                topic_mapping: self.topic_mapping,
-                acknowledgements: self.acknowledgements,
-                mstlo_algorithm: self.mstlo_algorithm,
-                mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
-                mstlo_variables: self.mstlo_variables,
+            LangSpecification::Dsrv(spec) => {
+                GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value> {
+                    executor: self.executor,
+                    model: Some(spec),
+                    input: self.input,
+                    input_pipeline: self.input_pipeline,
+                    output_writer: self.output_writer,
+                    output_pipeline: self.output_pipeline,
+                    shutdown_timeout: self.shutdown_timeout,
+                    runtime: self.runtime,
+                    semantics: self.semantics,
+                    distribution_mode: self.distribution_mode,
+                    distribution_mode_builder: self.distribution_mode_builder,
+                    scheduler_mode: self.scheduler_mode,
+                    mqtt_protocol: self.mqtt_protocol,
+                    reconf_topic: self.reconf_topic,
+                    use_context_transfer: self.use_context_transfer,
+                    var_msg_types: self.var_msg_types,
+                    topic_mapping: self.topic_mapping,
+                    acknowledgements: self.acknowledgements,
+                    mstlo_algorithm: self.mstlo_algorithm,
+                    mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
+                    mstlo_variables: self.mstlo_variables,
+                    replacement_preparation: self.replacement_preparation,
+                }
+                .build()
+                .await
+                .context("DSRV runtime could not be built")
             }
-            .build()
-            .await
-            .context("DSRV runtime could not be built"),
             LangSpecification::Mstlo(spec) => {
                 let runtime = match self.runtime {
                     RuntimeSpec::Mstlo(policy) => RuntimeSpec::Mstlo(policy),
@@ -1088,6 +1037,7 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     mstlo_algorithm: self.mstlo_algorithm,
                     mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
                     mstlo_variables: self.mstlo_variables,
+                    replacement_preparation: None,
                 }
                 .build()
                 .await
@@ -1174,13 +1124,13 @@ where
     }
 }
 
-impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
+impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
     // Creates the common parts of the builder
     fn create_common_builder(
         runtime: RuntimeSpec,
         semantics: Semantics,
         executor: Option<Rc<LocalExecutor<'static>>>,
-        model: Option<DsrvSpecification>,
+        model: Option<ElaboratedDsrvSpecification>,
         distribution_mode: DistributionMode,
         scheduler_mode: SchedulerCommunication,
         mqtt_protocol: MqttProtocol,
@@ -1192,45 +1142,41 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
         var_msg_types: Option<MsgTypeMapping>,
         acknowledgements: Option<ReconfigurationAckSink>,
         direct_input_supplied: bool,
-    ) -> anyhow::Result<Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>>> {
+        replacement_preparation: Option<ReplacementPreparation<ElaboratedDsrvSpecification>>,
+    ) -> anyhow::Result<Box<dyn RuntimeBuilderDyn<ElaboratedDsrvSpecification, Value>>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
             distribution_mode
         );
-        // Every runtime runs an elaborated specification. `typed-untimed`
-        // checks strictly; the other two check gradually, and `untimed`
-        // evaluates without consulting the types.
-        let options = match semantics {
-            Semantics::TypedUntimed => TypeCheckOptions::STRICT,
-            _ => TypeCheckOptions::GRADUAL,
-        };
-        let parse_replacement = match options.mode {
-            TypeCheckMode::Strict => parse_strictly_elaborated_spec,
-            TypeCheckMode::Gradual => parse_gradually_elaborated_spec,
+        if let Some(model) = &model {
+            ensure_check_mode(semantics, model)
+                .context("Specification cannot run in this runtime")?;
+        }
+        // Every runtime runs an elaborated specification, checked by the
+        // caller as `type_check_options` says; reconfigurable runtimes also
+        // need the caller's preparation for each replacement.
+        let replacement_preparation = || {
+            let prepare = replacement_preparation
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("{runtime:?} requires a replacement preparation"))?;
+            anyhow::Ok(admit_replacements(semantics, prepare))
         };
         let dsrv_semantics = matches!(
             semantics,
             Semantics::Untimed | Semantics::TypedUntimed | Semantics::GradualTypedUntimed
         );
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
+        let builder: Box<dyn RuntimeBuilderDyn<ElaboratedDsrvSpecification, Value>> =
             match (runtime, semantics) {
-                (RuntimeSpec::Async, Semantics::Untimed) => Box::new(ElaboratingBuilder::new(
-                    AsyncRuntimeBuilder::<ValueConfig, UntimedDsrvSemantics>::new(),
-                    options,
-                )),
+                (RuntimeSpec::Async, Semantics::Untimed) => {
+                    Box::new(AsyncRuntimeBuilder::<ValueConfig, UntimedDsrvSemantics>::new())
+                }
                 (RuntimeSpec::Async, Semantics::TypedUntimed | Semantics::GradualTypedUntimed) => {
-                    Box::new(ElaboratingBuilder::new(
-                        AsyncRuntimeBuilder::<ValueConfig, CheckedUntimedDsrvSemantics>::new(),
-                        options,
-                    ))
+                    Box::new(AsyncRuntimeBuilder::<ValueConfig, CheckedUntimedDsrvSemantics>::new())
                 }
                 (RuntimeSpec::Dataflow(policy), semantics) if dsrv_semantics => {
-                    Box::new(ElaboratingBuilder::new(
-                        DataflowRuntimeBuilder::new()
+                    Box::new(DataflowRuntimeBuilder::new()
                             .execution_policy(policy)
-                            .semantics(semantics),
-                        options,
-                    ))
+                            .semantics(semantics))
                 }
                 (RuntimeSpec::ReconfDataflow(policy), semantics) if dsrv_semantics => {
                     let transfer_policy = if use_context_transfer {
@@ -1241,7 +1187,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     let builder = configure_reconfigurable_dataflow_builder(
                         ReconfigurableDataflowRuntimeBuilder::new()
                             .semantics(semantics)
-                            .parse_spec(parse_replacement),
+                            .prepare_replacement(replacement_preparation()?),
                         input_pipeline,
                         output_pipeline,
                         reconf_topic,
@@ -1250,32 +1196,28 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         acknowledgements,
                         direct_input_supplied,
                     );
-                    Box::new(ElaboratingBuilder::new(builder, options))
+                    Box::new(builder)
                 }
                 (runtime @ RuntimeSpec::ReconfDataflow(_), semantics) => {
-                    Box::new(ElaboratingBuilder::new(
-                        ReconfigurableDataflowRuntimeBuilder::new().setup_error(format!(
+                    Box::new(ReconfigurableDataflowRuntimeBuilder::new().setup_error(format!(
                             "{runtime:?} supports only Untimed, TypedUntimed, and GradualTypedUntimed semantics; got {semantics:?}"
-                        )),
-                        options,
-                    ))
+                        )))
                 }
-                (RuntimeSpec::SemiSync, Semantics::Untimed) => Box::new(ElaboratingBuilder::new(
-                    SemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new(),
-                    options,
-                )),
+                (RuntimeSpec::SemiSync, Semantics::Untimed) => Box::new(SemiSyncRuntimeBuilder::<
+                    SemiSyncValueConfig,
+                    UntimedDsrvSemantics,
+                >::new()),
                 (
                     RuntimeSpec::SemiSync,
                     Semantics::TypedUntimed | Semantics::GradualTypedUntimed,
-                ) => Box::new(ElaboratingBuilder::new(
-                    SemiSyncRuntimeBuilder::<SemiSyncValueConfig, CheckedUntimedDsrvSemantics>::new(
-                    ),
-                    options,
-                )),
+                ) => Box::new(SemiSyncRuntimeBuilder::<
+                    SemiSyncValueConfig,
+                    CheckedUntimedDsrvSemantics,
+                >::new()),
                 (RuntimeSpec::ReconfSemiSync, Semantics::Untimed) => {
                     let builder = configure_reconfigurable_builder(
                         ReconfSemiSyncRuntimeBuilder::<SemiSyncValueConfig, UntimedDsrvSemantics>::new()
-                            .parse_spec(parse_replacement),
+                            .prepare_replacement(replacement_preparation()?),
                         input_pipeline.ok_or_else(|| {
                             anyhow::anyhow!(
                                 "Input pipeline required for ReconfigurableSemiSync runtime"
@@ -1289,7 +1231,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         reconf_topic,
                         use_context_transfer,
                     );
-                    Box::new(ElaboratingBuilder::new(builder, options))
+                    Box::new(builder)
                 }
                 (
                     RuntimeSpec::ReconfSemiSync,
@@ -1300,7 +1242,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                             SemiSyncValueConfig,
                             CheckedUntimedDsrvSemantics,
                         >::new()
-                        .parse_spec(parse_replacement),
+                        .prepare_replacement(replacement_preparation()?),
                         input_pipeline.ok_or_else(|| {
                             anyhow::anyhow!(
                                 "Input pipeline required for ReconfigurableSemiSync runtime"
@@ -1314,7 +1256,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                         reconf_topic,
                         use_context_transfer,
                     );
-                    Box::new(ElaboratingBuilder::new(builder, options))
+                    Box::new(builder)
                 }
                 (RuntimeSpec::Distributed, Semantics::Untimed) => {
                     debug!(
@@ -1478,7 +1420,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                     let builder = builder.maybe_var_msg_types(var_msg_types.clone());
                     let builder = builder.maybe_topic_mapping(topic_mapping.clone());
 
-                    Box::new(ElaboratingBuilder::new(builder, options))
+                    Box::new(builder)
                 }
                 (runtime, semantics) => {
                     anyhow::bail!(
@@ -1567,7 +1509,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
             }
             (None, self.input)
         };
-        let builder: Box<dyn RuntimeBuilderDyn<DsrvSpecification, Value>> =
+        let builder: Box<dyn RuntimeBuilderDyn<ElaboratedDsrvSpecification, Value>> =
             Self::create_common_builder(
                 self.runtime,
                 self.semantics,
@@ -1588,6 +1530,7 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
                 self.var_msg_types.clone(),
                 self.acknowledgements,
                 direct_input_supplied,
+                self.replacement_preparation,
             )?;
         // Construct the complete output pipeline before the runtime starts.
         // Runtimes receive one writer and retain their native logical tick shape.
@@ -1631,7 +1574,10 @@ impl GeneralRuntimeBuilder<DsrvSpecification, Value> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeMap};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+    };
 
     use async_trait::async_trait;
     use petgraph::graph::DiGraph;
@@ -1648,7 +1594,7 @@ mod tests {
 
     #[test]
     fn general_builder_defaults_to_buffered_dataflow() {
-        let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new();
+        let builder = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new();
         assert_eq!(
             builder.runtime,
             RuntimeSpec::Dataflow(ExecutionPolicy::Buffered)
@@ -1713,11 +1659,11 @@ mod tests {
     fn distributed_constraint_builder(
         output_writer: Option<OutputWriter<Value>>,
         output_pipeline: Option<OutputPipeline<Value>>,
-    ) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
-        let spec = "language distributed\nin x\nout c\nc = monitored_at(x, A)"
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse");
-        let mut builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+    ) -> GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
+        let spec = crate::dsrv_fixtures::elaborated(
+            "language distributed\nin x\nout c\nc = monitored_at(x, A)",
+        );
+        let mut builder = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
             .executor(Rc::new(LocalExecutor::new()))
             .model(spec)
             .input(empty_input_stream())
@@ -1740,8 +1686,8 @@ mod tests {
     #[test]
     fn dsrv_output_open_failure_is_returned_from_build() {
         let executor = Rc::new(LocalExecutor::new());
-        let spec = "out z\nz = 1".parse::<DsrvSpecification>().unwrap();
-        let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
+        let spec = crate::dsrv_fixtures::elaborated("out z\nz = 1");
+        let builder = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
             .executor(executor)
             .model(spec)
             .input(empty_input_stream())
@@ -1868,5 +1814,166 @@ mod tests {
             1,
             "the supplied writer must be closed on rejection"
         );
+    }
+
+    // Replacement preparation, exercised with the test-only warning rules: a
+    // string literal `"warn:alpha"` proves a warning at itself.
+
+    const WARNING_REPLACEMENT: &str = "out y: Str = \"warn:alpha\"";
+
+    /// Prepare `source`, recording each presentation's warning codes.
+    fn prepare_recording(
+        source: &str,
+        presented: &RefCell<Vec<Vec<&'static str>>>,
+    ) -> anyhow::Result<ElaboratedDsrvSpecification> {
+        prepare_replacement(source, TypeCheckOptions::STRICT, |warnings| {
+            presented
+                .borrow_mut()
+                .push(warnings.iter().map(SemanticWarning::code).collect());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_prepared_replacement_presents_its_warnings_once() {
+        let presented = RefCell::new(Vec::new());
+        let prepared = prepare_recording(WARNING_REPLACEMENT, &presented)
+            .expect("a replacement that only warns is prepared");
+        assert!(prepared.output_vars().contains(&VarName::new("y")));
+        assert_eq!(presented.into_inner(), [vec!["test-alpha"]]);
+    }
+
+    #[test]
+    fn a_replacement_that_fails_checking_presents_its_warnings_once_first() {
+        let presented = RefCell::new(Vec::new());
+        let error = prepare_recording("out y: Str = \"warn:alpha\"\nout z: Bool = 1", &presented)
+            .expect_err("an ill-typed replacement is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("Reconfigured spec failed type checking"),
+            "{error:#}"
+        );
+        assert_eq!(presented.into_inner(), [vec!["test-alpha"]]);
+    }
+
+    #[test]
+    fn a_replacement_whose_warnings_cannot_be_presented_is_refused() {
+        let presentations = Cell::new(0);
+        let error = prepare_replacement(WARNING_REPLACEMENT, TypeCheckOptions::STRICT, |_| {
+            presentations.set(presentations.get() + 1);
+            anyhow::bail!("presentation closed")
+        })
+        .expect_err("a presentation failure fails the preparation");
+        assert_eq!(presentations.get(), 1);
+        assert!(
+            format!("{error:#}").contains("presentation closed"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn each_submission_of_the_same_replacement_is_its_own_attempt() {
+        let presented = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&presented);
+        let preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
+            Rc::new(move |source| prepare_recording(source, &recorded));
+        preparation(WARNING_REPLACEMENT).expect("the first submission is prepared");
+        assert_eq!(*presented.borrow(), [vec!["test-alpha"]]);
+        preparation(WARNING_REPLACEMENT).expect("the second submission is prepared");
+        assert_eq!(
+            *presented.borrow(),
+            [vec!["test-alpha"], vec!["test-alpha"]]
+        );
+    }
+
+    // Checking-policy provenance at the builder.
+
+    const STRICTLY_TYPED: &str = "in x: Int\nout y: Int\ny = x + 1";
+
+    fn run_under(
+        semantics: Semantics,
+        spec: ElaboratedDsrvSpecification,
+    ) -> anyhow::Result<Box<dyn Runtime>> {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(
+            GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
+                .executor(executor)
+                .model(spec)
+                .input(empty_input_stream())
+                .output_writer(counted_writer(Rc::new(Cell::new(0))))
+                .runtime(RuntimeSpec::Async)
+                .semantics(semantics)
+                .build(),
+        )
+    }
+
+    #[test]
+    fn typed_untimed_refuses_a_gradually_checked_specification() {
+        let gradual =
+            crate::dsrv_fixtures::elaborated_with(STRICTLY_TYPED, TypeCheckOptions::GRADUAL);
+        let error = match run_under(Semantics::TypedUntimed, gradual) {
+            Ok(_) => panic!("a gradual artefact must not run under typed-untimed"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("requires a strictly checked specification"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn gradual_capable_semantics_accept_either_policy() {
+        for semantics in [
+            Semantics::Untimed,
+            Semantics::GradualTypedUntimed,
+            Semantics::TypedUntimed,
+        ] {
+            for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+                let spec = crate::dsrv_fixtures::elaborated_with(STRICTLY_TYPED, options);
+                let admissible = !(semantics == Semantics::TypedUntimed
+                    && options.mode == TypeCheckMode::Gradual);
+                assert_eq!(
+                    ensure_check_mode(semantics, &spec).is_ok(),
+                    admissible,
+                    "{semantics:?} with {options:?}"
+                );
+                if admissible {
+                    run_under(semantics, spec).unwrap_or_else(|error| {
+                        panic!("{semantics:?} with {options:?}: {error:#}")
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_gradual_replacement_cannot_enter_a_strict_runtime() {
+        let prepared = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&prepared);
+        let gradual_preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
+            Rc::new(move |source| {
+                counted.set(counted.get() + 1);
+                prepare_replacement(source, TypeCheckOptions::GRADUAL, |_| Ok(()))
+            });
+        let strict_runtime =
+            admit_replacements(Semantics::TypedUntimed, Rc::clone(&gradual_preparation));
+        let error = strict_runtime(STRICTLY_TYPED)
+            .expect_err("a gradual replacement is refused by a strict runtime");
+        assert!(
+            format!("{error:#}").contains("requires a strictly checked specification"),
+            "{error:#}"
+        );
+        let gradual_runtime =
+            admit_replacements(Semantics::GradualTypedUntimed, gradual_preparation);
+        let admitted = gradual_runtime(STRICTLY_TYPED).expect("a gradual runtime admits it");
+        assert_eq!(admitted.check_mode(), TypeCheckMode::Gradual);
+        // Admission reuses the preparation's result; nothing is prepared twice.
+        assert_eq!(prepared.get(), 2);
+
+        let strict_preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
+            Rc::new(|source| prepare_replacement(source, TypeCheckOptions::STRICT, |_| Ok(())));
+        admit_replacements(Semantics::TypedUntimed, strict_preparation)(STRICTLY_TYPED)
+            .expect("a strict replacement enters a strict runtime");
     }
 }

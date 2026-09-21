@@ -9,6 +9,7 @@ use crate::dataflow::lifecycle_test_support::{
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
 use crate::dsrv_fixtures::TestConfig;
+use crate::dsrv_fixtures::WithoutWarnings;
 use crate::dsrv_fixtures::elaborated;
 use crate::io::map;
 use crate::io::testing::channel_output;
@@ -230,6 +231,7 @@ fn arb_specialized_runtime_program_and_inputs()
                     Vec::new(),
                 )
                 .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
                 .expect("generated specification must check"),
                 rows,
             )
@@ -352,14 +354,14 @@ proptest! {
     /// `DataflowCompilationError` is a valid result.
     #[test]
     fn dataflow_compilation_is_total(spec in arb_boolean_dsrv_spec()) {
-        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL) {
+        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).without_warnings() {
             let _ = DataflowMonitor::compile_checked(spec);
         }
     }
 
     #[test]
     fn dataflow_compilation_without_types_is_total(spec in arb_dsrv_spec()) {
-        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL) {
+        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).without_warnings() {
             let _ = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed);
         }
     }
@@ -371,6 +373,7 @@ proptest! {
         let typed_spec = spec
             .clone()
             .check_and_elaborate(TypeCheckOptions::STRICT)
+.without_warnings()
             .expect("generated specification must type check");
         let mut augmented_spec = spec.clone();
         let unused = VarName::new("unused");
@@ -392,9 +395,11 @@ proptest! {
         );
         let spec = spec
             .check_and_elaborate(TypeCheckOptions::GRADUAL)
+.without_warnings()
             .expect("generated specification must check");
         let augmented_spec = augmented_spec
             .check_and_elaborate(TypeCheckOptions::GRADUAL)
+.without_warnings()
             .expect("augmented specification must check");
         let mut monitors = [
             DataflowMonitor::compile_with_semantics(spec.clone(), Semantics::Untimed)
@@ -1246,11 +1251,12 @@ fn checking_reports_unavailable_variables_before_dataflow_compiles() {
         .parse::<DsrvSpecification>()
         .unwrap()
         .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect_err("undeclared input should be rejected by checking");
 
     assert!(errors.iter().any(|error| matches!(
         error,
-        crate::lang::dsrv::type_checker::SemanticError::UndeclaredVariable(message, Some(span))
+        crate::lang::dsrv::diagnostics::SemanticError::UndeclaredVariable(message, Some(span))
             if message.contains("missing")
                 && *span == crate::lang::dsrv::span::Span::new(
                     source.find("missing").unwrap() as u32,
@@ -1285,6 +1291,7 @@ fn dataflow_compiles_elaborated_models_and_checking_refuses_invalid_ones() {
                 .parse::<DsrvSpecification>()
                 .map_or(true, |specification| specification
                     .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                    .without_warnings()
                     .is_err()),
             "{source} must be refused before it can be compiled"
         );
@@ -1351,10 +1358,11 @@ fn static_noval_is_refused_by_checking() {
     );
     let errors = specification
         .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect_err("static NoVal is not a source literal");
     assert!(errors.iter().any(|error| matches!(
         error,
-        crate::lang::dsrv::type_checker::SemanticError::UnsupportedLiteral(message, _)
+        crate::lang::dsrv::diagnostics::SemanticError::UnsupportedLiteral(message, _)
             if message.contains("runtime states")
     )));
 }

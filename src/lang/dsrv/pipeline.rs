@@ -7,8 +7,8 @@ use std::cell::Cell;
 
 use super::{
     ast::{CheckedDsrvSpecification, DsrvSpecification, ValidatedDsrvSpecification},
-    parser,
-    type_checker::{self, SemanticErrors, SemanticResult},
+    diagnostics::{SemanticAnalysisReport, SemanticResult},
+    parser, type_checker,
 };
 
 #[cfg(test)]
@@ -49,16 +49,6 @@ impl TypeCheckOptions {
     };
 }
 
-/// Failure while parsing and type checking a DSRV specification.
-#[derive(Debug, thiserror::Error)]
-pub enum DsrvPipelineError {
-    #[error("failed to parse DSRV specification: {0}")]
-    Parse(#[source] parser::DsrvParseError),
-
-    #[error("DSRV specification failed semantic validation: {0:?}")]
-    TypeCheck(SemanticErrors),
-}
-
 impl FromStr for DsrvSpecification {
     type Err = parser::DsrvParseError;
 
@@ -77,12 +67,19 @@ impl FromStr for DsrvSpecification {
 }
 
 impl DsrvSpecification {
+    /// Check the invariants every specification must satisfy, whatever the
+    /// checking policy. This neither infers types nor warns.
     pub fn validate(self) -> SemanticResult<ValidatedDsrvSpecification> {
         type_checker::validate(self)
     }
 
-    /// Type check this specification using the requested policy.
-    pub fn type_check(self, options: TypeCheckOptions) -> SemanticResult<CheckedDsrvSpecification> {
+    /// Semantically check this specification using the requested policy,
+    /// reporting its errors or the checked specification together with any
+    /// warnings.
+    pub fn check(
+        self,
+        options: TypeCheckOptions,
+    ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
         #[cfg(test)]
         PIPELINE_COUNTS.with(|counts| {
             let (parse, strict, gradual) = counts.get();
@@ -99,31 +96,27 @@ impl DsrvSpecification {
 }
 
 impl ValidatedDsrvSpecification {
-    pub fn type_check(self, mode: TypeCheckMode) -> SemanticResult<CheckedDsrvSpecification> {
-        match mode {
+    /// Semantically check this validated specification using the requested
+    /// policy.
+    pub fn check(
+        self,
+        options: TypeCheckOptions,
+    ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+        match options.mode {
             TypeCheckMode::Strict => type_checker::check_validated_strict(self),
             TypeCheckMode::Gradual => type_checker::check_validated_gradual(self),
         }
     }
 }
 
-impl FromStr for CheckedDsrvSpecification {
-    type Err = DsrvPipelineError;
-
-    /// Parse and strictly type check a non-distributed specification.
-    fn from_str(source: &str) -> Result<Self, Self::Err> {
-        Self::parse_with(source, TypeCheckOptions::STRICT)
-    }
-}
-
 impl CheckedDsrvSpecification {
-    /// Parse and type check a specification using the requested policy.
-    pub fn parse_with(source: &str, options: TypeCheckOptions) -> Result<Self, DsrvPipelineError> {
-        source
-            .parse::<DsrvSpecification>()
-            .map_err(DsrvPipelineError::Parse)?
-            .type_check(options)
-            .map_err(DsrvPipelineError::TypeCheck)
+    /// Parse and check a specification using the requested policy. A parse
+    /// failure stops before checking; otherwise the check is reported.
+    pub fn parse_with(
+        source: &str,
+        options: TypeCheckOptions,
+    ) -> Result<SemanticAnalysisReport<Self>, parser::DsrvParseError> {
+        Ok(source.parse::<DsrvSpecification>()?.check(options))
     }
 }
 
@@ -132,11 +125,20 @@ mod tests {
     use super::*;
     use crate::{
         VarName,
-        lang::dsrv::{
-            ast::Declaration,
-            type_checker::{SemanticError, TCType},
-        },
+        dsrv_fixtures::WithoutWarnings,
+        lang::dsrv::{ast::Declaration, diagnostics::SemanticError, type_checker::TCType},
     };
+
+    /// Parse and check `source`, which must parse and must not warn.
+    #[track_caller]
+    fn checked(
+        source: &str,
+        options: TypeCheckOptions,
+    ) -> SemanticResult<CheckedDsrvSpecification> {
+        CheckedDsrvSpecification::parse_with(source, options)
+            .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
+            .without_warnings()
+    }
 
     #[test]
     fn unchecked_specifications_parse_with_from_str() {
@@ -174,10 +176,13 @@ mod tests {
         for (equation, expected) in cases {
             // Unannotated, under gradual checking.
             let source = format!("in v\n{equation}");
-            let checked = CheckedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
-                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            let specification = checked(&source, TypeCheckOptions::GRADUAL)
+                .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
             assert_eq!(
-                checked.var_expr_ref(&VarName::new("y")).unwrap().typ(),
+                specification
+                    .var_expr_ref(&VarName::new("y"))
+                    .unwrap()
+                    .typ(),
                 &expected,
                 "{source}"
             );
@@ -186,12 +191,12 @@ mod tests {
                 "in v: Any\n{}",
                 equation.replacen("out y", &format!("out y: {}", source_type(&expected)), 1)
             );
-            CheckedDsrvSpecification::parse_with(&annotated, TypeCheckOptions::STRICT)
-                .unwrap_or_else(|error| panic!("{annotated}: {error}"));
+            checked(&annotated, TypeCheckOptions::STRICT)
+                .unwrap_or_else(|errors| panic!("{annotated}: {errors:?}"));
         }
         // A value with a known type that is not a collection is still an error.
         assert!(
-            CheckedDsrvSpecification::parse_with(
+            checked(
                 "in v: Int\nout y: Int = List.len(v)",
                 TypeCheckOptions::STRICT
             )
@@ -211,8 +216,7 @@ mod tests {
 
     #[test]
     fn struct_equality_needs_operands_of_the_same_struct_type() {
-        let strict =
-            |source: &str| CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT);
+        let strict = |source: &str| checked(source, TypeCheckOptions::STRICT);
         strict("in a: Struct<x: Int>\nin b: Struct<x: Int>\nout same: Bool = a == b").unwrap();
         strict("in n: Int\nout same: Bool = {x: n, y: 2} != {y: 2, x: 1}").unwrap();
         for source in [
@@ -220,7 +224,7 @@ mod tests {
             "in n: Int\nout same: Bool = {x: 1} == {x: 1, y: 2}",
             "in n: Int\nout same: Bool = {x: 1} == n",
         ] {
-            let Err(DsrvPipelineError::TypeCheck(errors)) = strict(source) else {
+            let Err(errors) = strict(source) else {
                 panic!("{source} must not type check");
             };
             assert!(
@@ -235,8 +239,8 @@ mod tests {
     #[test]
     fn lambda_parameter_types_are_inferred_from_their_context() {
         let strict = |source: &str| {
-            CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
-                .unwrap_or_else(|error| panic!("{source}: {error}"))
+            checked(source, TypeCheckOptions::STRICT)
+                .unwrap_or_else(|errors| panic!("{source}: {errors:?}"))
         };
         for (source, output, expected) in [
             (
@@ -276,7 +280,7 @@ mod tests {
         // Annotations still win, and must agree with the context.
         strict("in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Int -> x + 1, xs)");
         assert!(
-            CheckedDsrvSpecification::parse_with(
+            checked(
                 "in xs: List<Int>\nout ys: List<Int> = List.map(\\x: Str -> 1, xs)",
                 TypeCheckOptions::STRICT,
             )
@@ -288,9 +292,7 @@ mod tests {
     fn a_lambda_parameter_without_annotation_or_context_is_strict_error_and_gradual_any() {
         // A lambda stored in a list is checked with nothing to infer from.
         let source = "in x: Int\nout y: Int = List.len(List(\\f -> 1))";
-        let Err(DsrvPipelineError::TypeCheck(errors)) =
-            CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
-        else {
+        let Err(errors) = checked(source, TypeCheckOptions::STRICT) else {
             panic!("strict checking must reject an uninferable parameter");
         };
         assert!(
@@ -301,7 +303,7 @@ mod tests {
             )),
             "{errors:?}"
         );
-        CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
+        checked(source, TypeCheckOptions::GRADUAL)
             .expect("gradual checking gives the parameter the dynamic type");
     }
 
@@ -315,32 +317,68 @@ mod tests {
     }
 
     #[test]
-    fn checked_from_str_uses_strict_non_distributed_checking() {
-        let specification = "in x: Int\nout y: Int\ny = x + 1"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
-
+    fn check_reports_the_checked_specification_and_no_warnings() {
+        let report = "in x: Int\nout y: Int\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap()
+            .check(TypeCheckOptions::STRICT);
+        assert!(report.warnings().is_empty());
+        let (specification, warnings) = report.into_parts();
+        assert!(warnings.is_empty());
         assert_eq!(
             specification
+                .unwrap()
                 .var_expr_ref(&VarName::new("y"))
                 .unwrap()
                 .typ(),
             &TCType::Int
         );
-        assert!(
-            "in x\nout y\ny = x + 1"
-                .parse::<CheckedDsrvSpecification>()
-                .is_err()
-        );
+        let report = "in x\nout y\ny = x + 1"
+            .parse::<DsrvSpecification>()
+            .unwrap()
+            .check(TypeCheckOptions::STRICT);
+        assert!(report.warnings().is_empty());
+        assert!(report.result().is_err());
+    }
+
+    #[test]
+    fn every_check_entry_point_records_its_policy_and_elaboration_keeps_it() {
+        let source = "in x: Int\nout y: Int\ny = x + 1";
+        for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+            let spec = source.parse::<DsrvSpecification>().unwrap();
+            let direct = spec.clone().check(options).without_warnings().unwrap();
+            assert_eq!(direct.check_mode(), options.mode);
+            let validated = spec.clone().validate().unwrap();
+            let validated = validated.check(options).without_warnings().unwrap();
+            assert_eq!(validated.check_mode(), options.mode);
+            let parsed = checked(source, options).unwrap();
+            assert_eq!(parsed.check_mode(), options.mode);
+
+            let elaborated = parsed.elaborate();
+            assert_eq!(elaborated.check_mode(), options.mode);
+            assert_eq!(elaborated.source().check_mode(), options.mode);
+            assert_eq!(elaborated.checked().check_mode(), options.mode);
+            let elaborated = spec
+                .check_and_elaborate(options)
+                .without_warnings()
+                .unwrap();
+            assert_eq!(elaborated.check_mode(), options.mode);
+            let parsed = crate::ElaboratedDsrvSpecification::parse_with(source, options)
+                .unwrap()
+                .without_warnings()
+                .unwrap();
+            assert_eq!(parsed.check_mode(), options.mode);
+            // The policy is not part of the printed specification.
+            assert_eq!(
+                parsed.to_string(),
+                source.parse::<DsrvSpecification>().unwrap().to_string()
+            );
+        }
     }
 
     #[test]
     fn parse_with_supports_gradual_checking() {
-        let specification = CheckedDsrvSpecification::parse_with(
-            "in x\nout y\ny = x + 1",
-            TypeCheckOptions::GRADUAL,
-        )
-        .unwrap();
+        let specification = checked("in x\nout y\ny = x + 1", TypeCheckOptions::GRADUAL).unwrap();
 
         assert_eq!(
             specification
@@ -353,30 +391,22 @@ mod tests {
 
     #[test]
     fn checked_source_facade_keeps_parse_and_semantic_errors_distinct() {
-        assert!(matches!(
-            CheckedDsrvSpecification::parse_with("out y\ny = ", TypeCheckOptions::STRICT),
-            Err(DsrvPipelineError::Parse(_))
-        ));
-        let semantic =
-            CheckedDsrvSpecification::parse_with("out y\ny = missing", TypeCheckOptions::STRICT)
-                .expect_err("undeclared references must fail common admission");
-        assert!(matches!(
-            semantic,
-            DsrvPipelineError::TypeCheck(errors)
-                if errors.iter().any(|error| matches!(
-                    error,
-                    SemanticError::UndeclaredVariable(message, _)
-                        if message.contains("missing")
-                ))
-        ));
-        let type_error =
-            CheckedDsrvSpecification::parse_with("out y: Bool\ny = 1", TypeCheckOptions::STRICT)
-                .expect_err("well-formed but ill-typed source must reach type checking");
-        assert!(matches!(
-            type_error,
-            DsrvPipelineError::TypeCheck(errors)
-                if errors.iter().any(|error| matches!(error, SemanticError::TypeError(_)))
-        ));
+        assert!(
+            CheckedDsrvSpecification::parse_with("out y\ny = ", TypeCheckOptions::STRICT).is_err()
+        );
+        let semantic = checked("out y\ny = missing", TypeCheckOptions::STRICT)
+            .expect_err("undeclared references must fail common admission");
+        assert!(semantic.iter().any(|error| matches!(
+            error,
+            SemanticError::UndeclaredVariable(message, _) if message.contains("missing")
+        )));
+        let type_error = checked("out y: Bool\ny = 1", TypeCheckOptions::STRICT)
+            .expect_err("well-formed but ill-typed source must reach type checking");
+        assert!(
+            type_error
+                .iter()
+                .any(|error| matches!(error, SemanticError::TypeError(_)))
+        );
     }
 
     #[test]
@@ -488,7 +518,8 @@ mod tests {
                 .validate()
                 .expect("annotated local model should validate");
             let local_checked = local
-                .type_check(mode)
+                .check(TypeCheckOptions { mode })
+                .without_warnings()
                 .expect("annotated local model should type-check");
             assert_eq!(
                 local_checked
@@ -503,7 +534,8 @@ mod tests {
                 .validate()
                 .expect("ordinary model should validate in distributed mode");
             let distributed_checked = distributed
-                .type_check(mode)
+                .check(TypeCheckOptions { mode })
+                .without_warnings()
                 .expect("ordinary model should type-check in distributed mode");
             assert_eq!(
                 distributed_checked
@@ -520,19 +552,24 @@ mod tests {
         let local = unannotated.clone().validate().unwrap();
         local
             .clone()
-            .type_check(TypeCheckMode::Gradual)
+            .check(TypeCheckOptions::GRADUAL)
+            .without_warnings()
             .expect("gradual inference should accept arithmetic");
         assert!(
-            local.type_check(TypeCheckMode::Strict).is_err(),
+            local.check(TypeCheckOptions::STRICT).result().is_err(),
             "strict checking must not be implied by semantic validity"
         );
         let distributed = unannotated.validate().unwrap();
         distributed
             .clone()
-            .type_check(TypeCheckMode::Gradual)
+            .check(TypeCheckOptions::GRADUAL)
+            .without_warnings()
             .expect("gradual inference should accept arithmetic");
         assert!(
-            distributed.type_check(TypeCheckMode::Strict).is_err(),
+            distributed
+                .check(TypeCheckOptions::STRICT)
+                .result()
+                .is_err(),
             "strict checking must not be implied by semantic validity"
         );
     }

@@ -7,7 +7,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proptest::prelude::*;
 
+use crate::dsrv_fixtures::WithoutWarnings;
+use crate::lang::dsrv::ast::CheckedDsrvSpecification;
+use crate::lang::dsrv::diagnostics::SemanticResult;
 use crate::{DsrvSpecification, VarName, core::BinaryOperator, lang::dsrv::ast::Expr};
+
+/// Check strictly, for tests that expect no warning.
+#[track_caller]
+pub(crate) fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+    crate::lang::dsrv::type_checker::type_check(spec).without_warnings()
+}
+
+/// Check gradually, for tests that expect no warning.
+#[track_caller]
+pub(crate) fn type_check_gradual(
+    spec: DsrvSpecification,
+) -> SemanticResult<CheckedDsrvSpecification> {
+    crate::lang::dsrv::type_checker::type_check_gradual(spec).without_warnings()
+}
 
 /// Span-free semantic-entry oracle for ordered-specification properties.
 ///

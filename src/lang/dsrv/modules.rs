@@ -223,6 +223,7 @@ pub enum ModuleCollectError {
 /// Every module of one program, parsed, keyed by absolute path.
 pub struct ModuleSources {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
+    root_source: String,
 }
 
 impl ModuleSources {
@@ -239,6 +240,11 @@ impl ModuleSources {
         self.modules
             .remove(&ModulePath::new())
             .expect("the root module is always collected")
+    }
+
+    /// The root module's text, exactly as it was supplied.
+    pub fn root_source(&self) -> &str {
+        &self.root_source
     }
 
     pub(crate) fn get(&self, path: &[ModuleName]) -> Option<&ParsedSpecification> {
@@ -281,6 +287,7 @@ impl fmt::Debug for ModuleSources {
 pub struct ModuleCollector {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
     pending: VecDeque<ModulePath>,
+    root_source: String,
 }
 
 impl ModuleCollector {
@@ -289,6 +296,7 @@ impl ModuleCollector {
         let mut collector = Self {
             modules: BTreeMap::new(),
             pending: VecDeque::new(),
+            root_source: root.to_owned(),
         };
         collector.add(ModulePath::new(), root)?;
         Ok(collector)
@@ -316,6 +324,7 @@ impl ModuleCollector {
         }
         Ok(ModuleSources {
             modules: self.modules,
+            root_source: self.root_source,
         })
     }
 

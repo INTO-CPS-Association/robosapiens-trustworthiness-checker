@@ -118,7 +118,8 @@ use crate::io::reconfigurable_input::{
 };
 use crate::io::{InputPipeline, OutputPipeline, ReconfigurationRequest};
 use crate::lang::dsrv::ElaboratedDsrvSpecification;
-use crate::runtime::builder::RuntimeBuilder;
+use crate::runtime::ReplacementPreparation;
+use crate::runtime::builder::{RuntimeBuilder, ensure_check_mode};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -317,7 +318,7 @@ pub struct ReconfigurableDataflowRuntimeBuilder {
     input_pipeline: Option<InputPipeline<Value>>,
     output_pipeline: Option<OutputPipeline<Value>>,
     reconf_topic: Option<String>,
-    parse_spec: Option<fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification>>,
+    prepare_replacement: Option<ReplacementPreparation<ElaboratedDsrvSpecification>>,
     semantics: Semantics,
     execution_policy: ExecutionPolicy,
     quickening: bool,
@@ -329,12 +330,13 @@ pub struct ReconfigurableDataflowRuntimeBuilder {
 }
 
 impl ReconfigurableDataflowRuntimeBuilder {
-    /// Check and elaborate each replacement specification.
-    pub fn parse_spec(
+    /// Prepare each replacement specification: parse, check and elaborate
+    /// it, handling its diagnostics.
+    pub fn prepare_replacement(
         mut self,
-        parse_spec: fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification>,
+        prepare: impl Fn(&str) -> anyhow::Result<ElaboratedDsrvSpecification> + 'static,
     ) -> Self {
-        self.parse_spec = Some(parse_spec);
+        self.prepare_replacement = Some(Rc::new(prepare));
         self
     }
 
@@ -402,7 +404,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             input_pipeline: None,
             output_pipeline: None,
             reconf_topic: None,
-            parse_spec: None,
+            prepare_replacement: None,
             semantics: Semantics::GradualTypedUntimed,
             execution_policy: ExecutionPolicy::Synchronous,
             quickening: true,
@@ -454,10 +456,12 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
                     anyhow::anyhow!("reconfigurable dataflow runtime model is not configured"),
                 );
             };
-            let Some(parse_spec) = self.parse_spec else {
+            let Some(prepare_replacement) = self.prepare_replacement else {
                 return failed_dataflow_runtime(
                     policy,
-                    anyhow::anyhow!("reconfigurable dataflow runtime parser is not configured"),
+                    anyhow::anyhow!(
+                        "reconfigurable dataflow runtime replacement preparation is not configured"
+                    ),
                 );
             };
             let Some(input_pipeline) = self.input_pipeline else {
@@ -494,6 +498,9 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             };
 
             let semantics = self.semantics;
+            if let Err(error) = ensure_check_mode(semantics, &model) {
+                return failed_dataflow_runtime(policy, error);
+            }
             let compiled = match compile_model(model, semantics) {
                 Ok(compiled) => compiled,
                 Err(error) => return failed_dataflow_runtime(policy, error.into()),
@@ -528,7 +535,8 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             };
 
             let compiler: ReconfigurationCompiler = Rc::new(move |source| {
-                let model = parse_spec(source)?;
+                let model = prepare_replacement(source)?;
+                ensure_check_mode(semantics, &model)?;
                 compile_model(model, semantics).map_err(anyhow::Error::from)
             });
 
@@ -595,8 +603,10 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
             let execution_policy = self.execution_policy;
             let mut startup_error = None;
             let mut monitor = match self.model {
-                Some(model) => DataflowMonitor::compile_with_semantics(model, self.semantics)
-                    .map_err(anyhow::Error::from),
+                Some(model) => ensure_check_mode(self.semantics, &model).and_then(|()| {
+                    DataflowMonitor::compile_with_semantics(model, self.semantics)
+                        .map_err(anyhow::Error::from)
+                }),
                 None => Err(anyhow::anyhow!("dataflow runtime model is not configured")),
             };
             if let Ok(monitor) = &mut monitor {
@@ -1477,7 +1487,7 @@ mod tests {
     use crate::io::testing::{channel_output, input_source_with_control, limited_null_output};
     use crate::io::{InputPipeline, OutputBackendConfig, OutputPipeline, map};
     use crate::stream_utils::Fanout;
-    use crate::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, async_test};
+    use crate::{TypeCheckOptions, Value, async_test};
 
     use super::*;
     use crate::dsrv_fixtures::elaborated;
@@ -1651,6 +1661,38 @@ mod tests {
     }
 
     #[apply(async_test)]
+    async fn typed_untimed_dataflow_refuses_a_gradually_checked_specification(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let source = "in x: Int\nout y: Int\ny = x + 1";
+        let run = |options| {
+            let spec = crate::dsrv_fixtures::elaborated_with(source, options);
+            let output_writer = recording_writer(Rc::new(RefCell::new(Vec::new())));
+            DataflowRuntimeBuilder::new()
+                .semantics(Semantics::TypedUntimed)
+                .executor(executor.clone())
+                .model(spec)
+                .input(map::input_stream(BTreeMap::new()).into())
+                .output_writer(output_writer)
+                .build()
+        };
+        let error = run(TypeCheckOptions::GRADUAL)
+            .await
+            .run()
+            .await
+            .expect_err("a gradual artefact must not run under typed-untimed");
+        assert!(
+            format!("{error:#}").contains("requires a strictly checked specification"),
+            "{error:#}"
+        );
+        run(TypeCheckOptions::STRICT)
+            .await
+            .run()
+            .await
+            .expect("a strict artefact runs under typed-untimed");
+    }
+
+    #[apply(async_test)]
     async fn dataflow_runtime_evaluates_simple_arithmetic(executor: Rc<LocalExecutor<'static>>) {
         run_dataflow_runtime(
             executor,
@@ -1689,13 +1731,9 @@ mod tests {
 
         let runtime = ReconfigurableDataflowRuntimeBuilder::new()
             .semantics(Semantics::Untimed)
-            .parse_spec(|source| {
-                crate::ElaboratedDsrvSpecification::parse_with(
-                    source,
-                    crate::TypeCheckOptions::GRADUAL,
-                )
-                .map_err(anyhow::Error::from)
-            })
+            .prepare_replacement(crate::dsrv_fixtures::replacement_preparation(
+                crate::TypeCheckOptions::GRADUAL,
+            ))
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1771,13 +1809,9 @@ mod tests {
 
         let runtime = ReconfigurableDataflowRuntimeBuilder::new()
             .semantics(Semantics::Untimed)
-            .parse_spec(|source| {
-                crate::ElaboratedDsrvSpecification::parse_with(
-                    source,
-                    crate::TypeCheckOptions::GRADUAL,
-                )
-                .map_err(anyhow::Error::from)
-            })
+            .prepare_replacement(crate::dsrv_fixtures::replacement_preparation(
+                crate::TypeCheckOptions::GRADUAL,
+            ))
             .executor(executor.clone())
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1842,13 +1876,9 @@ mod tests {
         .unwrap();
         let runtime = ReconfigurableDataflowRuntimeBuilder::new()
             .semantics(Semantics::Untimed)
-            .parse_spec(|source| {
-                crate::ElaboratedDsrvSpecification::parse_with(
-                    source,
-                    crate::TypeCheckOptions::GRADUAL,
-                )
-                .map_err(anyhow::Error::from)
-            })
+            .prepare_replacement(crate::dsrv_fixtures::replacement_preparation(
+                crate::TypeCheckOptions::GRADUAL,
+            ))
             .executor(executor)
             .model(model)
             .input_pipeline(InputPipeline::new(input_source))
@@ -1872,9 +1902,7 @@ mod tests {
     #[test]
     fn eager_jit_runtime_replacement_compiles_candidate_once_for_cold_and_transfer_plans() {
         fn checked_program(source: &str) -> DataflowProgram {
-            let checked = elaborated(&source)
-                .type_check(TypeCheckOptions::STRICT)
-                .unwrap();
+            let checked = crate::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::STRICT);
             DataflowProgram::compile_checked(checked).unwrap()
         }
 
@@ -2030,8 +2058,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x: Any\nin y: Any\nout z: Any\nz = x + y";
-        let spec =
-            ElaboratedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
+        let spec = crate::dsrv_fixtures::elaborated_with(spec_src, TypeCheckOptions::GRADUAL);
         let output_writer = limited_null_output(spec.output_vars().clone(), 3).await;
         let runtime = DataflowRuntimeBuilder::new()
             .executor(executor.clone())
@@ -2058,8 +2085,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let spec_src = "in x\nout z\nz = x + 1";
-        let spec =
-            ElaboratedDsrvSpecification::parse_with(spec_src, TypeCheckOptions::GRADUAL).unwrap();
+        let spec = crate::dsrv_fixtures::elaborated_with(spec_src, TypeCheckOptions::GRADUAL);
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let runtime = DataflowRuntimeBuilder::new()
             .executor(executor.clone())

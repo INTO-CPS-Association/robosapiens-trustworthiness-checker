@@ -163,6 +163,7 @@ fn typed_recursive_spec() -> CheckedDsrvSpecification {
 fn elaborate_gradually(spec: &DsrvSpecification) -> ElaboratedDsrvSpecification {
     spec.clone()
         .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("benchmark specification should check gradually")
 }
 

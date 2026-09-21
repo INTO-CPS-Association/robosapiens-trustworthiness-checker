@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::core::BinaryOperator;
+use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::ElaboratedDsrvSpecification;
 use crate::lang::dsrv::ast::{DsrvSpecification, Expr, SyntaxLiteral};
 use proptest::prelude::*;
@@ -161,6 +162,7 @@ pub(in crate::dataflow) fn arb_lifecycle_case() -> impl Strategy<Value = Lifecyc
         .prop_map(|(recipes, trace_a, trace_b)| LifecycleCase {
             specification: specification_from_recipes(&recipes)
                 .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+                .without_warnings()
                 .expect("lifecycle specifications check"),
             trace_a,
             trace_b,

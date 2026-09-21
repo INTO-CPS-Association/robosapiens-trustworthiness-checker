@@ -459,14 +459,18 @@ async fn redis_knowledge_multi_phase_maple_k_inputs_drive_observable_runtime(
         output_receiver,
         |mut receiver| async move { receiver.recv().await.map(|row| (row, receiver)) },
     ));
-    let builder = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
-        .executor(executor.clone())
-        .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
-        .model(spec.clone())
-        .input(input)
-        .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
-            output_sender,
-        )));
+    let builder =
+        GeneralRuntimeBuilder::<trustworthiness_checker::ElaboratedDsrvSpecification, Value>::new()
+            .executor(executor.clone())
+            .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                spec.clone(),
+                trustworthiness_checker::core::Semantics::GradualTypedUntimed,
+            ))
+            .input(input)
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
+                output_sender,
+            )));
     let runtime = builder.build().await?;
     let runtime_task = executor.spawn(Runtime::run(runtime));
 

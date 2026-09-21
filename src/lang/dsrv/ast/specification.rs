@@ -10,6 +10,7 @@ use super::{
 };
 use crate::core::{Capabilities, Requirement};
 use crate::core::{Specification, StreamType, VarName};
+use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::span::Span;
 
@@ -354,18 +355,30 @@ impl Debug for DsrvSpecification {
     }
 }
 
-/// A specification paired with one immutable type for every reachable AST node.
+/// A specification paired with one immutable type for every reachable AST node,
+/// and the policy that checked it.
 #[derive(Clone, Debug)]
 pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
     checked: AstShared<CheckedTypes>,
+    mode: TypeCheckMode,
 }
 
 impl CheckedDsrvSpecification {
-    pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes) -> Self {
+    pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes, mode: TypeCheckMode) -> Self {
         let environment = AstShared::new(spec.type_annotations().clone());
         let checked = AstShared::new(CheckedTypes::new(expr_types, environment));
-        Self { spec, checked }
+        Self {
+            spec,
+            checked,
+            mode,
+        }
+    }
+
+    /// The policy this specification was checked with. Rewrites of a checked
+    /// specification keep it.
+    pub fn check_mode(&self) -> TypeCheckMode {
+        self.mode
     }
 
     pub fn unchecked(&self) -> &DsrvSpecification {
@@ -378,10 +391,18 @@ impl CheckedDsrvSpecification {
         self,
         change: impl FnOnce(DsrvSpecification) -> DsrvSpecification,
     ) -> Self {
-        let Self { spec, checked } = self;
+        let Self {
+            spec,
+            checked,
+            mode,
+        } = self;
         let spec = change(spec);
         debug_assert!(spec.nodes().all(|node| checked.has_type(node)));
-        Self { spec, checked }
+        Self {
+            spec,
+            checked,
+            mode,
+        }
     }
 
     pub fn var_expr_ref(&self, var: &VarName) -> Option<CheckedExprRef<'_>> {
@@ -717,14 +738,13 @@ impl Specification for DsrvSpecification {
 
 #[cfg(test)]
 mod tests {
+    use crate::dsrv_fixtures::WithoutWarnings;
     use std::collections::{BTreeMap, BTreeSet};
 
     use contiguous_tree::TreeCursorExt;
     use proptest::prelude::*;
     use tracing::info;
 
-    #[cfg(feature = "thread-safe-ast")]
-    use crate::TypeCheckMode;
     use crate::TypeCheckOptions;
     use crate::VarName;
     use crate::core::BinaryOperator;
@@ -738,16 +758,16 @@ mod tests {
         ExprKind, ReconfigurableExprScope, SyntaxLiteral,
     };
     use crate::lang::dsrv::ast::{Expr, ExprView};
+    use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind};
     use crate::lang::dsrv::parser::parse_expr;
     use crate::lang::dsrv::test_support::{
         DeclarationOracle, arb_boolean_sexpr, arb_duplicate_declaration_case, arb_float_sexpr,
         arb_int_sexpr, arb_mixed_sexpr, arb_ordered_specification_case, arb_string_sexpr,
     };
-    use crate::lang::dsrv::type_checker::{SemanticError, TCType, TypeErrorKind};
+    use crate::lang::dsrv::type_checker::TCType;
 
     fn checked_expression(source: &str) -> CheckedExpr {
-        CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
-            .unwrap()
+        crate::dsrv_fixtures::checked_with(source, TypeCheckOptions::STRICT)
             .var_expr(&VarName::new("y"))
             .unwrap()
     }
@@ -829,11 +849,16 @@ mod tests {
             .unwrap();
         let validated_local = source.clone().validate().unwrap();
         let validated_distributed = source.clone().validate().unwrap();
-        let checked_local = source.clone().type_check(TypeCheckOptions::STRICT).unwrap();
+        let checked_local = source
+            .clone()
+            .check(TypeCheckOptions::STRICT)
+            .without_warnings()
+            .unwrap();
         let checked_distributed = source
             .validate()
             .unwrap()
-            .type_check(TypeCheckMode::Strict)
+            .check(TypeCheckOptions::STRICT)
+            .without_warnings()
             .unwrap();
 
         let joined = std::thread::spawn(move || {
@@ -961,13 +986,12 @@ mod tests {
     #[test]
     fn programmatic_keyed_expressions_reject_duplicate_fields_during_checking() {
         let expr = Expr::Map([("x".into(), Expr::Val(1)), ("x".into(), Expr::Val(2))]);
-        let mut context = BTreeMap::new();
-
         let errors = crate::lang::dsrv::type_checker::type_check_expression(
             &expr,
             &StreamType::Map(Box::new(StreamType::Int)),
-            &mut context,
+            &BTreeMap::new(),
         )
+        .without_warnings()
         .expect_err("programmatic duplicate fields must remain a checking error");
         assert!(errors.iter().any(|error| matches!(
             error,
@@ -1553,9 +1577,7 @@ mod tests {
 
     #[test]
     fn checked_specification_forwards_views_and_keeps_checked_storage_alive() {
-        let checked = "in z: Int\nout b: Int\nb = z + 1"
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap();
+        let checked = crate::dsrv_fixtures::checked("in z: Int\nout b: Int\nb = z + 1");
         let b = VarName::new("b");
         assert_checked_views(&checked);
         assert_eq!(checked.var_expr_ref(&b).unwrap().typ(), &TCType::Int);
@@ -1574,7 +1596,7 @@ mod tests {
 
     #[test]
     fn empty_checked_specification_has_empty_views_and_missing_lookups() {
-        let checked = "".parse::<CheckedDsrvSpecification>().unwrap();
+        let checked = crate::dsrv_fixtures::checked("");
         assert!(checked.input_vars().is_empty());
         assert!(checked.output_vars().is_empty());
         assert!(checked.aux_vars().is_empty());

@@ -4,12 +4,13 @@ use std::collections::BTreeSet;
 
 use contiguous_tree::TreeCursorExt;
 
-use super::{SemanticError, SemanticResult, TCType, TypeErrorKind};
+use super::TCType;
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
     Declaration, DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope,
     SyntaxLiteral, ValidatedDsrvSpecification,
 };
+use crate::lang::dsrv::diagnostics::{SemanticError, SemanticResult, TypeErrorKind};
 use crate::{Value, VarName};
 use ecow::EcoVec;
 
@@ -287,7 +288,7 @@ pub fn extract_value_type(value: Value) -> TCType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::dsrv::type_checker::{SemanticError, type_check_gradual};
+    use crate::lang::dsrv::test_support::type_check_gradual;
     use std::collections::BTreeMap;
     use test_log::test;
 

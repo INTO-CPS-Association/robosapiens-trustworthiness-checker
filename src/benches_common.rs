@@ -11,13 +11,13 @@ use crate::Value;
 use crate::VarName;
 use crate::core::ExecutionPolicy;
 use crate::dataflow::ContextTransferPolicy;
+use crate::dsrv_fixtures::WithoutWarnings;
 
 use crate::core::Runtime;
 use crate::core::RuntimeSpec;
 use crate::core::Semantics;
 use crate::io::output::OutputBackendConfig;
 use crate::io::{InputPipeline, InputSource, OutputPipeline};
-use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
 use crate::runtime::asynchronous::AsyncRuntimeBuilder;
 use crate::runtime::builder::RuntimeBuilder;
@@ -38,8 +38,14 @@ pub const KEY_BENCHMARK_JIT_HOTNESS_EVENTS: u64 = 1_024;
 
 /// Check and elaborate a replacement specification gradually.
 fn parse_replacement(source: &str) -> anyhow::Result<ElaboratedDsrvSpecification> {
-    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-        .map_err(anyhow::Error::from)
+    crate::dsrv_fixtures::replacement_preparation(TypeCheckOptions::GRADUAL)(source)
+}
+
+/// Check and elaborate a benchmark specification as `semantics` requires.
+fn elaborate_for(spec: DsrvSpecification, semantics: Semantics) -> ElaboratedDsrvSpecification {
+    spec.check_and_elaborate(crate::runtime::builder::type_check_options(semantics))
+        .without_warnings()
+        .expect("benchmark specification should check")
 }
 
 pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -> usize {
@@ -49,9 +55,7 @@ pub fn function_binding_benchmark(terms: usize, checked: bool) -> impl FnMut() -
         .join(" + ");
     let source = format!("in n: Int\nout result: Int\nresult = (\\x: Int -> {expression})(n)");
     let runtime_expr = if checked {
-        source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("function binding fixture should type-check")
+        crate::dsrv_fixtures::checked(&source)
             .var_expr(&VarName::new("result"))
             .unwrap()
             .expr()
@@ -106,7 +110,7 @@ pub async fn monitor_runtime_outputs(
         .runtime(runtime)
         .semantics(semantics)
         .executor(executor)
-        .model(spec)
+        .model(elaborate_for(spec, semantics))
         .output_pipeline(output_pipeline)
         .input(input_stream)
         .build()
@@ -410,10 +414,11 @@ pub async fn monitor_outputs_untyped_reconf_limited(
 ) {
     let spec = spec
         .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("reconfiguration benchmark specification should check");
     let builder: ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics> =
         ReconfSemiSyncRuntimeBuilder::new()
-            .parse_spec(parse_replacement)
+            .prepare_replacement(parse_replacement)
             .executor(executor)
             .model(spec)
             .input_pipeline(InputPipeline::new(input_source))
@@ -439,10 +444,11 @@ pub async fn monitor_outputs_untyped_dataflow_reconf_limited(
     };
     let spec = spec
         .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("reconfiguration benchmark specification should check");
     let builder = ReconfigurableDataflowRuntimeBuilder::new()
         .semantics(Semantics::Untimed)
-        .parse_spec(parse_replacement)
+        .prepare_replacement(parse_replacement)
         .executor(executor)
         .model(spec)
         .input_pipeline(input_pipeline)
@@ -469,9 +475,10 @@ pub async fn monitor_outputs_dataflow_reconf_limited(
     };
     let checked = spec
         .check_and_elaborate(TypeCheckOptions::STRICT)
+        .without_warnings()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::new()
-        .parse_spec(parse_replacement)
+        .prepare_replacement(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -498,9 +505,10 @@ pub async fn monitor_outputs_quickened_dataflow_reconf_limited(
     };
     let checked = spec
         .check_and_elaborate(TypeCheckOptions::STRICT)
+        .without_warnings()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::new()
-        .parse_spec(parse_replacement)
+        .prepare_replacement(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)
@@ -527,9 +535,10 @@ pub async fn monitor_outputs_jit_dataflow_reconf_limited(
     };
     let checked = spec
         .check_and_elaborate(TypeCheckOptions::STRICT)
+        .without_warnings()
         .expect("reconfiguration benchmark specification should type check");
     let builder = ReconfigurableDataflowRuntimeBuilder::new()
-        .parse_spec(parse_replacement)
+        .prepare_replacement(parse_replacement)
         .executor(executor)
         .model(checked)
         .input_pipeline(input_pipeline)

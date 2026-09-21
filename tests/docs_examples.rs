@@ -24,7 +24,10 @@ fn evaluate_two_ticks() -> anyhow::Result<()> {
         alert = total > 20\n\
         total = default(total[1], 0) + scaled\n\
         scaled = x * 2";
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let (spec, warnings) =
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
@@ -54,7 +57,10 @@ fn reuse_a_compiled_program_for_independent_traces() -> anyhow::Result<()> {
     let source = "in x: Int\n\
         out total: Int\n\
         total = default(total[1], 0) + x";
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let (spec, warnings) =
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let program = DataflowProgram::compile_checked(spec)?;
 
     let mut first = DataflowMonitor::from_program(program.clone());
@@ -333,7 +339,10 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
         different = base != exponent\n\
         signed_power = (-base) ** exponent\n\
         both_positive = base > 0 and exponent > 0";
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let (spec, warnings) =
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
@@ -356,7 +365,7 @@ fn evaluate_revised_operator_syntax() -> anyhow::Result<()> {
 fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
     use trustworthiness_checker::lang::dsrv::ast::{ExprView, SyntaxLiteral};
     use trustworthiness_checker::lang::dsrv::parser::parse_expr;
-    use trustworthiness_checker::{CheckedDsrvSpecification, Value};
+    use trustworthiness_checker::{CheckedDsrvSpecification, TypeCheckOptions, Value};
 
     let literals = [
         ("42", Value::Int(42)),
@@ -382,8 +391,10 @@ fn parse_numeric_literal_syntax() -> anyhow::Result<()> {
 
     for literal in ["1e2.3", "1.2e3.4"] {
         let source = format!("out result: Float\nresult = {literal}");
+        let rejected = CheckedDsrvSpecification::parse_with(&source, TypeCheckOptions::STRICT)
+            .map_or(true, |report| report.result().is_err());
         assert!(
-            source.parse::<CheckedDsrvSpecification>().is_err(),
+            rejected,
             "{literal} must be rejected as a malformed numeric specification"
         );
     }
@@ -401,7 +412,10 @@ fn evaluate_trailing_commas_and_list_get() -> anyhow::Result<()> {
         out count: Int\n\
         first = List.get(values, 0,)\n\
         count = List.len(values,)";
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let (spec, warnings) =
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let outputs = monitor.output_vars().to_vec();
     let output_index = |name: &str| {
@@ -432,7 +446,10 @@ fn evaluate_else_if_chain() -> anyhow::Result<()> {
         level = if temperature > 90 then 2\n\
                 else if temperature > 70 then 1\n\
                 else 0";
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?;
+    let (spec, warnings) =
+        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)?.into_parts();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
     let mut monitor = DataflowMonitor::compile_checked(spec)?;
     let output = VarName::new("level");
     let mut row = vec![Value::NoVal];

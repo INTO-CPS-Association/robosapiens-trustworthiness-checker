@@ -14,7 +14,7 @@ use crate::{
         distribution_constraint::{ConstraintProfile, DistributionConstraintPlan},
         distribution_graphs::{LabelledDistributionGraph, NodeName},
     },
-    lang::dsrv::{ast::ValidatedDsrvSpecification, type_checker::SemanticErrors},
+    lang::dsrv::{ast::ValidatedDsrvSpecification, diagnostics::SemanticErrors},
 };
 
 pub use crate::distributed::distribution_constraint::ConstraintLoweringError;

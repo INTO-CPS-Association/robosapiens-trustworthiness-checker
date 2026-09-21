@@ -2,10 +2,12 @@
 //! specification carrying one prints back as.
 
 use crate::VarName;
+use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
+use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind};
 use crate::lang::dsrv::parser::{DsrvParseError, check_core_source, parse_str};
 use crate::lang::dsrv::pipeline::TypeCheckOptions;
-use crate::lang::dsrv::type_checker::{SemanticError, TCType, TypeErrorKind};
+use crate::lang::dsrv::type_checker::TCType;
 use crate::lang::dsrv::{Feature, LanguageError};
 
 use test_log::test;
@@ -24,13 +26,15 @@ fn parse(body: &str) -> DsrvSpecification {
 
 fn check(body: &str) -> CheckedDsrvSpecification {
     parse(body)
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .unwrap_or_else(|errors| panic!("{}: {errors:?}", specification(body)))
 }
 
 fn check_err(body: &str) -> Vec<SemanticError> {
     parse(body)
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .err()
         .unwrap_or_else(|| panic!("{}: expected checking to fail", specification(body)))
 }

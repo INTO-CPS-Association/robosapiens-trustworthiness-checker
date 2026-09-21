@@ -2,11 +2,15 @@
 //! expression-level checker, falling back to `Any` for unannotated variables
 //! that cannot be given a concrete type.
 
-use super::*;
+use super::TCType;
+use super::warnings::WarningCollector;
 use crate::DsrvSpecification;
 use crate::core::{StreamType, UnionPayload};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
+use crate::lang::dsrv::diagnostics::{
+    SemanticAnalysisReport, SemanticError, SemanticResult, TypeErrorKind,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn gradual_fallback_type(typ: TCType) -> StreamType {
@@ -102,7 +106,21 @@ fn can_widen_gradual_error(error: &SemanticError) -> bool {
     }
 }
 
-fn type_check_gradual_for(mut spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+fn type_check_gradual_for(
+    spec: DsrvSpecification,
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+    let mut warnings = WarningCollector::default();
+    let result = type_check_gradual_with(spec, &mut warnings);
+    warnings.report(result)
+}
+
+/// Infer root types to a fixed point without emitting warnings, then check
+/// every expression once against them; only that final pass is
+/// authoritative.
+fn type_check_gradual_with(
+    mut spec: DsrvSpecification,
+    warnings: &mut WarningCollector,
+) -> SemanticResult<CheckedDsrvSpecification> {
     super::validation::validate_specification(&spec)?;
     let mut types = spec.type_annotations.clone();
     for input in &spec.input_vars {
@@ -180,17 +198,24 @@ fn type_check_gradual_for(mut spec: DsrvSpecification) -> SemanticResult<Checked
     }
 
     spec.type_annotations = types.clone();
-    let expr_types = super::checker::check_gradual_expr_types(&spec, &root_types, &mut types)?;
-    Ok(CheckedDsrvSpecification::new(spec, expr_types))
+    let expr_types =
+        super::checker::check_gradual_expr_types(&spec, &root_types, &mut types, warnings)?;
+    Ok(CheckedDsrvSpecification::new(
+        spec,
+        expr_types,
+        crate::lang::dsrv::TypeCheckMode::Gradual,
+    ))
 }
 
-pub fn type_check_gradual(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+pub(crate) fn type_check_gradual(
+    spec: DsrvSpecification,
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     type_check_gradual_for(spec)
 }
 
-pub fn check_validated_gradual(
+pub(crate) fn check_validated_gradual(
     spec: ValidatedDsrvSpecification,
-) -> SemanticResult<CheckedDsrvSpecification> {
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     type_check_gradual_for(spec.into_specification())
 }
 
@@ -200,6 +225,7 @@ mod tests {
     use crate::VarName;
     use crate::core::BinaryOperator;
     use crate::lang::dsrv::ast::Expr;
+    use crate::lang::dsrv::test_support::{type_check, type_check_gradual};
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;

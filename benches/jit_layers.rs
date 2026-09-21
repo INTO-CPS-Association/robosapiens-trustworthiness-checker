@@ -109,8 +109,7 @@ fn compile(source: &str, config: JitConfig) -> DataflowMonitor {
 
 fn compile_untyped(source: &str) -> DataflowMonitor {
     DataflowMonitor::compile_with_semantics(
-        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-            .expect("benchmark specification should parse and check"),
+        trustworthiness_checker::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::GRADUAL),
         Semantics::Untimed,
     )
     .expect("untyped benchmark specification should compile")

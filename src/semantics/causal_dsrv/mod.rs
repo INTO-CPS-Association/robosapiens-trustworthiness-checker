@@ -578,11 +578,10 @@ mod tests {
     async fn checked_role_builder_keeps_dynamic_type_validation_and_roles(
         executor: Rc<LocalExecutor<'static>>,
     ) {
-        let checked =
-            "in property: Str\nin x: Int\nout result: Int\nresult = dynamic(property : Int)"
-                .parse::<crate::CheckedDsrvSpecification>()
-                .expect("checked causal fixture should type-check")
-                .elaborate();
+        let checked = crate::dsrv_fixtures::checked(
+            "in property: Str\nin x: Int\nout result: Int\nresult = dynamic(property : Int)",
+        )
+        .elaborate();
         let (output_writer, mut rows) = channel_output(checked.output_vars().clone()).await;
         let runtime = crate::semantics::CheckedCausalRuntimeBuilder::<RoleCausalSet>::role_new()
             .executor(executor.clone())
@@ -655,14 +654,15 @@ mod tests {
         use crate::lang::dsrv::parser::parse_expr;
         use crate::lang::dsrv::type_checker::check_expression;
 
-        let spec = "in property: Str\nout result: Int\nresult = dynamic(property : Int)"
-            .parse::<crate::CheckedDsrvSpecification>()
-            .expect("fixture should type-check");
+        let spec = crate::dsrv_fixtures::checked(
+            "in property: Str\nout result: Int\nresult = dynamic(property : Int)",
+        );
         let dynamic = spec
             .var_expr_ref(&VarName::new("result"))
             .expect("result expression should exist");
         let expression = parse_expr("true").expect("runtime expression should parse");
         let errors = check_expression(expression, dynamic.typ(), dynamic.shared_type_environment())
+            .discard_warnings()
             .expect_err("a Bool runtime expression must not satisfy an Int annotation");
         assert!(!errors.is_empty());
     }

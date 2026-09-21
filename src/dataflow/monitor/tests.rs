@@ -41,6 +41,7 @@ use crate::dataflow::{
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::{JitConfig, JitPlan};
+use crate::dsrv_fixtures::WithoutWarnings;
 use crate::dsrv_fixtures::elaborated;
 use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2770,6 +2771,7 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         [],
     )
     .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+    .without_warnings()
     .expect("complete-value spec should check");
     let mut monitor = DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed)
         .expect("complete-value spec should compile");

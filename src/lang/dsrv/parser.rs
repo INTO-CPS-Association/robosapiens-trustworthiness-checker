@@ -165,6 +165,14 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
     Ok(collector.finish()?)
 }
 
+/// A program read from disk and expanded.
+pub struct LoadedProgram {
+    pub specification: DsrvSpecification,
+    /// The root file's text from the same read that produced the
+    /// specification, so diagnostics are presented against what was checked.
+    pub root_source: String,
+}
+
 /// Read a program, its modules included, and expand it.
 ///
 /// A file that declares no module expands as a program of one; one that
@@ -172,9 +180,13 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
 pub async fn parse_program_file(
     file: &str,
     request: LanguageRequest,
-) -> anyhow::Result<DsrvSpecification> {
+) -> anyhow::Result<LoadedProgram> {
     let sources = collect_modules_from_file(file).await?;
-    Ok(expand::expand_program(sources, request)?)
+    let root_source = sources.root_source().to_owned();
+    Ok(LoadedProgram {
+        specification: expand::expand_program(sources, request)?,
+        root_source,
+    })
 }
 
 /// Accept a Core DSRV file. A file without a `language` line is read as Core;
@@ -328,7 +340,7 @@ mod source_tests {
 
     #[test]
     fn aliased_annotations_type_check_structurally() {
-        use crate::lang::dsrv::type_checker::type_check;
+        use crate::lang::dsrv::test_support::type_check;
         let spec = parse_str(
             "type P = Struct<x: Int>
              in p: P
@@ -520,11 +532,10 @@ mod source_tests {
                 "{short}"
             );
         }
-        crate::CheckedDsrvSpecification::parse_with(
+        crate::dsrv_fixtures::checked_with(
             &format!("{declarations}o = {{x, label}}"),
             crate::lang::dsrv::TypeCheckOptions::STRICT,
-        )
-        .unwrap();
+        );
 
         assert!(matches!(
             parse_str(&format!("{declarations}o = {{x, x: 1}}")),
@@ -2203,7 +2214,11 @@ mod tests {
         for literal in ["1e2.3", "1.2e3.4"] {
             let source = format!("out result: Float\nresult = {literal}");
             assert!(
-                source.parse::<crate::CheckedDsrvSpecification>().is_err(),
+                crate::CheckedDsrvSpecification::parse_with(
+                    &source,
+                    crate::TypeCheckOptions::STRICT
+                )
+                .map_or(true, |report| report.result().is_err()),
                 "{literal} must not be accepted as a valid typed specification"
             );
         }

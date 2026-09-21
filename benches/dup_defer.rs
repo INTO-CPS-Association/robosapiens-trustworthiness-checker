@@ -70,7 +70,8 @@ fn from_elem(c: &mut Criterion) {
         .expect("add/defer benchmark specification should parse");
     let checked_spec = spec
         .clone()
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("add/defer benchmark specification should type check");
     let dynamic_spec = "in x\nin y\nin e\nout z\nz = dynamic(e)"
         .parse::<DsrvSpecification>()
@@ -389,7 +390,8 @@ fn hard_dynamic_defer(c: &mut Criterion) {
         let spec = hard_dynamic_defer_spec(variant);
         let checked_spec = spec
             .clone()
-            .type_check(TypeCheckOptions::GRADUAL)
+            .check(TypeCheckOptions::GRADUAL)
+            .without_warnings()
             .expect("hard dynamic/defer benchmark specification should type check");
         for size in variant.sizes().iter().copied() {
             group.throughput(Throughput::Elements(size as u64));
@@ -484,8 +486,10 @@ fn hard_dynamic_defer(c: &mut Criterion) {
 fn dataflow_dynamic_phases(c: &mut Criterion) {
     fn compile(operator: &str) -> DataflowMonitor {
         let source = format!("in x\nin y\nin e\nout z\nz = {operator}(e)");
-        let spec = ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::GRADUAL)
-            .expect("dynamic phase benchmark specification should parse and check");
+        let spec = trustworthiness_checker::dsrv_fixtures::elaborated_with(
+            &source,
+            TypeCheckOptions::GRADUAL,
+        );
         DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap()
     }
 

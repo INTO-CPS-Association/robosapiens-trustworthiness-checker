@@ -113,7 +113,9 @@ async fn run_dsrv_with_semantics(
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
-        .model(spec)
+        .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            spec, semantics,
+        ))
         .input(input)
         .output_pipeline(output_pipeline)
         .runtime(runtime_spec)
@@ -360,7 +362,8 @@ fn compare_threshold_property(c: &mut Criterion) {
     let dsrv_spec = dsrv_threshold_spec();
     let checked_dsrv_spec = dsrv_spec
         .clone()
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("threshold benchmark specification should type check");
     let mstlo_spec = mstlo_threshold_spec();
     let mstlo_formula = mstlo_threshold_formula();

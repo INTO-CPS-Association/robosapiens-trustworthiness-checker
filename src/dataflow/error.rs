@@ -66,7 +66,7 @@ pub enum DataflowStateError {
 #[derive(Debug, thiserror::Error)]
 pub enum DataflowCompilationError {
     #[error("specification failed local semantic validation: {0:?}")]
-    Semantic(crate::lang::dsrv::type_checker::SemanticErrors),
+    Semantic(crate::lang::dsrv::diagnostics::SemanticErrors),
     #[error("invalid stream program: {0}")]
     InvalidStreamProgram(#[from] StreamProgramError),
     #[error("output `{0}` is not a declared stream")]

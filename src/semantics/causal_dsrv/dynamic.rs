@@ -214,8 +214,10 @@ where
             expected,
             evaluator,
         } => {
-            let checked =
-                check_expression(expr, &expected, &environment).unwrap_or_else(|errors| {
+            // Runtime text has nowhere to present warnings.
+            let checked = check_expression(expr, &expected, &environment)
+                .discard_warnings()
+                .unwrap_or_else(|errors| {
                     panic!("Dynamic expression failed type checking: {errors:?}")
                 });
             evaluator(checked, ctx, owner)

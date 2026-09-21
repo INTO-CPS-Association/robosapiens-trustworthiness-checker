@@ -139,7 +139,9 @@ async fn run_dsrv_with_semantics(
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
-        .model(spec)
+        .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            spec, semantics,
+        ))
         .input(input)
         .output_pipeline(output_pipeline)
         .runtime(runtime_spec)
@@ -167,7 +169,10 @@ async fn run_dsrv_counted(
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
-        .model(spec)
+        .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            spec,
+            Semantics::GradualTypedUntimed,
+        ))
         .input(input)
         .output_pipeline(output_pipeline)
         .runtime(runtime_spec)
@@ -196,7 +201,9 @@ async fn run_mstlo_value(
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
-        .model(spec)
+        .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            spec, semantics,
+        ))
         .input(input)
         .output_pipeline(output_pipeline)
         .semantics(semantics)
@@ -353,7 +360,8 @@ fn compare_time_dependent_property(c: &mut Criterion) {
     let dsrv_spec = dsrv_time_dependent_spec();
     let checked_dsrv_spec = dsrv_spec
         .clone()
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("time-dependent benchmark specification should type check");
 
     let mstlo_spec = mstlo_time_dependent_spec();

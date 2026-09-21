@@ -76,9 +76,10 @@ unknown edition is an error that lists the known ones.
 
 `use experimental::{…}` opts into features that are still being designed.
 They may change or disappear between releases. When the checker runs a
-specification that uses any, it logs a warning naming them. Like the
-checker's other diagnostics, the warning is shown only when logging is
-enabled at warning level or above, for example with `RUST_LOG=warn`.
+specification that uses any, it logs a warning naming them. This notice is
+a log message, shown only when logging is enabled at warning level or above,
+for example with `RUST_LOG=warn`; semantic warnings about the specification
+itself are always written to standard error.
 `use experimental::*` enables every current experiment. Core DSRV accepts no
 experiments.
 

@@ -310,9 +310,7 @@ mod tests {
 
     #[test]
     fn checked_display_uses_inferred_annotation_projection() {
-        let checked =
-            CheckedDsrvSpecification::parse_with("out y\ny = 1", TypeCheckOptions::GRADUAL)
-                .expect("gradual checking should infer the output type");
+        let checked = crate::dsrv_fixtures::checked_with("out y\ny = 1", TypeCheckOptions::GRADUAL);
 
         assert_eq!(
             checked.type_annotation(&VarName::new("y")),
@@ -320,9 +318,7 @@ mod tests {
         );
         let displayed = checked.to_string();
         assert_eq!(displayed, "out y: Int\ny = 1\n");
-        displayed
-            .parse::<CheckedDsrvSpecification>()
-            .expect("checked display must be accepted by strict checking");
+        crate::dsrv_fixtures::checked(&displayed);
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub mod io;
 pub use io::file::parse_file;
 pub mod lang;
 pub use lang::dsrv::{
-    DsrvPipelineError, ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions,
+    ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions,
     ast::{CheckedDsrvSpecification, Declaration, DsrvSpecification, ValidatedDsrvSpecification},
 };
 pub mod distributed;

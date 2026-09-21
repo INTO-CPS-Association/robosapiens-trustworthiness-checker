@@ -165,7 +165,10 @@ mod integration_tests {
 
         let async_monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                spec.clone(),
+                Semantics::Untimed,
+            ))
             .input(input_stream)
             .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topic))
             .runtime(RuntimeSpec::Async)
@@ -209,7 +212,10 @@ mod integration_tests {
 
         let async_monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                spec.clone(),
+                Semantics::Untimed,
+            ))
             .input(input_stream)
             .output_pipeline(mqtt_output_pipeline(mqtt_port, mqtt_topics))
             .runtime(RuntimeSpec::Async)
@@ -674,7 +680,10 @@ mod integration_tests {
 
         let monitor: Box<dyn Runtime> = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                spec.clone(),
+                semantics,
+            ))
             .input(input_stream)
             .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
                 output_sender,
@@ -888,10 +897,6 @@ mod reconf_tests {
     type TestRuntimeBuilder =
         ReconfSemiSyncRuntimeBuilder<SemiSyncValueConfig, UntimedDsrvSemantics>;
 
-    fn parse_str(input: &str) -> anyhow::Result<DsrvSpecification> {
-        Ok(input.parse()?)
-    }
-
     fn route(topic: &str) -> Route {
         Route::new(topic.to_owned().into_boxed_str(), None).expect("test route is non-empty")
     }
@@ -989,9 +994,14 @@ mod reconf_tests {
             OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .prepare_replacement(replacement_preparation(
+                    trustworthiness_checker::TypeCheckOptions::GRADUAL,
+                ))
                 .executor(executor.clone())
-                .model(spec.clone())
+                .model(elaborate_for(
+                    spec.clone(),
+                    trustworthiness_checker::core::Semantics::Untimed,
+                ))
                 .input_pipeline(InputPipeline::new(input_source))
                 .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
@@ -1210,9 +1220,14 @@ mod reconf_tests {
             OutputPipeline::from_backend(OutputBackendConfig::mqtt("localhost", Some(mqtt_port)));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(parse_str)
+                .prepare_replacement(replacement_preparation(
+                    trustworthiness_checker::TypeCheckOptions::GRADUAL,
+                ))
                 .executor(executor.clone())
-                .model(spec.clone())
+                .model(elaborate_for(
+                    spec.clone(),
+                    trustworthiness_checker::core::Semantics::Untimed,
+                ))
                 .input_pipeline(InputPipeline::new(input_source))
                 .output_pipeline(output_pipeline)
                 .reconf_topic(RECONF_TOPIC.into()),
@@ -1457,11 +1472,21 @@ mod reconf_dataflow_mqtt_tests {
 
         let runtime = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec)
+            .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                spec,
+                Semantics::Untimed,
+            ))
             .input_pipeline(InputPipeline::new(input_source))?
             .output_pipeline(mqtt_output_pipeline(mqtt_port, protocol))
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
             .semantics(Semantics::Untimed)
+            .prepare_replacement(
+                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                    trustworthiness_checker::runtime::builder::type_check_options(
+                        Semantics::Untimed,
+                    ),
+                ),
+            )
             .reconf_topic(CONTROL_TOPIC.to_owned())
             .acknowledgements(ack_tx)
             .build()

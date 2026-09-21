@@ -1,19 +1,21 @@
 //! The strict type-checking driver, which requires an explicit type
 //! annotation for every variable in the specification.
 
-use super::*;
 use crate::DsrvSpecification;
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
 use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
+use crate::lang::dsrv::diagnostics::SemanticAnalysisReport;
 
 /// Strictly type-check a specification and attach type metadata to its nodes.
-pub fn type_check(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+pub(crate) fn type_check(
+    spec: DsrvSpecification,
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     super::checker::check_specification(spec)
 }
 
-pub fn check_validated_strict(
+pub(crate) fn check_validated_strict(
     spec: ValidatedDsrvSpecification,
-) -> SemanticResult<CheckedDsrvSpecification> {
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     super::checker::check_specification(spec.into_specification())
 }
 
@@ -23,7 +25,10 @@ mod tests {
     use crate::VarName;
     use crate::core::{BinaryOperator, StreamType};
     use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
+    use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind};
     use crate::lang::dsrv::span::Span;
+    use crate::lang::dsrv::test_support::{type_check, type_check_gradual};
+    use crate::lang::dsrv::type_checker::TCType;
     use ecow::EcoVec;
     use std::collections::{BTreeMap, BTreeSet};
     use test_log::test;

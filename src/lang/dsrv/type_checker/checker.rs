@@ -9,8 +9,7 @@ use ecow::{EcoString, EcoVec};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::errors::UnresolvedTypeKind;
-use super::{SemanticError, SemanticResult, TypeErrorKind};
+use super::warnings::WarningCollector;
 use super::{StreamTypeEnvironment, TCType};
 use crate::VarName;
 use crate::core::{
@@ -20,6 +19,9 @@ use crate::lang::dsrv::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
     ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
     SyntaxLiteral,
+};
+use crate::lang::dsrv::diagnostics::{
+    SemanticAnalysisReport, SemanticError, SemanticResult, TypeErrorKind, UnresolvedTypeKind,
 };
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
@@ -37,6 +39,9 @@ struct TypeContext<'types> {
     /// used (a list callback's element type, or an immediate call's
     /// arguments). Taken by that lambda; callers clear it afterwards.
     parameter_hints: Option<EcoVec<TCType>>,
+    /// Present only in a driver's authoritative phase, which alone may emit
+    /// warnings.
+    warnings: Option<&'types mut WarningCollector>,
 }
 
 impl TypeContext<'_> {
@@ -53,7 +58,18 @@ impl TypeContext<'_> {
     }
 }
 
-pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsrvSpecification> {
+pub(super) fn check_specification(
+    spec: DsrvSpecification,
+) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
+    let mut warnings = WarningCollector::default();
+    let result = check_specification_with(spec, &mut warnings);
+    warnings.report(result)
+}
+
+fn check_specification_with(
+    spec: DsrvSpecification,
+    warnings: &mut WarningCollector,
+) -> SemanticResult<CheckedDsrvSpecification> {
     super::validation::validate_specification(&spec)?;
     let mut errors = Vec::new();
     let mut context = TypeContext {
@@ -64,6 +80,7 @@ pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsr
         strict_runtime_sources: true,
         dynamic_unhinted_parameters: false,
         parameter_hints: None,
+        warnings: Some(warnings),
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -87,7 +104,11 @@ pub fn check_specification(spec: DsrvSpecification) -> SemanticResult<CheckedDsr
             .expect("strict checking records expression types")
             .finish()
             .expect("successful checking typed every expression");
-        Ok(CheckedDsrvSpecification::new(spec, expr_types))
+        Ok(CheckedDsrvSpecification::new(
+            spec,
+            expr_types,
+            crate::lang::dsrv::TypeCheckMode::Strict,
+        ))
     } else {
         Err(errors)
     }
@@ -97,6 +118,17 @@ pub(crate) fn check_expression(
     expr: Expr,
     expected: &TCType,
     environment: &AstShared<StreamTypeEnvironment>,
+) -> SemanticAnalysisReport<CheckedExpr> {
+    let mut warnings = WarningCollector::default();
+    let result = check_expression_with(expr, expected, environment, &mut warnings);
+    warnings.report(result)
+}
+
+fn check_expression_with(
+    expr: Expr,
+    expected: &TCType,
+    environment: &AstShared<StreamTypeEnvironment>,
+    warnings: &mut WarningCollector,
 ) -> SemanticResult<CheckedExpr> {
     let mut context = TypeContext {
         environment: Cow::Borrowed(environment.as_ref()),
@@ -106,6 +138,7 @@ pub(crate) fn check_expression(
         strict_runtime_sources: true,
         dynamic_unhinted_parameters: false,
         parameter_hints: None,
+        warnings: Some(warnings),
     };
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
     #[cfg(debug_assertions)]
@@ -122,18 +155,18 @@ pub(crate) fn check_expression(
     ))
 }
 
-/// Check a standalone expression against an expected stream type.
+/// Check a standalone expression against an expected stream type in
+/// `environment`.
 pub fn type_check_expression(
     expr: &Expr,
     expected: &StreamType,
-    environment: &mut super::StreamTypeEnvironment,
-) -> SemanticResult<()> {
+    environment: &StreamTypeEnvironment,
+) -> SemanticAnalysisReport<CheckedExpr> {
     check_expression(
         expr.clone(),
         &TCType::from_stream_type(expected),
         &AstShared::new(environment.clone()),
     )
-    .map(|_| ())
 }
 
 #[cfg(debug_assertions)]
@@ -169,6 +202,8 @@ pub(crate) fn infer_expression(
         strict_runtime_sources: false,
         dynamic_unhinted_parameters: true,
         parameter_hints: None,
+        // Inference is not authoritative: the final pass revisits each node.
+        warnings: None,
     };
     check(expr, expected, &mut context)
 }
@@ -177,6 +212,7 @@ pub(crate) fn check_gradual_expr_types(
     spec: &DsrvSpecification,
     root_types: &BTreeMap<VarName, TCType>,
     environment: &mut StreamTypeEnvironment,
+    warnings: &mut WarningCollector,
 ) -> SemanticResult<ExprTypes> {
     let mut context = TypeContext {
         environment: Cow::Owned(std::mem::take(environment)),
@@ -186,6 +222,7 @@ pub(crate) fn check_gradual_expr_types(
         strict_runtime_sources: false,
         dynamic_unhinted_parameters: true,
         parameter_hints: None,
+        warnings: Some(warnings),
     };
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
@@ -1057,6 +1094,9 @@ fn check(
     };
     if let Some(expected) = expected {
         require(typ.clone(), expected, expr)?;
+    }
+    if let Some(warnings) = context.warnings.as_deref_mut() {
+        warnings.observe(expr, &typ);
     }
     if let Some(expr_types) = &mut context.expr_types {
         expr_types

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 
@@ -200,6 +201,53 @@ def test_checker_rejects_invalid_monitor_specification() -> None:
         tc.TcRuntime.from_text("this is not a monitor specification")
 
 
+def test_parse_failure_is_not_a_semantic_analysis_error() -> None:
+    with pytest.raises(RuntimeError) as raised:
+        tc.TcRuntime.from_text("this is not a monitor specification")
+    assert not isinstance(raised.value, tc.SemanticAnalysisError)
+
+
+ILL_TYPED_MONITOR = """
+in velocity: Int
+
+out verdict: Bool
+
+verdict = velocity
+"""
+
+
+@pytest.mark.parametrize(
+    "semantics", ["typed-untimed", "gradual-typed-untimed", "untimed", "causal"]
+)
+def test_semantic_check_failure_raises_with_its_warnings(semantics: str) -> None:
+    with pytest.raises(tc.SemanticAnalysisError, match="failed semantic checking") as raised:
+        tc.TcRuntime.from_text(ILL_TYPED_MONITOR, semantics)
+    assert isinstance(raised.value, RuntimeError)
+    assert raised.value.warnings == ()
+    assert isinstance(raised.value.warnings, tuple)
+
+
+def test_a_checked_model_exposes_its_warnings_as_an_immutable_tuple(tmp_path: Path) -> None:
+    path = tmp_path / "monitor.dsrv"
+    path.write_text(INSTANTANEOUS_SAFETY_MONITOR)
+    for runtime in [
+        tc.TcRuntime(INSTANTANEOUS_SAFETY_MONITOR),
+        tc.TcRuntime.from_text(INSTANTANEOUS_SAFETY_MONITOR),
+        tc.TcRuntime.from_path(path),
+        tc.TcRuntime.from_text(INSTANTANEOUS_SAFETY_MONITOR, "causal"),
+    ]:
+        assert isinstance(runtime, tc.TcRuntime)
+        assert runtime.warnings == ()
+        assert isinstance(runtime.warnings, tuple)
+        with pytest.raises(AttributeError):
+            runtime.warnings = ()
+
+
+def test_semantic_warning_records_cannot_be_constructed_from_python() -> None:
+    with pytest.raises(TypeError):
+        tc.SemanticWarning()
+
+
 @pytest.mark.parametrize(
     ("selector", "roles"),
     [
@@ -267,3 +315,88 @@ def test_causal_outputs_preserve_non_finite_python_floats(value: float) -> None:
 def test_causal_selectors_require_canonical_spelling(selector: str) -> None:
     with pytest.raises(ValueError, match="unsupported semantics"):
         tc.TcRuntime.from_text(CAUSAL_MONITOR, semantics=selector)
+
+
+UNION_MONITOR = """
+use experimental::{tagged_unions}
+
+type Cycle = Union<Idle, Active: Int>
+type Step = Union<Stayed, Moved: Cycle, Held: List<Int>>
+
+in x: Int
+
+out moved: Step
+out stayed: Step
+out held: Step
+
+moved = Moved(Active(x))
+stayed = Stayed
+held = Held([x, x + 1])
+"""
+
+
+def union_outputs() -> dict[str, object]:
+    runtime = tc.TcRuntime.from_text(UNION_MONITOR)
+    runtime.provide_inputs({"x": 3})
+    output = runtime.next_output(timeout=1.0)
+    assert output is not None
+    return output
+
+
+def test_union_values_convert_to_tagged_python_records() -> None:
+    output = union_outputs()
+
+    stayed = output["stayed"]
+    assert isinstance(stayed, tc.UnionValue)
+    assert stayed.tag == "Stayed"
+    assert stayed.payload is None
+
+    moved = output["moved"]
+    assert moved.tag == "Moved"
+    assert isinstance(moved.payload, tc.UnionValue)
+    assert moved.payload.tag == "Active"
+    assert moved.payload.payload == 3
+
+    held = output["held"]
+    assert held.tag == "Held"
+    assert held.payload == [3, 4]
+
+
+def test_union_values_are_immutable_and_not_constructible() -> None:
+    value = union_outputs()["moved"]
+    with pytest.raises(AttributeError):
+        value.tag = "Stayed"
+    with pytest.raises(AttributeError):
+        value.payload = None
+    with pytest.raises(TypeError):
+        tc.UnionValue("Stayed", None)
+
+
+def test_union_value_repr_shows_tag_and_payload() -> None:
+    output = union_outputs()
+    assert repr(output["stayed"]) == "UnionValue(tag='Stayed', payload=None)"
+    assert (
+        repr(output["moved"])
+        == "UnionValue(tag='Moved', payload=UnionValue(tag='Active', payload=3))"
+    )
+    assert repr(output["held"]) == "UnionValue(tag='Held', payload=[3, 4])"
+
+
+def test_union_values_support_structural_pattern_matching() -> None:
+    assert tc.UnionValue.__match_args__ == ("tag", "payload")
+
+    def describe(value: object) -> str:
+        match value:
+            case tc.UnionValue("Stayed", None):
+                return "stayed"
+            case tc.UnionValue("Moved", tc.UnionValue("Active", speed)):
+                return f"moving at {speed}"
+            case tc.UnionValue(tag=tag, payload=payload):
+                return f"{tag}: {payload}"
+        return "not a union"
+
+    output = union_outputs()
+    assert describe(output["stayed"]) == "stayed"
+    assert describe(output["moved"]) == "moving at 3"
+    assert describe(output["held"]) == "Held: [3, 4]"
+    assert describe(3) == "not a union"

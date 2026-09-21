@@ -259,7 +259,11 @@ fn try_inline_aux(
         declarations,
     );
     inlined.source_context = spec.source_context;
-    Ok(CheckedDsrvSpecification::new(inlined, expr_types))
+    Ok(CheckedDsrvSpecification::new(
+        inlined,
+        expr_types,
+        elaborated.check_mode(),
+    ))
 }
 
 /// Emits one destination subtree per source node, replacing each use of an
@@ -456,6 +460,7 @@ impl TryLocalisable for ElaboratedDsrvSpecification {
 
 #[cfg(test)]
 mod tests {
+    use crate::dsrv_fixtures::WithoutWarnings;
     use std::collections::{BTreeMap, BTreeSet};
     use std::rc::Rc;
     use std::vec;
@@ -478,7 +483,20 @@ mod tests {
 
     fn elaborate(spec: DsrvSpecification) -> ElaboratedDsrvSpecification {
         spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+            .without_warnings()
             .expect("test specification should check")
+    }
+
+    #[test]
+    fn localisation_keeps_the_checking_policy() {
+        let source = "in x: Int\naux a: Int\nout y: Int\nout z: Int\na = x + 1\ny = a * 2\nz = x";
+        for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+            let spec = crate::dsrv_fixtures::elaborated_with(source, options);
+            let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
+            assert_eq!(localised.check_mode(), options.mode);
+            assert_eq!(localised.source().check_mode(), options.mode);
+            assert_eq!(localised.checked().check_mode(), options.mode);
+        }
     }
 
     /// The elaborated tree of a localised specification.
@@ -546,7 +564,11 @@ mod tests {
             .parse::<DsrvSpecification>()
             .unwrap();
 
-        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
+        assert!(
+            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
+                .is_err()
+        );
     }
 
     fn assert_specs_eq_ignoring_spans(actual: &DsrvSpecification, expected: &DsrvSpecification) {
@@ -974,7 +996,11 @@ mod tests {
             vec![h1, h2],
         );
 
-        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
+        assert!(
+            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
+                .is_err()
+        );
     }
 
     #[test]
@@ -989,7 +1015,11 @@ mod tests {
             [missing.clone()],
         );
 
-        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
+        assert!(
+            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
+                .is_err()
+        );
     }
 
     #[test]
@@ -1035,7 +1065,11 @@ mod tests {
         );
         let _ = output;
 
-        assert!(spec.check_and_elaborate(TypeCheckOptions::GRADUAL).is_err());
+        assert!(
+            spec.check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
+                .is_err()
+        );
     }
 
     #[test]
@@ -1111,7 +1145,11 @@ mod tests {
             restricted_vars in prop::collection::hash_set("[a-z]", 0..5)
         ) {
             let restricted_vars: Vec<VarName> = restricted_vars.into_iter().map(|s| s.into()).collect();
-            let Ok(admitted) = spec.clone().check_and_elaborate(TypeCheckOptions::GRADUAL) else {
+            let Ok(admitted) = spec
+                .clone()
+                .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
+            else {
                 return Ok(());
             };
             let localised_spec = admitted.try_localise(&restricted_vars).unwrap();

@@ -67,7 +67,8 @@ fn from_elem(c: &mut Criterion) {
         .expect("deferred benchmark specification should parse");
     let checked_spec = spec
         .clone()
-        .type_check(TypeCheckOptions::GRADUAL)
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
         .expect("deferred benchmark specification should type check");
     let percents = vec![0, 25, 50, 75, 100];
 

@@ -15,8 +15,10 @@ use super::ast::{
     CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification, ExprBuilder,
     ExprForestMap, ExprId,
 };
-use super::pipeline::{DsrvPipelineError, TypeCheckOptions};
-use super::type_checker::{SemanticResult, TCType};
+use super::diagnostics::SemanticAnalysisReport;
+use super::parser::DsrvParseError;
+use super::pipeline::{TypeCheckMode, TypeCheckOptions};
+use super::type_checker::TCType;
 use crate::core::{Capabilities, Requirement, Specification, StreamType, VarName};
 
 /// A checked specification after elaboration: the tree every runtime runs,
@@ -31,10 +33,14 @@ pub struct ElaboratedDsrvSpecification {
 }
 
 impl ElaboratedDsrvSpecification {
-    /// Parse, check and elaborate a specification.
-    pub fn parse_with(source: &str, options: TypeCheckOptions) -> Result<Self, DsrvPipelineError> {
+    /// Parse, check and elaborate a specification. A parse failure stops
+    /// before checking; otherwise the check is reported.
+    pub fn parse_with(
+        source: &str,
+        options: TypeCheckOptions,
+    ) -> Result<SemanticAnalysisReport<Self>, DsrvParseError> {
         CheckedDsrvSpecification::parse_with(source, options)
-            .map(CheckedDsrvSpecification::elaborate)
+            .map(|report| report.map_checked(CheckedDsrvSpecification::elaborate))
     }
 
     /// The checked specification as written, before elaboration.
@@ -45,6 +51,12 @@ impl ElaboratedDsrvSpecification {
     /// The elaborated tree with the type of each of its nodes.
     pub fn checked(&self) -> &CheckedDsrvSpecification {
         &self.elaborated
+    }
+
+    /// The policy the specification was checked with, which elaboration and
+    /// every later rewrite keep.
+    pub fn check_mode(&self) -> TypeCheckMode {
+        self.elaborated.check_mode()
     }
 
     pub fn var_expr_ref(&self, var: &VarName) -> Option<CheckedExprRef<'_>> {
@@ -99,9 +111,9 @@ impl DsrvSpecification {
     pub fn check_and_elaborate(
         self,
         options: TypeCheckOptions,
-    ) -> SemanticResult<ElaboratedDsrvSpecification> {
-        self.type_check(options)
-            .map(CheckedDsrvSpecification::elaborate)
+    ) -> SemanticAnalysisReport<ElaboratedDsrvSpecification> {
+        self.check(options)
+            .map_checked(CheckedDsrvSpecification::elaborate)
     }
 }
 
@@ -156,7 +168,7 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
         spec.declarations.clone(),
     );
     elaborated.source_context = spec.source_context.clone();
-    CheckedDsrvSpecification::new(elaborated, expr_types)
+    CheckedDsrvSpecification::new(elaborated, expr_types, checked.check_mode())
 }
 
 impl Display for ElaboratedDsrvSpecification {
@@ -206,6 +218,7 @@ impl Specification for ElaboratedDsrvSpecification {
 
 #[cfg(test)]
 mod tests {
+    use crate::dsrv_fixtures::WithoutWarnings;
     use contiguous_tree::TreeCursorExt;
 
     use super::*;
@@ -225,7 +238,7 @@ mod tests {
     fn elaboration_keeps_every_node_with_its_span_context_and_type() {
         for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
             let source = SOURCE.replace("out z\n", "out z: List<Int>\n");
-            let checked = CheckedDsrvSpecification::parse_with(&source, options).unwrap();
+            let checked = crate::dsrv_fixtures::checked_with(&source, options);
             let elaborated = checked.clone().elaborate();
 
             assert_eq!(elaborated.checked().unchecked(), checked.unchecked());
@@ -257,8 +270,7 @@ mod tests {
 
     #[test]
     fn printing_uses_the_source_level_specification() {
-        let checked =
-            CheckedDsrvSpecification::parse_with(SOURCE, TypeCheckOptions::GRADUAL).unwrap();
+        let checked = crate::dsrv_fixtures::checked_with(SOURCE, TypeCheckOptions::GRADUAL);
         let printed = checked.to_string();
         assert_eq!(checked.elaborate().to_string(), printed);
     }
@@ -270,11 +282,13 @@ mod tests {
             ill_typed
                 .clone()
                 .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                .without_warnings()
                 .is_err()
         );
         assert!(
             ill_typed
                 .check_and_elaborate(TypeCheckOptions::STRICT)
+                .without_warnings()
                 .is_err()
         );
     }

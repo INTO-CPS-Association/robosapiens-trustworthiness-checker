@@ -21,9 +21,20 @@ use tc_core::io::channel::{
     ChannelInputController, ChannelOutputReceiver, channel, open_output, output,
 };
 
-use tc_core::runtime::builder::GeneralRuntimeBuilder;
+use tc_core::lang::dsrv::diagnostics::{SemanticErrors, SemanticWarning as CoreSemanticWarning};
+use tc_core::runtime::builder::{GeneralRuntimeBuilder, type_check_options};
 use tc_core::semantics::CausalRuntimeBuilder;
-use tc_core::{DsrvSpecification, InputUpdate, Value, VarName};
+use tc_core::{
+    DsrvSpecification, ElaboratedDsrvSpecification, InputUpdate, TypeCheckOptions, Value, VarName,
+};
+
+pyo3::create_exception!(
+    trustworthiness_checker,
+    SemanticAnalysisError,
+    pyo3::exceptions::PyRuntimeError,
+    "The model failed semantic checking. `warnings` holds the warnings the \
+     failed analysis proved."
+);
 
 type OutputBatch = BTreeMap<VarName, Value>;
 type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
@@ -51,6 +62,19 @@ enum RuntimeMode {
     ReferenceCausalSet,
     RoleCausalSet,
     RoleCausalAntichain,
+}
+
+impl RuntimeMode {
+    /// The policy the model is checked with. The causal runtimes evaluate
+    /// without consulting types, as `untimed` does, and are checked as it is.
+    fn type_check_options(&self) -> TypeCheckOptions {
+        match self {
+            RuntimeMode::Ordinary(semantics) => type_check_options(*semantics),
+            RuntimeMode::ReferenceCausalSet
+            | RuntimeMode::RoleCausalSet
+            | RuntimeMode::RoleCausalAntichain => type_check_options(Semantics::Untimed),
+        }
+    }
 }
 
 enum RuntimeOutputs {
@@ -97,6 +121,95 @@ impl NoValue {
     }
 }
 
+/// A value of a tagged union: its tag, and its payload converted as any other
+/// value is, or `None` for a tag without one. Only the checker creates them.
+#[pyclass(module = "trustworthiness_checker", frozen)]
+struct UnionValue {
+    #[pyo3(get)]
+    tag: String,
+    #[pyo3(get)]
+    payload: Option<Py<PyAny>>,
+}
+
+#[pymethods]
+impl UnionValue {
+    #[classattr]
+    fn __match_args__() -> (&'static str, &'static str) {
+        ("tag", "payload")
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let tag = PyString::new(py, &self.tag).repr()?;
+        let payload = match &self.payload {
+            Some(payload) => payload.bind(py).repr()?.to_string(),
+            None => "None".to_owned(),
+        };
+        Ok(format!("UnionValue(tag={tag}, payload={payload})"))
+    }
+}
+
+/// A warning semantic checking proved about the model. `span` is the byte
+/// range it applies to in the model text, or `None` when it has no position.
+#[pyclass(module = "trustworthiness_checker", frozen)]
+struct SemanticWarning {
+    #[pyo3(get)]
+    code: String,
+    #[pyo3(get)]
+    message: String,
+    #[pyo3(get)]
+    span: Option<(u32, u32)>,
+}
+
+#[pymethods]
+impl SemanticWarning {
+    fn __repr__(&self) -> String {
+        format!(
+            "SemanticWarning(code={:?}, message={:?}, span={:?})",
+            self.code, self.message, self.span
+        )
+    }
+}
+
+/// The warnings of one analysis, as an immutable Python tuple, in report order.
+fn warnings_tuple(py: Python<'_>, warnings: &[CoreSemanticWarning]) -> PyResult<Py<PyTuple>> {
+    let warnings = warnings
+        .iter()
+        .map(|warning| {
+            Py::new(
+                py,
+                SemanticWarning {
+                    code: warning.code().to_owned(),
+                    message: warning.message().to_owned(),
+                    span: warning.span().map(|span| (span.start, span.end)),
+                },
+            )
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(PyTuple::new(py, warnings)?.unbind())
+}
+
+/// A semantic-check failure, carrying the warnings the failed analysis proved.
+fn semantic_analysis_error(
+    py: Python<'_>,
+    errors: &SemanticErrors,
+    warnings: Py<PyTuple>,
+) -> PyErr {
+    let error = SemanticAnalysisError::new_err(format!(
+        "failed to initialise trustworthiness checker runtime: model failed semantic checking: \
+         {errors:?}"
+    ));
+    match error.value(py).setattr("warnings", warnings) {
+        Ok(()) => error,
+        Err(setattr_error) => setattr_error,
+    }
+}
+
+fn initialisation_error(error: anyhow::Error) -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(format!(
+        "failed to initialise trustworthiness checker runtime: {error:#}"
+    ))
+}
+
 #[pyclass(module = "trustworthiness_checker", unsendable)]
 struct TcRuntime {
     executor: Rc<LocalExecutor<'static>>,
@@ -104,31 +217,42 @@ struct TcRuntime {
     input_controller: ChannelInputController<Value>,
     tick_controller: InputController,
     outputs: RuntimeOutputs,
+    warnings: Py<PyTuple>,
 }
 
 #[pymethods]
 impl TcRuntime {
     #[new]
     #[pyo3(signature = (model, *, semantics="typed-untimed"))]
-    fn new(model: &Bound<'_, PyAny>, semantics: &str) -> PyResult<Self> {
+    fn new(py: Python<'_>, model: &Bound<'_, PyAny>, semantics: &str) -> PyResult<Self> {
         let model = model_to_text(model)?;
         let semantics = parse_semantics(semantics)?;
-        Self::from_model(model, semantics)
+        Self::from_model(py, model, semantics)
     }
 
     #[staticmethod]
     #[pyo3(signature = (model, semantics=None))]
-    fn from_text(model: &str, semantics: Option<&str>) -> PyResult<Self> {
+    fn from_text(py: Python<'_>, model: &str, semantics: Option<&str>) -> PyResult<Self> {
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
-        Self::from_model(model.to_string(), semantics)
+        Self::from_model(py, model.to_string(), semantics)
     }
 
     #[staticmethod]
     #[pyo3(signature = (path, semantics=None))]
-    fn from_path(path: &Bound<'_, PyAny>, semantics: Option<&str>) -> PyResult<Self> {
+    fn from_path(
+        py: Python<'_>,
+        path: &Bound<'_, PyAny>,
+        semantics: Option<&str>,
+    ) -> PyResult<Self> {
         let model = read_pathlike(path)?;
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
-        Self::from_model(model, semantics)
+        Self::from_model(py, model, semantics)
+    }
+
+    /// The warnings semantic checking proved about the model, in report order.
+    #[getter]
+    fn warnings(&self, py: Python<'_>) -> Py<PyTuple> {
+        self.warnings.clone_ref(py)
     }
 
     fn is_initialized(&self) -> bool {
@@ -262,18 +386,35 @@ fn trustworthiness_checker(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeferredValue>()?;
     m.add_class::<NoValue>()?;
     m.add_class::<TcRuntime>()?;
+    m.add_class::<SemanticWarning>()?;
+    m.add_class::<UnionValue>()?;
+    m.add(
+        "SemanticAnalysisError",
+        m.py().get_type::<SemanticAnalysisError>(),
+    )?;
     Ok(())
 }
 
 impl TcRuntime {
-    fn from_model(model: String, semantics: RuntimeMode) -> PyResult<Self> {
+    /// Parse, then check and elaborate the model before any runtime is built.
+    /// A semantic failure raises `SemanticAnalysisError` with its warnings;
+    /// every other failure keeps its existing channel.
+    fn from_model(py: Python<'_>, model: String, semantics: RuntimeMode) -> PyResult<Self> {
+        let spec = model.parse::<DsrvSpecification>().map_err(|err| {
+            initialisation_error(anyhow::anyhow!(
+                "example model could not be parsed: {err:?}"
+            ))
+        })?;
+        let (checked, warnings) = spec
+            .check_and_elaborate(semantics.type_check_options())
+            .into_parts();
+        let warnings = warnings_tuple(py, &warnings)?;
+        let spec = checked
+            .map_err(|errors| semantic_analysis_error(py, &errors, warnings.clone_ref(py)))?;
+
         let executor = Rc::new(LocalExecutor::new());
         let (input_vars, input_controller, tick_controller, outputs) =
-            build_runtime(executor.clone(), model, semantics).map_err(|err| {
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "failed to initialise trustworthiness checker runtime: {err:#}"
-                ))
-            })?;
+            build_runtime(executor.clone(), spec, semantics).map_err(initialisation_error)?;
 
         Ok(Self {
             executor,
@@ -281,6 +422,7 @@ impl TcRuntime {
             input_controller,
             tick_controller,
             outputs,
+            warnings,
         })
     }
 
@@ -337,7 +479,7 @@ impl TcRuntime {
 
 fn build_runtime(
     executor: Rc<LocalExecutor<'static>>,
-    model: String,
+    spec: ElaboratedDsrvSpecification,
     semantics: RuntimeMode,
 ) -> anyhow::Result<(
     BTreeSet<VarName>,
@@ -349,9 +491,6 @@ fn build_runtime(
 
     smol::block_on(
         executor.run(async move {
-            let spec = model
-                .parse::<DsrvSpecification>()
-                .map_err(|err| anyhow::anyhow!("example model could not be parsed: {err:?}"))?;
             let input_vars = spec.input_vars().clone();
             let (input, input_controller) = channel();
             let (input, tick_controller) = tc_core::io::controlled(input);
@@ -370,15 +509,16 @@ fn build_runtime(
                         OutputInterface::outputs(spec.output_vars().clone())?,
                     )
                     .await?;
-                    let monitor = GeneralRuntimeBuilder::<DsrvSpecification, Value>::new()
-                        .executor(runtime_executor.clone())
-                        .model(spec)
-                        .input(input)
-                        .output_writer(output_writer)
-                        .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
-                        .semantics(semantics)
-                        .build()
-                        .await?;
+                    let monitor =
+                        GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
+                            .executor(runtime_executor.clone())
+                            .model(spec)
+                            .input(input)
+                            .output_writer(output_writer)
+                            .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
+                            .semantics(semantics)
+                            .build()
+                            .await?;
                     runtime_executor.spawn(monitor.run()).detach();
                     RuntimeOutputs::Ordinary(outputs)
                 }
@@ -561,6 +701,21 @@ fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
         Value::NoVal => Ok(Py::new(py, NoValue)?.into_any()),
         Value::Function(function) => {
             Ok(function.to_string().into_pyobject(py)?.unbind().into_any())
+        }
+        Value::Union(value) => {
+            let payload = value
+                .payload()
+                .cloned()
+                .map(|payload| value_to_py(py, payload))
+                .transpose()?;
+            Ok(Py::new(
+                py,
+                UnionValue {
+                    tag: value.tag().to_string(),
+                    payload,
+                },
+            )?
+            .into_any())
         }
     }
 }

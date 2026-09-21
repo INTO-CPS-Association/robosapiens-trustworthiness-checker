@@ -528,13 +528,14 @@ impl Jit {
 #[cfg(all(test, feature = "jit"))]
 mod tests {
     use super::*;
+    use crate::Value;
     use crate::dataflow::execution::evaluator::Evaluator;
     use crate::dataflow::execution::evaluator_state::{reset_state_clone_count, state_clone_count};
     use crate::dataflow::execution::quickening::ScalarValue;
     use crate::dataflow::execution::scheduled_plan::PlanId;
     use crate::dataflow::stream_id::StreamId;
     use crate::dataflow::{DataflowProgram, JitConfig};
-    use crate::{CheckedDsrvSpecification, Value};
+    use crate::dsrv_fixtures::elaborated;
 
     #[test]
     fn materialize_into_replays_fused_state_in_live_evaluators() {

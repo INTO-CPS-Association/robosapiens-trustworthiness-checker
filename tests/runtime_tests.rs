@@ -11,7 +11,7 @@ use trustworthiness_checker::core::{
 };
 use trustworthiness_checker::io::channel::{open_output, output};
 use trustworthiness_checker::io::{file, map};
-use trustworthiness_checker::lang::dsrv::type_checker::{type_check, type_check_gradual};
+use trustworthiness_checker::lang::dsrv::diagnostics::SemanticErrors;
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{
@@ -82,7 +82,28 @@ enum TestConfiguration {
     SemiSyncGradualTypedUntimed,
 }
 
+fn type_check(spec: DsrvSpecification) -> Result<CheckedDsrvSpecification, SemanticErrors> {
+    spec.check(TypeCheckOptions::STRICT).without_warnings()
+}
+
+fn type_check_gradual(spec: DsrvSpecification) -> Result<CheckedDsrvSpecification, SemanticErrors> {
+    spec.check(TypeCheckOptions::GRADUAL).without_warnings()
+}
+
 impl TestConfiguration {
+    fn semantics(self) -> Semantics {
+        match self {
+            TestConfiguration::AsyncUntimed | TestConfiguration::SemiSyncUntimed => {
+                Semantics::Untimed
+            }
+            TestConfiguration::AsyncTypedUntimed | TestConfiguration::SemiSyncTypedUntimed => {
+                Semantics::TypedUntimed
+            }
+            TestConfiguration::AsyncGradualTypedUntimed
+            | TestConfiguration::SemiSyncGradualTypedUntimed => Semantics::GradualTypedUntimed,
+        }
+    }
+
     fn all() -> Vec<Self> {
         vec![
             TestConfiguration::AsyncUntimed,
@@ -114,9 +135,9 @@ impl TestConfiguration {
 }
 
 fn create_builder_from_config(
-    builder: GeneralRuntimeBuilder<DsrvSpecification, Value>,
+    builder: GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value>,
     config: TestConfiguration,
-) -> GeneralRuntimeBuilder<DsrvSpecification, Value> {
+) -> GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
     match config {
         TestConfiguration::AsyncUntimed => {
             let builder = builder.runtime(RuntimeSpec::Async);
@@ -157,7 +178,7 @@ async fn run_typed_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(spec)
+        .model(elaborate_for(spec, Semantics::TypedUntimed))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -184,7 +205,7 @@ async fn run_typed_lalr_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(spec)
+        .model(elaborate_for(spec, Semantics::TypedUntimed))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -211,7 +232,7 @@ async fn run_untyped_lalr_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(spec)
+        .model(elaborate_for(spec, Semantics::Untimed))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -269,7 +290,7 @@ async fn run_gradual_typed_runtime_with_spec(
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(spec)
+        .model(elaborate_for(spec, Semantics::GradualTypedUntimed))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(runtime)
@@ -633,8 +654,7 @@ fn test_gradual_type_check_accepts_spec_rejected_by_strict() {
         type_check(spec).is_err(),
         "strict checker should reject missing annotations"
     );
-    CheckedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-        .expect("test DSRV specification should type check gradually");
+    trustworthiness_checker::dsrv_fixtures::checked_with(source, TypeCheckOptions::GRADUAL);
 }
 
 #[test]
@@ -1230,7 +1250,7 @@ echoed = payload
 
     let monitor = GeneralRuntimeBuilder::new()
         .executor(executor.clone())
-        .model(spec)
+        .model(elaborate_for(spec, Semantics::TypedUntimed))
         .input(input_stream)
         .output_writer(output_writer)
         .runtime(RuntimeSpec::Async)
@@ -1285,12 +1305,12 @@ echoed = payload
 
 #[test]
 fn test_typed_object_literal_struct_fields_are_checked() {
-    (r#"
+    checked(
+        r#"
 out robot: Struct<id: Int, ...>
 robot = {"id": 1, "label": "robot"}
-"#)
-    .parse::<CheckedDsrvSpecification>()
-    .expect("test DSRV specification should type check");
+"#,
+    );
 
     let cases = [
         (
@@ -1410,12 +1430,10 @@ s = latch(Struct("id": 1), Struct("id": 2))
     ];
 
     for spec_src in cases {
-        (spec_src)
-            .parse::<CheckedDsrvSpecification>()
-            .expect("test DSRV specification should type check");
+        checked(spec_src);
     }
 
-    let mut ctx = BTreeMap::new();
+    let ctx = BTreeMap::new();
     for (source, expected) in [
         (
             r#"dynamic("Map(\"x\": 1)": Map<Int>)"#,
@@ -1436,8 +1454,9 @@ s = latch(Struct("id": 1), Struct("id": 2))
     ] {
         let expr = parse_expr(source).expect("dynamic/defer fixture should parse");
         trustworthiness_checker::lang::dsrv::type_checker::type_check_expression(
-            &expr, &expected, &mut ctx,
+            &expr, &expected, &ctx,
         )
+        .without_warnings()
         .unwrap_or_else(|errors| {
             panic!("expected dynamic/defer expression to type-check, got {errors:?}")
         });
@@ -1577,7 +1596,7 @@ id = Map.get(robot, "id")
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -1650,7 +1669,7 @@ renamed = Map.insert(robot, "name", "bb8")
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -1869,7 +1888,7 @@ async fn test_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> 
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -1926,7 +1945,7 @@ async fn test_defer_x_squared(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -1983,7 +2002,7 @@ async fn test_defer_deferred(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2040,7 +2059,7 @@ async fn test_defer_deferred2(executor: Rc<LocalExecutor<'static>>) -> anyhow::R
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2105,7 +2124,7 @@ async fn test_defer_dependency(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2167,7 +2186,7 @@ async fn test_update_both_init(executor: Rc<LocalExecutor<'static>>) -> anyhow::
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2216,7 +2235,7 @@ async fn test_update_first_x_then_y(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2275,7 +2294,7 @@ async fn test_update_defer(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2339,7 +2358,7 @@ async fn test_defer_update(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resu
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2408,7 +2427,7 @@ async fn test_runtime_initialization(executor: Rc<LocalExecutor<'static>>) -> an
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2444,7 +2463,7 @@ async fn test_var(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2490,7 +2509,7 @@ async fn test_literal_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2540,7 +2559,7 @@ async fn test_addition(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2586,7 +2605,7 @@ async fn test_subtraction(executor: Rc<LocalExecutor<'static>>) -> anyhow::Resul
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2634,7 +2653,7 @@ async fn test_index_past_mult_dependencies(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2692,7 +2711,7 @@ async fn test_if_else_expression(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2738,7 +2757,7 @@ async fn test_string_append(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2783,7 +2802,7 @@ async fn test_default_no_deferred(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2832,7 +2851,7 @@ async fn test_default_all_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2881,7 +2900,7 @@ async fn test_default_one_deferred(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2927,7 +2946,7 @@ async fn test_counter(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -2987,7 +3006,7 @@ async fn test_simple_add_monitor_does_not_go_away(
             // Build base monitor with common settings
             let builder = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(spec_untyped.clone())
+                .model(elaborate_for(spec_untyped.clone(), config.semantics()))
                 .input(input_stream)
                 .output_writer(output_writer);
 
@@ -3041,7 +3060,7 @@ async fn test_simple_add_monitor_large_input(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3109,7 +3128,7 @@ async fn test_simple_add_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3153,7 +3172,7 @@ async fn test_simple_add_monitor_untyped_spec(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3201,7 +3220,7 @@ async fn test_defer_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyhow
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3249,7 +3268,7 @@ async fn test_dynamic_untyped_spec(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3299,7 +3318,7 @@ async fn test_simple_modulo_monitor(executor: Rc<LocalExecutor<'static>>) -> any
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3348,7 +3367,7 @@ async fn test_simple_add_monitor_float(executor: Rc<LocalExecutor<'static>>) -> 
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3396,7 +3415,7 @@ async fn test_count_monitor_sequential_dataflow_runs(
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(spec_untyped.clone())
+                .model(elaborate_for(spec_untyped.clone(), semantics))
                 .input(input_stream)
                 .output_writer(output_writer)
                 .semantics(semantics)
@@ -3439,7 +3458,7 @@ async fn test_count_monitor_sequential_dataflow_runs(
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(executor.clone())
-                .model(spec_untyped.clone())
+                .model(elaborate_for(spec_untyped.clone(), semantics))
                 .input(input_stream)
                 .output_writer(output_writer)
                 .semantics(semantics)
@@ -3560,7 +3579,7 @@ async fn test_dataflow_early_output_receiver_close(
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), semantics))
             .input(input_stream)
             .output_writer(output_writer)
             .semantics(semantics)
@@ -3608,7 +3627,7 @@ async fn test_count_monitor(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3655,7 +3674,7 @@ async fn test_multiple_parameters(executor: Rc<LocalExecutor<'static>>) -> anyho
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3700,7 +3719,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3769,7 +3788,7 @@ async fn test_revised_dynamic_source_replacement(
         let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec)
+            .model(elaborate_for(spec, config.semantics()))
             .input(input)
             .output_writer(output_writer);
         let monitor = create_builder_from_config(builder, config)
@@ -3808,7 +3827,7 @@ async fn test_string_concatenation(executor: Rc<LocalExecutor<'static>>) -> anyh
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3847,7 +3866,7 @@ async fn test_past_indexing(executor: Rc<LocalExecutor<'static>>) -> anyhow::Res
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3891,7 +3910,7 @@ async fn test_maple_sequence(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -3953,7 +3972,7 @@ async fn test_restricted_dynamic_monitor(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4018,7 +4037,7 @@ async fn test_defer_stream_1(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4094,7 +4113,7 @@ async fn test_defer_stream_2(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4170,7 +4189,7 @@ async fn test_defer_stream_3(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4246,7 +4265,7 @@ async fn test_defer_stream_4(executor: Rc<LocalExecutor<'static>>) -> anyhow::Re
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4311,7 +4330,7 @@ async fn test_defer_comp_dynamic(executor: Rc<LocalExecutor<'static>>) -> anyhow
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec_untyped.clone())
+            .model(elaborate_for(spec_untyped.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4402,7 +4421,7 @@ async fn test_benchmark_regression_long_add_defer(
         // Build base monitor with common settings
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
 
@@ -4456,7 +4475,7 @@ async fn test_map_get_deferred_propagates(
 
         let builder = GeneralRuntimeBuilder::new()
             .executor(executor.clone())
-            .model(spec)
+            .model(elaborate_for(spec, config.semantics()))
             .input(input_stream)
             .output_writer(output_writer);
         let builder = create_builder_from_config(builder, config);
@@ -4578,12 +4597,19 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), Semantics::TypedUntimed))
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("channel input factory should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
+            .prepare_replacement(
+                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                    trustworthiness_checker::runtime::builder::type_check_options(
+                        Semantics::TypedUntimed,
+                    ),
+                ),
+            )
             .reconf_topic(RECONF_TOPIC.into())
             .build()
             .await
@@ -4664,12 +4690,19 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(spec.clone())
+            .model(elaborate_for(spec.clone(), Semantics::TypedUntimed))
             .input_pipeline(InputPipeline::new(input_factory))
             .expect("channel input factory should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfSemiSync)
             .semantics(Semantics::TypedUntimed)
+            .prepare_replacement(
+                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                    trustworthiness_checker::runtime::builder::type_check_options(
+                        Semantics::TypedUntimed,
+                    ),
+                ),
+            )
             .reconf_topic(RECONF_TOPIC.into())
             .build()
             .await
@@ -4729,12 +4762,17 @@ mod reconf_tests {
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
-                .model(spec)
+                .model(elaborate_for(spec, semantics))
                 .input_pipeline(InputPipeline::new(input_source))
                 .expect("channel input source should support reconfiguration")
                 .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous))
                 .semantics(semantics)
+                .prepare_replacement(
+                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                        trustworthiness_checker::runtime::builder::type_check_options(semantics),
+                    ),
+                )
                 .acknowledgements(ack_tx)
                 // No CLI/topic override: the configured source route must be retained.
                 .build()
@@ -4785,12 +4823,19 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex.clone())
-            .model(spec)
+            .model(elaborate_for(spec, Semantics::Untimed))
             .input_pipeline(InputPipeline::new(input_source))
             .expect("channel input source should support reconfiguration")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
+            .prepare_replacement(
+                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                    trustworthiness_checker::runtime::builder::type_check_options(
+                        Semantics::Untimed,
+                    ),
+                ),
+            )
             .build()
             .await
             .expect("general runtime builder should succeed");
@@ -4849,12 +4894,19 @@ mod reconf_tests {
 
         let monitor = GeneralRuntimeBuilder::new()
             .executor(ex)
-            .model(spec)
+            .model(elaborate_for(spec, Semantics::Untimed))
             .input_pipeline(InputPipeline::new(input))
             .expect("input pipeline should be accepted by the public builder")
             .output_pipeline(output_pipeline)
             .runtime(RuntimeSpec::ReconfDataflow(ExecutionPolicy::Buffered))
             .semantics(Semantics::Untimed)
+            .prepare_replacement(
+                trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                    trustworthiness_checker::runtime::builder::type_check_options(
+                        Semantics::Untimed,
+                    ),
+                ),
+            )
             .build()
             .await
             .expect("general runtime builder should succeed");
@@ -4890,12 +4942,17 @@ mod reconf_tests {
 
             let monitor = GeneralRuntimeBuilder::new()
                 .executor(ex.clone())
-                .model(spec)
+                .model(elaborate_for(spec, semantics))
                 .input_pipeline(InputPipeline::new(input_source))
                 .expect("channel input source should support reconfiguration")
                 .output_pipeline(output_pipeline)
                 .runtime(RuntimeSpec::ReconfSemiSync)
                 .semantics(semantics)
+                .prepare_replacement(
+                    trustworthiness_checker::dsrv_fixtures::replacement_preparation(
+                        trustworthiness_checker::runtime::builder::type_check_options(semantics),
+                    ),
+                )
                 .reconf_topic(RECONF_TOPIC.into())
                 .use_context_transfer(false)
                 .build()
@@ -4964,10 +5021,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5090,10 +5144,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5211,10 +5262,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5307,10 +5355,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5409,10 +5454,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5516,10 +5558,7 @@ mod reconf_tests {
         let output_pipeline = OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
         let monitor_builder = Box::new(
             TestRuntimeBuilder::new()
-                .parse_spec(|source| {
-                    ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                        .map_err(anyhow::Error::from)
-                })
+                .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                 .executor(ex.clone())
                 .model(spec.clone())
                 .input_pipeline(InputPipeline::new(input_factory))
@@ -5633,10 +5672,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| {
-                        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                            .map_err(anyhow::Error::from)
-                    })
+                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))
@@ -5753,10 +5789,7 @@ mod reconf_tests {
                 OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
             let monitor_builder = Box::new(
                 TestRuntimeBuilder::new()
-                    .parse_spec(|source| {
-                        ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-                            .map_err(anyhow::Error::from)
-                    })
+                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
                     .executor(ex.clone())
                     .model(spec.clone())
                     .input_pipeline(InputPipeline::new(input_factory))

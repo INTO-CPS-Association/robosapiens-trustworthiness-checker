@@ -5,17 +5,20 @@
 //! in the source context of the node it was supplied to, may call the same
 //! defs that node's file could, and is checked against the type and
 //! environment elaboration gave that node.
+//!
+//! Warnings proved while checking such text are discarded: runtime text has
+//! no channel to present them on, so a runtime sees only whether the text
+//! checked.
 
 use std::collections::BTreeMap;
 
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr};
+use crate::lang::dsrv::diagnostics::SemanticErrors;
 use crate::lang::dsrv::expand::functions::Callable;
 use crate::lang::dsrv::parser::{DsrvParseError, parse_expr_with_functions};
 use crate::lang::dsrv::source::SourceContext;
-use crate::lang::dsrv::type_checker::{
-    SemanticErrors, StreamTypeEnvironment, TCType, check_expression,
-};
+use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 
 /// The type and environment runtime text is checked against: what elaboration
 /// gave the `dynamic` or `defer` node the text was supplied to.
@@ -94,10 +97,13 @@ impl RuntimeText {
                 check_expression(expr, &TCType::Any, &AstShared::new(environment))
             }
         };
-        checked.map_err(|errors| RuntimeTextError::TypeCheck {
-            text: text.to_owned(),
-            errors,
-        })
+        // Runtime text has nowhere to present warnings.
+        checked
+            .discard_warnings()
+            .map_err(|errors| RuntimeTextError::TypeCheck {
+                text: text.to_owned(),
+                errors,
+            })
     }
 
     /// Parse and check `text`, giving the expression a runtime evaluates.

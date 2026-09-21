@@ -1,6 +1,7 @@
 //! DSRV syntax, parsers, and type checking.
 
 pub mod ast;
+pub mod diagnostics;
 mod elaborate;
 pub(crate) mod expand;
 pub mod modules;
@@ -26,6 +27,8 @@ mod module_tests;
 mod tagged_union_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod warning_tests;
 
 pub use elaborate::ElaboratedDsrvSpecification;
 pub use expand::language::{
@@ -33,6 +36,6 @@ pub use expand::language::{
     LanguageRequest,
 };
 pub use parser::{DsrvParseError, check_core_source};
-pub use pipeline::{DsrvPipelineError, TypeCheckMode, TypeCheckOptions};
+pub use pipeline::{TypeCheckMode, TypeCheckOptions};
 #[cfg(test)]
 pub(crate) use pipeline::{reset_test_pipeline_counts, test_pipeline_counts};

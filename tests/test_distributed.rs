@@ -72,11 +72,10 @@ async fn channel_output(
 /// Every specification here is monitored in a distribution, so it is written
 /// in Distributed DSRV.
 fn parse_spec(source: &str) -> ElaboratedDsrvSpecification {
-    ElaboratedDsrvSpecification::parse_with(
+    trustworthiness_checker::dsrv_fixtures::elaborated_with(
         &format!("language distributed\n{source}"),
         TypeCheckOptions::GRADUAL,
     )
-    .expect("test DSRV specification should parse and check")
 }
 
 // SYN-R15/R18/E1/E2: the in-process distributed runtime carries revised scalar

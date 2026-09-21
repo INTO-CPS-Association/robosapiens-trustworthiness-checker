@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::DataflowMonitor;
-use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+use trustworthiness_checker::{TypeCheckOptions, Value, VarName};
 
 struct CountingAllocator;
 
@@ -59,8 +59,8 @@ fn counts() -> AllocationCounts {
 }
 
 fn compile(source: &str) -> DataflowMonitor {
-    let spec = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::GRADUAL)
-        .expect("allocation benchmark specification should parse and check");
+    let spec =
+        trustworthiness_checker::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::GRADUAL);
     DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .expect("allocation benchmark monitor should compile")
 }

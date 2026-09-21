@@ -6,7 +6,7 @@ use smol::Timer;
 use tracing::info;
 
 use crate::{
-    DsrvSpecification, ElaboratedDsrvSpecification, Value, VarName,
+    ElaboratedDsrvSpecification, Value, VarName,
     distributed::{
         distribution_graphs::{DistributionGraph, LabelledDistributionGraph},
         scheduling::planning_context::PlanningContext,
@@ -275,7 +275,7 @@ mod tests {
         })
     }
 
-    fn aux_spec() -> DsrvSpecification {
+    fn aux_spec() -> crate::ElaboratedDsrvSpecification {
         let src = r#"language distributed
 in c1
 in c2
@@ -295,9 +295,7 @@ d2 = h2
 d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
 "#
         .trim();
-        (src)
-            .parse::<DsrvSpecification>()
-            .expect("test DSRV specification should parse")
+        crate::dsrv_fixtures::elaborated(src)
     }
 
     fn planning_snapshot(c1: bool, c2: bool, c3: bool) -> PlanningContextSnapshot {
