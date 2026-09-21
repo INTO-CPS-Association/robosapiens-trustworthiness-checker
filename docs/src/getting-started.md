@@ -82,6 +82,14 @@ For a native Windows build, install rustup and the MSVC C++ prerequisites, then 
 
 Under WSL, use the Linux instructions on this page inside the WSL distribution. Install Rust and build tools inside WSL rather than reusing a Windows Rust installation. See [Windows Subsystem for Linux](tutorials/windows.md#windows-subsystem-for-linux-wsl) for filesystem and Docker Desktop considerations.
 
+## Editor Support
+
+![The DSRV extension in VS Code: syntax highlighting, completion, and run commands](./assets/user/editor-support.png)
+
+A Visual Studio Code extension provides syntax highlighting, completion, and inline diagnostics for `.dsrv` files, and runs a model from the editor without switching to a shell. The language features come from the DSRV language server, which reuses this repository's parser and type checker, so the errors shown while editing are the ones the checker reports.
+
+See [Editor Support](features/editor-support.md) for what it provides, which binaries it needs, and how to configure them.
+
 ## Continue from the first run
 
 - [Write and run DSRV models](tutorials/write-dsrv-monitor.md) explains declarations, equations, timestamped traces, history, `defer`, and `dynamic`.
