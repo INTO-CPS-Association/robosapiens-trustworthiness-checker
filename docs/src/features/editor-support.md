@@ -27,7 +27,7 @@ The extension does not bundle the binaries it drives. Two executables must be av
 | `dsrv-lsp` | [dsrv-lsp](https://github.com/INTO-CPS-Association/dsrv-lsp) | Completion and diagnostics |
 | `trustworthiness_checker` | This repository | Executing a model from the editor |
 
-Build the checker as described in [Getting started](getting-started.md). For a standalone binary rather than `cargo run`, build in release mode from the repository root:
+Build the checker as described in [Getting started](../getting-started.md). For a standalone binary rather than `cargo run`, build in release mode from the repository root:
 
 ```sh
 cargo build --release --package trustworthiness_checker
@@ -76,7 +76,7 @@ Each command opens a terminal and invokes the checker directly:
 
 The simplest workflow keeps an input file beside the model with the same base name - `counter.dsrv` and `counter.input` - so **Run DSRV** needs no file dialog.
 
-Note that the editor commands select `untimed` or `typed-untimed` explicitly, while the CLI default is `gradual-typed-untimed`. Running the same model from the editor and from a shell without options therefore selects different semantics. See the [CLI reference](reference/cli.md) for the full set of semantics values.
+Note that the editor commands select `untimed` or `typed-untimed` explicitly, while the CLI default is `gradual-typed-untimed`. Running the same model from the editor and from a shell without options therefore selects different semantics. See the [CLI reference](../reference/cli.md) for the full set of semantics values.
 
 ## Troubleshooting
 
