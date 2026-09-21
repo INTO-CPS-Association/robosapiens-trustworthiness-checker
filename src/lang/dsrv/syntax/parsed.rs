@@ -32,7 +32,7 @@ contiguous_tree::tree_schema! {
         keyed_children: EcoVec,
 
         If(condition: child, then_expr: child, else_expr: child),
-        SIndex(input: child, offset: copy(u64)),
+        SIndex(input: child, offset: data(SourceOffset)),
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Var(variable: data(VarName)),
@@ -88,6 +88,16 @@ contiguous_tree::tree_schema! {
     }
 }
 
+/// How far back a stream offset reaches, before names are resolved.
+///
+/// The core AST keeps a number; a constant naming one is folded away in
+/// expansion, exactly as `ModuleItem` is.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SourceOffset {
+    Literal(u64),
+    Named(ValuePath),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ParsedDeclaration {
     Input(VarName, Option<SourceType>, Span),
@@ -117,6 +127,15 @@ pub(crate) enum ParsedDeclaration {
         internal: bool,
         span: Span,
     },
+    /// `const <name>: <type> = <body>`: a value folded once and written in
+    /// wherever it is named, rather than evaluated.
+    Const {
+        name: VarName,
+        ty: SourceType,
+        body: ParsedExprId,
+        internal: bool,
+        span: Span,
+    },
     /// `mod <path>`, naming a submodule this file pulls in. The path is the
     /// module's name, not a file: mapping it to one is the collector's work.
     Mod {
@@ -142,7 +161,8 @@ impl ParsedSpecification {
                 ParsedDeclaration::Equation(_, root, _)
                 | ParsedDeclaration::Output(_, _, Some(root), _)
                 | ParsedDeclaration::Aux(_, _, Some(root), _)
-                | ParsedDeclaration::Def { body: root, .. } => Some(*root),
+                | ParsedDeclaration::Def { body: root, .. }
+                | ParsedDeclaration::Const { body: root, .. } => Some(*root),
                 _ => None,
             });
         let expressions = builder

@@ -136,6 +136,9 @@ pub enum SourceResolveError {
 
     #[error("`{name}` at {span:?} names no function: a module-qualified value must name a `def`")]
     UnknownModuleItem { name: EcoString, span: Span },
+
+    #[error("`{name}` at {span:?} names no constant: a stream offset must be a number")]
+    UnknownOffset { name: EcoString, span: Span },
     #[error("{name} at {span:?} takes {expected} type arguments, given {found}")]
     AliasArity {
         name: TypePath,

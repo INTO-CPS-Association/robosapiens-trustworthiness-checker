@@ -83,7 +83,12 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::Inlined(_)
             | DsrvExpandError::UnknownFunction { .. }
             | DsrvExpandError::RecursiveFunction { .. }
-            | DsrvExpandError::FunctionArity { .. }) => Self::Modules(other.to_string()),
+            | DsrvExpandError::FunctionArity { .. }
+            | DsrvExpandError::NotConstant { .. }
+            | DsrvExpandError::UnknownConstant { .. }
+            | DsrvExpandError::RecursiveConstant { .. }
+            | DsrvExpandError::ConstantValue { .. }
+            | DsrvExpandError::ConstantOffset { .. }) => Self::Modules(other.to_string()),
         }
     }
 }

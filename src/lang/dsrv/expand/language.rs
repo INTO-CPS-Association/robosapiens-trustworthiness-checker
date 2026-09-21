@@ -124,6 +124,7 @@ pub enum Feature {
     Generics,
     Modules,
     Functions,
+    Constants,
 }
 
 impl Feature {
@@ -134,6 +135,7 @@ impl Feature {
         Self::Generics,
         Self::Modules,
         Self::Functions,
+        Self::Constants,
     ];
 
     pub fn name(self) -> &'static str {
@@ -143,6 +145,7 @@ impl Feature {
             Self::Generics => "generics",
             Self::Modules => "modules",
             Self::Functions => "functions",
+            Self::Constants => "constants",
         }
     }
 
@@ -208,6 +211,11 @@ impl LanguageConfig {
     /// Whether imports beyond `use experimental` are available.
     pub(crate) fn has_modules(&self) -> bool {
         self.has(Feature::Modules)
+    }
+
+    /// Whether `const` is available.
+    pub(crate) fn has_constants(&self) -> bool {
+        self.has(Feature::Constants)
     }
 
     pub(super) fn has(&self, feature: Feature) -> bool {
@@ -986,7 +994,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item

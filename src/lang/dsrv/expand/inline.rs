@@ -105,13 +105,21 @@ pub(crate) fn inline_functions(
             // Every declaration that owns a root, in the order
             // `ParsedSpecification::new` collects them.
             ParsedDeclaration::Equation(..)
+            | ParsedDeclaration::Const { .. }
             | ParsedDeclaration::Output(_, _, Some(_), _)
             | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
             _ => {}
         }
     }
-    // A file that declares no def may still call an imported one.
-    if declared.is_empty() && imported.bare.is_empty() && imported.qualified.is_empty() {
+    // A file that declares no def may still call an imported one, and a
+    // file that declares neither may still name a constant.
+    let names_nothing = declared.is_empty()
+        && imported.bare.is_empty()
+        && imported.qualified.is_empty()
+        && imported
+            .constants
+            .is_none_or(super::constants::Constants::is_empty);
+    if names_nothing {
         return Ok(parsed);
     }
 
@@ -175,6 +183,19 @@ pub(crate) fn inline_functions(
                 internal,
                 span,
             },
+            ParsedDeclaration::Const {
+                name,
+                ty,
+                internal,
+                span,
+                ..
+            } => ParsedDeclaration::Const {
+                name,
+                ty,
+                body: next.next().expect("one root each"),
+                internal,
+                span,
+            },
             other => other,
         })
         .collect();
@@ -188,6 +209,10 @@ pub(crate) fn inline_functions(
 /// module.
 #[derive(Default)]
 pub(crate) struct Scope<'a> {
+    /// What a bare or qualified name stands for, where it names a constant
+    /// rather than a stream. A constant is a value, not a tree, so it is
+    /// written in as a literal rather than grafted.
+    pub(crate) constants: Option<&'a super::constants::Constants>,
     pub(crate) bare: BTreeMap<VarName, Def<'a>>,
     pub(crate) qualified: BTreeMap<(Vec<ModuleName>, VarName), Def<'a>>,
 }
@@ -253,6 +278,44 @@ fn graft(
             def, None, named, cursor, &arguments, scope, builder, active, stamp,
         );
     }
+    // A constant is a value, so it replaces the name with a literal leaf.
+    // Allocating a leaf keeps the trailing-roots discipline trivially.
+    if let Some(constants) = scope.constants {
+        if let ParsedExprKind::Var(name) = cursor.kind()
+            && let Some(value) = constants.bare(name)
+        {
+            return Ok(builder.alloc(
+                ParsedExprKind::Val(value.clone()),
+                stamp.unwrap_or_else(|| parsed::span_of(cursor)),
+            ));
+        }
+        if let ParsedExprKind::ModuleItem(path) = cursor.kind()
+            && let Some(value) = constants.through_module(path.module(), path.name())
+        {
+            return Ok(builder.alloc(
+                ParsedExprKind::Val(value.clone()),
+                stamp.unwrap_or_else(|| parsed::span_of(cursor)),
+            ));
+        }
+        // An offset is a number rather than an expression, so a constant
+        // standing in for one is resolved to the number itself.
+        if let ParsedExprKind::SIndex(input, parsed::SourceOffset::Named(path)) = cursor.kind() {
+            let span = parsed::span_of(cursor);
+            let found = if path.module().is_empty() {
+                constants.bare(path.name())
+            } else {
+                constants.through_module(path.module(), path.name())
+            };
+            if let Some(value) = found {
+                let offset = offset_of(value, path, span)?;
+                let input = graft(cursor.child(*input), scope, builder, active, stamp)?;
+                return Ok(builder.alloc(
+                    ParsedExprKind::SIndex(input, parsed::SourceOffset::Literal(offset)),
+                    stamp.unwrap_or(span),
+                ));
+            }
+        }
+    }
     let mut grafted = Vec::new();
     for child in cursor.child_ids() {
         grafted.push(graft(cursor.child(child), scope, builder, active, stamp)?);
@@ -263,6 +326,21 @@ fn graft(
         *child = next.next().expect("one grafted child per child id");
     });
     Ok(builder.alloc(kind, stamp.unwrap_or_else(|| parsed::span_of(cursor))))
+}
+
+/// The number an offset's constant stands for, which must be a count.
+fn offset_of(
+    value: &crate::lang::dsrv::ast::SyntaxLiteral,
+    path: &ValuePath,
+    span: crate::lang::dsrv::span::Span,
+) -> Result<u64, DsrvExpandError> {
+    match value {
+        crate::lang::dsrv::ast::SyntaxLiteral::Int(offset) if *offset >= 0 => Ok(*offset as u64),
+        _ => Err(DsrvExpandError::ConstantOffset {
+            name: path.to_string(),
+            span,
+        }),
+    }
 }
 
 /// Build `(\p… -> body)(a…)` for a call to a def named without a qualifier.

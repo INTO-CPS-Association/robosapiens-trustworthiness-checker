@@ -58,6 +58,7 @@
 //! and whether equations fit their types are validation's and the type
 //! checker's questions, asked of the assembled specification.
 
+pub(crate) mod constants;
 pub(crate) mod functions;
 pub(crate) mod graph;
 pub(crate) mod inline;
@@ -74,6 +75,7 @@ use super::ast::{
 };
 use super::source::SourceType;
 use super::source::{SourceContext, SourceResolveError};
+use super::span::Span;
 use super::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAscription};
 use crate::core::StreamType;
@@ -132,6 +134,21 @@ pub enum DsrvExpandError {
 
     #[error("{name} is internal to its module and cannot be imported")]
     InternalImport { name: String },
+
+    #[error("a constant cannot be built from {construct}")]
+    NotConstant { construct: &'static str, span: Span },
+
+    #[error("`{name}` names no constant")]
+    UnknownConstant { name: String, span: Span },
+
+    #[error("`{name}` is defined in terms of itself; a `const` may not recurse")]
+    RecursiveConstant { name: String },
+
+    #[error("a constant could not be worked out: {message}")]
+    ConstantValue { message: String, span: Span },
+
+    #[error("`{name}` is not a count, so it cannot be a stream offset")]
+    ConstantOffset { name: String, span: Span },
 }
 
 /// A parsed specification's declarations, with names and types resolved.
@@ -198,6 +215,13 @@ pub(crate) fn expand_declarations_in(
                 span,
                 ..
             } => Some(("an internal function", *span)),
+            // An internal constant is hidden the same way, and likewise
+            // needs `constants` for the constant itself.
+            ParsedDeclaration::Const {
+                internal: true,
+                span,
+                ..
+            } => Some(("an internal constant", *span)),
             _ => None,
         };
         if let Some((construct, span)) = module_construct
@@ -220,6 +244,23 @@ pub(crate) fn expand_declarations_in(
             }
             .into());
         }
+        if let ParsedDeclaration::Const { span, .. } = declaration {
+            if !language.has_constants() {
+                return Err(LanguageError::NeedsExperiment {
+                    construct: "a constant",
+                    feature: "constants",
+                    span: *span,
+                }
+                .into());
+            }
+            if core {
+                return Err(LanguageError::NotCore {
+                    construct: "a constant",
+                    span: *span,
+                }
+                .into());
+            }
+        }
         if let ParsedDeclaration::Alias(alias) = declaration {
             if core {
                 return Err(LanguageError::NotCore {
@@ -234,16 +275,24 @@ pub(crate) fn expand_declarations_in(
             }
         }
     }
-    // A program of several files was handed a table built over all of them;
+    let context = match supplied {
+        Some(context) => context,
+        None => {
+            context.language(language.clone());
+            Rc::new(context.build()?)
+        }
+    };
+    // A program of several files was handed tables built over all of them;
     // a program of one file builds its own, so text supplied to it at
-    // runtime can call the defs that file declared.
+    // runtime reaches the defs and constants that file declared.
     let callable = match callable {
-        // A program whose modules declared no def leaves its nodes carrying
-        // nothing, as a program without the experiment does.
+        // A program whose modules declared neither leaves its nodes
+        // carrying nothing, as a program without the experiments does.
         Some(callable) if !callable.is_empty() => Some(callable),
         Some(_) => None,
-        None if declares_a_def(parsed.declarations()) => Some(Rc::new(Callable::new(
+        None if declares_a_def_or_constant(parsed.declarations()) => Some(Rc::new(Callable::new(
             Rc::new(functions::single_file_table(&parsed)?),
+            Rc::new(constants::single_file_constants(&parsed, &context)?),
             &ModulePath::new(),
             parsed.declarations(),
         )?)),
@@ -256,13 +305,6 @@ pub(crate) fn expand_declarations_in(
         .map_or_else(inline::Scope::default, |callable| callable.scope());
     let parsed = inline::inline_functions(parsed, scope)?;
     let (expressions, parsed_declarations) = parsed.into_parts();
-    let context = match supplied {
-        Some(context) => context,
-        None => {
-            context.language(language.clone());
-            Rc::new(context.build()?)
-        }
-    };
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
     let mut declarations = EcoVec::new();
@@ -339,8 +381,14 @@ pub(crate) fn expand_declarations_in(
             // A def is inlined at its call sites rather than kept as a
             // declaration, but it owns a root and must consume it here so
             // the remaining declarations still line up with theirs.
-            ParsedDeclaration::Def { .. } => {
-                roots.next().expect("each def owns one parsed root");
+            // A def is inlined at its call sites and a constant is folded
+            // into them, so neither is kept as a declaration; both own a
+            // root and must consume it here so the remaining declarations
+            // still line up with theirs.
+            ParsedDeclaration::Def { .. } | ParsedDeclaration::Const { .. } => {
+                roots
+                    .next()
+                    .expect("each def and constant owns one parsed root");
                 continue;
             }
             // The header is expanded into the source context, not kept.
@@ -359,12 +407,15 @@ pub(crate) fn expand_declarations_in(
     })
 }
 
-/// Whether a file declares a function, which is what makes a table worth
-/// building for it.
-fn declares_a_def(declarations: &[ParsedDeclaration]) -> bool {
-    declarations
-        .iter()
-        .any(|declaration| matches!(declaration, ParsedDeclaration::Def { .. }))
+/// Whether a file declares a function or a constant, which is what makes
+/// a table worth building for it.
+fn declares_a_def_or_constant(declarations: &[ParsedDeclaration]) -> bool {
+    declarations.iter().any(|declaration| {
+        matches!(
+            declaration,
+            ParsedDeclaration::Def { .. } | ParsedDeclaration::Const { .. }
+        )
+    })
 }
 
 /// Resolve a declared stream's annotation, refusing a type its file did not
@@ -387,6 +438,19 @@ fn check_expression_types(
 ) -> Result<(), DsrvExpandError> {
     use contiguous_tree::TreeCursorExt;
     for node in expression.postorder() {
+        // Writing an offset as a name is what `constants` adds to a
+        // spelling every file can now parse, so the check belongs here
+        // rather than in the grammar.
+        if let ParsedExprKind::SIndex(_, parsed::SourceOffset::Named(_)) = node.kind()
+            && !context.language().has_constants()
+        {
+            return Err(LanguageError::NeedsExperiment {
+                construct: "a named stream offset",
+                feature: "constants",
+                span: parsed::span_of(node),
+            }
+            .into());
+        }
         // Naming a value through a module is what `modules` adds. The
         // check belongs here because `ModuleItem` is a parsed kind that
         // inlining resolves away, so no core node carries it.
@@ -439,8 +503,9 @@ pub(crate) fn expand_program(
         .expect("the root has a namespace")
         .clone();
     let table = Rc::new(functions::build_function_table(&sources)?);
+    let folded = Rc::new(constants::build_constant_table(&sources, &graph)?);
     let root_path = ModulePath::new();
-    let callable = Callable::new(table, &root_path, sources.root_declarations())?;
+    let callable = Callable::new(table, folded, &root_path, sources.root_declarations())?;
     let root = sources.into_root();
     finish_specification(expand_declarations_in(
         root,
@@ -598,7 +663,19 @@ pub(crate) fn expand_tree(
             };
             let kind = match node.cursor().kind() {
                 If(a, b, c) => ExprKind::If(*node.child(*a), *node.child(*b), *node.child(*c)),
-                SIndex(a, offset) => ExprKind::SIndex(*node.child(*a), *offset),
+                // Folding replaces a named offset with the number its
+                // constant stands for, so one reaching here named none.
+                SIndex(a, offset) => match offset {
+                    parsed::SourceOffset::Literal(offset) => {
+                        ExprKind::SIndex(*node.child(*a), *offset)
+                    }
+                    parsed::SourceOffset::Named(path) => {
+                        return Err(SourceResolveError::UnknownOffset {
+                            name: path.to_string().into(),
+                            span: metadata.span,
+                        });
+                    }
+                },
                 Val(value) => ExprKind::Val(value.clone()),
                 BinOp(a, b, op) => ExprKind::BinOp(*node.child(*a), *node.child(*b), *op),
                 // Case decides: in a file that took on tagged unions, a

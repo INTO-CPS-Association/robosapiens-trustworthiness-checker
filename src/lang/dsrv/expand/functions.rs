@@ -20,6 +20,7 @@ use crate::lang::dsrv::source::{SourceType, TypeName};
 use crate::lang::dsrv::syntax::parsed::{ParsedExpr, ParsedExprRef};
 use crate::lang::dsrv::syntax::{ParsedDeclaration, ParsedSpecification};
 
+use super::constants::{ConstantTable, Constants};
 use super::inline::{Def, Scope, standalone};
 use super::{DsrvExpandError, graph};
 
@@ -130,6 +131,7 @@ fn add_module(
                 root += 1;
             }
             ParsedDeclaration::Equation(..)
+            | ParsedDeclaration::Const { .. }
             | ParsedDeclaration::Output(_, _, Some(_), _)
             | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
             _ => {}
@@ -172,6 +174,8 @@ fn add_module(
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Callable {
     table: AstShared<FunctionTable>,
+    /// What a name in this module stands for, folded once (19b).
+    constants: Constants,
     /// The module whose text this is. Its own defs are callable bare, the
     /// ones it keeps internal included (S12).
     own: ModulePath,
@@ -183,11 +187,13 @@ pub(crate) struct Callable {
 impl Callable {
     pub(crate) fn new(
         table: AstShared<FunctionTable>,
+        constants: AstShared<ConstantTable>,
         path: &ModulePath,
         declarations: &[ParsedDeclaration],
     ) -> Result<Self, DsrvExpandError> {
         Ok(Self {
             table,
+            constants: Constants::new(constants, path, declarations)?,
             own: path.clone(),
             imported: imported_modules(path, declarations)?,
         })
@@ -196,7 +202,7 @@ impl Callable {
     /// Whether any def is callable at all, which is what says a node needs
     /// to carry this on into the text it is given.
     pub(crate) fn is_empty(&self) -> bool {
-        self.table.entries.is_empty()
+        self.table.entries.is_empty() && self.constants.is_empty()
     }
 
     /// What the text given to a node could call, written into the node's
@@ -207,6 +213,7 @@ impl Callable {
             return;
         }
         let scope = self.scope();
+        self.constants.describe(out);
         for (name, def) in &scope.bare {
             let _ = write!(out, "{}", name.name());
             describe_def(out, def);
@@ -220,6 +227,7 @@ impl Callable {
     /// Borrow the table into a scope for one expansion.
     pub(crate) fn scope(&self) -> Scope<'_> {
         let mut scope = scope_of(&self.imported, &self.table);
+        scope.constants = Some(&self.constants);
         // A file's own defs win over the ones it imported, as types do
         // (S11), and a file may call the ones it keeps to itself.
         for (name, entry) in self.table.declared(&self.own) {
@@ -243,6 +251,7 @@ impl PartialEq for Callable {
             return true;
         }
         AstShared::ptr_eq(&self.table, &other.table)
+            && self.constants == other.constants
             && self.own == other.own
             && self.imported == other.imported
     }
@@ -271,7 +280,7 @@ fn imported_scope<'a>(
 /// Which modules a file's `use` lines name, and which of them bring their
 /// defs in bare. A glob is the only form that does: a named import names a
 /// type, and a qualified call reaches the rest.
-fn imported_modules(
+pub(super) fn imported_modules(
     path: &ModulePath,
     declarations: &[ParsedDeclaration],
 ) -> Result<BTreeMap<ModulePath, bool>, DsrvExpandError> {

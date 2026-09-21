@@ -3,7 +3,7 @@ use ecow::{EcoString, EcoVec};
 use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
-use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription};
+use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree, ValuePath};
 use crate::core::{BinaryOperator, VarName};
@@ -212,8 +212,27 @@ SIndexHelp: ExprId = {
 
 // Indexing expression e[idx]
 SIndex: ExprId = {
-  <l:@L> <expr: SIndexHelp> "[" <idx: Uint> "]" <r:@R> => {
+  <l:@L> <expr: SIndexHelp> "[" <idx: SourceOffsetSpelling> "]" <r:@R> => {
         builder.alloc(ExprKind::SIndex(expr, idx), Span::new(l as u32, r as u32))
+    },
+};
+
+// How far back an offset reaches: a number, or a constant naming one. The
+// name is resolved in expansion, so parsing settles nothing here.
+SourceOffsetSpelling: SourceOffset = {
+    <value:Uint> => SourceOffset::Literal(value),
+    <name:LowerIdent> =>
+        SourceOffset::Named(ValuePath::new(EcoVec::new(), VarName::from(name))),
+    <l:@L> <module:(<LowerIdent> "::")+> <name:LowerIdent> =>? {
+        let module = module
+            .into_iter()
+            .map(ModuleName::new)
+            .collect::<Result<EcoVec<_>, _>>()
+            .map_err(|_| {
+                *user_error_location = Some(l);
+                ParseError::User { error: "a module segment must be a lowercase name" }
+            })?;
+        Ok(SourceOffset::Named(ValuePath::new(module, VarName::from(name))))
     },
 };
 
@@ -901,6 +920,21 @@ DefDecl: Declaration = {
        },
 };
 
+// A constant. Its body is an ordinary expression, so it joins the forest
+// like any other definition and must be consumed in declaration order by
+// expansion; expansion folds it to a literal and keeps no declaration.
+ConstDecl: Declaration = {
+   <l:@L> <internal:"internal"?> "const" <name:Ident> ":" <ty:StreamTyp>
+       "=" <body:Expr> <r:@R> =>
+       Declaration::Const {
+           name,
+           ty,
+           body,
+           internal: internal.is_some(),
+           span: Span::new(l as u32, r as u32),
+       },
+};
+
 ModDecl: Declaration = {
     <l:@L> "mod" <path:ModPath> <r:@R> =>
         Declaration::Mod { path, span: Span::new(l as u32, r as u32) },
@@ -910,6 +944,7 @@ Declaration: Declaration = {
     HeaderDecl,
     ModDecl,
     DefDecl,
+    ConstDecl,
     InputDecl,
     OutputDecl,
     AuxDecl,

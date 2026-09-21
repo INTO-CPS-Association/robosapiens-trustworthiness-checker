@@ -2010,13 +2010,13 @@ mod integration_tests {
 
             // Expected output: z = 4, 6 (from adding x + y for each timestep)
             assert!(
-                stdout.lines().any(|line| line.contains("Int(4)")),
-                "Expected MQTT-derived output 'Int(4)' not found in: '{}'",
+                stdout.lines().any(|line| line.ends_with(" = 4")),
+                "Expected MQTT-derived output value 4 not found in: '{}'",
                 stdout
             );
             assert!(
-                stdout.lines().any(|line| line.contains("Int(6)")),
-                "Expected MQTT-derived output 'Int(6)' not found in: '{}'",
+                stdout.lines().any(|line| line.ends_with(" = 6")),
+                "Expected MQTT-derived output value 6 not found in: '{}'",
                 stdout
             );
         }
@@ -2132,13 +2132,13 @@ mod integration_tests {
 
             // Expected output: z = 4, 6 (from adding x + y for each timestep)
             assert!(
-                stdout.lines().any(|line| line.contains("Int(4)")),
-                "Expected Redis-derived output 'Int(4)' not found in: '{}'",
+                stdout.lines().any(|line| line.ends_with(" = 4")),
+                "Expected Redis-derived output value 4 not found in: '{}'",
                 stdout
             );
             assert!(
-                stdout.lines().any(|line| line.contains("Int(6)")),
-                "Expected Redis-derived output 'Int(6)' not found in: '{}'",
+                stdout.lines().any(|line| line.ends_with(" = 6")),
+                "Expected Redis-derived output value 6 not found in: '{}'",
                 stdout
             );
         }
