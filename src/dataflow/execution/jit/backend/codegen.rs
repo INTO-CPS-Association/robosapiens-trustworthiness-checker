@@ -36,6 +36,7 @@ const FLOAT_POWER_SYMBOL: &str = "dsrv_float_power";
 const FAILURE_INTEGER_DIVISION_BY_ZERO: i64 = 1;
 const FAILURE_NEGATIVE_INTEGER_EXPONENT: i64 = 2;
 const FAILURE_INTEGER_POWER_OVERFLOW: i64 = 3;
+const FAILURE_UNREPRESENTABLE_INTEGER: i64 = 4;
 
 extern "C" fn checked_int_power(base: i64, exponent: i64) -> u8 {
     if exponent < 0 {
@@ -1209,6 +1210,57 @@ impl GraphCodegen<'_, '_> {
                     }
                     (UnaryOperator::Absolute, ScalarKind::Float, ScalarKind::Float) => {
                         self.builder.ins().fabs(arg.value)
+                    }
+                    (UnaryOperator::CastFloat, ScalarKind::Int, ScalarKind::Float) => {
+                        self.builder.ins().fcvt_from_sint(types::F64, arg.value)
+                    }
+                    (
+                        op @ (UnaryOperator::Truncate
+                        | UnaryOperator::Floor
+                        | UnaryOperator::Ceiling
+                        | UnaryOperator::Round),
+                        ScalarKind::Float,
+                        ScalarKind::Int,
+                    ) => {
+                        let rounded = match op {
+                            UnaryOperator::Truncate => self.builder.ins().trunc(arg.value),
+                            UnaryOperator::Floor => self.builder.ins().floor(arg.value),
+                            UnaryOperator::Ceiling => self.builder.ins().ceil(arg.value),
+                            UnaryOperator::Round => self.builder.ins().nearest(arg.value),
+                            _ => unreachable!(),
+                        };
+                        let lower = self.builder.ins().f64const(Ieee64::with_float(
+                            9_223_372_036_854_775_808.0_f64.copysign(-1.0),
+                        ));
+                        let upper = self
+                            .builder
+                            .ins()
+                            .f64const(Ieee64::with_float(9_223_372_036_854_775_808.0));
+                        let at_least_lower =
+                            self.builder
+                                .ins()
+                                .fcmp(FloatCC::GreaterThanOrEqual, rounded, lower);
+                        let below_upper =
+                            self.builder.ins().fcmp(FloatCC::LessThan, rounded, upper);
+                        let representable = self.builder.ins().band(at_least_lower, below_upper);
+                        let failure_block = self
+                            .failure_block
+                            .expect("checked float-to-int conversion requires a failure block");
+                        let status = self
+                            .builder
+                            .ins()
+                            .iconst(types::I8, FAILURE_UNREPRESENTABLE_INTEGER);
+                        let continuation = self.builder.create_block();
+                        self.builder.ins().brif(
+                            representable,
+                            continuation,
+                            &[],
+                            failure_block,
+                            &[status.into()],
+                        );
+                        self.builder.switch_to_block(continuation);
+                        self.builder.seal_block(continuation);
+                        self.builder.ins().fcvt_to_sint(types::I64, rounded)
                     }
                     _ => unreachable!("lowering admitted an unsupported unary operation"),
                 };

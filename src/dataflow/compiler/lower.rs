@@ -122,12 +122,24 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
             let rhs = lower_expression(rhs, builder);
             builder.push_with_signature(UnboundOp::Binary { op, lhs, rhs }, signature)
         }
+        Cast(value, target) => {
+            let op = match target {
+                crate::core::StreamType::Float => UnaryOperator::CastFloat,
+                crate::core::StreamType::Str => UnaryOperator::CastStr,
+                _ => return lower_expression(value, builder),
+            };
+            lower_unary(builder, op, value, result_kind)
+        }
         Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
         Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg, result_kind),
         Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg, result_kind),
         Cos(arg) => lower_unary(builder, UnaryOperator::Cos, arg, result_kind),
         Tan(arg) => lower_unary(builder, UnaryOperator::Tan, arg, result_kind),
         Abs(arg) => lower_unary(builder, UnaryOperator::Absolute, arg, result_kind),
+        Trunc(arg) => lower_unary(builder, UnaryOperator::Truncate, arg, result_kind),
+        Floor(arg) => lower_unary(builder, UnaryOperator::Floor, arg, result_kind),
+        Ceil(arg) => lower_unary(builder, UnaryOperator::Ceiling, arg, result_kind),
+        Round(arg) => lower_unary(builder, UnaryOperator::Round, arg, result_kind),
         If(cond, then_value, else_value) => {
             let cond = lower_expression(cond, builder);
             let then_branch = lower_branch(then_value, builder.specialise);

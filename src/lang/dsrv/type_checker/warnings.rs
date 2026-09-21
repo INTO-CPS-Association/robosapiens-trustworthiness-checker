@@ -1,10 +1,10 @@
 //! Warnings collected during one checking attempt.
 //!
 //! A warning rule looks at one checked node and its type and proves its
-//! finding from that node alone. Only the authoritative phase of a driver
-//! offers findings to the collector: strict checking, the final expression
-//! pass of gradual checking, and standalone expression checking. Gradual
-//! inference revisits nodes speculatively and never emits.
+//! finding from that node alone. Only authoritative work is retained: strict
+//! checking, successful or accepted-widening gradual inference attempts, the
+//! final expression pass, and standalone expression checking. Findings from a
+//! failed or unresolved gradual inference attempt are discarded.
 //!
 //! A finding is identified by the expanded node it was proved at and the rule
 //! that proved it, so a node visited twice reports once, while two copies of
@@ -22,7 +22,7 @@ use crate::lang::dsrv::diagnostics::{
 /// A rule proving a warning from one checked node and its type.
 pub(super) type WarningRule = fn(ExprRef<'_>, &TCType) -> Option<SemanticWarning>;
 
-/// Every warning rule. None exists until casts; test builds install fixtures.
+/// Every warning rule.
 #[cfg(not(test))]
 pub(super) const WARNING_RULES: &[WarningRule] = &[];
 #[cfg(test)]
@@ -43,17 +43,17 @@ impl WarningCollector {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            unreachable_code,
-            reason = "no production warning rule exists until casts, so no warning can be built"
-        )
-    )]
-    fn emit(&mut self, occurrence: ExprId, warning: SemanticWarning) {
+    pub(super) fn emit(&mut self, occurrence: ExprId, warning: SemanticWarning) {
         self.found
             .entry((occurrence, warning.kind()))
             .or_insert(warning);
+    }
+
+    /// Retain findings from an inference attempt that became authoritative.
+    pub(super) fn absorb(&mut self, other: Self) {
+        for (key, warning) in other.found {
+            self.found.entry(key).or_insert(warning);
+        }
     }
 
     /// Close the attempt. Warnings are ordered by source position, those

@@ -17,14 +17,24 @@ fn compile_program(source: &str) -> DataflowProgram {
     let spec = source
         .parse::<DsrvSpecification>()
         .expect("benchmark specification should parse");
-    DataflowProgram::compile_untyped(spec).expect("benchmark program should compile")
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate_for(
+        spec,
+        trustworthiness_checker::core::Semantics::Untimed,
+    );
+    DataflowProgram::compile_with_semantics(spec, trustworthiness_checker::core::Semantics::Untimed)
+        .expect("benchmark program should compile")
 }
 
 fn compile(source: &str) -> DataflowMonitor {
     let spec = source
         .parse::<DsrvSpecification>()
         .expect("benchmark specification should parse");
-    DataflowMonitor::compile_untyped(spec).expect("benchmark monitor should compile")
+    let spec = trustworthiness_checker::dsrv_fixtures::elaborate_for(
+        spec,
+        trustworthiness_checker::core::Semantics::Untimed,
+    );
+    DataflowMonitor::compile_with_semantics(spec, trustworthiness_checker::core::Semantics::Untimed)
+        .expect("benchmark monitor should compile")
 }
 
 fn input_row(monitor: &DataflowMonitor, values: &[(&str, Value)]) -> Vec<Value> {

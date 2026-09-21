@@ -99,9 +99,53 @@ fn gradual_checking_revisits_a_node_but_reports_it_once() {
 }
 
 #[test]
-fn gradual_inference_failure_reports_no_warning() {
-    // Inference fails before the authoritative pass runs.
-    let source = "out y = \"warn:alpha\"\nout z: Bool = 1";
+fn gradual_inference_failure_does_not_retain_findings_from_the_failed_root() {
+    let source = "out y: Bool = if true then \"warn:alpha\" else 1";
+    let report = check(source, TypeCheckOptions::GRADUAL);
+    assert!(report.result().is_err());
+    assert!(report.warnings().is_empty());
+}
+
+#[test]
+fn redundant_cast_warning_survives_an_enclosing_gradual_widening() {
+    let source = "use experimental::{casts}\n\
+                  out y = if true then (1 as Int) else \"other\"";
+    let report = check(source, TypeCheckOptions::GRADUAL);
+    assert!(report.result().is_ok());
+    assert_eq!(
+        found(source, report.warnings()),
+        [(SemanticWarningKind::RedundantCast, Some("1 as Int"))]
+    );
+}
+
+#[test]
+fn redundant_cast_is_reported_once_by_the_authoritative_pass() {
+    let source = "use experimental::{casts}\nout y = 1 as Int";
+    let report = check(source, TypeCheckOptions::GRADUAL);
+    assert!(report.result().is_ok());
+    assert_eq!(
+        found(source, report.warnings()),
+        [(SemanticWarningKind::RedundantCast, Some("1 as Int"))]
+    );
+}
+
+#[test]
+fn failed_or_unresolved_casts_do_not_warn() {
+    for source in [
+        "use experimental::{casts}\nout y: Int = true as Int",
+        "use experimental::{casts}\nout y: Int = missing as Int",
+    ] {
+        for options in MODES {
+            let report = check(source, options);
+            assert!(report.result().is_err(), "{options:?}: {source}");
+            assert!(report.warnings().is_empty(), "{options:?}: {source}");
+        }
+    }
+}
+
+#[test]
+fn contextual_result_hint_does_not_manufacture_cast_redundancy() {
+    let source = "use experimental::{casts}\nin x\nout y: Int = x as Int";
     let report = check(source, TypeCheckOptions::GRADUAL);
     assert!(report.result().is_err());
     assert!(report.warnings().is_empty());
@@ -206,4 +250,27 @@ fn runtime_text_discards_its_warnings() {
         .accept("\"warn:alpha\"")
         .expect("runtime text that warns still checks");
     assert_eq!(checked.expr().to_string(), "\"warn:alpha\"");
+}
+
+#[test]
+fn runtime_text_deliberately_discards_a_redundant_cast_warning() {
+    use crate::VarName;
+    use crate::lang::dsrv::runtime_text::RuntimeText;
+
+    let spec = "use experimental::{casts}\nout y: Int = dynamic(\"1\": Int)"
+        .parse::<DsrvSpecification>()
+        .expect("the enclosing model parses");
+    let metadata = spec
+        .var_expr_ref(&VarName::new("y"))
+        .expect("y is defined")
+        .metadata();
+    let runtime_text = RuntimeText::new(
+        metadata.context.clone().expect("y has its source context"),
+        metadata.callable.clone().unwrap_or_default(),
+        None,
+    );
+    let checked = runtime_text
+        .accept("1 as Int")
+        .expect("runtime text with a redundant cast still checks");
+    assert_eq!(checked.expr().to_string(), "(1 as Int)");
 }

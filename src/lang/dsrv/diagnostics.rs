@@ -216,11 +216,10 @@ pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 /// its [`code`](Self::code) is the stable name consumers match on; messages
 /// may change wording.
 ///
-/// No rule is defined yet: the first arrives with casts. The kinds present in
-/// test builds exist only to exercise the reporting machinery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum SemanticWarningKind {
+    RedundantCast,
     #[cfg(test)]
     TestAlpha,
     #[cfg(test)]
@@ -231,6 +230,7 @@ impl SemanticWarningKind {
     /// The stable, descriptive code of this warning rule.
     pub fn code(self) -> &'static str {
         match self {
+            Self::RedundantCast => "dsrv.redundant-cast",
             #[cfg(test)]
             Self::TestAlpha => "test-alpha",
             #[cfg(test)]
@@ -249,10 +249,6 @@ pub struct SemanticWarning {
 }
 
 impl SemanticWarning {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no production warning rule exists until casts")
-    )]
     pub(crate) fn new(
         kind: SemanticWarningKind,
         message: impl Into<String>,

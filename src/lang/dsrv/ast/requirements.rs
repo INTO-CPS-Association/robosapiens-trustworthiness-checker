@@ -17,6 +17,7 @@ pub(super) fn requirement(kind: &ExprKind) -> Option<(Capability, &'static str)>
         | ExprKind::SIndex(..)
         | ExprKind::Val(..)
         | ExprKind::BinOp(..)
+        | ExprKind::Cast(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
@@ -54,6 +55,10 @@ pub(super) fn requirement(kind: &ExprKind) -> Option<(Capability, &'static str)>
         | ExprKind::Sin(..)
         | ExprKind::Cos(..)
         | ExprKind::Tan(..)
-        | ExprKind::Abs(..) => None,
+        | ExprKind::Abs(..)
+        | ExprKind::Trunc(..)
+        | ExprKind::Floor(..)
+        | ExprKind::Ceil(..)
+        | ExprKind::Round(..) => None,
     }
 }

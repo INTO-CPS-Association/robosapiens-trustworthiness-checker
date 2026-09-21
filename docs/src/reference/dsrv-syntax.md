@@ -144,6 +144,7 @@ The operators, from highest to lowest precedence, are:
 | calls, field access, `x[n]` | application, fields, stream history | left |
 | `**` | exponentiation | right |
 | unary `-`, `!`, `not` | numeric and Boolean negation | right |
+| `as` | scalar cast | left |
 | `*`, `/`, `%` | multiplication, division, remainder | left |
 | `+`, `-` | addition and subtraction | left |
 | `<`, `<=`, `>`, `>=` | ordering | left |
@@ -154,6 +155,18 @@ The operators, from highest to lowest precedence, are:
 | `++` | string concatenation | left |
 
 `and`, `or`, and `not` are reserved aliases for `&&`, `||`, and `!`.
+
+The `casts` experiment adds `value as Type` plus `trunc`, `floor`, `ceil`,
+and `round`. Casts admit an identity conversion, `Int as Float`, and
+`Int`/`Float`/`Bool`/`Unit` to `Str`; an identity conversion produces a
+redundant-cast warning. Convert a `Float` to `Int` explicitly with one of the
+four rounding functions. `round` follows IEEE 754 ties-to-even:
+`round(-3.5)`, `round(-2.5)`, `round(-1.5)`, and `round(-0.5)` are
+`-4`, `-2`, `-2`, and `0`; `round(0.5)`, `round(1.5)`, `round(2.5)`, and
+`round(3.5)` are `0`, `2`, `2`, and `4`. A non-finite or out-of-range result
+is a runtime operation failure. `as`, `trunc`, `floor`, `ceil`, and `round`
+are reserved words in every DSRV file, including files that do not enable the
+experiment.
 
 Integer power is checked: overflow terminates evaluation, and an integer
 exponent must be non-negative. Power promotes mixed `Int`/`Float` operands to

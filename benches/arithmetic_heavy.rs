@@ -12,9 +12,7 @@ use trustworthiness_checker::benches_common::{
 };
 
 use trustworthiness_checker::io::map;
-use trustworthiness_checker::{
-    CheckedDsrvSpecification, DsrvSpecification, InputStream, Value, VarName,
-};
+use trustworthiness_checker::{DsrvSpecification, InputStream, Value, VarName};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -82,9 +80,7 @@ fn arithmetic_heavy(c: &mut Criterion) {
     let untyped = source
         .parse::<DsrvSpecification>()
         .expect("arithmetic-heavy specification should parse");
-    let checked = source
-        .parse::<CheckedDsrvSpecification>()
-        .expect("arithmetic-heavy specification should type check");
+    let checked = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
 
     let mut group = c.benchmark_group("arithmetic_heavy");
     group.sampling_mode(SamplingMode::Flat);

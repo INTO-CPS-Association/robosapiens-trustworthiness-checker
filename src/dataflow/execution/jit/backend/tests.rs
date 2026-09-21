@@ -93,6 +93,87 @@ fn complete_arithmetic_graph_runs_natively() {
 }
 
 #[test]
+fn casts_and_rounding_execute_in_the_jit_with_canonical_parity() {
+    for (function, rows) in [
+        (
+            "round",
+            vec![
+                vec![Value::Float(-3.5)],
+                vec![Value::Float(-2.5)],
+                vec![Value::Float(-0.5)],
+                vec![Value::Float(0.5)],
+                vec![Value::Float(1.5)],
+                vec![Value::Float(2.5)],
+                vec![Value::Float(3.5)],
+            ],
+        ),
+        (
+            "trunc",
+            vec![vec![Value::Float(-1.9)], vec![Value::Float(1.9)]],
+        ),
+        (
+            "floor",
+            vec![vec![Value::Float(-1.1)], vec![Value::Float(1.1)]],
+        ),
+        (
+            "ceil",
+            vec![vec![Value::Float(-1.1)], vec![Value::Float(1.1)]],
+        ),
+    ] {
+        let source = format!(
+            "use experimental::casts\nin x: Float\nout result: Int\nresult = {function}(x)"
+        );
+        assert_rows(&source, &rows);
+    }
+
+    assert_rows(
+        "use experimental::casts\nin x: Int\nout result: Float\nresult = x as Float",
+        &[
+            vec![Value::Int(i64::MIN)],
+            vec![Value::Int(-9_007_199_254_740_993)],
+            vec![Value::Int(9_007_199_254_740_993)],
+            vec![Value::Int(i64::MAX)],
+        ],
+    );
+    assert_jit_row(
+        "use experimental::casts\nin x: Float\nout result: Int\nresult = round(x)",
+        &[Value::Float(-9_223_372_036_854_775_808.0)],
+        &[Value::Int(i64::MIN)],
+    );
+}
+
+#[test]
+fn unrepresentable_rounding_side_exits_before_canonical_failure() {
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    for function in ["trunc", "floor", "ceil", "round"] {
+        for input in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            LIMIT,
+            f64::from_bits((-LIMIT).to_bits() + 1),
+        ] {
+            let source = format!(
+                "use experimental::casts\n\
+                 in x: Float\nout result: Int\nresult = {function}(x)"
+            );
+            let checked = elaborated(&source);
+            let mut monitor =
+                DataflowMonitor::compile_checked_with_jit(checked, JitConfig::eager())
+                    .expect("the checked monitor compiles");
+            let mut output = [Value::NoVal];
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                monitor.evaluate(&[Value::Float(input)], &mut output)
+            }));
+            assert!(
+                failure.is_err(),
+                "{function}({input:?}) produced {output:?} instead of failing"
+            );
+        }
+    }
+}
+
+#[test]
 fn integer_division_and_remainder_are_native_eligible() {
     for operation in ["/", "%"] {
         for rhs in ["5", "y"] {

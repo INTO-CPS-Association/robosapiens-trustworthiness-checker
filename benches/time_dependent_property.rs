@@ -17,6 +17,7 @@ use trustworthiness_checker::benches_common::{
     monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
+use trustworthiness_checker::dsrv_fixtures::WithoutWarnings;
 use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
@@ -201,9 +202,7 @@ async fn run_mstlo_value(
 
     let runtime = GeneralRuntimeBuilder::new()
         .executor(executor)
-        .model(trustworthiness_checker::dsrv_fixtures::elaborate_for(
-            spec, semantics,
-        ))
+        .model(spec)
         .input(input)
         .output_pipeline(output_pipeline)
         .semantics(semantics)
@@ -360,7 +359,7 @@ fn compare_time_dependent_property(c: &mut Criterion) {
     let dsrv_spec = dsrv_time_dependent_spec();
     let checked_dsrv_spec = dsrv_spec
         .clone()
-        .check(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
         .without_warnings()
         .expect("time-dependent benchmark specification should type check");
 

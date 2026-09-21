@@ -158,6 +158,17 @@ mod integration_tests {
         }
     }
 
+    async fn run_cli_with_rust_log(
+        args: &[&str],
+        rust_log: &str,
+    ) -> Result<std::process::Output, std::io::Error> {
+        Command::new(get_binary_path())
+            .args(args)
+            .env("RUST_LOG", rust_log)
+            .output()
+            .await
+    }
+
     /// Helper function to run CLI with streaming output capture for infinite processes
     async fn run_cli_streaming(
         args: &[&str],
@@ -876,6 +887,80 @@ mod integration_tests {
                 "invalid {semantics} model panicked: {stderr}"
             );
         }
+    }
+
+    #[apply(async_test)]
+    async fn semantic_warning_uses_dedicated_stderr_not_logging_or_monitor_output() {
+        let log_path = std::env::temp_dir().join(format!(
+            "trustworthiness-checker-warning-{}.log",
+            std::process::id()
+        ));
+        let log_path_text = log_path.to_string_lossy().into_owned();
+        let model = fixture_path("redundant_cast.dsrv");
+        let output = run_cli_with_rust_log(
+            &[
+                &model,
+                "--input-file",
+                &fixture_path("debug_simple.input"),
+                "--output-stdout",
+                "--log-file",
+                &log_path_text,
+            ],
+            "off",
+        )
+        .await
+        .expect("CLI should run");
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let diagnostic = "warning[dsrv.redundant-cast]: cast from Int to Int is redundant";
+        assert_eq!(stderr.matches(diagnostic).count(), 1, "{stderr}");
+        assert!(
+            stderr.contains("redundant_cast.dsrv:4:5 (bytes 51..59)"),
+            "{stderr}"
+        );
+        assert!(!stdout.contains("warning["), "{stdout}");
+        assert!(stdout.contains("y"), "monitor output was absent: {stdout}");
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert!(!log.contains("dsrv.redundant-cast"), "{log}");
+        let _ = std::fs::remove_file(log_path);
+    }
+
+    #[apply(async_test)]
+    async fn semantic_warning_is_presented_once_alongside_a_semantic_error() {
+        let output = run_cli_with_rust_log(
+            &[
+                &fixture_path("redundant_cast_with_error.dsrv"),
+                "--input-file",
+                &fixture_path("debug_simple.input"),
+                "--output-stdout",
+                "--semantics",
+                "typed-untimed",
+            ],
+            "off",
+        )
+        .await
+        .expect("CLI should run");
+
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("warning[dsrv.redundant-cast]").count(),
+            1,
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("cast from Int to Int is redundant"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("type check"), "{stderr}");
+        assert!(stdout.is_empty(), "{stdout}");
     }
 
     #[apply(async_test)]

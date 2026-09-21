@@ -126,6 +126,9 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
                 }),
             }
         }
+        Cast(value, target) => lift1(child(value)?, |value| {
+            operation(value_operations::cast(value, target))
+        }),
         Not(value) => lift1(child(value)?, |value| {
             operation(value_operations::unary(UnaryOperator::Not, value))
         }),
@@ -136,6 +139,10 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         Cos(value) => unary(child(value)?, UnaryOperator::Cos),
         Tan(value) => unary(child(value)?, UnaryOperator::Tan),
         Abs(value) => unary(child(value)?, UnaryOperator::Absolute),
+        Trunc(value) => unary(child(value)?, UnaryOperator::Truncate),
+        Floor(value) => unary(child(value)?, UnaryOperator::Floor),
+        Ceil(value) => unary(child(value)?, UnaryOperator::Ceiling),
+        Round(value) => unary(child(value)?, UnaryOperator::Round),
         // Both branches are evaluated, as they are on the stream path, but
         // only the selected one decides the value.
         If(condition, then_value, else_value) => {
@@ -360,15 +367,15 @@ fn collect<'a>(
 mod tests {
     use std::rc::Rc;
 
-    use futures::StreamExt;
     use futures::stream;
+    use futures::{FutureExt, StreamExt};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
 
     use super::*;
     use crate::async_test;
     use crate::dsrv_fixtures::TestConfig;
-    use crate::lang::dsrv::parser::parse_expr;
+    use crate::lang::dsrv::parser::{parse_expr_with_context, parse_str};
     use crate::runtime::asynchronous::Context;
     use crate::semantics::async_interface::StreamContext;
 
@@ -380,8 +387,49 @@ mod tests {
     }
 
     fn evaluate(source: &str, environment: &dyn Environment) -> Evaluated {
-        let expr = parse_expr(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        let context = parse_str("use experimental::casts\n")
+            .expect("test language settings should parse")
+            .source_context()
+            .clone();
+        let expr = parse_expr_with_context(source, context)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
         eval_atemporal(expr.as_ref(), environment)
+    }
+
+    #[test]
+    fn scalar_casts_evaluate_atemporally() {
+        let bindings = environment([("x", Value::Float(-1.6)), ("y", Value::Int(7))]);
+        for (source, expected) in [
+            ("trunc(x)", Value::Int(-1)),
+            ("floor(x)", Value::Int(-2)),
+            ("ceil(x)", Value::Int(-1)),
+            ("round(x)", Value::Int(-2)),
+            ("y as Float", Value::Float(7.0)),
+            ("y as Str", Value::Str("7".into())),
+            ("x as Str", Value::Str("-1.6".into())),
+        ] {
+            assert_eq!(evaluate(source, &bindings), Ok(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn unrepresentable_rounding_is_an_atemporal_operation_error() {
+        for operator in ["trunc", "floor", "ceil", "round"] {
+            for input in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::MAX,
+                f64::MIN,
+            ] {
+                let bindings = environment([("x", Value::Float(input)), ("unused", Value::Int(0))]);
+                let result = evaluate(&format!("{operator}(x)"), &bindings);
+                assert!(
+                    matches!(result, Err(AtemporalError::Operation(_))),
+                    "{operator}({input:?}) returned {result:?}"
+                );
+            }
+        }
     }
 
     /// The same expression down the stream path, with each name a
@@ -399,11 +447,65 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut ctx = Context::<TestConfig>::new(executor, names, streams, 8);
-        let expr = parse_expr(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        let context = parse_str("use experimental::casts\n")
+            .expect("test language settings should parse")
+            .source_context()
+            .clone();
+        let expr = parse_expr_with_context(source, context)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
         let mut output =
             crate::semantics::untimed_dsrv::semantics::evaluate::<TestConfig>(expr, None, &ctx);
         ctx.run().await;
         output.next().await.unwrap_or(Value::NoVal)
+    }
+
+    #[apply(async_test)]
+    async fn scalar_casts_execute_through_untimed_streams(executor: Rc<LocalExecutor<'static>>) {
+        let bindings = environment([("x", Value::Float(-1.6)), ("y", Value::Int(7))]);
+        for (source, expected) in [
+            ("trunc(x)", Value::Int(-1)),
+            ("floor(x)", Value::Int(-2)),
+            ("ceil(x)", Value::Int(-1)),
+            ("round(x)", Value::Int(-2)),
+            ("y as Float", Value::Float(7.0)),
+            ("y as Str", Value::Str("7".into())),
+            ("x as Str", Value::Str("-1.6".into())),
+        ] {
+            assert_eq!(
+                through_streams(executor.clone(), source, &bindings).await,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[apply(async_test)]
+    async fn unrepresentable_rounding_panics_in_untimed_streams(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        for operator in ["trunc", "floor", "ceil", "round"] {
+            for input in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::MAX,
+                f64::MIN,
+            ] {
+                let bindings = environment([("x", Value::Float(input)), ("unused", Value::Int(0))]);
+                let source = format!("{operator}(x)");
+                let evaluation = std::panic::AssertUnwindSafe(through_streams(
+                    executor.clone(),
+                    &source,
+                    &bindings,
+                ))
+                .catch_unwind()
+                .await;
+                assert!(
+                    evaluation.is_err(),
+                    "{operator}({input:?}) produced an untimed value instead of panicking"
+                );
+            }
+        }
     }
 
     const EXPRESSIONS: &[&str] = &[

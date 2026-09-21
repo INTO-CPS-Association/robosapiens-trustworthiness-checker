@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 use tc_testutils::streams::with_timeout;
-use trustworthiness_checker::CheckedDsrvSpecification;
 use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::Value;
 use trustworthiness_checker::VarName;
@@ -268,14 +267,9 @@ async fn run_reconf_bench(
 
 fn assert_strict_type_checkable(config: &BenchConfig<'_>) {
     for (replacement, spec) in [("first", &config.spec1), ("second", &config.spec2)] {
-        spec.to_string()
-            .parse::<CheckedDsrvSpecification>()
-            .unwrap_or_else(|error| {
-                panic!(
-                    "{replacement} specification in {} is not strict-type-checkable: {error}",
-                    config.group_name
-                )
-            });
+        let source = spec.to_string();
+        let _ = replacement;
+        trustworthiness_checker::dsrv_fixtures::checked(&source);
     }
 }
 

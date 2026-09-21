@@ -481,6 +481,7 @@ fn check_expression_types(
             ParsedExprKind::Dynamic(_, ascription, _) | ParsedExprKind::Defer(_, ascription, _) => {
                 ascription.source_type().into_iter().collect()
             }
+            ParsedExprKind::Cast(_, target) => vec![target],
             _ => continue,
         };
         for ty in types {
@@ -678,6 +679,13 @@ pub(crate) fn expand_tree(
                 },
                 Val(value) => ExprKind::Val(value.clone()),
                 BinOp(a, b, op) => ExprKind::BinOp(*node.child(*a), *node.child(*b), *op),
+                Cast(value, target) => {
+                    ExprKind::Cast(*node.child(*value), context.resolve_type(target)?)
+                }
+                Trunc(value) => ExprKind::Trunc(*node.child(*value)),
+                Floor(value) => ExprKind::Floor(*node.child(*value)),
+                Ceil(value) => ExprKind::Ceil(*node.child(*value)),
+                Round(value) => ExprKind::Round(*node.child(*value)),
                 // Case decides: in a file that took on tagged unions, a
                 // capitalised name is a tag whose union elaboration settles,
                 // not a name expansion could resolve.

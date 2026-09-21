@@ -114,9 +114,10 @@ fn type_check_gradual_for(
     warnings.report(result)
 }
 
-/// Infer root types to a fixed point without emitting warnings, then check
-/// every expression once against them; only that final pass is
-/// authoritative.
+/// Infer root types to a fixed point, retaining findings only from successful
+/// or accepted-widening attempts, then check every concrete expression against
+/// its inferred type. Collector identity suppresses findings repeated by the
+/// final pass.
 fn type_check_gradual_with(
     mut spec: DsrvSpecification,
     warnings: &mut WarningCollector,
@@ -156,8 +157,15 @@ fn type_check_gradual_with(
             let expr = spec.exprs.get(&var).unwrap();
             let expected_stream = types.get(&var).cloned();
             let expected = expected_stream.as_ref().map(TCType::from_stream_type);
-            match super::checker::infer_expression(expr, expected.as_ref(), &types) {
+            let mut inferred_warnings = WarningCollector::default();
+            match super::checker::infer_expression(
+                expr,
+                expected.as_ref(),
+                &types,
+                &mut inferred_warnings,
+            ) {
                 Ok(actual) => {
+                    warnings.absorb(inferred_warnings);
                     if let Some(expected) = &expected_stream {
                         root_types.insert(var.clone(), actual.clone());
                         if !gradual_consistent(expected, &actual) {
@@ -177,6 +185,11 @@ fn type_check_gradual_with(
                     progressed = true;
                 }
                 Err(error) if expected_stream.is_none() && can_widen_gradual_error(&error) => {
+                    // Widening accepts this inference attempt as the root's
+                    // authoritative result. Findings proved locally inside it
+                    // therefore survive even though the enclosing expression
+                    // becomes `Any`.
+                    warnings.absorb(inferred_warnings);
                     types.insert(var.clone(), StreamType::Any);
                     root_types.insert(var.clone(), TCType::Any);
                     progressed = true;

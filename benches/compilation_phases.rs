@@ -16,11 +16,7 @@ use trustworthiness_checker::lang::dsrv::ast::ExprView;
 use trustworthiness_checker::lang::dsrv::parser::{
     parse_expr, parse_str, parse_syntax_for_benchmark,
 };
-use trustworthiness_checker::lang::dsrv::type_checker::type_check;
-use trustworthiness_checker::{
-    CheckedDsrvSpecification, DsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions,
-    VarName,
-};
+use trustworthiness_checker::{DsrvSpecification, TypeCheckOptions, VarName};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -99,9 +95,7 @@ fn compilation_phases(c: &mut Criterion) {
         let parsed = source
             .parse::<DsrvSpecification>()
             .expect("benchmark input should parse");
-        let typed = source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("benchmark input should type check");
+        let typed = trustworthiness_checker::dsrv_fixtures::checked(&source);
         let elaborated = typed.clone().elaborate();
         DataflowMonitor::compile_with_semantics(elaborated.clone(), Semantics::Untimed)
             .expect("benchmark input should compile untyped");
@@ -128,7 +122,13 @@ fn compilation_phases(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| black_box(type_check(spec).unwrap()),
+                |spec| {
+                    black_box(
+                        spec.check(TypeCheckOptions::STRICT)
+                            .discard_warnings()
+                            .unwrap(),
+                    )
+                },
                 BatchSize::SmallInput,
             )
         });
@@ -190,7 +190,10 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = type_check(parsed).unwrap();
+                    let typed = parsed
+                        .check(TypeCheckOptions::STRICT)
+                        .discard_warnings()
+                        .unwrap();
                     black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
             },
@@ -201,7 +204,10 @@ fn compilation_phases(c: &mut Criterion) {
             |b, source| {
                 b.iter(|| {
                     let parsed = parse_str(black_box(source)).unwrap();
-                    let typed = type_check(parsed).unwrap();
+                    let typed = parsed
+                        .check(TypeCheckOptions::STRICT)
+                        .discard_warnings()
+                        .unwrap();
                     black_box(typed.dependency_graph_for(DependencyGraphRoots::AllStreams));
                     black_box(DataflowMonitor::compile_checked(typed.elaborate()).unwrap())
                 })
@@ -235,14 +241,18 @@ fn compilation_phases(c: &mut Criterion) {
         let parsed = source
             .parse::<DsrvSpecification>()
             .expect("lexical binding input should parse");
-        source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("lexical binding input should type check");
+        trustworthiness_checker::dsrv_fixtures::checked(&source);
         group.throughput(Throughput::Elements(bindings as u64));
         group.bench_function(BenchmarkId::from_parameter(bindings), |b| {
             b.iter_batched(
                 || parsed.clone(),
-                |spec| black_box(type_check(spec).unwrap()),
+                |spec| {
+                    black_box(
+                        spec.check(TypeCheckOptions::STRICT)
+                            .discard_warnings()
+                            .unwrap(),
+                    )
+                },
                 BatchSize::SmallInput,
             )
         });
@@ -272,9 +282,7 @@ fn indexed_arena_comparison(c: &mut Criterion) {
     for depth in [5_u32, 8, 11] {
         let nodes = (1_u64 << (depth + 2)) - 1;
         let source = balanced_scalar_source(depth);
-        let typed = source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("balanced scalar source should type check");
+        let typed = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
         let mut monitor = DataflowMonitor::compile_checked(typed.clone())
             .expect("balanced scalar source should compile");
 
@@ -291,7 +299,13 @@ fn indexed_arena_comparison(c: &mut Criterion) {
                         .parse::<DsrvSpecification>()
                         .expect("benchmark source should parse")
                 },
-                |spec| black_box(type_check(spec).unwrap()),
+                |spec| {
+                    black_box(
+                        spec.check(TypeCheckOptions::STRICT)
+                            .discard_warnings()
+                            .unwrap(),
+                    )
+                },
                 BatchSize::SmallInput,
             )
         });
@@ -375,9 +389,7 @@ fn ast_traversal(c: &mut Criterion) {
         let spec = source
             .parse::<DsrvSpecification>()
             .expect("benchmark fixture should parse");
-        let checked = source
-            .parse::<CheckedDsrvSpecification>()
-            .expect("benchmark fixture should type check");
+        let checked = trustworthiness_checker::dsrv_fixtures::checked(&source);
         let output = VarName::new("z");
         let expr = spec
             .var_expr_ref(&output)
@@ -426,9 +438,7 @@ fn localisation(c: &mut Criterion) {
 
     for assignments in [32_usize, 256, 1024] {
         let source = localisation_chain_input(assignments);
-        let spec = source
-            .parse::<DsrvSpecification>()
-            .expect("localisation benchmark fixture should parse");
+        let spec = trustworthiness_checker::dsrv_fixtures::elaborated(&source);
         let local_outputs = vec![VarName::new("result")];
         spec.try_localise(&local_outputs)
             .expect("localisation benchmark fixture should localise");

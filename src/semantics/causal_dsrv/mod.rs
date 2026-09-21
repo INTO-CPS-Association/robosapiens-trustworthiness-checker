@@ -166,6 +166,11 @@ where
         Cos(value) => combinators::unary(UnaryOperator::Cos, child(value)),
         Tan(value) => combinators::unary(UnaryOperator::Tan, child(value)),
         Abs(value) => combinators::unary(UnaryOperator::Absolute, child(value)),
+        Trunc(value) => combinators::unary(UnaryOperator::Truncate, child(value)),
+        Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
+        Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
+        Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
+        Cast(value, target) => combinators::cast(child(value), target.clone()),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -258,6 +263,11 @@ where
         Cos(value) => combinators::unary(UnaryOperator::Cos, child(value)),
         Tan(value) => combinators::unary(UnaryOperator::Tan, child(value)),
         Abs(value) => combinators::unary(UnaryOperator::Absolute, child(value)),
+        Trunc(value) => combinators::unary(UnaryOperator::Truncate, child(value)),
+        Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
+        Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
+        Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
+        Cast(value, target) => combinators::cast(child(value), target.clone()),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -310,7 +320,7 @@ mod tests {
         rc::Rc,
     };
 
-    use futures::StreamExt;
+    use futures::{FutureExt, StreamExt};
     use macro_rules_attribute::apply;
     use smol::LocalExecutor;
 
@@ -388,6 +398,74 @@ mod tests {
         assert!(rows.next().await.is_none());
         task.await.unwrap();
         result
+    }
+
+    #[apply(async_test)]
+    async fn scalar_casts_preserve_values_and_causal_support(executor: Rc<LocalExecutor<'static>>) {
+        let cases = [
+            ("trunc(x)", Value::Int(-1)),
+            ("floor(x)", Value::Int(-2)),
+            ("ceil(x)", Value::Int(-1)),
+            ("round(x)", Value::Int(-2)),
+            ("integer as Float", Value::Float(7.0)),
+            ("integer as Str", Value::Str("7".into())),
+            ("x as Str", Value::Str("-1.6".into())),
+        ];
+        for (expression, expected) in cases {
+            let source = format!(
+                "use experimental::{{casts}}\n\
+                 in x: Float\nin integer: Int\nout result\nresult = {expression}"
+            );
+            let result = unchecked_output::<CausalSet, CausalDsrvSemantics>(
+                &source,
+                BTreeMap::from([
+                    ("x".into(), vec![Value::Float(-1.6)]),
+                    ("integer".into(), vec![Value::Int(7)]),
+                ]),
+                executor.clone(),
+            )
+            .await;
+            assert_eq!(result.value, expected, "{expression}");
+            assert_eq!(
+                result.explanation.support().iter().count(),
+                1,
+                "{expression}"
+            );
+        }
+    }
+
+    #[apply(async_test)]
+    async fn unrepresentable_rounding_panics_in_causal_stream_evaluation(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        for operator in ["trunc", "floor", "ceil", "round"] {
+            for input in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::MAX,
+                f64::MIN,
+            ] {
+                let source = format!(
+                    "use experimental::{{casts}}\n\
+                     in x: Float\nout result: Int\nresult = {operator}(x)"
+                );
+                let evaluation = std::panic::AssertUnwindSafe(unchecked_output::<
+                    CausalSet,
+                    CausalDsrvSemantics,
+                >(
+                    &source,
+                    BTreeMap::from([("x".into(), vec![Value::Float(input)])]),
+                    executor.clone(),
+                ))
+                .catch_unwind()
+                .await;
+                assert!(
+                    evaluation.is_err(),
+                    "{operator}({input:?}) produced a causal value instead of panicking"
+                );
+            }
+        }
     }
 
     #[apply(async_test)]

@@ -1,7 +1,7 @@
 //! Untimed DSRV evaluation reused by distributed semantics.
 
 use super::combinators as mc;
-use crate::core::{BinaryOperator, LocalStream, Value};
+use crate::core::{BinaryOperator, LocalStream, UnaryOperator, Value};
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
 
 pub(crate) fn evaluate<'a>(
@@ -34,6 +34,7 @@ pub(crate) fn evaluate<'a>(
                 BinaryOperator::Greater => mc::gt(left, right),
             }
         }
+        Cast(value, target) => mc::cast(evaluate(value), target.clone()),
         Not(value) => mc::not(evaluate(value)),
         Neg(value) => mc::neg(evaluate(value)),
         Update(current, update) => mc::update(evaluate(current), evaluate(update)),
@@ -70,6 +71,10 @@ pub(crate) fn evaluate<'a>(
         Cos(value) => mc::cos(evaluate(value)),
         Tan(value) => mc::tan(evaluate(value)),
         Abs(value) => mc::abs(evaluate(value)),
+        Trunc(value) => mc::unary(UnaryOperator::Truncate, evaluate(value)),
+        Floor(value) => mc::unary(UnaryOperator::Floor, evaluate(value)),
+        Ceil(value) => mc::unary(UnaryOperator::Ceiling, evaluate(value)),
+        Round(value) => mc::unary(UnaryOperator::Round, evaluate(value)),
         _ => return None,
     };
     Some(stream)

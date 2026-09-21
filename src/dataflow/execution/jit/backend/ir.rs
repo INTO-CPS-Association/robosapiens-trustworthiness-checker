@@ -113,6 +113,14 @@ fn graph_requires_failure_guard(graph: &LoweredGraph) -> bool {
             else_graph,
             ..
         } => graph_requires_failure_guard(then_graph) || graph_requires_failure_guard(else_graph),
+        LoweredNode::Unary {
+            op:
+                UnaryOperator::Truncate
+                | UnaryOperator::Floor
+                | UnaryOperator::Ceiling
+                | UnaryOperator::Round,
+            ..
+        } => true,
         LoweredNode::Unary { .. } | LoweredNode::Binary { .. } => false,
     })
 }

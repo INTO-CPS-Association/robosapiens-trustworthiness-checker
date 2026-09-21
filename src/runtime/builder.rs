@@ -1816,10 +1816,10 @@ mod tests {
         );
     }
 
-    // Replacement preparation, exercised with the test-only warning rules: a
-    // string literal `"warn:alpha"` proves a warning at itself.
+    // Replacement preparation, exercised with the production redundant-cast
+    // warning rather than a test-only rule.
 
-    const WARNING_REPLACEMENT: &str = "out y: Str = \"warn:alpha\"";
+    const WARNING_REPLACEMENT: &str = "use experimental::{casts}\nout y: Int = 1 as Int";
 
     /// Prepare `source`, recording each presentation's warning codes.
     fn prepare_recording(
@@ -1840,21 +1840,24 @@ mod tests {
         let prepared = prepare_recording(WARNING_REPLACEMENT, &presented)
             .expect("a replacement that only warns is prepared");
         assert!(prepared.output_vars().contains(&VarName::new("y")));
-        assert_eq!(presented.into_inner(), [vec!["test-alpha"]]);
+        assert_eq!(presented.into_inner(), [vec!["dsrv.redundant-cast"]]);
     }
 
     #[test]
     fn a_replacement_that_fails_checking_presents_its_warnings_once_first() {
         let presented = RefCell::new(Vec::new());
-        let error = prepare_recording("out y: Str = \"warn:alpha\"\nout z: Bool = 1", &presented)
-            .expect_err("an ill-typed replacement is refused");
+        let error = prepare_recording(
+            "use experimental::{casts}\nout y: Int = 1 as Int\nout z: Bool = 1",
+            &presented,
+        )
+        .expect_err("an ill-typed replacement is refused");
         assert!(
             error
                 .to_string()
                 .contains("Reconfigured spec failed type checking"),
             "{error:#}"
         );
-        assert_eq!(presented.into_inner(), [vec!["test-alpha"]]);
+        assert_eq!(presented.into_inner(), [vec!["dsrv.redundant-cast"]]);
     }
 
     #[test]
@@ -1879,11 +1882,11 @@ mod tests {
         let preparation: ReplacementPreparation<ElaboratedDsrvSpecification> =
             Rc::new(move |source| prepare_recording(source, &recorded));
         preparation(WARNING_REPLACEMENT).expect("the first submission is prepared");
-        assert_eq!(*presented.borrow(), [vec!["test-alpha"]]);
+        assert_eq!(*presented.borrow(), [vec!["dsrv.redundant-cast"]]);
         preparation(WARNING_REPLACEMENT).expect("the second submission is prepared");
         assert_eq!(
             *presented.borrow(),
-            [vec!["test-alpha"], vec!["test-alpha"]]
+            [vec!["dsrv.redundant-cast"], vec!["dsrv.redundant-cast"]]
         );
     }
 

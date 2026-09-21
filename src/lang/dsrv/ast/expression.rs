@@ -20,7 +20,7 @@ use ecow::{EcoString, EcoVec};
 
 use super::CheckedExprRef;
 use super::checked::CheckedTypes;
-use crate::core::{BinaryOperator, Value};
+use crate::core::{BinaryOperator, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::expand::functions::Callable;
@@ -285,6 +285,7 @@ contiguous_tree::tree_schema! {
         SIndex(input: child, offset: copy(u64)),
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
+        Cast(value: child, target: data(StreamType)),
         Var(variable: data(VarName)),
         // A constructor before elaboration resolves it: a tag, the payload it
         // is given (none for a nullary alternative), and the union named by a
@@ -353,6 +354,10 @@ contiguous_tree::tree_schema! {
         Cos(value: child),
         Tan(value: child),
         Abs(value: child),
+        Trunc(value: child),
+        Floor(value: child),
+        Ceil(value: child),
+        Round(value: child),
 
         MonitoredAt(variable: data(VarName), node: data(NodeName)),
         Dist(left: data(VarOrNodeName), right: data(VarOrNodeName)),

@@ -35,6 +35,7 @@ contiguous_tree::tree_schema! {
         SIndex(input: child, offset: data(SourceOffset)),
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
+        Cast(value: child, target: data(SourceType)),
         Var(variable: data(VarName)),
         // A value named through a module. Expansion inlines the def it
         // names, so this never reaches the core AST.
@@ -83,6 +84,10 @@ contiguous_tree::tree_schema! {
         Cos(value: child),
         Tan(value: child),
         Abs(value: child),
+        Trunc(value: child),
+        Floor(value: child),
+        Ceil(value: child),
+        Round(value: child),
         MonitoredAt(variable: data(VarName), node: data(NodeName)),
         Dist(left: data(VarOrNodeName), right: data(VarOrNodeName)),
     }

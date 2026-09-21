@@ -111,6 +111,12 @@ pub(super) fn supports_unary(op: UnaryOperator, input: ScalarKind, output: Scala
     matches!(
         (op, input, output),
         (Op::Not, Kind::Bool, Kind::Bool)
+            | (Op::CastFloat, Kind::Int, Kind::Float)
+            | (
+                Op::Truncate | Op::Floor | Op::Ceiling | Op::Round,
+                Kind::Float,
+                Kind::Int
+            )
             | (Op::Negate | Op::Absolute, Kind::Int, Kind::Int)
             | (
                 Op::Negate | Op::Sin | Op::Cos | Op::Tan | Op::Absolute,
@@ -166,6 +172,7 @@ pub(super) fn apply_unary(op: UnaryOperator, input: ScalarValue) -> ScalarValue 
         (Op::Sin, Scalar::Float(value)) => Scalar::Float(value.sin()),
         (Op::Cos, Scalar::Float(value)) => Scalar::Float(value.cos()),
         (Op::Tan, Scalar::Float(value)) => Scalar::Float(value.tan()),
+        (Op::CastFloat, Scalar::Int(value)) => Scalar::Float(value as f64),
         (Op::Absolute, Scalar::Int(value)) => Scalar::Int(value.wrapping_abs()),
         (Op::Absolute, Scalar::Float(value)) => Scalar::Float(value.abs()),
         _ => generic_unary(op, input),

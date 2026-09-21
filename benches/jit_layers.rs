@@ -15,9 +15,7 @@ use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dataflow::{
     DataflowMonitor, JitConfig, JitPlan, TypedDataflowMonitor, TypedJitMonitor, TypedMonitor,
 };
-use trustworthiness_checker::{
-    CheckedDsrvSpecification, ElaboratedDsrvSpecification, TypeCheckOptions, Value,
-};
+use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
 
 const HOTNESS_EVENTS: u64 = 1_024;
 const WARM_EVENTS: usize = 10_000;
@@ -92,10 +90,7 @@ const BOUNDARY_SCENARIOS: &[Scenario] = &[
 ];
 
 fn parse(source: &str) -> ElaboratedDsrvSpecification {
-    source
-        .parse::<CheckedDsrvSpecification>()
-        .expect("benchmark specification should type check")
-        .elaborate()
+    trustworthiness_checker::dsrv_fixtures::elaborated(source)
 }
 
 fn build(specification: ElaboratedDsrvSpecification, config: JitConfig) -> DataflowMonitor {
@@ -107,12 +102,12 @@ fn compile(source: &str, config: JitConfig) -> DataflowMonitor {
     build(parse(source), config)
 }
 
-fn compile_untyped(source: &str) -> DataflowMonitor {
+fn compile_gradual(source: &str) -> DataflowMonitor {
     DataflowMonitor::compile_with_semantics(
         trustworthiness_checker::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::GRADUAL),
         Semantics::Untimed,
     )
-    .expect("untyped benchmark specification should compile")
+    .expect("gradually checked benchmark specification should compile")
 }
 
 fn compile_checked_canonical(source: &str) -> DataflowMonitor {
@@ -276,7 +271,7 @@ fn verify_direct_routes(scenario: Scenario) {
 fn verify() {
     for scenario in SCENARIOS.iter().chain(BOUNDARY_SCENARIOS) {
         let mut canonical = compile_checked_canonical(scenario.source);
-        let mut untyped = compile_untyped(scenario.source);
+        let mut untyped = compile_gradual(scenario.source);
         let mut quickened = compile_checked_quickened(scenario.source);
         let mut eager = compile(scenario.source, JitConfig::eager());
         let mut hot = compile(scenario.source, JitConfig::after_events(HOTNESS_EVENTS));
@@ -354,8 +349,8 @@ fn bench_configuration(c: &mut Criterion) {
         sustained.throughput(Throughput::Elements(TIMED_EVENTS as u64));
         for (name, build_monitor) in [
             (
-                "untyped_value",
-                compile_untyped as fn(&str) -> DataflowMonitor,
+                "gradually_checked_value",
+                compile_gradual as fn(&str) -> DataflowMonitor,
             ),
             ("checked_canonical_value", compile_checked_canonical),
             ("checked_quickened_value", compile_checked_quickened),

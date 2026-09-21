@@ -9,8 +9,7 @@ use trustworthiness_checker::core::{Runtime, Semantics};
 use trustworthiness_checker::dataflow::DataflowMonitor;
 use trustworthiness_checker::io::map;
 use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
-use trustworthiness_checker::lang::dsrv::ast::CheckedDsrvSpecification;
-use trustworthiness_checker::lang::dsrv::{ElaboratedDsrvSpecification, TypeCheckOptions};
+use trustworthiness_checker::lang::dsrv::ElaboratedDsrvSpecification;
 
 use trustworthiness_checker::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use trustworthiness_checker::runtime::dataflow::DataflowRuntimeBuilder;
@@ -60,7 +59,7 @@ impl AsyncExecutor for LocalSmolExecutor {
 
 async fn monitor_recursive_outputs_semisync(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
@@ -80,7 +79,7 @@ async fn monitor_recursive_outputs_semisync(
 
 async fn monitor_recursive_outputs_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: DsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
@@ -88,7 +87,7 @@ async fn monitor_recursive_outputs_dataflow(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("dataflow benchmark output pipeline should open");
-    let monitor = DataflowRuntimeBuilder::<DsrvSpecification>::new()
+    let monitor = DataflowRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream.into())
@@ -100,7 +99,7 @@ async fn monitor_recursive_outputs_dataflow(
 
 async fn monitor_recursive_outputs_typed_semisync(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
@@ -123,7 +122,7 @@ async fn monitor_recursive_outputs_typed_semisync(
 
 async fn monitor_recursive_outputs_typed_dataflow(
     executor: Rc<LocalExecutor<'static>>,
-    spec: CheckedDsrvSpecification,
+    spec: ElaboratedDsrvSpecification,
     input_stream: InputStream<Value>,
     output_limit: usize,
 ) {
@@ -131,7 +130,7 @@ async fn monitor_recursive_outputs_typed_dataflow(
         .build(spec.output_vars(), spec.aux_vars(), None)
         .await
         .expect("typed dataflow benchmark output pipeline should open");
-    let monitor = DataflowRuntimeBuilder::<CheckedDsrvSpecification>::new()
+    let monitor = DataflowRuntimeBuilder::new()
         .executor(executor.clone())
         .model(spec)
         .input(input_stream.into())
@@ -150,21 +149,17 @@ fn recursive_spec() -> DsrvSpecification {
         .expect("recursive benchmark specification should parse")
 }
 
-fn typed_recursive_spec() -> CheckedDsrvSpecification {
+fn typed_recursive_spec() -> ElaboratedDsrvSpecification {
     let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = if x % 5 == 0 then default(z[1], 0) + y * 3 else default(z[1], 0) + x + y";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("recursive benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 /// Check a specification gradually and elaborate it, as every runtime requires.
 fn elaborate_gradually(spec: &DsrvSpecification) -> ElaboratedDsrvSpecification {
-    spec.clone()
-        .check_and_elaborate(TypeCheckOptions::GRADUAL)
-        .without_warnings()
-        .expect("benchmark specification should check gradually")
+    trustworthiness_checker::dsrv_fixtures::elaborate_for(spec.clone(), Semantics::Untimed)
 }
 
 fn arithmetic_spec() -> DsrvSpecification {
@@ -176,13 +171,12 @@ fn arithmetic_spec() -> DsrvSpecification {
         .expect("arithmetic benchmark specification should parse")
 }
 
-fn typed_arithmetic_spec() -> CheckedDsrvSpecification {
+fn typed_arithmetic_spec() -> ElaboratedDsrvSpecification {
     let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = (x + y) * 3 - (x % 7)";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("arithmetic benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn if_arithmetic_spec() -> DsrvSpecification {
@@ -194,13 +188,12 @@ fn if_arithmetic_spec() -> DsrvSpecification {
         .expect("conditional arithmetic benchmark specification should parse")
 }
 
-fn typed_if_arithmetic_spec() -> CheckedDsrvSpecification {
+fn typed_if_arithmetic_spec() -> ElaboratedDsrvSpecification {
     let spec = "in x: Int\n\
                     in y: Int\n\
                     out z: Int\n\
                     z = if x % 5 == 0 then y * 3 else x + y";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("conditional arithmetic benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn stream_dependency_spec() -> DsrvSpecification {
@@ -214,15 +207,14 @@ fn stream_dependency_spec() -> DsrvSpecification {
         .expect("stream dependency benchmark specification should parse")
 }
 
-fn typed_stream_dependency_spec() -> CheckedDsrvSpecification {
+fn typed_stream_dependency_spec() -> ElaboratedDsrvSpecification {
     let spec = "in x: Int\n\
                     in y: Int\n\
                     out w: Int\n\
                     aux z: Int\n\
                     z = (x + y) * 3 - (x % 7)\n\
                     w = z + (z % 5)";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("stream dependency benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn function_heavy_spec() -> DsrvSpecification {
@@ -244,7 +236,7 @@ fn function_heavy_spec() -> DsrvSpecification {
         .expect("function-heavy benchmark specification should parse")
 }
 
-fn typed_function_heavy_spec() -> CheckedDsrvSpecification {
+fn typed_function_heavy_spec() -> ElaboratedDsrvSpecification {
     let spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
@@ -255,8 +247,7 @@ fn typed_function_heavy_spec() -> CheckedDsrvSpecification {
                     direct = (\\x: Int -> x + bias)(n)\n\
                     mapped = List.map(\\x: Int -> x + bias, xs)\n\
                     sum = List.fold(\\acc: Int, x: Int -> acc + x + bias, 0, xs)";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("function-heavy benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn recursive_function_if_spec() -> DsrvSpecification {
@@ -268,13 +259,12 @@ fn recursive_function_if_spec() -> DsrvSpecification {
         .expect("recursive function benchmark specification should parse")
 }
 
-fn typed_recursive_function_if_spec() -> CheckedDsrvSpecification {
+fn typed_recursive_function_if_spec() -> ElaboratedDsrvSpecification {
     let spec = "in n: Int\n\
                     in bias: Int\n\
                     out recursive: Int\n\
                     recursive = fix(\\self: (Int -> Int), k: Int -> if k == 0 then bias else (self(k - 1) + 1))(n)";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("recursive function benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn direct_function_if_spec() -> DsrvSpecification {
@@ -286,13 +276,12 @@ fn direct_function_if_spec() -> DsrvSpecification {
         .expect("direct function benchmark specification should parse")
 }
 
-fn typed_direct_function_if_spec() -> CheckedDsrvSpecification {
+fn typed_direct_function_if_spec() -> ElaboratedDsrvSpecification {
     let spec = "in n: Int\n\
                     in bias: Int\n\
                     out direct: Int\n\
                     direct = (\\k: Int -> if k == 0 then bias else k + bias)(n)";
-    spec.parse::<CheckedDsrvSpecification>()
-        .expect("direct function benchmark specification should type check")
+    trustworthiness_checker::dsrv_fixtures::elaborated(spec)
 }
 
 fn recursive_inputs(size: usize) -> InputStream<Value> {
@@ -353,6 +342,7 @@ fn recursive_function_input_columns(size: usize) -> Vec<Vec<Value>> {
 
 fn compare_dataflow_semantics(c: &mut Criterion) {
     let spec = recursive_spec();
+    let spec = elaborate_gradually(&spec);
     let typed_spec = typed_recursive_spec();
 
     let mut group = c.benchmark_group("dataflow_semantics_recursive");
@@ -427,6 +417,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     group.finish();
 
     let spec = arithmetic_spec();
+    let spec = elaborate_gradually(&spec);
     let typed_spec = typed_arithmetic_spec();
     let mut group = c.benchmark_group("dataflow_semantics_arithmetic");
     group.sampling_mode(SamplingMode::Flat);
@@ -500,6 +491,7 @@ fn compare_dataflow_semantics(c: &mut Criterion) {
     group.finish();
 
     let spec = stream_dependency_spec();
+    let spec = elaborate_gradually(&spec);
     let typed_spec = typed_stream_dependency_spec();
     let mut group = c.benchmark_group("dataflow_semantics_stream_dependency");
     group.sampling_mode(SamplingMode::Flat);

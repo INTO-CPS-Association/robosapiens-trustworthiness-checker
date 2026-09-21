@@ -6,6 +6,13 @@ pub enum UnaryOperator {
     Cos,
     Tan,
     Absolute,
+    /// `trunc`, `floor`, `ceil` and `round`: a `Float` to an `Int`.
+    Truncate,
+    Floor,
+    Ceiling,
+    Round,
+    CastFloat,
+    CastStr,
 }
 
 impl UnaryOperator {
@@ -17,6 +24,12 @@ impl UnaryOperator {
             Self::Cos => "cos",
             Self::Tan => "tan",
             Self::Absolute => "absolute value",
+            Self::Truncate => "trunc",
+            Self::Floor => "floor",
+            Self::Ceiling => "ceil",
+            Self::Round => "round",
+            Self::CastFloat => "cast to Float",
+            Self::CastStr => "cast to Str",
         }
     }
 }

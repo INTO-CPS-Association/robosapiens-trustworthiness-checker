@@ -337,6 +337,14 @@ SpecialKeywords: ExprId = {
        builder.alloc(ExprKind::Tan(e), Span::new(l as u32, r as u32)),
   <l:@L> "abs" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::Abs(e), Span::new(l as u32, r as u32)),
+  <l:@L> "trunc" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
+       builder.alloc(ExprKind::Trunc(e), Span::new(l as u32, r as u32)),
+  <l:@L> "floor" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
+       builder.alloc(ExprKind::Floor(e), Span::new(l as u32, r as u32)),
+  <l:@L> "ceil" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
+       builder.alloc(ExprKind::Ceil(e), Span::new(l as u32, r as u32)),
+  <l:@L> "round" "(" <e: Expr> <trailing:TrailingComma> ")" <r:@R> =>
+       builder.alloc(ExprKind::Round(e), Span::new(l as u32, r as u32)),
   <l:@L> "monitored_at" "(" <v: Ident> "," <n: PlacementNode> <trailing:TrailingComma> ")" <r:@R> =>
        builder.alloc(ExprKind::MonitoredAt(v, n), Span::new(l as u32, r as u32)),
   <l:@L> "dist" "(" <v1: VarOrNodeName> "," <v2: VarOrNodeName> <trailing:TrailingComma> ")" <r:@R> =>
@@ -557,6 +565,30 @@ UnaryExpr: ExprId = {
     PowerExpr
 };
 
+// Casts bind more tightly than multiplication, but less tightly than unary
+// operators. The recursive left operand makes a cast chain left-associative.
+CastExpr: ExprId = {
+    <l:@L> <value:CastExpr> "as" <target:CastTarget> <r:@R> =>
+        builder.alloc(ExprKind::Cast(value, target), Span::new(l as u32, r as u32)),
+    UnaryExpr,
+};
+
+// A cast target is one type name, never a generic or structural type.
+CastTarget: SourceType = {
+    <l:@L> <kind:CastTargetKind> <r:@R> =>
+        SourceType { kind, span: Span::new(l as u32, r as u32) },
+};
+
+CastTargetKind: StreamType = {
+    "Int" => StreamType::Int,
+    "Str" => StreamType::Str,
+    "Float" => StreamType::Float,
+    "Bool" => StreamType::Bool,
+    "Unit" => StreamType::Unit,
+    "Any" => StreamType::Any,
+    <name:TypeRef> => StreamType::Named(name, EcoVec::new()),
+};
+
 PowerExpr: ExprId = {
     <l:@L> <lhs:Atom> "**" <rhs:UnaryExpr> <r:@R> =>
         builder.alloc(ExprKind::BinOp(lhs, rhs, BinaryOperator::Power), Span::new(l as u32, r as u32)),
@@ -773,7 +805,7 @@ TypeAnno: SourceType = {
 
 // Operator precedence chain with Final having highest precedence
 PrecChain: ExprId = {
-    ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<UnaryExpr>>>>>>>>,
+    ConcatExpr<ImplExpr<OrExpr<AndExpr<CompExpr<RelExpr<AddExpr<MultExpr<CastExpr>>>>>>>>,
 }
 
 // The top-level expression

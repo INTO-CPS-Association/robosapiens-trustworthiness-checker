@@ -52,6 +52,20 @@ pub fn unary<D: CausalDomain>(
     }))
 }
 
+pub fn cast<D: CausalDomain>(
+    input: LocalStream<CausalValue<D>>,
+    target: crate::core::StreamType,
+) -> LocalStream<CausalValue<D>> {
+    Box::pin(lift_base(input).map(move |input| {
+        let value = match input.value {
+            Value::NoVal => Value::NoVal,
+            Value::Deferred => Value::Deferred,
+            value => operations::cast(value, &target).unwrap_or_else(|error| panic!("{error}")),
+        };
+        marker(value, input.explanation)
+    }))
+}
+
 pub fn binary<D: CausalDomain>(
     operation: BinaryOperator,
     left: LocalStream<CausalValue<D>>,

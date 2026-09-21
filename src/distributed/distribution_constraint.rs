@@ -4,7 +4,7 @@ use std::fmt;
 use ecow::{EcoString, EcoVec};
 
 use crate::core::values::operations as value_operations;
-use crate::core::{BinaryOperator, UnaryOperator};
+use crate::core::{BinaryOperator, StreamType, UnaryOperator};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
 use crate::lang::dsrv::span::Span;
@@ -45,6 +45,8 @@ pub enum ConstraintExprKind {
     Not(Box<ConstraintExpr>),
     Neg(Box<ConstraintExpr>),
     Abs(Box<ConstraintExpr>),
+    Unary(Box<ConstraintExpr>, UnaryOperator),
+    Cast(Box<ConstraintExpr>, StreamType),
     List(EcoVec<ConstraintExpr>),
     ListIndex(Box<ConstraintExpr>, Box<ConstraintExpr>),
     ListAppend(Box<ConstraintExpr>, Box<ConstraintExpr>),
@@ -275,6 +277,15 @@ impl DistributionConstraintPlan {
                 self.evaluate(value, bindings, monitored_at, stack)?,
             )
             .ok(),
+            E::Unary(value, operator) => value_operations::unary(
+                *operator,
+                self.evaluate(value, bindings, monitored_at, stack)?,
+            )
+            .ok(),
+            E::Cast(value, target) => {
+                value_operations::cast(self.evaluate(value, bindings, monitored_at, stack)?, target)
+                    .ok()
+            }
             E::List(items) => items
                 .iter()
                 .map(|item| self.evaluate(item, bindings, monitored_at, stack))
@@ -407,6 +418,22 @@ impl Lowerer<'_> {
             Not(value) => ConstraintExprKind::Not(Box::new(self.lower_expr(value)?)),
             Neg(value) => ConstraintExprKind::Neg(Box::new(self.lower_expr(value)?)),
             Abs(value) => ConstraintExprKind::Abs(Box::new(self.lower_expr(value)?)),
+            Trunc(value) => ConstraintExprKind::Unary(
+                Box::new(self.lower_expr(value)?),
+                UnaryOperator::Truncate,
+            ),
+            Floor(value) => {
+                ConstraintExprKind::Unary(Box::new(self.lower_expr(value)?), UnaryOperator::Floor)
+            }
+            Ceil(value) => {
+                ConstraintExprKind::Unary(Box::new(self.lower_expr(value)?), UnaryOperator::Ceiling)
+            }
+            Round(value) => {
+                ConstraintExprKind::Unary(Box::new(self.lower_expr(value)?), UnaryOperator::Round)
+            }
+            Cast(value, target) => {
+                ConstraintExprKind::Cast(Box::new(self.lower_expr(value)?), target.clone())
+            }
             MGet(map, key) | SGet(map, key) => {
                 ConstraintExprKind::MapGet(Box::new(self.lower_expr(map)?), key.clone())
             }
@@ -584,6 +611,84 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn constraint_profiles_lower_and_evaluate_casts_without_saturating() {
+        let spec = ("use experimental::casts\n\
+                     in x: Float\nin integer: Int\n\
+                     out truncated: Int\nout floored: Int\nout ceiled: Int\n\
+                     out rounded: Int\nout widened: Float\nout text: Str\n\
+                     truncated = trunc(x)\nfloored = floor(x)\nceiled = ceil(x)\n\
+                     rounded = round(x)\nwidened = integer as Float\ntext = integer as Str")
+            .parse::<DsrvSpecification>()
+            .expect("cast constraint should parse");
+        let bindings = BTreeMap::from([
+            (VarName::new("x"), Value::Float(-1.6)),
+            (VarName::new("integer"), Value::Int(7)),
+        ]);
+
+        for profile in [ConstraintProfile::CompactEvaluator, ConstraintProfile::Sat] {
+            let plan = DistributionConstraintPlan::lower(
+                &spec,
+                [
+                    "truncated",
+                    "floored",
+                    "ceiled",
+                    "rounded",
+                    "widened",
+                    "text",
+                ]
+                .map(VarName::new),
+                profile,
+            )
+            .unwrap();
+            for (name, expected) in [
+                ("truncated", Value::Int(-1)),
+                ("floored", Value::Int(-2)),
+                ("ceiled", Value::Int(-1)),
+                ("rounded", Value::Int(-2)),
+                ("widened", Value::Float(7.0)),
+                ("text", Value::Str("7".into())),
+            ] {
+                assert_eq!(
+                    plan.evaluate_var(&VarName::new(name), &bindings, None),
+                    Some(expected),
+                    "{profile:?}: {name}"
+                );
+            }
+        }
+
+        for operator in ["trunc", "floor", "ceil", "round"] {
+            let source = format!(
+                "use experimental::casts\nin x: Float\nout constraint: Int\n\
+                 constraint = {operator}(x)"
+            );
+            let spec = source.parse::<DsrvSpecification>().unwrap();
+            let plan = DistributionConstraintPlan::lower(
+                &spec,
+                [VarName::new("constraint")],
+                ConstraintProfile::CompactEvaluator,
+            )
+            .unwrap();
+            for input in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::MAX,
+                f64::MIN,
+            ] {
+                assert_eq!(
+                    plan.evaluate_var(
+                        &VarName::new("constraint"),
+                        &BTreeMap::from([(VarName::new("x"), Value::Float(input))]),
+                        None,
+                    ),
+                    None,
+                    "{operator}({input:?})"
+                );
+            }
+        }
     }
 
     // SYN-R17/E2: compact constraints are partial evaluators. Arithmetic

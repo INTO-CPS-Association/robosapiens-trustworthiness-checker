@@ -1,0 +1,4 @@
+use experimental::{casts}
+in x: Int
+out y: Int
+y = x as Int

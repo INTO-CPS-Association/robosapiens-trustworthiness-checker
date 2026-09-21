@@ -30,6 +30,126 @@ fn typed_monitor_evaluates_power_and_inequality() {
     assert_eq!(monitor.evaluate(&(0, 0)), (1, false));
 }
 
+#[test]
+fn typed_monitor_casts_and_rounds_with_ieee_ties_to_even() {
+    let specification = elaborated(
+        "use experimental::{casts}\n\
+         in x: Float\nout rounded: Int\n\
+         rounded = round(x)",
+    );
+    let mut monitor =
+        TypedDataflowMonitor::<(f64,), (i64,)>::compile_checked(specification).unwrap();
+
+    for (input, rounded) in [
+        (-3.5, -4),
+        (-2.5, -2),
+        (-1.5, -2),
+        (-0.5, 0),
+        (0.5, 0),
+        (1.5, 2),
+        (2.5, 2),
+        (3.5, 4),
+    ] {
+        assert_eq!(monitor.evaluate(&(input,)), (rounded,));
+    }
+}
+
+#[test]
+fn typed_monitor_executes_all_scalar_casts() {
+    let report = crate::ElaboratedDsrvSpecification::parse_with(
+        "use experimental::{casts}\n\
+         in x: Float\nin integer: Int\n\
+         out truncated: Int\nout floored: Int\nout ceiled: Int\nout rounded: Int\n\
+         out widened: Float\nout identity: Float\n\
+         truncated = trunc(x)\nfloored = floor(x)\nceiled = ceil(x)\nrounded = round(x)\n\
+         widened = integer as Float\nidentity = (integer as Float) as Float",
+        crate::TypeCheckOptions::STRICT,
+    )
+    .expect("the identity-cast monitor parses");
+    assert_eq!(
+        report
+            .warnings()
+            .iter()
+            .map(|warning| warning.code())
+            .collect::<Vec<_>>(),
+        ["dsrv.redundant-cast"]
+    );
+    let specification = report
+        .discard_warnings()
+        .expect("the identity-cast monitor checks");
+    let mut monitor =
+        TypedDataflowMonitor::<(f64, i64), (i64, i64, i64, i64, f64, f64)>::compile_checked(
+            specification,
+        )
+        .unwrap();
+
+    assert_eq!(monitor.evaluate(&(-1.6, 7)), (-1, -2, -1, -2, 7.0, 7.0));
+}
+
+#[test]
+fn typed_monitor_rejects_unrepresentable_rounded_values() {
+    for operator in ["trunc", "floor", "ceil", "round"] {
+        for input in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            f64::MIN,
+        ] {
+            let specification = elaborated(&format!(
+                "use experimental::{{casts}}\n\
+                 in x: Float\nout result: Int\nresult = {operator}(x)"
+            ));
+            let mut monitor =
+                TypedDataflowMonitor::<(f64,), (i64,)>::compile_checked(specification).unwrap();
+
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                monitor.evaluate(&(input,))
+            }));
+            assert!(
+                failure.is_err(),
+                "{operator}({input:?}) produced a value instead of failing"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn adaptive_jit_preserves_rounding_when_native_tier_activates() {
+    let specification = elaborated(
+        "use experimental::{casts}\n\
+         in x: Float\nout rounded: Int\nout doubled: Float\n\
+         rounded = round(x)\ndoubled = x * 2.0",
+    );
+    let mut monitor = TypedDataflowMonitor::<(f64,), (i64, f64)>::compile_checked_with_jit(
+        specification,
+        JitConfig::after_events(1),
+    )
+    .unwrap();
+
+    for (input, rounded) in [
+        (-3.5, -4),
+        (-2.5, -2),
+        (-1.5, -2),
+        (-0.5, 0),
+        (0.5, 0),
+        (1.5, 2),
+        (2.5, 2),
+        (3.5, 4),
+    ] {
+        assert_eq!(monitor.evaluate(&(input,)), (rounded, input * 2.0));
+    }
+    assert!(monitor.is_direct_jit_active());
+    assert!(
+        monitor
+            .jit_report()
+            .expect("rounding JIT report")
+            .compiled_artifacts()
+            > 0
+    );
+}
+
 // SYN-R15/E1: the typed monitor reaches a direct native artifact for the actual
 // revised operators, not just for an unrelated arithmetic prefix.
 #[cfg(feature = "jit")]
@@ -148,6 +268,17 @@ fn jit_direct_reports_integer_power_overflow_distinctly() {
         TypedJitMonitor::<(i64, i64), (i64,)>::compile_checked(specification).unwrap();
 
     monitor.evaluate(&(2, 63));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+#[should_panic(expected = "rounded Float is not representable as an Int in direct JIT monitor")]
+fn jit_direct_reports_unrepresentable_rounded_integers_distinctly() {
+    let specification =
+        elaborated("use experimental::casts\nin x: Float\nout result: Int\nresult = round(x)");
+    let mut monitor = TypedJitMonitor::<(f64,), (i64,)>::compile_checked(specification).unwrap();
+
+    monitor.evaluate(&(f64::NAN,));
 }
 
 #[cfg(feature = "jit")]

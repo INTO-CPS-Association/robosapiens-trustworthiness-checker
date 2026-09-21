@@ -3,9 +3,109 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, eco_vec};
 
 use super::*;
-use crate::core::BinaryOperator;
+use crate::core::{BinaryOperator, StreamType, UnaryOperator};
 use crate::lang::dsrv::test_support::arb_int_power_case;
 use proptest::prelude::*;
+
+#[test]
+fn casts_and_float_to_integer_operations_cover_boundaries() {
+    assert_eq!(
+        cast(Value::Int((1_i64 << 53) + 1), &StreamType::Float),
+        Ok(Value::Float((1_i64 << 53) as f64))
+    );
+    for (value, expected) in [
+        (Value::Int(-12), "-12"),
+        (Value::Float(1.0), "1.0"),
+        (Value::Bool(true), "true"),
+        (Value::Unit, "()"),
+        (Value::Str("text".into()), "text"),
+    ] {
+        assert_eq!(
+            cast(value, &StreamType::Str),
+            Ok(Value::Str(expected.into()))
+        );
+    }
+    assert_eq!(
+        unary(UnaryOperator::CastFloat, Value::Float(1.5)),
+        Ok(Value::Float(1.5))
+    );
+    assert_eq!(
+        unary(UnaryOperator::CastStr, Value::Str("text".into())),
+        Ok(Value::Str("text".into()))
+    );
+    for (operation, input, expected) in [
+        (UnaryOperator::Truncate, -1.9, -1),
+        (UnaryOperator::Floor, -1.1, -2),
+        (UnaryOperator::Ceiling, 1.1, 2),
+        (UnaryOperator::Round, 2.4, 2),
+        (UnaryOperator::Round, 3.6, 4),
+        (UnaryOperator::Round, -3.5, -4),
+        (UnaryOperator::Round, -2.5, -2),
+        (UnaryOperator::Round, -1.5, -2),
+        (UnaryOperator::Round, -0.5, 0),
+        (UnaryOperator::Round, 0.5, 0),
+        (UnaryOperator::Round, 1.5, 2),
+        (UnaryOperator::Round, 2.5, 2),
+        (UnaryOperator::Round, 3.5, 4),
+        (UnaryOperator::Round, -0.0, 0),
+    ] {
+        assert_eq!(
+            unary(operation, Value::Float(input)),
+            Ok(Value::Int(expected))
+        );
+    }
+    for operation in [
+        UnaryOperator::Truncate,
+        UnaryOperator::Floor,
+        UnaryOperator::Ceiling,
+        UnaryOperator::Round,
+    ] {
+        for input in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, i64::MAX as f64] {
+            assert!(matches!(
+                unary(operation, Value::Float(input)),
+                Err(ValueOpError::UnrepresentableInteger { .. })
+            ));
+        }
+    }
+
+    const TWO_TO_53: i64 = 1_i64 << 53;
+    for input in [
+        TWO_TO_53 - 1,
+        TWO_TO_53,
+        TWO_TO_53 + 1,
+        -(TWO_TO_53 - 1),
+        -TWO_TO_53,
+        -(TWO_TO_53 + 1),
+    ] {
+        assert_eq!(
+            cast(Value::Int(input), &StreamType::Float),
+            Ok(Value::Float(input as f64))
+        );
+    }
+
+    const TWO_TO_63: f64 = 9_223_372_036_854_775_808.0;
+    let below_positive_limit = f64::from_bits(TWO_TO_63.to_bits() - 1);
+    assert_eq!(
+        unary(UnaryOperator::Truncate, Value::Float(below_positive_limit)),
+        Ok(Value::Int(9_223_372_036_854_774_784))
+    );
+    assert_eq!(
+        unary(UnaryOperator::Truncate, Value::Float(-TWO_TO_63)),
+        Ok(Value::Int(i64::MIN))
+    );
+    for input in [
+        TWO_TO_63,
+        f64::from_bits((-TWO_TO_63).to_bits() + 1),
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        assert!(matches!(
+            unary(UnaryOperator::Truncate, Value::Float(input)),
+            Err(ValueOpError::UnrepresentableInteger { .. })
+        ));
+    }
+}
 
 #[test]
 fn numeric_operations_promote_mixed_operands_and_check_integer_failures() {

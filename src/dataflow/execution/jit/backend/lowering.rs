@@ -508,6 +508,9 @@ fn fold_node(node: &LoweredNode) -> Option<ScalarRef> {
             (UnaryOperator::Absolute, ScalarKind::Int, ScalarKind::Int) => {
                 Some(constant(bits.wrapping_abs(), ScalarKind::Int))
             }
+            (UnaryOperator::CastFloat, ScalarKind::Int, ScalarKind::Float) => {
+                Some(constant((*bits as f64).to_bits() as i64, ScalarKind::Float))
+            }
             _ => None,
         },
         LoweredNode::Binary {
@@ -606,6 +609,15 @@ fn supported_unary(op: UnaryOperator, input: ScalarKind, output: ScalarKind) -> 
         (op, input, output),
         (UnaryOperator::Negate, ScalarKind::Int, ScalarKind::Int)
             | (UnaryOperator::Absolute, ScalarKind::Int, ScalarKind::Int)
+            | (UnaryOperator::CastFloat, ScalarKind::Int, ScalarKind::Float)
+            | (
+                UnaryOperator::Truncate
+                    | UnaryOperator::Floor
+                    | UnaryOperator::Ceiling
+                    | UnaryOperator::Round,
+                ScalarKind::Float,
+                ScalarKind::Int
+            )
             | (UnaryOperator::Negate, ScalarKind::Float, ScalarKind::Float)
             | (
                 UnaryOperator::Absolute,

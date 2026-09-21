@@ -499,6 +499,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn localisation_reuses_the_submitted_models_checked_tree() {
+        let source = "use experimental::{casts}\nin x: Int\nout y: Int\ny = x as Int";
+        let report = ElaboratedDsrvSpecification::parse_with(source, TypeCheckOptions::STRICT)
+            .expect("the submitted model parses");
+        assert_eq!(
+            report
+                .warnings()
+                .iter()
+                .map(|warning| warning.code())
+                .collect::<Vec<_>>(),
+            ["dsrv.redundant-cast"]
+        );
+        let (submitted, _) = report.into_parts();
+        let submitted = submitted.expect("the submitted model checks");
+
+        let localised = submitted
+            .try_localise(&vec![VarName::new("y")])
+            .expect("the checked model localises without another analysis report");
+        assert_eq!(localised.checked().unchecked().exprs.len(), 1);
+    }
+
     /// The elaborated tree of a localised specification.
     fn tree(spec: &ElaboratedDsrvSpecification) -> &DsrvSpecification {
         spec.checked().unchecked()

@@ -51,9 +51,10 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
 
     // Fixtures that are ill-typed on purpose, to test that checking rejects
     // them.
-    const ILL_TYPED: [&str; 3] = [
+    const ILL_TYPED: [&str; 4] = [
         "examples/recursive_types_illtyped.dsrv",
         "examples/simple_add_illtyped.dsrv",
+        "tests/fixtures/redundant_cast_with_error.dsrv",
         "tests/fixtures/invalid_typed_model.dsrv",
     ];
 

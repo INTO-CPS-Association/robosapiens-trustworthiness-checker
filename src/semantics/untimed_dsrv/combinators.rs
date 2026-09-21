@@ -39,6 +39,17 @@ fn eval_unary(operation: UnaryOperator, operand: Value) -> Value {
     unwrap_value(value_operations::unary(operation, operand))
 }
 
+pub fn unary(operation: UnaryOperator, input: LocalStream<Value>) -> LocalStream<Value> {
+    stream_lift1(move |value| eval_unary(operation, value), input)
+}
+
+pub fn cast(input: LocalStream<Value>, target: crate::core::StreamType) -> LocalStream<Value> {
+    stream_lift1(
+        move |value| unwrap_value(value_operations::cast(value, &target)),
+        input,
+    )
+}
+
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 

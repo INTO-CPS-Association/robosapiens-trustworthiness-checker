@@ -546,6 +546,8 @@ fn collect_input_dependencies(
         E::Not(value)
         | E::Neg(value)
         | E::Abs(value)
+        | E::Unary(value, _)
+        | E::Cast(value, _)
         | E::ListHead(value)
         | E::ListTail(value)
         | E::ListLen(value)

@@ -215,6 +215,29 @@ out verdict: Bool
 verdict = velocity
 """
 
+REDUNDANT_CAST_MONITOR = """use experimental::{casts}
+in velocity: Int
+out verdict: Int
+verdict = velocity as Int
+"""
+
+REDUNDANT_CAST_WITH_ERROR_MONITOR = """use experimental::{casts}
+out y: Int
+out z: Bool
+y = 1 as Int
+z = 1
+"""
+
+
+def assert_redundant_cast_warning(warning: object, model: str) -> None:
+    assert warning.code == "dsrv.redundant-cast"
+    assert warning.message == "cast from Int to Int is redundant"
+    assert warning.span is not None
+    start, end = warning.span
+    assert model[start:end] == "velocity as Int"
+    with pytest.raises(AttributeError):
+        warning.message = "changed"
+
 
 @pytest.mark.parametrize(
     "semantics", ["typed-untimed", "gradual-typed-untimed", "untimed", "causal"]
@@ -225,6 +248,18 @@ def test_semantic_check_failure_raises_with_its_warnings(semantics: str) -> None
     assert isinstance(raised.value, RuntimeError)
     assert raised.value.warnings == ()
     assert isinstance(raised.value.warnings, tuple)
+
+
+def test_semantic_check_failure_exposes_its_real_warnings() -> None:
+    with pytest.raises(tc.SemanticAnalysisError) as raised:
+        tc.TcRuntime.from_text(REDUNDANT_CAST_WITH_ERROR_MONITOR)
+    assert isinstance(raised.value.warnings, tuple)
+    assert len(raised.value.warnings) == 1
+    warning = raised.value.warnings[0]
+    assert warning.code == "dsrv.redundant-cast"
+    assert warning.message == "cast from Int to Int is redundant"
+    start, end = warning.span
+    assert REDUNDANT_CAST_WITH_ERROR_MONITOR[start:end] == "1 as Int"
 
 
 def test_a_checked_model_exposes_its_warnings_as_an_immutable_tuple(tmp_path: Path) -> None:
@@ -241,6 +276,50 @@ def test_a_checked_model_exposes_its_warnings_as_an_immutable_tuple(tmp_path: Pa
         assert isinstance(runtime.warnings, tuple)
         with pytest.raises(AttributeError):
             runtime.warnings = ()
+
+
+def test_successful_construction_exposes_real_warnings_for_every_constructor(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "monitor.dsrv"
+    path.write_text(REDUNDANT_CAST_MONITOR)
+    for runtime in [
+        tc.TcRuntime(REDUNDANT_CAST_MONITOR),
+        tc.TcRuntime.from_text(REDUNDANT_CAST_MONITOR),
+        tc.TcRuntime.from_path(path),
+    ]:
+        assert isinstance(runtime.warnings, tuple)
+        assert len(runtime.warnings) == 1
+        assert_redundant_cast_warning(runtime.warnings[0], REDUNDANT_CAST_MONITOR)
+        with pytest.raises(AttributeError):
+            runtime.warnings = ()
+
+
+CAST_WARNING_MONITOR = """
+use experimental::{casts}
+in x: Int
+out y: Int = x as Int
+"""
+
+
+def test_redundant_cast_warning_is_converted_on_success() -> None:
+    runtime = tc.TcRuntime.from_text(CAST_WARNING_MONITOR)
+    assert len(runtime.warnings) == 1
+    warning = runtime.warnings[0]
+    assert warning.code == "dsrv.redundant-cast"
+    assert warning.message == "cast from Int to Int is redundant"
+    assert CAST_WARNING_MONITOR[slice(*warning.span)] == "x as Int"
+
+
+def test_redundant_cast_warning_is_converted_on_semantic_failure() -> None:
+    model = CAST_WARNING_MONITOR + "\nout broken: Bool = 1\n"
+    with pytest.raises(tc.SemanticAnalysisError) as raised:
+        tc.TcRuntime.from_text(model)
+    assert len(raised.value.warnings) == 1
+    warning = raised.value.warnings[0]
+    assert warning.code == "dsrv.redundant-cast"
+    assert warning.message == "cast from Int to Int is redundant"
+    assert model[slice(*warning.span)] == "x as Int"
 
 
 def test_semantic_warning_records_cannot_be_constructed_from_python() -> None:

@@ -16,6 +16,7 @@ use trustworthiness_checker::benches_common::{
     monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
 };
 use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics, Specification};
+use trustworthiness_checker::dsrv_fixtures::WithoutWarnings;
 use trustworthiness_checker::io::{OutputBackendConfig, OutputPipeline};
 use trustworthiness_checker::lang::dsrv::TypeCheckOptions;
 use trustworthiness_checker::lang::mstlo::{MstloSpecification, parse_named_properties};
@@ -362,7 +363,7 @@ fn compare_threshold_property(c: &mut Criterion) {
     let dsrv_spec = dsrv_threshold_spec();
     let checked_dsrv_spec = dsrv_spec
         .clone()
-        .check(TypeCheckOptions::GRADUAL)
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
         .without_warnings()
         .expect("threshold benchmark specification should type check");
     let mstlo_spec = mstlo_threshold_spec();

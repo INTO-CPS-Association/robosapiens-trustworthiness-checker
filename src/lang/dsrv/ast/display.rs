@@ -86,6 +86,7 @@ impl Display for ExprRef<'_> {
                     write!(f, "({} {} {})", lhs, operator.symbol(), rhs)
                 }
             }
+            Cast(value, target) => write!(f, "({value} as {target})"),
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
             SIndex(expr, index) => write!(f, "{}[{index}]", expr),
             Not(expr) => write!(f, "!{expr}"),
@@ -218,6 +219,10 @@ impl Display for ExprRef<'_> {
             Cos(expr) => write!(f, "cos({expr})"),
             Tan(expr) => write!(f, "tan({expr})"),
             Abs(expr) => write!(f, "abs({expr})"),
+            Trunc(expr) => write!(f, "trunc({expr})"),
+            Floor(expr) => write!(f, "floor({expr})"),
+            Ceil(expr) => write!(f, "ceil({expr})"),
+            Round(expr) => write!(f, "round({expr})"),
             MonitoredAt(var, node) => write!(f, "monitored_at({var}, {node})"),
             Dist(a, b) => write!(f, "dist({a}, {b})"),
         }

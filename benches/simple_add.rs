@@ -6,6 +6,7 @@ use criterion::SamplingMode;
 use criterion::async_executor::AsyncExecutor;
 use criterion::{criterion_group, criterion_main};
 use smol::LocalExecutor;
+use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_async;
 use trustworthiness_checker::benches_common::monitor_outputs_typed_dataflow;
 use trustworthiness_checker::benches_common::monitor_outputs_untyped_async;
@@ -15,7 +16,6 @@ use trustworthiness_checker::core::Semantics;
 use trustworthiness_checker::dsrv_fixtures::simple_add_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
 use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor_typed;
-use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -54,9 +54,8 @@ fn from_elem(c: &mut Criterion) {
     let spec = spec_simple_add_monitor()
         .parse::<DsrvSpecification>()
         .expect("simple-add benchmark specification should parse");
-    let spec_typed = spec_simple_add_monitor_typed()
-        .parse::<CheckedDsrvSpecification>()
-        .expect("typed simple-add benchmark specification should type check");
+    let spec_typed =
+        trustworthiness_checker::dsrv_fixtures::elaborated(spec_simple_add_monitor_typed());
 
     for size in sizes {
         let input_stream_fn = || simple_add_input_stream(size);

@@ -16,9 +16,9 @@ use trustworthiness_checker::benches_common::{
     monitor_outputs_dataflow, monitor_outputs_quickened_dataflow,
 };
 
+use trustworthiness_checker::DsrvSpecification;
 use trustworthiness_checker::dsrv_fixtures::maple_valid_input_stream;
 use trustworthiness_checker::dsrv_fixtures::spec_maple_sequence;
-use trustworthiness_checker::{CheckedDsrvSpecification, DsrvSpecification};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -57,9 +57,7 @@ fn from_elem(c: &mut Criterion) {
     let spec = spec_maple_sequence()
         .parse::<DsrvSpecification>()
         .expect("maple sequence benchmark specification should parse");
-    let spec_typed = spec_maple_sequence()
-        .parse::<CheckedDsrvSpecification>()
-        .expect("maple sequence benchmark specification should type check");
+    let spec_typed = trustworthiness_checker::dsrv_fixtures::elaborated(spec_maple_sequence());
 
     for size in sizes {
         let input_stream_fn = || maple_valid_input_stream(size);

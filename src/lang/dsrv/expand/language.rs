@@ -125,6 +125,7 @@ pub enum Feature {
     Modules,
     Functions,
     Constants,
+    Casts,
 }
 
 impl Feature {
@@ -136,6 +137,7 @@ impl Feature {
         Self::Modules,
         Self::Functions,
         Self::Constants,
+        Self::Casts,
     ];
 
     pub fn name(self) -> &'static str {
@@ -146,6 +148,7 @@ impl Feature {
             Self::Modules => "modules",
             Self::Functions => "functions",
             Self::Constants => "constants",
+            Self::Casts => "casts",
         }
     }
 
@@ -607,6 +610,11 @@ pub(crate) fn check_experiment_node(
         ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
         ExprKind::Match(..) => ("`match`", Feature::PatternMatching),
         ExprKind::Matches(..) => ("`matches`", Feature::PatternMatching),
+        ExprKind::Cast(..)
+        | ExprKind::Trunc(..)
+        | ExprKind::Floor(..)
+        | ExprKind::Ceil(..)
+        | ExprKind::Round(..) => ("a cast", Feature::Casts),
         _ => return Ok(()),
     };
     if language.has(feature) {
@@ -753,6 +761,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         ExprKind::If(..)
         | ExprKind::SIndex(..)
         | ExprKind::BinOp(..)
+        | ExprKind::Cast(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
@@ -763,7 +772,11 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::Latch(..)
         | ExprKind::Init(..)
         | ExprKind::Not(..)
-        | ExprKind::Neg(..) => None,
+        | ExprKind::Neg(..)
+        | ExprKind::Trunc(..)
+        | ExprKind::Floor(..)
+        | ExprKind::Ceil(..)
+        | ExprKind::Round(..) => None,
         ExprKind::Constructor(..) => Some("a union constructor"),
         ExprKind::Match(..) => Some("`match`"),
         ExprKind::Matches(..) => Some("`matches`"),
@@ -994,7 +1007,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item

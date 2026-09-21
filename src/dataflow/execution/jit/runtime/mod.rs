@@ -63,6 +63,9 @@ impl PreparedDirectJit {
                     1 => panic!("integer division by zero in direct JIT monitor"),
                     2 => panic!("negative integer exponent in direct JIT monitor"),
                     3 => panic!("integer overflow during exponentiation in direct JIT monitor"),
+                    4 => {
+                        panic!("rounded Float is not representable as an Int in direct JIT monitor")
+                    }
                     status => panic!("unknown direct JIT failure status {status}"),
                 }
             }

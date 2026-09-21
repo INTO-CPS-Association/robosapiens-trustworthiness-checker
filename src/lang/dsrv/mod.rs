@@ -16,6 +16,8 @@ mod syntax;
 pub mod type_checker;
 
 #[cfg(test)]
+mod cast_tests;
+#[cfg(test)]
 mod constant_tests;
 #[cfg(test)]
 mod generic_tests;

@@ -21,7 +21,8 @@ use crate::lang::dsrv::ast::{
     SyntaxLiteral,
 };
 use crate::lang::dsrv::diagnostics::{
-    SemanticAnalysisReport, SemanticError, SemanticResult, TypeErrorKind, UnresolvedTypeKind,
+    SemanticAnalysisReport, SemanticError, SemanticResult, SemanticWarning, SemanticWarningKind,
+    TypeErrorKind, UnresolvedTypeKind,
 };
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
@@ -193,6 +194,7 @@ pub(crate) fn infer_expression(
     expr: ExprRef<'_>,
     expected: Option<&TCType>,
     environment: &StreamTypeEnvironment,
+    warnings: &mut WarningCollector,
 ) -> Result<TCType, SemanticError> {
     let mut context = TypeContext {
         environment: Cow::Borrowed(environment),
@@ -202,8 +204,7 @@ pub(crate) fn infer_expression(
         strict_runtime_sources: false,
         dynamic_unhinted_parameters: true,
         parameter_hints: None,
-        // Inference is not authoritative: the final pass revisits each node.
-        warnings: None,
+        warnings: Some(warnings),
     };
     check(expr, expected, &mut context)
 }
@@ -384,6 +385,41 @@ fn check(
             }
             resolve_binary(expr, parsed, &lhs_type, &rhs_type)?
         }
+        Cast(value, target) => {
+            let source = check(value, None, context)?;
+            let target_type = TCType::from_stream_type(target);
+            if source == target_type
+                && let Some(warnings) = context.warnings.as_deref_mut()
+            {
+                warnings.emit(
+                    expr.id(),
+                    SemanticWarning::new(
+                        SemanticWarningKind::RedundantCast,
+                        format!("cast from {target} to {target} is redundant"),
+                        Some(expr.span()),
+                    ),
+                );
+            }
+            let valid = source == target_type
+                || source == TCType::Int && target_type == TCType::Float
+                || matches!(
+                    source,
+                    TCType::Int | TCType::Float | TCType::Bool | TCType::Unit
+                ) && target_type == TCType::Str;
+            if !valid {
+                let detail = if source == TCType::Float && target_type == TCType::Int {
+                    "; use trunc, floor, ceil, or round instead"
+                } else {
+                    ""
+                };
+                return Err(error(
+                    expr,
+                    TypeErrorKind::OperatorTypeMismatch,
+                    format!("cannot cast {source} to {target}{detail}"),
+                ));
+            }
+            (target_type, None)
+        }
         If(cond, yes, no) => {
             require(
                 check(cond, Some(&TCType::Bool), context)?,
@@ -465,6 +501,14 @@ fn check(
                 ));
             }
             (typ, None)
+        }
+        Trunc(value) | Floor(value) | Ceil(value) | Round(value) => {
+            require(
+                check(value, Some(&TCType::Float), context)?,
+                &TCType::Float,
+                expr,
+            )?;
+            (TCType::Int, None)
         }
         Lambda(params, body) => {
             // A parameter's type is its annotation, else the type the

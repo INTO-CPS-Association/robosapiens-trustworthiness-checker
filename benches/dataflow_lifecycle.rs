@@ -14,10 +14,14 @@ const TEMPORAL: &str = "in x: Int\nout z: Int\nz = default(x[4], 0) + x";
 const DYNAMIC: &str = "in x: Int\nin source: Str\nout z: Int\nz = dynamic(source: Int)";
 
 fn program(source: &str) -> DataflowProgram {
-    DataflowProgram::compile_untyped(
-        source
-            .parse::<DsrvSpecification>()
-            .expect("benchmark specification should parse"),
+    DataflowProgram::compile_with_semantics(
+        trustworthiness_checker::dsrv_fixtures::elaborate_for(
+            source
+                .parse::<DsrvSpecification>()
+                .expect("benchmark specification should parse"),
+            trustworthiness_checker::core::Semantics::Untimed,
+        ),
+        trustworthiness_checker::core::Semantics::Untimed,
     )
     .expect("benchmark specification should compile")
 }
@@ -50,12 +54,22 @@ fn dataflow_lifecycle(c: &mut Criterion) {
     ] {
         let compiled = program(source);
         let dynamic = name == "dynamic";
-        group.bench_function(format!("{name}/compile_plus_instantiate"), |b| {
+        group.bench_function(format!("{name}/elaborate_compile_plus_instantiate"), |b| {
             b.iter(|| {
                 let specification = black_box(source)
                     .parse::<DsrvSpecification>()
                     .expect("benchmark specification should parse");
-                black_box(DataflowMonitor::compile_untyped(specification).unwrap())
+                let specification = trustworthiness_checker::dsrv_fixtures::elaborate_for(
+                    specification,
+                    trustworthiness_checker::core::Semantics::Untimed,
+                );
+                black_box(
+                    DataflowMonitor::compile_with_semantics(
+                        specification,
+                        trustworthiness_checker::core::Semantics::Untimed,
+                    )
+                    .unwrap(),
+                )
             })
         });
         group.bench_function(format!("{name}/instantiate_from_program"), |b| {

@@ -1,0 +1,5 @@
+use experimental::{casts}
+out y: Int
+out z: Bool
+y = 1 as Int
+z = 1
