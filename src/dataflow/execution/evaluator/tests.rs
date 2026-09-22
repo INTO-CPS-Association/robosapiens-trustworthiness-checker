@@ -100,6 +100,7 @@ fn cloned_evaluator_has_independent_state() {
 fn cloned_evaluator_has_independent_lazy_branch_state() {
     let graph = BoundEvaluationGraph::new(
         vec![BoundOp::If {
+            policy: IfPolicy::Eager,
             cond: BoundRef::Const(Value::Bool(true)),
             then_branch: add_graph(1, 2),
             else_branch: add_graph(3, 4),

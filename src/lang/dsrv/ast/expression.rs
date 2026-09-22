@@ -24,6 +24,7 @@ use crate::core::{BinaryOperator, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::expand::functions::Callable;
+use crate::lang::dsrv::expand::language::IfPolicy;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::source_map::NodeOrigin;
@@ -432,6 +433,14 @@ impl<'arena> ExprRef<'arena> {
     /// constructor's qualifier is looked up.
     pub fn source_context(self) -> Option<&'arena SourceContext> {
         self.node().source.context.as_deref()
+    }
+
+    /// How an `if` at this node chooses its branches: by the settings of
+    /// the module that wrote it, which for inlined code or runtime text is
+    /// where it was defined. A node built without a context is eager.
+    pub fn if_policy(self) -> IfPolicy {
+        self.source_context()
+            .map_or(IfPolicy::Eager, |context| context.language().if_policy())
     }
 
     /// Compare expression structure and payload while ignoring source metadata.

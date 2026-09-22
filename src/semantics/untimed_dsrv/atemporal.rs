@@ -24,6 +24,7 @@ use ecow::EcoVec;
 use crate::VarName;
 use crate::core::values::operations as value_operations;
 use crate::core::{BinaryOperator, PartialMarker, UnaryOperator, Value};
+use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
 use crate::lang::dsrv::patterns::{
     ArmSelection, Bindings, GuardOutcome, MatchArm, MatchPattern, select_arm,
@@ -143,6 +144,18 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         Floor(value) => unary(child(value)?, UnaryOperator::Floor),
         Ceil(value) => unary(child(value)?, UnaryOperator::Ceiling),
         Round(value) => unary(child(value)?, UnaryOperator::Round),
+        // Under `lazy_if`, only the selected branch is evaluated, so the
+        // other can neither fail nor make the result absent.
+        If(condition, then_value, else_value) if node.if_policy() == IfPolicy::Lazy => {
+            match child(condition)? {
+                Value::Bool(true) => child(then_value),
+                Value::Bool(false) => child(else_value),
+                absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
+                other => Err(AtemporalError::Operation(format!(
+                    "`if` needs a Bool condition, got {other}"
+                ))),
+            }
+        }
         // Both branches are evaluated, as they are on the stream path, but
         // only the selected one decides the value.
         If(condition, then_value, else_value) => {
@@ -394,6 +407,54 @@ mod tests {
         let expr = parse_expr_with_context(source, context)
             .unwrap_or_else(|error| panic!("{source}: {error}"));
         eval_atemporal(expr.as_ref(), environment)
+    }
+
+    fn evaluate_under(header: &str, source: &str, environment: &dyn Environment) -> Evaluated {
+        let context = parse_str(header)
+            .expect("test language settings should parse")
+            .source_context()
+            .clone();
+        let expr = parse_expr_with_context(source, context)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        eval_atemporal(expr.as_ref(), environment)
+    }
+
+    // Eager evaluation reads both branches, so an unselected branch can
+    // fail it; under `lazy_if` only the selected one is read, and an absent
+    // condition reads neither.
+    #[test]
+    fn a_lazy_if_evaluates_only_its_selected_branch() {
+        let source = "if c then List.get(xs, 5) else 0";
+        for (condition, lazy) in [
+            (Value::Bool(false), Ok(Value::Int(0))),
+            (Value::NoVal, Ok(Value::NoVal)),
+            (Value::Deferred, Ok(Value::Deferred)),
+        ] {
+            let bindings = environment([
+                ("c", condition.clone()),
+                ("xs", Value::List(EcoVec::from([Value::Int(1)]))),
+            ]);
+            assert!(
+                matches!(
+                    evaluate_under("", source, &bindings),
+                    Err(AtemporalError::Operation(_))
+                ),
+                "eager {condition:?}"
+            );
+            assert_eq!(
+                evaluate_under("use experimental::lazy_if\n", source, &bindings),
+                lazy,
+                "lazy {condition:?}"
+            );
+        }
+        let selected = environment([
+            ("c", Value::Bool(true)),
+            ("xs", Value::List(EcoVec::from([Value::Int(1)]))),
+        ]);
+        assert!(matches!(
+            evaluate_under("use experimental::lazy_if\n", source, &selected),
+            Err(AtemporalError::Operation(_))
+        ));
     }
 
     #[test]

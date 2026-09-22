@@ -28,12 +28,21 @@ const NOT_RUN: &[(&str, &str)] = &[
 
 const SEMANTICS: &[&str] = &["untimed", "typed-untimed", "gradual-typed-untimed"];
 
+// The reference table documents stable language capabilities. Experimental
+// capabilities have focused admission tests without changing the docs yet.
+const DOCUMENTED_CAPABILITIES: &[Capability] = &[
+    Capability::Distribution,
+    Capability::TaggedUnions,
+    Capability::PatternMatching,
+];
+
 /// A specification and input that use exactly one capability.
 fn fixture(capability: Capability) -> (&'static str, &'static str) {
     match capability {
         Capability::Distribution => ("distribution.dsrv", "distribution.input"),
         Capability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
         Capability::PatternMatching => ("pattern_matching.dsrv", "pattern_matching.input"),
+        Capability::LazyIf => ("lazy_if.dsrv", "lazy_if.input"),
     }
 }
 
@@ -96,18 +105,18 @@ fn runtimes() -> Vec<String> {
 
 fn table() -> String {
     let mut table = String::from("| Runtime |");
-    for capability in Capability::ALL {
+    for capability in DOCUMENTED_CAPABILITIES {
         table.push_str(&format!(" {capability} |"));
     }
     table.push_str("\n|---|");
-    for _ in Capability::ALL {
+    for _ in DOCUMENTED_CAPABILITIES {
         table.push_str("---|");
     }
     table.push('\n');
     for runtime in runtimes() {
         table.push_str(&format!("| `{runtime}` |"));
         let skipped = NOT_RUN.iter().find(|(name, _)| *name == runtime);
-        for capability in Capability::ALL {
+        for capability in DOCUMENTED_CAPABILITIES {
             let cell = match skipped {
                 Some((_, reason)) => format!("not checked automatically ({reason})"),
                 None => {
@@ -142,6 +151,29 @@ fn every_runtime_is_run_or_named_with_a_reason() {
         );
     }
     assert!(runtimes.len() > NOT_RUN.len(), "some runtime must be run");
+}
+
+/// Only the dataflow runtime runs a lazy `if`; every other runtime that can
+/// be started refuses it at admission, under every semantics.
+#[test]
+fn only_dataflow_runs_a_lazy_if() {
+    for runtime in runtimes() {
+        if NOT_RUN.iter().any(|(name, _)| *name == runtime) {
+            continue;
+        }
+        let expected = if runtime == "dataflow" {
+            Outcome::Admitted
+        } else {
+            Outcome::Refused
+        };
+        for semantics in SEMANTICS {
+            assert_eq!(
+                run(&runtime, semantics, Capability::LazyIf),
+                expected,
+                "{runtime}/{semantics}"
+            );
+        }
+    }
 }
 
 #[test]

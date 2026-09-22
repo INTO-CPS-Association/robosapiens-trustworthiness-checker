@@ -168,6 +168,7 @@ fn conditional_boundary() -> BoundEvaluationGraph {
     BoundEvaluationGraph::new(
         vec![
             BoundOp::If {
+                policy: crate::dataflow::ir::IfPolicy::Eager,
                 cond: BoundRef::Const(Value::Bool(true)),
                 then_branch: add_graph(
                     BoundRef::External(EnvironmentSlot::new(0)),
@@ -286,6 +287,7 @@ fn an_eager_select_stream_forms_a_quickened_region() {
     let conditional = program(
         BoundEvaluationGraph::new(
             vec![BoundOp::If {
+                policy: crate::dataflow::ir::IfPolicy::Eager,
                 cond: BoundRef::Const(Value::Bool(true)),
                 then_branch: add_graph(
                     BoundRef::External(EnvironmentSlot::new(0)),

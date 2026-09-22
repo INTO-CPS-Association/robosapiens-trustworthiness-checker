@@ -10,7 +10,7 @@ use std::ops::Range;
 use crate::core::{BinaryOperator, UnaryOperator, Value};
 use crate::dataflow::environment::EnvironmentSlot;
 use crate::dataflow::ir::{
-    BoundEvaluationGraph, BoundOp, BoundRef, NodeId, ScalarKind, ScalarSignature,
+    BoundEvaluationGraph, BoundOp, BoundRef, IfPolicy, NodeId, ScalarKind, ScalarSignature,
 };
 
 /// The identity of a value in a [`ScalarProgram`].
@@ -315,6 +315,7 @@ impl ScalarProgram {
                 }
                 (
                     BoundOp::If {
+                        policy: IfPolicy::Eager,
                         cond,
                         then_branch,
                         else_branch,
@@ -549,6 +550,7 @@ fn infer_node_kinds(graph: &BoundEvaluationGraph) -> Option<Vec<Option<ScalarKin
             | (_, Some(ScalarSignature::Binary { output, .. })) => Some(*output),
             (
                 BoundOp::If {
+                    policy: IfPolicy::Eager,
                     then_branch,
                     else_branch,
                     ..
@@ -825,6 +827,7 @@ mod tests {
     fn eager_select_preserves_nested_ssa_regions_and_local_node_ids() {
         let graph = BoundEvaluationGraph::new(
             vec![BoundOp::If {
+                policy: IfPolicy::Eager,
                 cond: BoundRef::Const(Value::Bool(true)),
                 then_branch: BoundEvaluationGraph::new(
                     vec![BoundOp::Binary {

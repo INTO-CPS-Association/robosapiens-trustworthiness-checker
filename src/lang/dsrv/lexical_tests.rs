@@ -705,3 +705,101 @@ fn text_supplied_to_a_library_defer_is_read_where_the_library_wrote_it() {
         Err(RuntimeExpressionError::Parse { .. })
     ));
 }
+
+// -----------------------------------------------------------------------------
+// `lazy_if`
+// -----------------------------------------------------------------------------
+
+/// How each `if` in a stream's definition chooses its branches, in postorder.
+fn if_policies(spec: &DsrvSpecification, var: &str) -> Vec<crate::lang::dsrv::IfPolicy> {
+    spec.var_expr_ref(&VarName::from(var))
+        .expect("the stream is defined")
+        .postorder()
+        .filter(|node| matches!(node.kind(), crate::lang::dsrv::ast::ExprKind::If(..)))
+        .map(ExprRef::if_policy)
+        .collect()
+}
+
+const LAZY_PICK: &str = "use experimental::{modules, functions, lazy_if}\n\
+    def pick(c: Bool, x: Int) -> Int = if c then x else 0\n\
+    def read(s: Str) -> Int = dynamic(s: Int)\n";
+const EAGER_PICK: &str = "use experimental::{modules, functions}\n\
+    def pick(c: Bool, x: Int) -> Int = if c then x else 0\n\
+    def read(s: Str) -> Int = dynamic(s: Int)\n";
+
+/// An `if` runs as the module that wrote it says, wherever it is inlined:
+/// a lazy library's `if` stays lazy in an eager program, and an eager
+/// library's stays eager in a lazy one.
+#[test]
+fn an_inlined_if_keeps_the_policy_of_the_module_that_wrote_it() {
+    use crate::core::{Capabilities, Capability, Specification};
+    use crate::lang::dsrv::IfPolicy::{Eager, Lazy};
+
+    let eager_root = format!(
+        "{ROOT}mod lib\nuse lib\nin c: Bool\nin x: Int\nout y: Int\n\
+         y = if c then lib::pick(c, x) else 1\n"
+    );
+    let spec = program(&eager_root, &[("lib", LAZY_PICK)]);
+    assert_eq!(if_policies(&spec, "y"), [Lazy, Eager]);
+    let requirement = spec.first_unsupported(Capabilities::NONE).unwrap();
+    assert_eq!(requirement.capability, Capability::LazyIf);
+
+    let lazy_root = format!(
+        "use experimental::{{modules, functions, lazy_if}}\nmod lib\nuse lib\n\
+         in c: Bool\nin x: Int\nout y: Int\ny = if c then lib::pick(c, x) else 1\n"
+    );
+    let spec = program(&lazy_root, &[("lib", EAGER_PICK)]);
+    assert_eq!(if_policies(&spec, "y"), [Eager, Lazy]);
+
+    // Neither module lazy: nothing to admit.
+    let spec = program(&eager_root, &[("lib", EAGER_PICK)]);
+    assert_eq!(if_policies(&spec, "y"), [Eager, Eager]);
+    assert_eq!(spec.first_unsupported(Capabilities::NONE), None);
+}
+
+/// Text supplied to a `dynamic` is read where the `dynamic` was written, so
+/// an `if` in it follows that module's policy, not the caller's.
+#[test]
+fn an_if_in_runtime_text_follows_the_module_that_wrote_the_site() {
+    use crate::lang::dsrv::IfPolicy::{Eager, Lazy};
+
+    let root = format!(
+        "{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\nout z: Int\n\
+         y = lib::read(s)\nz = dynamic(s: Int)\n"
+    );
+    let spec = program(&root, &[("lib", LAZY_PICK)]);
+    let text = "if true then 1 else 2";
+    let library = site(&spec, "y").parse(text).expect("parses");
+    let caller = site(&spec, "z").parse(text).expect("parses");
+    assert_eq!(library.as_ref().if_policy(), Lazy);
+    assert_eq!(caller.as_ref().if_policy(), Eager);
+}
+
+#[cfg(feature = "thread-safe-ast")]
+#[test]
+fn a_lazy_site_reads_text_on_another_thread_with_its_policy() {
+    let root = format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = lib::read(s)\n");
+    let elaborated = program(&root, &[("lib", LAZY_PICK)])
+        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .without_warnings()
+        .expect("checks");
+    let site = elaborated
+        .var_expr_ref(&VarName::from("y"))
+        .unwrap()
+        .postorder()
+        .find(|node| is_runtime_expression(node.expr()))
+        .expect("a dynamic node")
+        .runtime_expression()
+        .clone();
+    drop(elaborated);
+    let policy = std::thread::spawn(move || {
+        site.parse_and_check("if true then 1 else 2")
+            .expect("checks")
+            .as_ref()
+            .expr()
+            .if_policy()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(policy, crate::lang::dsrv::IfPolicy::Lazy);
+}

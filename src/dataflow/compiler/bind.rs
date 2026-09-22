@@ -351,10 +351,12 @@ fn bind_op(
             rhs: r!(rhs),
         },
         UnboundOp::If {
+            policy,
             cond,
             then_branch,
             else_branch,
         } => BoundOp::If {
+            policy,
             cond: r!(cond),
             then_branch: body!(then_branch),
             else_branch: body!(else_branch),

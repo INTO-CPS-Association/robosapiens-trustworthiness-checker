@@ -587,6 +587,7 @@ fn evaluate_lazy_if_with_history(
     history_access: Option<HistoryAccess<'_>>,
 ) -> Value {
     let StreamOp::If {
+        policy,
         cond,
         then_branch,
         else_branch,
@@ -599,6 +600,15 @@ fn evaluate_lazy_if_with_history(
         unreachable!("if node has incompatible runtime state")
     };
     let condition = retain_last_value(condition, &mut lazy_if.last_condition);
+    if *policy == IfPolicy::Lazy {
+        let Some(branch) = select_branch(&condition, lazy_if) else {
+            return condition;
+        };
+        let (state, last) = lazy_if.branch_mut(branch);
+        let graph = branch_graph(branch, then_branch, else_branch);
+        let value = evaluate_branch_with_history(graph, state, context, None);
+        return retain_last_value(value, last);
+    }
     if context.recursive_call.is_some() {
         return match condition {
             Value::Bool(true) => evaluate_branch_with_history(
@@ -643,6 +653,30 @@ fn evaluate_lazy_if_with_history(
         Value::Deferred => Value::Deferred,
         Value::NoVal => Value::NoVal,
         other => panic!("if condition must be bool, got {:?}", other),
+    }
+}
+
+/// The branch a lazy `if` runs for `condition`, recorded so that only that
+/// branch's temporal writes are staged and committed. `None` for an absent
+/// condition, which runs neither and is itself the result.
+fn select_branch(condition: &Value, lazy_if: &mut LazyIfState) -> Option<Branch> {
+    lazy_if.ran = match condition {
+        Value::Bool(true) => Some(Branch::Then),
+        Value::Bool(false) => Some(Branch::Else),
+        Value::Deferred | Value::NoVal => None,
+        other => panic!("if condition must be bool, got {:?}", other),
+    };
+    lazy_if.ran
+}
+
+pub(in crate::dataflow) fn branch_graph<'a>(
+    branch: Branch,
+    then_branch: &'a BoundEvaluationGraph,
+    else_branch: &'a BoundEvaluationGraph,
+) -> &'a BoundEvaluationGraph {
+    match branch {
+        Branch::Then => then_branch,
+        Branch::Else => else_branch,
     }
 }
 
@@ -729,6 +763,7 @@ fn try_evaluate_lazy_if(
     history_access: Option<HistoryAccess<'_>>,
 ) -> Result<Value, DataflowEvaluationError> {
     let StreamOp::If {
+        policy,
         cond,
         then_branch,
         else_branch,
@@ -741,6 +776,18 @@ fn try_evaluate_lazy_if(
         unreachable!("if node has incompatible runtime state")
     };
     let condition = retain_last_value(condition, &mut lazy_if.last_condition);
+
+    // Only the selected branch runs, so only it can fail. A failed branch
+    // is rolled back to where it was, and the failed tick commits nothing.
+    if *policy == IfPolicy::Lazy {
+        let Some(branch) = select_branch(&condition, lazy_if) else {
+            return Ok(condition);
+        };
+        let (state, last) = lazy_if.branch_mut(branch);
+        let graph = branch_graph(branch, then_branch, else_branch);
+        let value = try_evaluate_branch(graph, state, context, None)?;
+        return Ok(retain_last_value(value, last));
+    }
 
     // Recursive functions must not evaluate the recursive, unselected branch.
     if context.recursive_call.is_some() {

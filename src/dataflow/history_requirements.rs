@@ -538,6 +538,7 @@ mod tests {
         let graph = program(
             &layout,
             vec![BoundOp::If {
+                policy: crate::dataflow::ir::IfPolicy::Eager,
                 cond: BoundRef::Const(Value::Bool(true)),
                 then_branch: branch(2),
                 else_branch: branch(4),

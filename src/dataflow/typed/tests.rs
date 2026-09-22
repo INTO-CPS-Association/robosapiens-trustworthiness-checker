@@ -440,3 +440,31 @@ fn binding_rejects_wrong_tuple_kind() {
         Err(TypedBindingError::TypeMismatch { side: "input", .. })
     ));
 }
+
+// A lazy `if` has no native form: the native-only monitor refuses it, and the
+// tiered monitor keeps running it canonically without activating native code.
+#[cfg(feature = "jit")]
+#[test]
+fn a_lazy_if_stays_canonical_under_the_typed_jit() {
+    let source = "use experimental::lazy_if\nin c: Bool\nin x: Int\nout y: Int\n\
+                  y = if c then x + 1 else x - 1";
+    assert!(matches!(
+        TypedJitMonitor::<(bool, i64), (i64,)>::compile_checked(elaborated(source)),
+        Err(TypedBindingError::UnsupportedPlan { .. })
+    ));
+    let mut monitor = TypedDataflowMonitor::<(bool, i64), (i64,)>::compile_checked_with_jit(
+        elaborated(source),
+        JitConfig::after_events(1),
+    )
+    .unwrap();
+    for (row, expected) in [((true, 1), 2), ((false, 5), 4), ((true, 7), 8)] {
+        assert_eq!(monitor.evaluate(&row), (expected,));
+        assert!(!monitor.is_direct_jit_active());
+    }
+    assert_eq!(
+        monitor
+            .jit_report()
+            .map_or(0, |report| report.compiled_artifacts()),
+        0
+    );
+}

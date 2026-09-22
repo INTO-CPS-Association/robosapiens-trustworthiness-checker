@@ -791,14 +791,8 @@ impl Specification for DsrvSpecification {
     type Expr = Expr;
 
     fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
-        self.nodes().find_map(|node| {
-            let (capability, construct) = super::requirements::requirement(node.kind())?;
-            (!supported.contains(capability)).then_some(Requirement {
-                capability,
-                construct,
-                span: node.span(),
-            })
-        })
+        self.roots()
+            .find_map(|(_, root)| super::requirements::first_unsupported(root, supported))
     }
 
     fn input_vars(&self) -> BTreeSet<VarName> {

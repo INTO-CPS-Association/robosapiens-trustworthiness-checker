@@ -250,3 +250,61 @@ fn eager_select_region_native_recovers_after_successive_sparse_rows() {
         assert_eq!(tiered_output, canonical_output, "row {row:?}");
     }
 }
+
+/// A lazy `if` runs only its selected branch, which an eager select cannot,
+/// so its stream stays on the canonical tier.
+#[test]
+fn a_lazy_if_is_not_a_scalar_region() {
+    let region = |header: &str| {
+        let compiled = DataflowProgram::compile_checked(elaborated(&format!(
+            "{header}in c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
+             result = if c then x + 1 else y + 2"
+        )))
+        .expect("conditional should compile");
+        let programs = compiled.stream_programs().to_vec();
+        let schedule = ScheduledExecutionPlan::new(
+            PlanId(0),
+            &programs,
+            compiled.monitor_plan().stream_slots,
+            &[],
+            &[StreamId::new(0)],
+            compiled.monitor_plan().temporal_streams.as_slice(),
+        );
+        ScalarRegion::new(&schedule)
+            .and_then(|semantic| QuickenedRegionPlan::from_region(&schedule, &semantic))
+            .is_some()
+    };
+    assert!(region(""));
+    assert!(!region("use experimental::lazy_if\n"));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn a_lazy_if_compiles_no_native_artifact() {
+    let source = "use experimental::lazy_if\nin c: Bool\nin x: Int\nin y: Int\nout result: Int\n\
+                  result = if c then x[1] + 1 else y + 2";
+    let mut tiered =
+        DataflowMonitor::compile_checked_with_jit(elaborated(source), JitConfig::eager()).unwrap();
+    let mut canonical = DataflowMonitor::compile_checked(elaborated(source)).unwrap();
+    canonical.set_quickening(false);
+    let report = tiered.jit_report().unwrap();
+    assert_eq!(report.compiled_artifacts(), 0);
+    assert!(
+        matches!(report.plan(), JitPlan::Unavailable),
+        "{:?}",
+        report.plan()
+    );
+    let mut tiered_output = [Value::NoVal];
+    let mut canonical_output = [Value::NoVal];
+    for row in [
+        [Value::Bool(false), Value::Int(1), Value::Int(10)],
+        [Value::Bool(true), Value::Int(2), Value::Int(20)],
+        [Value::Bool(true), Value::Int(3), Value::Int(30)],
+    ] {
+        tiered.evaluate(&row, &mut tiered_output).unwrap();
+        canonical.evaluate(&row, &mut canonical_output).unwrap();
+        assert_eq!(tiered_output, canonical_output, "row {row:?}");
+    }
+    // The then-branch first ran at the second tick.
+    assert_eq!(canonical_output, [Value::Int(3)]);
+}

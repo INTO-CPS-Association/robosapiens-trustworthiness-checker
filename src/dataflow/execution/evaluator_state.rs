@@ -140,6 +140,13 @@ impl ArmCall {
     }
 }
 
+/// One branch of an `if`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::dataflow) enum Branch {
+    Then,
+    Else,
+}
+
 #[derive(Clone)]
 pub(in crate::dataflow) struct LazyIfState {
     pub(in crate::dataflow) then_state: Box<EvaluatorState>,
@@ -147,6 +154,11 @@ pub(in crate::dataflow) struct LazyIfState {
     pub(in crate::dataflow) last_condition: Option<Value>,
     pub(in crate::dataflow) last_then_value: Option<Value>,
     pub(in crate::dataflow) last_else_value: Option<Value>,
+    /// Under [`IfPolicy::Lazy`], the branch the latest evaluation ran, if
+    /// any. Its temporal writes are the only ones staged and committed, so a
+    /// branch's timeline advances only on the ticks that select it. Eager
+    /// evaluation runs both and leaves this `None`.
+    pub(in crate::dataflow) ran: Option<Branch>,
 }
 
 impl LazyIfState {
@@ -156,6 +168,18 @@ impl LazyIfState {
         self.last_condition = None;
         self.last_then_value = None;
         self.last_else_value = None;
+        self.ran = None;
+    }
+
+    /// The state and retained output of one branch.
+    pub(in crate::dataflow) fn branch_mut(
+        &mut self,
+        branch: Branch,
+    ) -> (&mut EvaluatorState, &mut Option<Value>) {
+        match branch {
+            Branch::Then => (self.then_state.as_mut(), &mut self.last_then_value),
+            Branch::Else => (self.else_state.as_mut(), &mut self.last_else_value),
+        }
     }
 }
 
@@ -861,11 +885,13 @@ fn node_state_can_rewrite(
         (NodeState::LazyIf(target), NodeState::LazyIf(source)) => {
             let (
                 StreamOp::If {
+                    policy: target_policy,
                     then_branch: target_then,
                     else_branch: target_else,
                     ..
                 },
                 StreamOp::If {
+                    policy: source_policy,
                     then_branch: source_then,
                     else_branch: source_else,
                     ..
@@ -874,21 +900,23 @@ fn node_state_can_rewrite(
             else {
                 return false;
             };
-            state_shape_compatible(
-                target.then_state.as_ref(),
-                source.then_state.as_ref(),
-                target_then,
-                source_then,
-                target_layout,
-                source_layout,
-            ) && state_shape_compatible(
-                target.else_state.as_ref(),
-                source.else_state.as_ref(),
-                target_else,
-                source_else,
-                target_layout,
-                source_layout,
-            )
+            target_policy == source_policy
+                && state_shape_compatible(
+                    target.then_state.as_ref(),
+                    source.then_state.as_ref(),
+                    target_then,
+                    source_then,
+                    target_layout,
+                    source_layout,
+                )
+                && state_shape_compatible(
+                    target.else_state.as_ref(),
+                    source.else_state.as_ref(),
+                    target_else,
+                    source_else,
+                    target_layout,
+                    source_layout,
+                )
         }
         _ => false,
     }
@@ -999,22 +1027,33 @@ impl NodeState {
             }
             StreamOp::Reconfigurable(_) => Self::Reconfigurable(Box::default()),
             StreamOp::If {
+                policy,
                 then_branch,
                 else_branch,
                 ..
-            } => Self::LazyIf(LazyIfState {
-                then_state: Box::new(EvaluatorState::new_for_nodes(
-                    &then_branch.nodes,
-                    history_bindings,
-                )),
-                else_state: Box::new(EvaluatorState::new_for_nodes(
-                    &else_branch.nodes,
-                    history_bindings,
-                )),
-                last_condition: None,
-                last_then_value: None,
-                last_else_value: None,
-            }),
+            } => {
+                // A lazy branch's delays keep private rings: shared stream
+                // history records every tick, and the branch sees only the
+                // ticks that select it.
+                let history_bindings = match policy {
+                    IfPolicy::Eager => history_bindings,
+                    IfPolicy::Lazy => &[],
+                };
+                Self::LazyIf(LazyIfState {
+                    then_state: Box::new(EvaluatorState::new_for_nodes(
+                        &then_branch.nodes,
+                        history_bindings,
+                    )),
+                    else_state: Box::new(EvaluatorState::new_for_nodes(
+                        &else_branch.nodes,
+                        history_bindings,
+                    )),
+                    last_condition: None,
+                    last_then_value: None,
+                    last_else_value: None,
+                    ran: None,
+                })
+            }
         }
     }
 

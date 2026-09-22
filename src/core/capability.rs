@@ -22,6 +22,9 @@ pub enum Capability {
     TaggedUnions,
     /// Selecting a `match` arm and binding what its pattern matched.
     PatternMatching,
+    /// An `if` under `lazy_if`, which runs only its selected branch, on a
+    /// timeline of its own.
+    LazyIf,
 }
 
 impl Capability {
@@ -30,6 +33,7 @@ impl Capability {
         Self::Distribution,
         Self::TaggedUnions,
         Self::PatternMatching,
+        Self::LazyIf,
     ];
 
     const fn bit(self) -> u32 {
@@ -37,6 +41,7 @@ impl Capability {
             Self::Distribution => 1 << 0,
             Self::TaggedUnions => 1 << 1,
             Self::PatternMatching => 1 << 2,
+            Self::LazyIf => 1 << 3,
         }
     }
 
@@ -46,6 +51,7 @@ impl Capability {
             Self::Distribution => "distribution",
             Self::TaggedUnions => "tagged unions",
             Self::PatternMatching => "pattern matching",
+            Self::LazyIf => "lazy if",
         }
     }
 }
@@ -130,6 +136,105 @@ pub fn admit<S: Specification>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lang::dsrv::ElaboratedDsrvSpecification;
+    use crate::runtime::builder::{DistValueConfig, SemiSyncValueConfig, ValueConfig};
+    use crate::semantics::{
+        CausalCheckedSemiSyncConfig, CausalDsrvSemantics, CausalSemiSyncConfig,
+        CheckedUntimedDsrvSemantics, DistributedSemantics, MonitoringSemantics,
+        UntimedDsrvSemantics,
+    };
+
+    const LAZY: &str = "use experimental::lazy_if\nin c: Bool\nin x: Int\nout y: Int\n\
+                        y = if c then x + 1 else x - 1\n";
+
+    fn lazy() -> ElaboratedDsrvSpecification {
+        crate::dsrv_fixtures::elaborated(LAZY)
+    }
+
+    /// What each stream semantics declares, which is what its runtimes
+    /// admit against.
+    fn semantics() -> [(&'static str, Capabilities); 7] {
+        use crate::causal::CausalSet;
+        [
+            (
+                "untimed",
+                <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::CAPABILITIES,
+            ),
+            (
+                "typed untimed",
+                <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::CAPABILITIES,
+            ),
+            (
+                "semi-sync untimed",
+                <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::CAPABILITIES,
+            ),
+            (
+                "distributed",
+                <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::CAPABILITIES,
+            ),
+            (
+                "causal",
+                <CausalDsrvSemantics as MonitoringSemantics<
+                    CausalSemiSyncConfig<CausalSet>,
+                >>::CAPABILITIES,
+            ),
+            (
+                "checked causal",
+                <CausalDsrvSemantics as MonitoringSemantics<
+                    CausalCheckedSemiSyncConfig<CausalSet>,
+                >>::CAPABILITIES,
+            ),
+            ("dataflow", crate::dataflow::CAPABILITIES),
+        ]
+    }
+
+    // Only dataflow runs a lazy `if`; every stream semantics refuses one at
+    // admission, naming the `if`.
+    #[test]
+    fn only_dataflow_admits_a_lazy_if() {
+        let model = lazy();
+        for (name, capabilities) in semantics() {
+            let admitted = admit(&model, capabilities, "test");
+            if name == "dataflow" {
+                admitted.unwrap();
+                continue;
+            }
+            let error = admitted.expect_err(name);
+            assert_eq!(error.requirement.capability, Capability::LazyIf, "{name}");
+            assert_eq!(error.requirement.construct, "a lazy `if`", "{name}");
+            assert_eq!(
+                &LAZY[error.requirement.span.to_range()],
+                "if c then x + 1 else x - 1"
+            );
+        }
+        // The same `if` without the experiment needs nothing.
+        let eager = crate::dsrv_fixtures::elaborated(
+            LAZY.trim_start_matches("use experimental::lazy_if\n"),
+        );
+        for (name, capabilities) in semantics() {
+            admit(&eager, capabilities, "test").unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+
+    // The semi-sync runtimes, reconfigurable included, set up evaluation
+    // through one path, which refuses before building a single stream.
+    #[test]
+    fn semi_sync_evaluation_refuses_a_lazy_if_before_building_streams() {
+        let result = smol::block_on(crate::runtime::semi_sync::SemiSyncRuntime::<
+            SemiSyncValueConfig,
+            UntimedDsrvSemantics,
+        >::setup_evaluation(
+            lazy(), Default::default(), "semi-sync"
+        ));
+        let Err(error) = result else {
+            panic!("a lazy `if` was admitted");
+        };
+        let refusal = error
+            .downcast_ref::<UnsupportedConstruct>()
+            .unwrap_or_else(|| panic!("not an admission refusal: {error}"));
+        assert_eq!(refusal.requirement.capability, Capability::LazyIf);
+        assert_eq!(refusal.runtime, "semi-sync");
+    }
 
     #[test]
     fn the_message_names_the_construct_runtime_and_capability() {

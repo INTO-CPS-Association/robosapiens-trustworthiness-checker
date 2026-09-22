@@ -4,8 +4,9 @@
 //! text into a parsed tree and resolves no names. Expansion, this module,
 //! turns that tree into a [`DsrvSpecification`]. Validation and type checking
 //! ([`super::type_checker`]) then judge the specification. Expansion is the
-//! only stage that reads the language settings, and the only one that sees
-//! source syntax; everything after it works on the core AST. Today the
+//! only stage that reads the language settings, apart from the `if` policy
+//! each node's settings imply ([`language::IfPolicy`]), and the only one that
+//! sees source syntax; everything after it works on the core AST. Today the
 //! conversion is one core node per parsed node; language features that
 //! rewrite syntax will do so here, which is why this stage, not the parser,
 //! owns it.

@@ -40,8 +40,8 @@ mod warning_tests;
 
 pub use elaborate::ElaboratedDsrvSpecification;
 pub use expand::language::{
-    CoreDsrvSpecification, Dialect, Edition, Feature, LanguageConfig, LanguageError,
-    LanguageRequest,
+    CoreDsrvSpecification, Dialect, Edition, Feature, IfPolicy, LanguageConfig, LanguageError,
+    LanguageRequest, Umbrella,
 };
 pub use parser::{DsrvParseError, check_core_source};
 pub use pipeline::{TypeCheckMode, TypeCheckOptions};

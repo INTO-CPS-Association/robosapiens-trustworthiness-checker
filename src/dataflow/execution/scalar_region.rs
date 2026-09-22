@@ -13,7 +13,8 @@ use crate::dataflow::environment::{EnvironmentLayout, EnvironmentSlot};
 use crate::dataflow::execution::scalar_ir::ScalarProgram;
 use crate::dataflow::execution::scheduled_plan::{PlannedStream, ScheduledExecutionPlan};
 use crate::dataflow::ir::{
-    BoundEvaluationGraph, BoundOp, BoundRef, NodeId, ScalarKind, ScalarSignature, StreamProgram,
+    BoundEvaluationGraph, BoundOp, BoundRef, IfPolicy, NodeId, ScalarKind, ScalarSignature,
+    StreamProgram,
 };
 use crate::dataflow::stream_id::{StreamId, StreamSlots};
 
@@ -319,6 +320,7 @@ fn infer_graph_output_kind(graph: &BoundEvaluationGraph) -> Option<ScalarKind> {
             | (_, Some(ScalarSignature::Binary { output, .. })) => Some(*output),
             (
                 BoundOp::If {
+                    policy: IfPolicy::Eager,
                     then_branch,
                     else_branch,
                     ..

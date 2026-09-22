@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contiguous_tree::TreeCursorExt;
 
-use crate::core::StreamType;
+use crate::core::{Capabilities, StreamType, UnsupportedConstruct};
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprArena, ExprKind, ExprRef};
 use crate::lang::dsrv::diagnostics::SemanticErrors;
 use crate::lang::dsrv::expand::functions::Callable;
@@ -107,6 +107,12 @@ pub(crate) enum RuntimeExpressionError {
     TypeCheck {
         text: String,
         errors: SemanticErrors,
+    },
+    #[error("runtime expression {text:?} is unsupported: {error}")]
+    Unsupported {
+        text: String,
+        #[source]
+        error: UnsupportedConstruct,
     },
 }
 
@@ -265,6 +271,48 @@ impl RuntimeExpressionSite {
         self.check(text, expr, sources.as_ref())
             .map(|checked| checked.prepare_sites_with(sources.as_ref()))
     }
+
+    pub(crate) fn parse_and_check_for(
+        &self,
+        text: &str,
+        capabilities: Capabilities,
+        runtime: &'static str,
+    ) -> Result<CheckedExpr, RuntimeExpressionError> {
+        let checked = self.parse_and_check(text)?;
+        admit_expression(checked.as_ref().expr(), text, capabilities, runtime)?;
+        Ok(checked)
+    }
+
+    pub(crate) fn parse_unchecked_for(
+        &self,
+        text: &str,
+        capabilities: Capabilities,
+        runtime: &'static str,
+    ) -> Result<UntypedExpr, RuntimeExpressionError> {
+        let expression = self.parse_unchecked(text)?;
+        admit_expression(expression.expr().as_ref(), text, capabilities, runtime)?;
+        Ok(expression)
+    }
+}
+
+fn admit_expression(
+    expression: ExprRef<'_>,
+    text: &str,
+    capabilities: Capabilities,
+    runtime: &'static str,
+) -> Result<(), RuntimeExpressionError> {
+    let Some(requirement) =
+        crate::lang::dsrv::ast::requirements::first_unsupported(expression, capabilities)
+    else {
+        return Ok(());
+    };
+    Err(RuntimeExpressionError::Unsupported {
+        text: text.to_owned(),
+        error: UnsupportedConstruct {
+            requirement,
+            runtime,
+        },
+    })
 }
 
 /// Prepare a site for every runtime-expression occurrence among `nodes`.

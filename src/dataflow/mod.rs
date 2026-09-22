@@ -451,6 +451,20 @@
 //! effective `NoVal` without a retained Boolean, returns without evaluating either branch. This
 //! genuinely lazy selection lets a recursive base case return without entering the recursive branch.
 //!
+//! ## `lazy_if`
+//!
+//! Each `ir::StreamOp::If` carries the `IfPolicy` of the module that wrote it, which lowering reads
+//! from the node's source context, so inlined library code and runtime text keep their own. The
+//! behaviour above is `IfPolicy::Eager`. Under `IfPolicy::Lazy` an effective `Bool` runs only the
+//! selected branch, and `Deferred` or `NoVal` without a retained Boolean runs neither and is the
+//! result. The branch output is retained on the branch's own timeline, and the other branch's
+//! absence never reaches the result. `LazyIfState::ran` records which branch ran, and only that
+//! branch's recursive delays are staged and its temporal state committed or discarded, so each
+//! branch's history holds only the ticks that selected it. Lazy branch state is built without shared
+//! history bindings, and its delays keep private rings for the same reason. Scalar extraction
+//! accepts only eager conditionals, so a stream with a lazy `if` stays on the canonical tier and
+//! the JIT produces no artifact for it.
+//!
 //! Reconfigurable expressions are not supported inside lazy branches: compilation rejects an `if`
 //! branch containing `dynamic` or `defer`. Supported branch evaluation therefore uses the static
 //! evaluator and has no branch-error suppression or rollback semantics. After an ordinary enclosing stream
@@ -723,6 +737,8 @@ mod ir;
 #[cfg(feature = "jit")]
 mod jit_api;
 #[cfg(test)]
+mod lazy_if_tests;
+#[cfg(test)]
 #[allow(dead_code)]
 pub(in crate::dataflow) mod lifecycle_test_support;
 mod monitor;
@@ -740,7 +756,8 @@ pub mod typed;
 /// specification against this before lowering it.
 pub const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
     .with(crate::core::Capability::TaggedUnions)
-    .with(crate::core::Capability::PatternMatching);
+    .with(crate::core::Capability::PatternMatching)
+    .with(crate::core::Capability::LazyIf);
 
 pub use typed::{
     TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,

@@ -143,6 +143,7 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
             let then_branch = lower_branch(then_value, builder.specialise);
             let else_branch = lower_branch(else_value, builder.specialise);
             builder.push(UnboundOp::If {
+                policy: expr.expr().if_policy(),
                 cond,
                 then_branch,
                 else_branch,

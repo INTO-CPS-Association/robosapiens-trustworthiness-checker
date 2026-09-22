@@ -1,0 +1,8 @@
+use experimental::lazy_if
+
+// Uses exactly one capability: an `if` that runs only its selected branch.
+in c: Bool
+in x: Int
+out y: Int
+
+y = if c then x + 1 else x - 1

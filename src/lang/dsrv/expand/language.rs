@@ -4,7 +4,8 @@
 //! Expansion is the only stage that may branch on a feature, so the accessor
 //! that asks whether one is enabled is private to this module's parent. Later
 //! stages see the settings only as part of the source fingerprint, through
-//! the dialect (which decides admission) and through the header text.
+//! the dialect (which decides admission), through the [`IfPolicy`] each
+//! node's settings give its `if`, and through the header text.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -126,6 +127,7 @@ pub enum Feature {
     Functions,
     Constants,
     Casts,
+    LazyIf,
 }
 
 impl Feature {
@@ -138,6 +140,7 @@ impl Feature {
         Self::Functions,
         Self::Constants,
         Self::Casts,
+        Self::LazyIf,
     ];
 
     pub fn name(self) -> &'static str {
@@ -149,6 +152,7 @@ impl Feature {
             Self::Functions => "functions",
             Self::Constants => "constants",
             Self::Casts => "casts",
+            Self::LazyIf => "lazy_if",
         }
     }
 
@@ -166,15 +170,110 @@ impl Feature {
             .collect::<Vec<_>>()
             .join(", ")
     }
+
+    /// Whether `umbrella` enables this experiment. The match names every
+    /// experiment, so a new one does not compile until it is placed in or
+    /// out of each umbrella.
+    fn is_in(self, umbrella: Umbrella) -> bool {
+        match umbrella {
+            // Every Full DSRV preview this release implements. Growing this
+            // set changes what a file naming the umbrella means, so it also
+            // bumps [`EXPERIMENTAL_REVISION`].
+            Umbrella::HighLevelDsrv => match self {
+                Self::TaggedUnions
+                | Self::PatternMatching
+                | Self::Generics
+                | Self::Modules
+                | Self::Functions
+                | Self::Constants
+                | Self::Casts
+                | Self::LazyIf => true,
+            },
+        }
+    }
+}
+
+/// A name that enables a fixed set of experiments at once, as in
+/// `use experimental::high_level_dsrv`.
+///
+/// An umbrella is resolved when the header is read, so the settings, the
+/// fingerprint and the printed header hold its experiments rather than its
+/// name: a file that names it is the same program as one that lists them.
+/// An umbrella enables experiments only; it never changes the dialect, so it
+/// does not reach Distributed DSRV and does not change which runtimes admit a
+/// specification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub enum Umbrella {
+    /// Every Full DSRV preview experiment this release implements.
+    HighLevelDsrv,
+}
+
+impl Umbrella {
+    /// Every umbrella.
+    pub const ALL: &'static [Self] = &[Self::HighLevelDsrv];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::HighLevelDsrv => "high_level_dsrv",
+        }
+    }
+
+    /// The experiments this umbrella enables, in [`Feature::ALL`] order.
+    pub fn experiments(self) -> impl Iterator<Item = Feature> {
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(move |feature| feature.is_in(self))
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|umbrella| umbrella.name() == name)
+    }
+
+    fn known() -> String {
+        Self::ALL
+            .iter()
+            .map(|umbrella| umbrella.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// The revision of the experiments in this release. Bump it whenever any
 /// experiment's meaning changes, so compiled code cached under one meaning is
-/// never reused under another.
+/// never reused under another, and whenever an [`Umbrella`] gains an
+/// experiment.
 ///
 /// Revision 2: code inlined from another module's def is read under that
 /// module's settings and in its namespace, rather than its caller's.
-pub const EXPERIMENTAL_REVISION: u32 = 2;
+///
+/// Revision 3: `lazy_if` joins the experiments, and with it
+/// `high_level_dsrv`.
+pub const EXPERIMENTAL_REVISION: u32 = 3;
+
+/// How an `if` chooses between its branches.
+///
+/// This is a property of where the `if` was written: an `if` inlined from
+/// another module's def, or arriving as runtime text, keeps the policy of the
+/// module that wrote it. Stages after expansion read it through
+/// [`crate::lang::dsrv::ast::ExprRef::if_policy`], never through the
+/// experiment itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+pub enum IfPolicy {
+    /// Both branches advance on every tick the `if` is evaluated, and only
+    /// the condition decides which value is published. The language's
+    /// behaviour without `lazy_if`.
+    #[default]
+    Eager,
+    /// Only the selected branch runs. Each branch has its own timeline,
+    /// which advances only on the ticks that select it, so an unselected
+    /// branch neither executes, advances or commits temporal state, nor
+    /// reports errors or sparse values.
+    Lazy,
+}
 
 /// The resolved settings of one specification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -232,6 +331,15 @@ impl LanguageConfig {
     /// Whether `const` is available.
     pub(crate) fn has_constants(&self) -> bool {
         self.has(Feature::Constants)
+    }
+
+    /// How an `if` written under these settings chooses its branches.
+    pub(crate) fn if_policy(&self) -> IfPolicy {
+        if self.has(Feature::LazyIf) {
+            IfPolicy::Lazy
+        } else {
+            IfPolicy::Eager
+        }
     }
 
     pub(super) fn has(&self, feature: Feature) -> bool {
@@ -297,10 +405,13 @@ pub enum LanguageError {
         span: Span,
     },
 
-    #[error("unknown experimental feature `{name}` at {span:?}; current experiments: {known}")]
+    #[error(
+        "unknown experimental feature `{name}` at {span:?}; current experiments: {known}; umbrellas: {umbrellas}"
+    )]
     UnknownFeature {
         name: EcoString,
         known: String,
+        umbrellas: String,
         span: Span,
     },
 
@@ -347,41 +458,53 @@ pub enum LanguageError {
 ///
 /// The name may be grouped, starred or written on its own, so
 /// `use experimental::{a, b}`, `use experimental::*` and
-/// `use experimental::a` all read the same way.
+/// `use experimental::a` all read the same way. An umbrella's name reads as
+/// the experiments it stands for.
 fn experimental_features(tree: &UseTree) -> Result<Vec<Feature>, LanguageError> {
     match (tree.path(), tree.kind()) {
         ([_], ImportKind::Glob) => Ok(Feature::ALL.to_vec()),
-        ([_], ImportKind::Group(items)) => items.iter().map(named_experiment).collect(),
+        ([_], ImportKind::Group(items)) => items
+            .iter()
+            .map(named_experiments)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|groups| groups.concat()),
         ([_, PathSegment::Module(name)], ImportKind::Item) => {
-            experiment_by_name(name.as_str(), tree.span()).map(|feature| vec![feature])
+            experiments_by_name(name.as_str(), tree.span())
         }
         _ => Err(unknown_experiment(tree)),
     }
 }
 
 /// One entry of `use experimental::{…}`, which is a plain lowercase name.
-fn named_experiment(item: &UseTree) -> Result<Feature, LanguageError> {
+fn named_experiments(item: &UseTree) -> Result<Vec<Feature>, LanguageError> {
     match (item.sole_segment(), item.kind()) {
         (Some(PathSegment::Module(name)), ImportKind::Item) => {
-            experiment_by_name(name.as_str(), item.span())
+            experiments_by_name(name.as_str(), item.span())
         }
         _ => Err(unknown_experiment(item)),
     }
 }
 
-fn experiment_by_name(name: &str, span: Span) -> Result<Feature, LanguageError> {
-    Feature::from_name(name).ok_or_else(|| LanguageError::UnknownFeature {
-        name: name.into(),
-        known: Feature::known(),
-        span,
-    })
+fn experiments_by_name(name: &str, span: Span) -> Result<Vec<Feature>, LanguageError> {
+    if let Some(feature) = Feature::from_name(name) {
+        return Ok(vec![feature]);
+    }
+    if let Some(umbrella) = Umbrella::from_name(name) {
+        return Ok(umbrella.experiments().collect());
+    }
+    Err(unknown_feature(name.into(), span))
 }
 
 fn unknown_experiment(tree: &UseTree) -> LanguageError {
+    unknown_feature(tree.to_string().into(), tree.span())
+}
+
+fn unknown_feature(name: EcoString, span: Span) -> LanguageError {
     LanguageError::UnknownFeature {
-        name: tree.to_string().into(),
+        name,
         known: Feature::known(),
-        span: tree.span(),
+        umbrellas: Umbrella::known(),
+        span,
     }
 }
 
@@ -1020,7 +1143,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item
@@ -1263,5 +1386,302 @@ mod tests {
             edition: Some(Edition::BASE),
         };
         parse_str_with(&format!("edition 2026-09\n{BODY}"), edition).unwrap();
+    }
+
+    const HIGH_LEVEL: &str = "use experimental::high_level_dsrv\n";
+
+    fn fingerprint_of(source: &str) -> String {
+        serde_json::to_string(parse_str(source).unwrap().source_context().fingerprint()).unwrap()
+    }
+
+    /// One construct for each experiment `high_level_dsrv` enables, written
+    /// without a header.
+    const GATED: &[(Feature, &str)] = &[
+        (Feature::TaggedUnions, "in s: Union<Stopped, Moving: Int>\n"),
+        (
+            Feature::PatternMatching,
+            "in x: Int\nout y: Bool\ny = matches(x, _)\n",
+        ),
+        (Feature::Generics, "type Box<A> = List<A>\nin x: Int\n"),
+        (
+            Feature::Modules,
+            "internal type Hidden = Int\nin x: Hidden\n",
+        ),
+        (Feature::Functions, "def f(v: Int) -> Int = v\nin x: Int\n"),
+        (Feature::Constants, "const limit: Int = 3\nin x: Int\n"),
+        (Feature::Casts, "in x: Int\nout y: Float\ny = x as Float\n"),
+    ];
+
+    // The resolved set is pinned together with the revision: an experiment
+    // joining the umbrella changes what files naming it mean, so it must
+    // bump `EXPERIMENTAL_REVISION` and update both lines here. Planned
+    // experiments are absent until they are implemented.
+    #[test]
+    fn high_level_dsrv_is_exactly_this_releases_full_previews() {
+        assert_eq!(
+            (
+                Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>(),
+                EXPERIMENTAL_REVISION,
+            ),
+            (
+                vec![
+                    Feature::TaggedUnions,
+                    Feature::PatternMatching,
+                    Feature::Generics,
+                    Feature::Modules,
+                    Feature::Functions,
+                    Feature::Constants,
+                    Feature::Casts,
+                    Feature::LazyIf,
+                ],
+                3,
+            )
+        );
+        assert_eq!(
+            language_of(&format!("{HIGH_LEVEL}{BODY}")),
+            config(
+                Dialect::Full,
+                &Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+            )
+        );
+        // Every experiment is placed in or out of every umbrella; for now
+        // every one is a Full DSRV preview.
+        assert!(
+            Feature::ALL
+                .iter()
+                .all(|f| f.is_in(Umbrella::HighLevelDsrv))
+        );
+    }
+
+    #[test]
+    fn naming_the_umbrella_is_listing_its_experiments() {
+        let listed = Umbrella::HighLevelDsrv
+            .experiments()
+            .map(Feature::name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let explicit = format!("use experimental::{{{listed}}}\n{BODY}");
+        let spellings = [
+            format!("{HIGH_LEVEL}{BODY}"),
+            format!("use experimental::{{high_level_dsrv}}\n{BODY}"),
+            // Naming the umbrella and some of its experiments, or the
+            // umbrella twice, adds up as other repeated names do.
+            format!("use experimental::{{casts, high_level_dsrv, tagged_unions}}\n{BODY}"),
+            format!("{HIGH_LEVEL}{HIGH_LEVEL}use experimental::generics\n{BODY}"),
+        ];
+        for source in &spellings {
+            assert_eq!(language_of(source), language_of(&explicit), "{source}");
+            assert_eq!(
+                fingerprint_of(source),
+                fingerprint_of(&explicit),
+                "{source}"
+            );
+            assert_eq!(
+                parse_str(source)
+                    .unwrap()
+                    .source_context()
+                    .language()
+                    .experimental_revision(),
+                Some(EXPERIMENTAL_REVISION)
+            );
+        }
+        // The settings print as the experiments, not the umbrella, so a
+        // printed file keeps its meaning in a release where the umbrella
+        // has grown.
+        let printed = parse_str(&spellings[0]).unwrap().to_string();
+        assert!(
+            printed.starts_with(&format!(
+                "use experimental::{{{}}}\n",
+                language_of(&explicit)
+                    .experiment_names()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            "{printed}"
+        );
+        assert!(!printed.contains("high_level_dsrv"), "{printed}");
+        assert_eq!(language_of(&printed), language_of(&explicit));
+        // Fewer experiments are a different program.
+        assert_ne!(
+            fingerprint_of(&format!("{HIGH_LEVEL}{BODY}")),
+            fingerprint_of(&format!("use experimental::{{tagged_unions}}\n{BODY}"))
+        );
+    }
+
+    #[test]
+    fn umbrella_names_are_their_own() {
+        for umbrella in Umbrella::ALL {
+            assert_eq!(Feature::from_name(umbrella.name()), None);
+            assert_eq!(Umbrella::from_name(umbrella.name()), Some(*umbrella));
+        }
+        // An umbrella is a name, not a path or a namespace.
+        for header in [
+            "use experimental::high_level_dsrv::casts\n",
+            "use experimental::{high_level_dsrv::casts}\n",
+            "use experimental::{high_level_dsrv::*}\n",
+            "use experimental::high_level\n",
+        ] {
+            let error = language_error(&format!("{header}{BODY}"));
+            assert!(
+                matches!(&error, LanguageError::UnknownFeature { .. }),
+                "{header}: {error}"
+            );
+        }
+        let error = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
+        assert!(
+            matches!(&error, LanguageError::UnknownFeature { umbrellas, .. }
+                if umbrellas == "high_level_dsrv"),
+            "{error}"
+        );
+        assert!(error.to_string().ends_with("; umbrellas: high_level_dsrv"));
+    }
+
+    #[test]
+    fn the_umbrella_satisfies_every_experiment_it_enables() {
+        let mut covered = Vec::new();
+        for (feature, body) in GATED {
+            let error = language_error(body);
+            assert!(
+                matches!(&error, LanguageError::NeedsExperiment { feature: needed, .. }
+                    if *needed == feature.name()),
+                "{body}: {error}"
+            );
+            parse_str(&format!("use experimental::{}\n{body}", feature.name()))
+                .unwrap_or_else(|error| panic!("{body}: {error}"));
+            parse_str(&format!("{HIGH_LEVEL}{body}"))
+                .unwrap_or_else(|error| panic!("{body}: {error}"));
+            covered.push(*feature);
+        }
+        // `lazy_if` gates no syntax; it changes how every `if` runs.
+        let lazy = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
+        assert_eq!(lazy.source_context().language().if_policy(), IfPolicy::Lazy);
+        covered.push(Feature::LazyIf);
+        assert_eq!(
+            covered,
+            Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+        );
+    }
+
+    // `lazy_if` changes how every `if` in the file runs, so it is part of
+    // the program's identity, and it is still only an experiment: it
+    // chooses no dialect, and Core refuses it.
+    #[test]
+    fn lazy_if_selects_the_if_policy_and_nothing_else() {
+        let lazy = format!("use experimental::lazy_if\n{BODY}");
+        assert_eq!(LanguageConfig::default().if_policy(), IfPolicy::Eager);
+        assert_eq!(language_of(BODY).if_policy(), IfPolicy::Eager);
+        let others = Feature::ALL
+            .iter()
+            .copied()
+            .filter(|feature| *feature != Feature::LazyIf)
+            .collect::<Vec<_>>();
+        assert_eq!(config(Dialect::Full, &others).if_policy(), IfPolicy::Eager);
+        assert_eq!(language_of(&lazy).if_policy(), IfPolicy::Lazy);
+        assert_eq!(
+            language_of(&lazy),
+            config(Dialect::Full, &[Feature::LazyIf])
+        );
+        assert_eq!(
+            language_of(&lazy).experimental_revision(),
+            Some(EXPERIMENTAL_REVISION)
+        );
+        assert_ne!(fingerprint_of(BODY), fingerprint_of(&lazy));
+
+        let distributed = format!("language distributed\n{lazy}");
+        assert_eq!(language_of(&distributed).dialect(), Dialect::Distributed);
+        assert_eq!(language_of(&distributed).if_policy(), IfPolicy::Lazy);
+        assert_ne!(fingerprint_of(&lazy), fingerprint_of(&distributed));
+        assert!(matches!(
+            language_error(&format!("language core\n{lazy}")),
+            LanguageError::ExperimentsInCore { .. }
+        ));
+    }
+
+    #[test]
+    fn the_umbrella_does_not_choose_the_dialect() {
+        let full = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
+        assert_eq!(full.source_context().language().dialect(), Dialect::Full);
+        // Distribution primitives still need `language distributed`.
+        let dist = format!("{HIGH_LEVEL}in x\nout y\ny = dist(x, n)\n");
+        assert!(
+            matches!(
+                language_error(&dist),
+                LanguageError::NeedsDistributed { .. }
+            ),
+            "{dist}"
+        );
+        assert!(matches!(
+            parse_expr_with_context("monitored_at(x, n)", full.source_context().clone()),
+            Err(DsrvParseError::Language(
+                LanguageError::NeedsDistributed { .. }
+            ))
+        ));
+        let distributed = parse_str(&format!("language distributed\n{dist}")).unwrap();
+        assert_eq!(
+            distributed.source_context().language(),
+            &config(
+                Dialect::Distributed,
+                &Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+            )
+        );
+        assert_ne!(
+            fingerprint_of(&format!("{HIGH_LEVEL}{BODY}")),
+            fingerprint_of(&format!("language distributed\n{HIGH_LEVEL}{BODY}"))
+        );
+        // Core accepts no experiments, however they are named, and a Core
+        // request is not overridden by the umbrella.
+        assert!(matches!(
+            language_error(&format!("language core\n{HIGH_LEVEL}{BODY}")),
+            LanguageError::ExperimentsInCore { .. }
+        ));
+        let core = LanguageRequest {
+            dialect: Some(Dialect::Core),
+            edition: None,
+        };
+        assert!(matches!(
+            language_error_with(&format!("{HIGH_LEVEL}{BODY}"), core),
+            LanguageError::ExperimentsInCore { .. }
+        ));
+    }
+
+    #[test]
+    fn the_umbrella_does_not_widen_runtime_capabilities() {
+        use crate::core::{Capabilities, Capability, admit};
+        // Enabling experiments needs nothing from a runtime by itself.
+        let plain = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
+        admit(&plain, Capabilities::NONE, "test").unwrap();
+        // A construct still needs its capability, whatever enabled it.
+        let source = format!(
+            "{HIGH_LEVEL}type State = Union<Stopped, Moving: Int>\n\
+             in x: Int\nout y: State\ny = State::Moving(x)\n"
+        );
+        let unions = parse_str(&source).unwrap();
+        let error = admit(&unions, Capabilities::NONE, "test").unwrap_err();
+        assert_eq!(error.requirement.capability, Capability::TaggedUnions);
+        admit(
+            &unions,
+            Capabilities::NONE.with(Capability::TaggedUnions),
+            "test",
+        )
+        .unwrap();
+    }
+
+    // Embedded modules declare the experiments they use by name, so what
+    // they mean does not change when an umbrella grows.
+    #[test]
+    fn embedded_modules_name_their_experiments() {
+        use crate::lang::dsrv::catalogue::Catalogue;
+        for module in Catalogue::STANDARD.modules {
+            for line in module
+                .source
+                .lines()
+                .filter(|line| line.trim_start().starts_with("use experimental"))
+            {
+                assert!(!line.contains('*'), "{}: {line}", module.file);
+                for umbrella in Umbrella::ALL {
+                    assert!(!line.contains(umbrella.name()), "{}: {line}", module.file);
+                }
+            }
+        }
     }
 }

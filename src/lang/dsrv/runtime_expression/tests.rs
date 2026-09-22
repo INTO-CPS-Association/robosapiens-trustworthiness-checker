@@ -50,6 +50,37 @@ fn site_count(spec: &CheckedDsrvSpecification) -> Option<usize> {
 }
 
 #[test]
+fn runtime_source_is_admitted_against_the_receiving_runtime() {
+    let specification = elaborated(
+        "use experimental::lazy_if\n\
+         in condition: Bool\nin x: Int\nin source: Str\n\
+         out y: Int\ny = dynamic(source: Int)",
+    );
+    let expression = specification.var_expr(&var("y")).unwrap();
+    let site = expression
+        .as_ref()
+        .postorder()
+        .find(|node| is_runtime_expression(node.expr()))
+        .unwrap()
+        .runtime_expression()
+        .clone();
+    let source = "if condition then x[1] else 0";
+
+    assert!(matches!(
+        site.parse_and_check_for(source, Capabilities::NONE, "untimed stream"),
+        Err(RuntimeExpressionError::Unsupported { .. })
+    ));
+    assert!(
+        site.parse_and_check_for(source, crate::dataflow::CAPABILITIES, "dataflow")
+            .is_ok()
+    );
+    assert!(matches!(
+        site.parse_unchecked_for(source, Capabilities::NONE, "causal"),
+        Err(RuntimeExpressionError::Unsupported { .. })
+    ));
+}
+
+#[test]
 fn checked_inspection_stays_unprepared_and_elaboration_prepares_every_occurrence() {
     let checked = checked(OCCURRENCES);
     assert_eq!(site_count(&checked), None);

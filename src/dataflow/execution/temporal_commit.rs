@@ -14,7 +14,7 @@ use super::super::ir::*;
 use super::super::*;
 use super::evaluator::*;
 use super::evaluator_state::*;
-use super::node_evaluation::function_history_bindings;
+use super::node_evaluation::{branch_graph, function_history_bindings};
 use super::quickening::ScalarValue;
 
 /// Stage the enclosing stream's completed output for every recursive delay of
@@ -22,8 +22,10 @@ use super::quickening::ScalarValue;
 ///
 /// A branch graph binds the enclosing stream's self-reference too, so its
 /// recursive delays record the stream's output, never the branch's own result.
-/// Both branches are staged every tick, whichever was selected, because each
-/// delay's ring is that stream's history.
+/// An eager `if` stages both branches every tick, whichever was selected,
+/// because each delay's ring is that stream's history. A lazy `if` stages
+/// only the branch that ran, whose ring is the stream's history on the ticks
+/// that selected it.
 pub(in crate::dataflow) fn stage_recursive_delays(
     body: &BoundEvaluationGraph,
     state: &mut EvaluatorState,
@@ -32,6 +34,7 @@ pub(in crate::dataflow) fn stage_recursive_delays(
     stage_recursive_nodes(&body.recursive_delays, state, output);
     for node in &body.recursive_branches {
         let StreamOp::If {
+            policy,
             then_branch,
             else_branch,
             ..
@@ -42,8 +45,18 @@ pub(in crate::dataflow) fn stage_recursive_delays(
         let NodeState::LazyIf(lazy_if) = &mut state.node_states[node.index()] else {
             unreachable!("if node has incompatible runtime state")
         };
-        stage_recursive_delays(then_branch, lazy_if.then_state.as_mut(), output);
-        stage_recursive_delays(else_branch, lazy_if.else_state.as_mut(), output);
+        match policy {
+            IfPolicy::Eager => {
+                stage_recursive_delays(then_branch, lazy_if.then_state.as_mut(), output);
+                stage_recursive_delays(else_branch, lazy_if.else_state.as_mut(), output);
+            }
+            IfPolicy::Lazy => {
+                if let Some(branch) = lazy_if.ran {
+                    let graph = branch_graph(branch, then_branch, else_branch);
+                    stage_recursive_delays(graph, lazy_if.branch_mut(branch).0, output);
+                }
+            }
+        }
     }
 }
 
@@ -86,6 +99,27 @@ pub(in crate::dataflow) fn commit_staged_temporal_state_with_history(
                 NodeState::ScalarDelay(history) => history.commit_recursive_value(),
                 _ => unreachable!("recursive delay node has incompatible runtime state"),
             },
+            StreamOp::If {
+                policy: IfPolicy::Lazy,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
+                    unreachable!("if node has incompatible runtime state")
+                };
+                // Only the branch that ran has a tick to commit, and it
+                // never reads shared history.
+                if let Some(branch) = lazy_if.ran.take() {
+                    let graph = branch_graph(branch, then_branch, else_branch);
+                    commit_staged_temporal_state_with_history(
+                        graph,
+                        lazy_if.branch_mut(branch).0,
+                        context,
+                        None,
+                    );
+                }
+            }
             StreamOp::If {
                 then_branch,
                 else_branch,
@@ -183,6 +217,20 @@ pub(in crate::dataflow) fn discard_staged_temporal_state(
                 NodeState::ScalarDelay(history) => history.discard_recursive_value(),
                 _ => unreachable!("recursive delay node has incompatible runtime state"),
             },
+            StreamOp::If {
+                policy: IfPolicy::Lazy,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let NodeState::LazyIf(lazy_if) = &mut state.node_states[index] else {
+                    unreachable!("if node has incompatible runtime state")
+                };
+                if let Some(branch) = lazy_if.ran.take() {
+                    let graph = branch_graph(branch, then_branch, else_branch);
+                    discard_staged_temporal_state(graph, lazy_if.branch_mut(branch).0);
+                }
+            }
             StreamOp::If {
                 then_branch,
                 else_branch,

@@ -15,7 +15,7 @@ mod expression;
 mod checked;
 
 // Specifications and their checked metadata.
-mod requirements;
+pub(crate) mod requirements;
 mod specification;
 
 // Semantic queries over expressions.

@@ -569,6 +569,47 @@ mod tests {
         assert!(plan.definitions().contains_key(&VarName::new("helper")));
     }
 
+    // Constraints are evaluated by their own evaluator, which has always read
+    // only the selected branch; `lazy_if` changes neither the plan nor what
+    // it evaluates to.
+    #[test]
+    fn constraints_evaluate_only_the_selected_branch_under_either_if_policy() {
+        let plans = ["", "use experimental::lazy_if\n"].map(|header| {
+            let spec = format!(
+                "language distributed\n{header}in gate: Bool\nin missing: Int\n\
+                 out constraint: Bool\nconstraint = if gate then 1 == 1 else missing == 1"
+            )
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+            DistributionConstraintPlan::lower(
+                &spec,
+                [VarName::new("constraint")],
+                ConstraintProfile::CompactEvaluator,
+            )
+            .unwrap()
+        });
+        let shown = |plan: &DistributionConstraintPlan| {
+            plan.definitions()
+                .iter()
+                .map(|(name, expr)| format!("{name} = {}", expr.display))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&plans[0]), shown(&plans[1]));
+        for plan in &plans {
+            let evaluate = |gate: bool| {
+                plan.evaluate_var(
+                    &VarName::new("constraint"),
+                    &BTreeMap::from([(VarName::new("gate"), Value::Bool(gate))]),
+                    None,
+                )
+            };
+            // The unbound `missing` is never read while the gate selects
+            // the other branch.
+            assert_eq!(evaluate(true), Some(Value::Bool(true)));
+            assert_eq!(evaluate(false), None);
+        }
+    }
+
     #[test]
     fn lowering_reports_unsupported_form_with_span_and_display() {
         let spec = ("language distributed\nout constraint\nconstraint = dist(A, B) == 1")

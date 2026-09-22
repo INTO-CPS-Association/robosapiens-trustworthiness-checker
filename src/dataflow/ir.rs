@@ -2,6 +2,7 @@ use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
+pub(super) use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::patterns::MatchPattern;
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
@@ -580,11 +581,17 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             descriptor.push(')');
         }
         StreamOp::If {
+            policy,
             cond,
             then_branch,
             else_branch,
         } => {
-            descriptor.push_str("if(");
+            // Eager and lazy branches keep different state, so they are
+            // never the same program.
+            descriptor.push_str(match policy {
+                IfPolicy::Eager => "if(",
+                IfPolicy::Lazy => "lazy-if(",
+            });
             append_ref_descriptor(descriptor, cond, layout);
             descriptor.push_str(",then{");
             append_graph_descriptor(descriptor, then_branch, layout);
@@ -1118,6 +1125,9 @@ pub(super) enum StreamOp<E: GraphReference> {
         rhs: DataRef<E>,
     },
     If {
+        /// Decided by the module that wrote the `if`, so it survives
+        /// inlining and runtime text unchanged.
+        policy: IfPolicy,
         cond: DataRef<E>,
         then_branch: EvaluationGraph<E>,
         else_branch: EvaluationGraph<E>,

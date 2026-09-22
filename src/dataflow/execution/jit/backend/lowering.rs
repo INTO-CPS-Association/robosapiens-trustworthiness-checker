@@ -7,7 +7,7 @@ use crate::dataflow::execution::scalar_ir::{
 use crate::dataflow::execution::scheduled_plan::{TemporalOperation, TemporalPlan};
 
 use crate::dataflow::ir::{
-    BoundEvaluationGraph, BoundOp, BoundRef, NodeId, ScalarKind, ScalarSignature,
+    BoundEvaluationGraph, BoundOp, BoundRef, IfPolicy, NodeId, ScalarKind, ScalarSignature,
 };
 
 use super::artifact::{InputSource, InputSpec, TemporalNodeLayout, TemporalStateLayout};
@@ -685,6 +685,7 @@ fn infer_output_kind(graph: &BoundEvaluationGraph) -> Option<ScalarKind> {
             | (_, Some(ScalarSignature::Binary { output, .. })) => Some(*output),
             (
                 BoundOp::If {
+                    policy: IfPolicy::Eager,
                     then_branch,
                     else_branch,
                     ..

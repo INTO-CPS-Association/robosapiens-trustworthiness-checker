@@ -1416,6 +1416,7 @@ impl QuickenedInstructionState {
                     last_condition: canonical_condition,
                     last_then_value: canonical_then_value,
                     last_else_value: canonical_else_value,
+                    ..
                 }),
             ) => {
                 then_program.materialize(then_state, canonical_then);
@@ -1477,6 +1478,7 @@ impl QuickenedInstructionState {
                     last_condition: source_condition,
                     last_then_value: source_then_value,
                     last_else_value: source_else_value,
+                    ..
                 }),
             ) => {
                 *last_condition = source_condition
