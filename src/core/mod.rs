@@ -3,7 +3,10 @@ pub use operators::*;
 pub mod variables;
 pub use variables::*;
 pub mod capability;
-pub use capability::{Capabilities, Capability, Requirement, UnsupportedConstruct, admit};
+pub use capability::{
+    RuntimeCapabilities, RuntimeCapability, RuntimeCapabilityRequirement,
+    UnsupportedRuntimeConstruct, ensure_runtime_support,
+};
 pub mod interfaces;
 pub use interfaces::*;
 mod batch;

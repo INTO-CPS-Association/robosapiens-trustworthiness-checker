@@ -460,8 +460,8 @@ fn localisation(c: &mut Criterion) {
 /// Accepting one `dynamic` or `defer` text: parsing it in the node's source
 /// context, checking it against the node's elaborated typing, and lowering it
 /// (item 8f).
-fn runtime_text_acceptance(c: &mut Criterion) {
-    let mut group = c.benchmark_group("runtime_text_acceptance");
+fn runtime_expression_acceptance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("runtime_expression_acceptance");
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
@@ -507,7 +507,7 @@ fn runtime_text_acceptance(c: &mut Criterion) {
 criterion_group!(
     benches,
     compilation_phases,
-    runtime_text_acceptance,
+    runtime_expression_acceptance,
     indexed_arena_comparison,
     specification_import,
     ast_traversal,

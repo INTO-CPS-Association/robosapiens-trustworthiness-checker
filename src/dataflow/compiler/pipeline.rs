@@ -11,7 +11,7 @@ use crate::lang::dsrv::ElaboratedDsrvSpecification;
 
 impl DataflowProgram {
     /// Compile an elaborated specification into an immutable monitor definition,
-    /// using its types for scalar specialisation and for checking runtime text.
+    /// using its types for scalar specialisation and for checking runtime expression source.
     pub fn compile_checked(
         specification: ElaboratedDsrvSpecification,
     ) -> Result<Self, DataflowCompilationError> {
@@ -44,7 +44,11 @@ impl DataflowProgram {
     where
         S: Specification,
     {
-        crate::core::admit(&specification, crate::dataflow::CAPABILITIES, "dataflow")?;
+        crate::core::ensure_runtime_support(
+            &specification,
+            crate::dataflow::RUNTIME_CAPABILITIES,
+            "dataflow",
+        )?;
         let input_variables = specification.input_vars_in_order();
         let output_variables = specification.output_vars_in_order();
         let stream_variables = specification.stream_vars_in_order();

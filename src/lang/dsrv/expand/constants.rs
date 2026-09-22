@@ -26,6 +26,7 @@ use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use crate::lang::dsrv::syntax::{ParsedDeclaration, ParsedSpecification};
+use crate::lang::dsrv::type_checker::check_value_stream_type;
 
 use super::graph::ModuleGraph;
 use super::{DsrvExpandError, functions, graph};
@@ -81,7 +82,12 @@ pub(crate) fn build_constant_table(
         let context = graph
             .get(&path)
             .expect("every path in the order has a namespace");
-        add_module(&mut table, &path, parsed, context)?;
+        let source = parsed
+            .source()
+            .and_then(|source| sources.archive().file(source))
+            .map(|file| file.label().to_string())
+            .unwrap_or_else(|| crate::lang::dsrv::modules::show_path(&path));
+        add_module(&mut table, &path, parsed, context, &source)?;
     }
     Ok(table)
 }
@@ -93,7 +99,7 @@ pub(crate) fn single_file_constants(
     context: &SourceContext,
 ) -> Result<ConstantTable, DsrvExpandError> {
     let mut table = ConstantTable::default();
-    add_module(&mut table, &ModulePath::new(), parsed, context)?;
+    add_module(&mut table, &ModulePath::new(), parsed, context, "<string>")?;
     Ok(table)
 }
 
@@ -107,12 +113,13 @@ fn add_module(
     path: &ModulePath,
     parsed: &ParsedSpecification,
     context: &SourceContext,
+    source: &str,
 ) -> Result<(), DsrvExpandError> {
     let declarations = parsed.declarations();
     let held = parsed.roots();
     let trees: Vec<ParsedExprRef<'_>> = held.iter().map(|tree| tree.as_ref()).collect();
 
-    let mut local: Vec<(VarName, usize, bool)> = Vec::new();
+    let mut local = Vec::new();
     let mut root = 0usize;
     for declaration in declarations {
         match declaration {
@@ -123,15 +130,11 @@ fn add_module(
                 span,
                 ..
             } => {
-                // The declared type is resolved here so an unknown name is
-                // refused where it was written. Whether the value agrees
-                // with it is the type checker's question, asked wherever
-                // the constant is named.
-                context.resolve_type(ty).map_err(|error| {
+                let typ = context.resolve_type(ty).map_err(|error| {
                     let _ = span;
                     error
                 })?;
-                local.push((name.clone(), root, *internal));
+                local.push((name.clone(), root, *internal, typ, *span));
                 root += 1;
             }
             ParsedDeclaration::Def { .. }
@@ -164,18 +167,27 @@ fn add_module(
     // bodies are folded by need rather than in declaration order.
     let pending: BTreeMap<VarName, usize> = local
         .iter()
-        .map(|(name, index, _)| (name.clone(), *index))
+        .map(|(name, index, ..)| (name.clone(), *index))
         .collect();
     let mut active = Vec::new();
-    for (name, _, _) in &local {
+    for (name, ..) in &local {
         fold_pending(name, &pending, &trees, &mut scope, &mut active)?;
     }
-    for (name, _, internal) in local {
+    for (name, _, internal, expected, span) in local {
         let value = scope
             .bare
             .get(&name)
             .expect("every local constant was folded")
             .clone();
+        check_value_stream_type(&expected, &value.clone().into_runtime_value()).map_err(
+            |message| DsrvExpandError::ConstantType {
+                name: name.to_string(),
+                location: source.to_owned(),
+                expected,
+                message,
+                span,
+            },
+        )?;
         table
             .entries
             .insert((path.clone(), name), ConstEntry { internal, value });

@@ -38,6 +38,9 @@ contiguous_tree::tree_schema! {
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(SourceType)),
+        // Frontend-generated type ascription; unlike a source cast, this does
+        // not require the casts experiment.
+        Ascribe(value: child, target: data(SourceType)),
         Var(variable: data(VarName)),
         // A value named through a module. Expansion inlines the def it
         // names, so this never reaches the core AST.
@@ -101,11 +104,20 @@ contiguous_tree::tree_schema! {
 /// and syntax belong to. The file itself is the parsed specification's, so
 /// no node carries it, and a node without a lexical environment belongs to
 /// the text it sits in.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct ParsedOrigin {
     pub(crate) span: Span,
     pub(crate) definition: Option<SourceSite>,
     pub(crate) lexical: Option<LexicalId>,
+    pub(crate) generic_def: Option<crate::lang::dsrv::ast::AstShared<GenericFunctionSignature>>,
+}
+
+/// Source-only signature carried by the lambda generated for a generic `def`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GenericFunctionSignature {
+    pub(crate) type_parameters: ecow::EcoVec<crate::lang::dsrv::source::TypeName>,
+    pub(crate) parameters: ecow::EcoVec<crate::lang::dsrv::source::SourceType>,
+    pub(crate) result: crate::lang::dsrv::source::SourceType,
 }
 
 impl From<Span> for ParsedOrigin {
@@ -114,6 +126,7 @@ impl From<Span> for ParsedOrigin {
             span,
             definition: None,
             lexical: None,
+            generic_def: None,
         }
     }
 }
@@ -279,5 +292,5 @@ pub(crate) fn span_of(cursor: ParsedExprRef<'_>) -> Span {
 
 /// Where a parsed node came from.
 pub(crate) fn origin_of(cursor: ParsedExprRef<'_>) -> ParsedOrigin {
-    cursor.node().origin
+    cursor.node().origin.clone()
 }

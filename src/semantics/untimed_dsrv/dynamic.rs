@@ -1,6 +1,6 @@
 use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
-use crate::core::{Capabilities, Capability, Value};
+use crate::core::{RuntimeCapabilities, RuntimeCapability, Value};
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 use crate::semantics::{AsyncConfig, StreamContext};
@@ -16,9 +16,9 @@ fn accept_text(site: &RuntimeExpressionSite, source: &str, owner: Option<&VarNam
     let checked = site
         .parse_and_check_for(
             source,
-            Capabilities::NONE
-                .with(Capability::TaggedUnions)
-                .with(Capability::PatternMatching),
+            RuntimeCapabilities::NONE
+                .with(RuntimeCapability::TaggedUnions)
+                .with(RuntimeCapability::PatternMatching),
             "untimed stream",
         )
         .unwrap_or_else(|error| panic!("{error}"));

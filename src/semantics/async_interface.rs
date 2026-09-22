@@ -72,9 +72,9 @@ where
     AC: AsyncConfig,
 {
     /// The capabilities this semantics evaluates. Every semantics declares
-    /// them; runtimes admit a specification only if it needs no others, and
+    /// them; runtimes ensure_runtime_support a specification only if it needs no others, and
     /// `runtime::capabilities` tests each declaration against the runtime.
-    const CAPABILITIES: crate::core::Capabilities;
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities;
 
     fn to_async_stream(
         expr: &AC::Expr,

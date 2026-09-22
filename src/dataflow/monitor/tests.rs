@@ -3560,7 +3560,7 @@ proptest::proptest! {
 }
 
 /// A program whose files are labelled with `prefix`, with `lib` supplying
-/// the defs its runtime text may call.
+/// the defs its runtime expression source may call.
 fn labelled_program(prefix: &str, lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecification {
     use crate::lang::dsrv::modules::ModuleCollector;
     use crate::lang::dsrv::source_map::SourceLabel;
@@ -3582,7 +3582,7 @@ fn labelled_program(prefix: &str, lib: &str) -> crate::lang::dsrv::ElaboratedDsr
 
 /// Where a program's files are, and what they are called, is not what
 /// its streams mean: relocating it keeps every stream's state. Changing a
-/// def its runtime text may call does change the `dynamic` stream.
+/// def its runtime expression source may call does change the `dynamic` stream.
 #[test]
 fn relocated_files_keep_stream_identity_and_changed_defs_do_not() {
     const LIB: &str = "use experimental::{modules, functions}\ndef good(n: Int) -> Int = n * 2\n";
@@ -3630,7 +3630,7 @@ fn relocated_files_keep_stream_identity_and_changed_defs_do_not() {
     assert_eq!(initialized.len(), 1, "{report:?}");
 }
 
-/// A program whose runtime text may call `lib`'s defs.
+/// A program whose runtime expression source may call `lib`'s defs.
 fn library_helper_program(lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecification {
     use crate::lang::dsrv::modules::ModuleCollector;
 
@@ -3651,10 +3651,10 @@ fn library_helper_program(lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecifi
 const CASTING_LIB: &str = "use experimental::{modules, functions, casts}\n\
     def helper(n: Int) -> Int = trunc(n as Float * 2.5)\n";
 
-/// Runtime text that calls a library def runs that def as the library
+/// Runtime expression source that calls a library def runs that def as the library
 /// wrote it, under the library's settings rather than the root's.
 #[test]
-fn runtime_text_runs_a_library_def_under_the_librarys_settings() {
+fn runtime_expression_source_runs_a_library_def_under_the_librarys_settings() {
     let mut monitor = DataflowMonitor::compile_with_semantics(
         library_helper_program(CASTING_LIB),
         Semantics::Untimed,
@@ -3673,7 +3673,7 @@ fn runtime_text_runs_a_library_def_under_the_librarys_settings() {
     assert_eq!(output, [Value::Int(5), Value::Int(3)]);
 }
 
-/// The library's settings are part of what the defs runtime text may call
+/// The library's settings are part of what the defs runtime expression source may call
 /// mean, so changing them starts the `dynamic` stream afresh and leaves the
 /// others alone.
 #[test]

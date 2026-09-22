@@ -8,7 +8,7 @@ stream, naming the first such construct:
 Error: `monitored_at` at Span { start: 105, end: 127 } cannot run on the semi-sync runtime, which does not support distribution; see "Runtime capabilities" in the documentation
 ```
 
-| Capability | Constructs |
+| Runtime capability | Constructs |
 |---|---|
 | distribution | `dist` and `monitored_at`, which also need `language distributed` |
 
@@ -33,12 +33,12 @@ while it runs.
 
 ## For contributors
 
-- `core::Capability` lists the capabilities, and
+- `core::RuntimeCapability` lists the capabilities, and
   `src/lang/dsrv/ast/requirements.rs` says which expression needs which. That
   match has no wildcard, so a new expression kind must be placed.
 - Each evaluator declares what it supports where it is implemented: every
-  `MonitoringSemantics` has a `CAPABILITIES` constant, and each runtime calls
-  `core::admit` with its evaluator's declaration at its own entry point.
+  `MonitoringSemantics` has a `RUNTIME_CAPABILITIES` constant, and each runtime calls
+  `core::ensure_runtime_support` with its evaluator's declaration at its own entry point.
 - `tests/runtime_capabilities.rs` runs every runtime it can start from files
   and fails on a panic, a timeout or a failure other than the refusal, and on
   any difference from this table. Regenerate the table with

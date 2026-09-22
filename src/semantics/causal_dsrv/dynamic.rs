@@ -210,13 +210,13 @@ where
     match evaluator {
         RuntimeEvaluator::Unchecked(evaluator) => {
             let expr = site
-                .parse_unchecked_for(property, crate::core::Capabilities::NONE, "causal")
+                .parse_unchecked_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
                 .unwrap_or_else(|error| panic!("invalid scalar dynamic DSRV expression: {error}"));
             evaluator(expr, ctx, owner)
         }
         RuntimeEvaluator::Checked(evaluator) => {
             let checked = site
-                .parse_and_check_for(property, crate::core::Capabilities::NONE, "causal")
+                .parse_and_check_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
                 .unwrap_or_else(|error| match error {
                     RuntimeExpressionError::Parse { .. } => {
                         panic!("invalid scalar dynamic DSRV expression: {error}")

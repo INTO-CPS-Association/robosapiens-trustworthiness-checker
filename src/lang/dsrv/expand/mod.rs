@@ -156,6 +156,17 @@ pub enum DsrvExpandError {
     #[error("a constant could not be worked out: {message}")]
     ConstantValue { message: String, span: Span },
 
+    #[error(
+        "constant `{name}` in {location} does not have its declared type {expected} at {span:?}: {message}"
+    )]
+    ConstantType {
+        name: String,
+        location: String,
+        expected: crate::core::StreamType,
+        message: String,
+        span: Span,
+    },
+
     #[error("`{name}` is not a count, so it cannot be a stream offset")]
     ConstantOffset { name: String, span: Span },
 }
@@ -580,7 +591,7 @@ fn check_expression_types(
             ParsedExprKind::Dynamic(_, ascription, _) | ParsedExprKind::Defer(_, ascription, _) => {
                 ascription.source_type().into_iter().collect()
             }
-            ParsedExprKind::Cast(_, target) => vec![target],
+            ParsedExprKind::Cast(_, target) | ParsedExprKind::Ascribe(_, target) => vec![target],
             _ => continue,
         };
         for ty in types {
@@ -679,7 +690,7 @@ pub(crate) fn expand_expression(
     located: Option<(&SourceArchive, SourceId)>,
 ) -> Result<Expr, DsrvExpandError> {
     check_provenance(callable, located.map(|(archive, _)| archive))?;
-    // Runtime text may call a def, so it is inlined first, exactly as a
+    // Runtime expression source may call a def, so it is inlined first, exactly as a
     // file's own expressions are.
     let scope = callable.scope();
     let inlined = inline::standalone(parsed.as_ref(), &scope, [])?;
@@ -797,6 +808,7 @@ pub(crate) fn expand_tree(
                 origin: NodeOrigin::new(source, source.and(origin.definition)),
                 context: Some(context.clone()),
                 callable: callable.cloned(),
+                generic_def: origin.generic_def,
             };
             let kind = match node.cursor().kind() {
                 If(a, b, c) => ExprKind::If(*node.child(*a), *node.child(*b), *node.child(*c)),
@@ -817,6 +829,9 @@ pub(crate) fn expand_tree(
                 BinOp(a, b, op) => ExprKind::BinOp(*node.child(*a), *node.child(*b), *op),
                 Cast(value, target) => {
                     ExprKind::Cast(*node.child(*value), context.resolve_type(target)?)
+                }
+                Ascribe(value, target) => {
+                    ExprKind::Ascribe(*node.child(*value), context.resolve_type(target)?)
                 }
                 Trunc(value) => ExprKind::Trunc(*node.child(*value)),
                 Floor(value) => ExprKind::Floor(*node.child(*value)),

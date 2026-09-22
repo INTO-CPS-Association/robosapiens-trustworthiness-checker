@@ -34,7 +34,7 @@ pub(crate) fn evaluate<'a>(
                 BinaryOperator::Greater => mc::gt(left, right),
             }
         }
-        Cast(value, target) => mc::cast(evaluate(value), target.clone()),
+        Cast(value, target) | Ascribe(value, target) => mc::cast(evaluate(value), target.clone()),
         Not(value) => mc::not(evaluate(value)),
         Neg(value) => mc::neg(evaluate(value)),
         Update(current, update) => mc::update(evaluate(current), evaluate(update)),

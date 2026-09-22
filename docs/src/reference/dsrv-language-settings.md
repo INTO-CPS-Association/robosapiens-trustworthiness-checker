@@ -94,7 +94,7 @@ must separately support constructs introduced by that experiment.
 | `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | Yes — lazy if |
 <!-- dsrv-experiments:end -->
 
-`use experimental::high_level_dsrv` is an umbrella for **all experiments in
+`use experimental::high_level_dsrv` is a meta-feature for **all experiments in
 that table**, including the behavior-changing `lazy_if`. `use experimental::*`
 currently resolves to the same set. Both forms are resolved to explicit
 experiment settings, so adding a future experiment can change what a source
@@ -116,7 +116,7 @@ is enabled at warning level or above, for example with `RUST_LOG=warn`;
 semantic warnings about the specification itself are always written to
 standard error.
 
-Any experimental name that is neither implemented nor an umbrella is an error
+Any experimental name that is neither implemented nor a meta-feature is an error
 listing the current names. Without `modules`, `use` of another namespace is
 rejected.
 

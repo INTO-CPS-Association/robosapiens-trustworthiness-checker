@@ -1,13 +1,15 @@
 //! Environments for expressions supplied at run time to `dynamic` and `defer`.
 //!
-//! Every runtime checks such source when it arrives and refuses source that does
-//! not check, whether it then consults the types or not. The text is parsed
-//! in the source context of the node it was supplied to, may call the same
-//! defs the module that wrote that node could, and is checked against the
-//! type and environment elaboration gave that node. For a node inlined from
-//! a library's def, that is the library's context and defs, not its caller's.
+//! Checked runtime paths check such source when it arrives and refuse source
+//! that does not check, whether evaluation then consults the types or not. The
+//! intentionally unchecked causal path parses and admits the source without
+//! adding type checking. In both cases, source is parsed in the context of the
+//! node it was supplied to and may call the same defs the module that wrote
+//! that node could. Checked paths use the type and environment elaboration
+//! gave that node. For a node inlined from a library's def, that is the
+//! library's context and defs, not its caller's.
 //!
-//! Warnings proved while checking such text are discarded: runtime text has
+//! Warnings proved while checking such text are discarded: runtime expression source has
 //! no channel to present them on, so a runtime sees only whether the text
 //! checked.
 //!
@@ -22,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contiguous_tree::TreeCursorExt;
 
-use crate::core::{Capabilities, StreamType, UnsupportedConstruct};
+use crate::core::{RuntimeCapabilities, StreamType, UnsupportedRuntimeConstruct};
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprArena, ExprKind, ExprRef};
 use crate::lang::dsrv::diagnostics::SemanticErrors;
 use crate::lang::dsrv::expand::functions::Callable;
@@ -33,7 +35,7 @@ use crate::lang::dsrv::source_map::{
 };
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
 
-/// The type and environment runtime text is checked against: what elaboration
+/// The type and environment runtime expression source is checked against: what elaboration
 /// gave the `dynamic` or `defer` node the text was supplied to.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RuntimeExpressionTyping {
@@ -112,7 +114,7 @@ pub(crate) enum RuntimeExpressionError {
     Unsupported {
         text: String,
         #[source]
-        error: UnsupportedConstruct,
+        error: UnsupportedRuntimeConstruct,
     },
 }
 
@@ -253,7 +255,7 @@ impl RuntimeExpressionSite {
                 check_expression(expr, &TCType::Any, &AstShared::new(environment), sources)
             }
         };
-        // Runtime text has nowhere to present warnings.
+        // Runtime expression source has nowhere to present warnings.
         checked
             .discard_warnings()
             .map_err(|errors| RuntimeExpressionError::TypeCheck {
@@ -275,7 +277,7 @@ impl RuntimeExpressionSite {
     pub(crate) fn parse_and_check_for(
         &self,
         text: &str,
-        capabilities: Capabilities,
+        capabilities: RuntimeCapabilities,
         runtime: &'static str,
     ) -> Result<CheckedExpr, RuntimeExpressionError> {
         let checked = self.parse_and_check(text)?;
@@ -286,7 +288,7 @@ impl RuntimeExpressionSite {
     pub(crate) fn parse_unchecked_for(
         &self,
         text: &str,
-        capabilities: Capabilities,
+        capabilities: RuntimeCapabilities,
         runtime: &'static str,
     ) -> Result<UntypedExpr, RuntimeExpressionError> {
         let expression = self.parse_unchecked(text)?;
@@ -298,17 +300,17 @@ impl RuntimeExpressionSite {
 fn admit_expression(
     expression: ExprRef<'_>,
     text: &str,
-    capabilities: Capabilities,
+    capabilities: RuntimeCapabilities,
     runtime: &'static str,
 ) -> Result<(), RuntimeExpressionError> {
     let Some(requirement) =
-        crate::lang::dsrv::ast::requirements::first_unsupported(expression, capabilities)
+        crate::lang::dsrv::ast::requirements::first_unsupported_construct(expression, capabilities)
     else {
         return Ok(());
     };
     Err(RuntimeExpressionError::Unsupported {
         text: text.to_owned(),
-        error: UnsupportedConstruct {
+        error: UnsupportedRuntimeConstruct {
             requirement,
             runtime,
         },

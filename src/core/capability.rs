@@ -1,10 +1,10 @@
 //! Language constructs that not every runtime evaluates.
 //!
 //! A specification states what it needs through
-//! [`Specification::first_unsupported`](super::Specification::first_unsupported).
+//! [`Specification::first_unsupported_construct`](super::Specification::first_unsupported_construct).
 //! Each evaluator declares what it provides where it is implemented (a
-//! semantics through `MonitoringSemantics::CAPABILITIES`), and each runtime
-//! calls [`admit`] at its own entry point. Nothing lists runtimes centrally:
+//! semantics through `MonitoringSemantics::RUNTIME_CAPABILITIES`), and each runtime
+//! calls [`ensure_runtime_support`] at its own entry point. Nothing lists runtimes centrally:
 //! `tests/runtime_capabilities.rs` observes what each runtime does and
 //! generates the documented table from that.
 
@@ -15,7 +15,7 @@ use crate::lang::dsrv::span::Span;
 
 /// A group of constructs a runtime may or may not evaluate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Capability {
+pub enum RuntimeCapability {
     /// The distribution primitives `dist` and `monitored_at`.
     Distribution,
     /// Building and reading tagged union values.
@@ -27,7 +27,7 @@ pub enum Capability {
     LazyIf,
 }
 
-impl Capability {
+impl RuntimeCapability {
     /// Every capability, in a stable order for tables and tests.
     pub const ALL: &'static [Self] = &[
         Self::Distribution,
@@ -56,7 +56,7 @@ impl Capability {
     }
 }
 
-impl fmt::Display for Capability {
+impl fmt::Display for RuntimeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
@@ -64,16 +64,16 @@ impl fmt::Display for Capability {
 
 /// A set of capabilities, usable in constants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Capabilities(u32);
+pub struct RuntimeCapabilities(u32);
 
-impl Capabilities {
+impl RuntimeCapabilities {
     pub const NONE: Self = Self(0);
 
-    pub const fn with(self, capability: Capability) -> Self {
+    pub const fn with(self, capability: RuntimeCapability) -> Self {
         Self(self.0 | capability.bit())
     }
 
-    pub const fn contains(self, capability: Capability) -> bool {
+    pub const fn contains(self, capability: RuntimeCapability) -> bool {
         self.0 & capability.bit() != 0
     }
 
@@ -85,8 +85,8 @@ impl Capabilities {
 
 /// A construct a specification uses, and the capability it needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Requirement {
-    pub capability: Capability,
+pub struct RuntimeCapabilityRequirement {
+    pub capability: RuntimeCapability,
     pub construct: &'static str,
     pub span: Span,
 }
@@ -94,16 +94,16 @@ pub struct Requirement {
 /// A specification uses a construct the runtime cannot evaluate. The runtime
 /// reports it before building any stream, instead of failing while it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnsupportedConstruct {
-    pub requirement: Requirement,
+pub struct UnsupportedRuntimeConstruct {
+    pub requirement: RuntimeCapabilityRequirement,
     pub runtime: &'static str,
 }
 
-impl std::error::Error for UnsupportedConstruct {}
+impl std::error::Error for UnsupportedRuntimeConstruct {}
 
-impl fmt::Display for UnsupportedConstruct {
+impl fmt::Display for UnsupportedRuntimeConstruct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Requirement {
+        let RuntimeCapabilityRequirement {
             capability,
             construct,
             span,
@@ -119,13 +119,13 @@ impl fmt::Display for UnsupportedConstruct {
 
 /// Admit `model` on the runtime named `runtime` if it needs nothing outside
 /// the `capabilities` that runtime's evaluator declares.
-pub fn admit<S: Specification>(
+pub fn ensure_runtime_support<S: Specification>(
     model: &S,
-    capabilities: Capabilities,
+    capabilities: RuntimeCapabilities,
     runtime: &'static str,
-) -> Result<(), UnsupportedConstruct> {
-    match model.first_unsupported(capabilities) {
-        Some(requirement) => Err(UnsupportedConstruct {
+) -> Result<(), UnsupportedRuntimeConstruct> {
+    match model.first_unsupported_construct(capabilities) {
+        Some(requirement) => Err(UnsupportedRuntimeConstruct {
             requirement,
             runtime,
         }),
@@ -152,39 +152,39 @@ mod tests {
     }
 
     /// What each stream semantics declares, which is what its runtimes
-    /// admit against.
-    fn semantics() -> [(&'static str, Capabilities); 7] {
+    /// ensure_runtime_support against.
+    fn semantics() -> [(&'static str, RuntimeCapabilities); 7] {
         use crate::causal::CausalSet;
         [
             (
                 "untimed",
-                <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::CAPABILITIES,
+                <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES,
             ),
             (
                 "typed untimed",
-                <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::CAPABILITIES,
+                <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES,
             ),
             (
                 "semi-sync untimed",
-                <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::CAPABILITIES,
+                <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::RUNTIME_CAPABILITIES,
             ),
             (
                 "distributed",
-                <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::CAPABILITIES,
+                <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::RUNTIME_CAPABILITIES,
             ),
             (
                 "causal",
                 <CausalDsrvSemantics as MonitoringSemantics<
                     CausalSemiSyncConfig<CausalSet>,
-                >>::CAPABILITIES,
+                >>::RUNTIME_CAPABILITIES,
             ),
             (
                 "checked causal",
                 <CausalDsrvSemantics as MonitoringSemantics<
                     CausalCheckedSemiSyncConfig<CausalSet>,
-                >>::CAPABILITIES,
+                >>::RUNTIME_CAPABILITIES,
             ),
-            ("dataflow", crate::dataflow::CAPABILITIES),
+            ("dataflow", crate::dataflow::RUNTIME_CAPABILITIES),
         ]
     }
 
@@ -194,13 +194,17 @@ mod tests {
     fn only_dataflow_admits_a_lazy_if() {
         let model = lazy();
         for (name, capabilities) in semantics() {
-            let admitted = admit(&model, capabilities, "test");
+            let admitted = ensure_runtime_support(&model, capabilities, "test");
             if name == "dataflow" {
                 admitted.unwrap();
                 continue;
             }
             let error = admitted.expect_err(name);
-            assert_eq!(error.requirement.capability, Capability::LazyIf, "{name}");
+            assert_eq!(
+                error.requirement.capability,
+                RuntimeCapability::LazyIf,
+                "{name}"
+            );
             assert_eq!(error.requirement.construct, "a lazy `if`", "{name}");
             assert_eq!(
                 &LAZY[error.requirement.span.to_range()],
@@ -212,7 +216,8 @@ mod tests {
             LAZY.trim_start_matches("use experimental::lazy_if\n"),
         );
         for (name, capabilities) in semantics() {
-            admit(&eager, capabilities, "test").unwrap_or_else(|error| panic!("{name}: {error}"));
+            ensure_runtime_support(&eager, capabilities, "test")
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
         }
     }
 
@@ -230,17 +235,17 @@ mod tests {
             panic!("a lazy `if` was admitted");
         };
         let refusal = error
-            .downcast_ref::<UnsupportedConstruct>()
+            .downcast_ref::<UnsupportedRuntimeConstruct>()
             .unwrap_or_else(|| panic!("not an admission refusal: {error}"));
-        assert_eq!(refusal.requirement.capability, Capability::LazyIf);
+        assert_eq!(refusal.requirement.capability, RuntimeCapability::LazyIf);
         assert_eq!(refusal.runtime, "semi-sync");
     }
 
     #[test]
     fn the_message_names_the_construct_runtime_and_capability() {
-        let error = UnsupportedConstruct {
-            requirement: Requirement {
-                capability: Capability::Distribution,
+        let error = UnsupportedRuntimeConstruct {
+            requirement: RuntimeCapabilityRequirement {
+                capability: RuntimeCapability::Distribution,
                 construct: "`dist`",
                 span: Span::new(3, 9),
             },

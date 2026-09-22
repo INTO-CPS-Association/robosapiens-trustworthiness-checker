@@ -128,6 +128,13 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
             };
             lower_unary(builder, op, value, result_kind)
         }
+        Ascribe(value, target) => {
+            let input = lower_expression(value, builder);
+            builder.push(UnboundOp::Ascribe {
+                input,
+                target: target.clone(),
+            })
+        }
         Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
         Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg, result_kind),
         Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg, result_kind),

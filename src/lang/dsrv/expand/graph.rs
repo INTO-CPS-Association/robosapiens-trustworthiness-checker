@@ -123,7 +123,7 @@ fn visit(
 
 /// The items one import contributes, keyed as the importer will write them.
 ///
-/// A resolved alias travels as its type; a template travels as a declaration
+/// A resolved alias travels as its type; a generic alias travels as a declaration
 /// whose body was resolved in the module that declared it (S16).
 fn contributed(
     import: &Import,
@@ -153,15 +153,19 @@ fn contributed(
             );
             return Ok(());
         }
-        if let Some(template) = exporter.generic().get(&key) {
+        if let Some(generic_alias) = exporter.generic().get(&key) {
             let mut active = vec![key.clone()];
-            let body =
-                resolved_template(&template.ty, &template.parameters, exporter, &mut active)?;
+            let body = resolve_generic_alias(
+                &generic_alias.ty,
+                &generic_alias.parameters,
+                exporter,
+                &mut active,
+            )?;
             taken.insert(
                 under,
                 AliasDeclaration {
                     name: key.name().clone(),
-                    parameters: template.parameters.clone(),
+                    parameters: generic_alias.parameters.clone(),
                     internal: false,
                     ty: body,
                     span: import.span,
@@ -615,7 +619,7 @@ mod tests {
 
     const GENERIC: &str = "use experimental::{modules, generics}\n";
 
-    /// The alias a use site of an imported template resolves to, read back
+    /// The alias a use site of an imported generic alias resolves to, read back
     /// from the importing module's namespace.
     fn applied(root: &str, sources: &[(&str, &str)]) -> StreamType {
         let graph = graph_of(root, sources).expect("built");
@@ -641,7 +645,7 @@ mod tests {
     /// S16: a name private to the exporter is resolved away, so the importer
     /// never needs it in scope.
     #[test]
-    fn a_templates_private_names_are_resolved_before_it_travels() {
+    fn a_generic_aliases_private_names_are_resolved_before_it_travels() {
         let StreamType::Struct(fields, _) = applied(
             &format!("{GENERIC}mod store\nuse store::Boxed\ntype Used = Boxed<Str>\nin x: Int\n"),
             &[(
@@ -661,11 +665,11 @@ mod tests {
         );
     }
 
-    /// The shape the journal library forces: a template applying another
-    /// template to its own free parameters, which cannot be resolved to a
+    /// The shape the journal library forces: a generic alias applying another
+    /// generic alias to its own free parameters, which cannot be resolved to a
     /// structural type and so must be inlined.
     #[test]
-    fn a_template_may_apply_another_to_its_own_parameters() {
+    fn a_generic_alias_may_apply_another_to_its_own_parameters() {
         let StreamType::Struct(fields, _) = applied(
             &format!("{GENERIC}mod store\nuse store::Outer\ntype Used = Outer<Int>\nin x: Int\n"),
             &[(
@@ -687,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn a_glob_brings_templates_too() {
+    fn a_glob_brings_generic_aliases_too() {
         assert_eq!(
             applied(
                 &format!("{GENERIC}mod store\nuse store::*\ntype Used = Boxed<Int>\nin x: Int\n"),
@@ -698,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn a_module_import_qualifies_a_template_too() {
+    fn a_module_import_qualifies_a_generic_alias_too() {
         let graph = graph_of(
             &format!("{GENERIC}mod store\nuse store\ntype Used = store::Boxed<Int>\nin x: Int\n"),
             &[("store", &format!("{GENERIC}type Boxed<A> = List<A>\n"))],
@@ -753,11 +757,11 @@ mod tests {
         assert_eq!(store.get(&local("Shown")), Some(&StreamType::Int));
     }
 
-    /// The reason S16 resolves a template rather than copying it: an
-    /// exported template may rest on an internal name, which the importer
+    /// The reason S16 resolves a generic alias rather than copying it: an
+    /// exported generic alias may rest on an internal name, which the importer
     /// must never need.
     #[test]
-    fn an_exported_template_may_rest_on_an_internal_name() {
+    fn an_exported_generic_alias_may_rest_on_an_internal_name() {
         let graph = graph_of(
             &format!("{GENERIC}mod store\nuse store::Boxed\ntype Used = Boxed<Str>\nin x: Int\n"),
             &[(
@@ -788,13 +792,13 @@ mod tests {
     }
 }
 
-/// A template with every non-parameter name resolved in the module that
+/// A generic alias with every non-parameter name resolved in the module that
 /// declared it, so it can be copied into another namespace (S16).
 ///
 /// A parameter stays free. An application of another of the exporter's
-/// templates is inlined, because it cannot be resolved to a structural type
+/// generic aliases are inlined, because it cannot be resolved to a structural type
 /// while its arguments are free.
-fn resolved_template(
+fn resolve_generic_alias(
     ty: &SourceType,
     parameters: &[TypeName],
     exporter: &SourceContext,
@@ -803,11 +807,11 @@ fn resolved_template(
     use crate::lang::dsrv::source::SourceTypeKind as Kind;
 
     let recur = |ty: &SourceType, active: &mut Vec<TypePath>| {
-        resolved_template(ty, parameters, exporter, active)
+        resolve_generic_alias(ty, parameters, exporter, active)
     };
     let kind = match &ty.kind {
         Kind::Named(path, arguments) if arguments.is_empty() => {
-            // A parameter of this template stays as written.
+            // A parameter of this generic alias stays as written.
             if !path.is_qualified() && parameters.contains(path.name()) {
                 Kind::Named(path.clone(), EcoVec::new())
             } else if let Some(resolved) = exporter.get(path) {
@@ -819,7 +823,7 @@ fn resolved_template(
             }
         }
         Kind::Named(path, arguments) => {
-            // Applying one of the exporter's templates: inline it, since the
+            // Applying one of the exporter's generic_aliases: inline it, since the
             // arguments may themselves be free parameters.
             let Some(declaration) = exporter.generic().get(path) else {
                 return Err(DsrvExpandError::UnknownExport {

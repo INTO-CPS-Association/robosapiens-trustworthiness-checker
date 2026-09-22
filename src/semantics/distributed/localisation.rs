@@ -505,12 +505,12 @@ mod tests {
     // distributed runtime able to meet it.
     #[test]
     fn localisation_keeps_the_if_policy_without_claiming_runtime_support() {
-        use crate::core::{Capability, admit};
+        use crate::core::{RuntimeCapability, ensure_runtime_support};
         use crate::runtime::builder::DistValueConfig;
         use crate::semantics::{DistributedSemantics, MonitoringSemantics};
 
         let distributed =
-            <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::CAPABILITIES;
+            <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::RUNTIME_CAPABILITIES;
         for (header, lazy) in [("", false), ("use experimental::lazy_if\n", true)] {
             let source = format!(
                 "language distributed\n{header}in c: Bool\nin x: Int\naux a: Int\n\
@@ -519,11 +519,16 @@ mod tests {
             let spec = crate::dsrv_fixtures::elaborated(&source);
             let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
             assert!(tree(&localised).aux_vars.is_empty());
-            let refused = admit(&localised, distributed, "distributed");
+            let refused = ensure_runtime_support(&localised, distributed, "distributed");
             if lazy {
                 let refusal = refused.expect_err("the inlined `if` is still lazy");
-                assert_eq!(refusal.requirement.capability, Capability::LazyIf);
-                admit(&localised, crate::dataflow::CAPABILITIES, "dataflow").unwrap();
+                assert_eq!(refusal.requirement.capability, RuntimeCapability::LazyIf);
+                ensure_runtime_support(
+                    &localised,
+                    crate::dataflow::RUNTIME_CAPABILITIES,
+                    "dataflow",
+                )
+                .unwrap();
             } else {
                 refused.unwrap();
             }

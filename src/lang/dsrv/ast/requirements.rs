@@ -3,29 +3,30 @@
 use contiguous_tree::TreeCursorExt;
 
 use super::{ExprKind, ExprRef};
-use crate::core::{Capabilities, Capability, Requirement};
+use crate::core::{RuntimeCapabilities, RuntimeCapability, RuntimeCapabilityRequirement};
 use crate::lang::dsrv::expand::language::IfPolicy;
 
 /// The capability an expression needs, with a name for messages. Every kind
 /// is listed, with no wildcard, so a new kind must be placed before this
 /// compiles.
-pub(super) fn requirement(node: ExprRef<'_>) -> Option<(Capability, &'static str)> {
+pub(super) fn requirement(node: ExprRef<'_>) -> Option<(RuntimeCapability, &'static str)> {
     match node.kind() {
         // Only the policy of the module that wrote the `if` decides, so an
         // `if` inlined from a lazy module into an eager one still needs it.
         ExprKind::If(..) if node.if_policy() == IfPolicy::Lazy => {
-            Some((Capability::LazyIf, "a lazy `if`"))
+            Some((RuntimeCapability::LazyIf, "a lazy `if`"))
         }
-        ExprKind::MonitoredAt(..) => Some((Capability::Distribution, "`monitored_at`")),
-        ExprKind::Dist(..) => Some((Capability::Distribution, "`dist`")),
-        ExprKind::Constructor(..) => Some((Capability::TaggedUnions, "a union constructor")),
-        ExprKind::Match(..) => Some((Capability::PatternMatching, "`match`")),
-        ExprKind::Matches(..) => Some((Capability::PatternMatching, "`matches`")),
+        ExprKind::MonitoredAt(..) => Some((RuntimeCapability::Distribution, "`monitored_at`")),
+        ExprKind::Dist(..) => Some((RuntimeCapability::Distribution, "`dist`")),
+        ExprKind::Constructor(..) => Some((RuntimeCapability::TaggedUnions, "a union constructor")),
+        ExprKind::Match(..) => Some((RuntimeCapability::PatternMatching, "`match`")),
+        ExprKind::Matches(..) => Some((RuntimeCapability::PatternMatching, "`matches`")),
         ExprKind::If(..)
         | ExprKind::SIndex(..)
         | ExprKind::Val(..)
         | ExprKind::BinOp(..)
         | ExprKind::Cast(..)
+        | ExprKind::Ascribe(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
@@ -71,10 +72,13 @@ pub(super) fn requirement(node: ExprRef<'_>) -> Option<(Capability, &'static str
     }
 }
 
-pub(crate) fn first_unsupported(root: ExprRef<'_>, supported: Capabilities) -> Option<Requirement> {
+pub(crate) fn first_unsupported_construct(
+    root: ExprRef<'_>,
+    supported: RuntimeCapabilities,
+) -> Option<RuntimeCapabilityRequirement> {
     root.postorder().find_map(|node| {
         let (capability, construct) = requirement(node)?;
-        (!supported.contains(capability)).then_some(Requirement {
+        (!supported.contains(capability)).then_some(RuntimeCapabilityRequirement {
             capability,
             construct,
             span: node.span(),

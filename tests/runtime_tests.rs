@@ -303,6 +303,191 @@ async fn run_gradual_typed_runtime_with_spec(
     with_timeout(outputs.enumerate().collect(), 5, timeout_label).await
 }
 
+#[apply(async_test)]
+async fn list_callbacks_follow_the_current_function_stream(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let specification = r#"
+in choose_first: Bool
+out mapped: List<Int>
+out filtered: List<Int>
+out total: Int
+mapped = List.map(
+    if choose_first then (\x: Int -> x + 1) else (\x: Int -> x + 10),
+    List(1)
+)
+filtered = List.filter(
+    if choose_first then (\x: Int -> x > 0) else (\x: Int -> x < 0),
+    List(1, -1)
+)
+total = List.fold(
+    if choose_first then (\acc: Int, x: Int -> acc + x) else (\acc: Int, x: Int -> acc - x),
+    0,
+    List(1, 2)
+)
+"#;
+    let input = BTreeMap::from([(
+        VarName::new("choose_first"),
+        vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+    )]);
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            specification,
+            input.clone(),
+            "changing list callback outputs",
+        )
+        .await?;
+        let selected = outputs
+            .into_iter()
+            .map(|(_, row)| {
+                (
+                    row[&VarName::new("mapped")].clone(),
+                    row[&VarName::new("filtered")].clone(),
+                    row[&VarName::new("total")].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected,
+            vec![
+                (
+                    Value::List(vec![Value::Int(2)].into()),
+                    Value::List(vec![Value::Int(1)].into()),
+                    Value::Int(3),
+                ),
+                (
+                    Value::List(vec![Value::Int(11)].into()),
+                    Value::List(vec![Value::Int(-1)].into()),
+                    Value::Int(-3),
+                ),
+                (
+                    Value::List(vec![Value::Int(2)].into()),
+                    Value::List(vec![Value::Int(1)].into()),
+                    Value::Int(3),
+                ),
+            ],
+            "{runtime:?}"
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn list_callbacks_freeze_captures_for_each_collection_tick(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let specification = r#"
+in tick: Int
+in bias: Int
+out nested: List<Int>
+out lexical: List<Int>
+nested = List.map(\x: Int -> (\v: Int -> v + bias)(x), List(tick, tick + 1))
+lexical = (\b: Int -> List.map(\x: Int -> (\v: Int -> v + b)(x), List(tick, tick + 1)))(bias)
+"#;
+    let input = BTreeMap::from([
+        (
+            VarName::new("tick"),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        ),
+        (
+            VarName::new("bias"),
+            vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        ),
+    ]);
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            specification,
+            input.clone(),
+            "captured collection callback outputs",
+        )
+        .await?;
+        let selected = outputs
+            .into_iter()
+            .map(|(_, row)| {
+                (
+                    row[&VarName::new("nested")].clone(),
+                    row[&VarName::new("lexical")].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected,
+            vec![
+                (
+                    Value::List(vec![Value::Int(11), Value::Int(12)].into()),
+                    Value::List(vec![Value::Int(11), Value::Int(12)].into()),
+                ),
+                (
+                    Value::List(vec![Value::Int(22), Value::Int(23)].into()),
+                    Value::List(vec![Value::Int(22), Value::Int(23)].into()),
+                ),
+                (
+                    Value::List(vec![Value::Int(33), Value::Int(34)].into()),
+                    Value::List(vec![Value::Int(33), Value::Int(34)].into()),
+                ),
+            ],
+            "{runtime:?}"
+        );
+    }
+    Ok(())
+}
+
+#[apply(async_test)]
+async fn list_callbacks_advance_captures_when_the_list_is_absent(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let specification = r#"
+in tick: Int
+in bias: Int
+aux original: List<Int> = List(tick)
+aux delayed: List<Int> = original[1]
+out captured: List<Int>
+captured = List.map(\x: Int -> x + bias, delayed)
+"#;
+    let input = BTreeMap::from([
+        (
+            VarName::new("tick"),
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+        ),
+        (
+            VarName::new("bias"),
+            vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        ),
+    ]);
+
+    for runtime in [RuntimeSpec::Async, RuntimeSpec::SemiSync] {
+        let outputs = run_typed_runtime_with_spec(
+            executor.clone(),
+            runtime,
+            specification,
+            input.clone(),
+            "delayed collection callback outputs",
+        )
+        .await?;
+        let selected = outputs
+            .into_iter()
+            .map(|(_, row)| row[&VarName::new("captured")].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selected,
+            vec![
+                Value::Deferred,
+                Value::List(vec![Value::Int(21)].into()),
+                Value::List(vec![Value::Int(32)].into()),
+                Value::List(vec![Value::NoVal].into()),
+            ],
+            "{runtime:?}"
+        );
+    }
+    Ok(())
+}
+
 fn expected_dsrv_future_window_outputs(size: usize) -> Vec<(usize, BTreeMap<VarName, Value>)> {
     (0..size)
         .map(|idx| {

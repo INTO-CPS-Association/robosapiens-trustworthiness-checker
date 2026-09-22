@@ -621,7 +621,7 @@ fn text_supplied_at_runtime_may_call_a_def() {
 }
 
 /// A file that declares no def leaves its nodes carrying nothing, so a call
-/// in its runtime text names a variable, as it did before defs existed.
+/// in its runtime expression source names a variable, as it did before defs existed.
 #[test]
 fn text_supplied_at_runtime_calls_nothing_where_no_def_was_declared() {
     let spec = parse_str("in x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n").expect("parses");
@@ -634,7 +634,7 @@ fn text_supplied_at_runtime_calls_nothing_where_no_def_was_declared() {
     );
 }
 
-/// What runtime text may call is part of the node, not of the program: a
+/// What runtime expression source may call is part of the node, not of the program: a
 /// def declared after the node is still one the node's file declared.
 #[test]
 fn text_supplied_at_runtime_may_call_a_def_declared_after_the_node() {
@@ -648,7 +648,7 @@ fn text_supplied_at_runtime_may_call_a_def_declared_after_the_node() {
     assert!(expr.to_string().contains('*'), "got {expr}");
 }
 
-/// Runtime text a def's own body supplies is expanded the same way, so a
+/// Runtime expression source a def's own body supplies is expanded the same way, so a
 /// def may be called from inside text nested in a call to another.
 #[test]
 fn source_nested_in_a_runtime_expression_may_call_a_def_in_turn() {
@@ -666,7 +666,7 @@ fn source_nested_in_a_runtime_expression_may_call_a_def_in_turn() {
     assert!(expr.to_string().contains('*'), "got {expr}");
 }
 
-/// The runtime text of a node in a file that took defs from elsewhere may
+/// The runtime expression source of a node in a file that took defs from elsewhere may
 /// call them too, by the same names its own expressions could.
 #[test]
 fn text_supplied_at_runtime_may_call_an_imported_def() {

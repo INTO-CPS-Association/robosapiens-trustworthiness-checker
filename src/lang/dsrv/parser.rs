@@ -95,6 +95,7 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::UnknownConstant { .. }
             | DsrvExpandError::RecursiveConstant { .. }
             | DsrvExpandError::ConstantValue { .. }
+            | DsrvExpandError::ConstantType { .. }
             | DsrvExpandError::ConstantOffset { .. }) => Self::Modules(other.to_string()),
         }
     }
@@ -118,7 +119,7 @@ pub fn parse_expr_with_context(
     parse_expr_with_functions(input, context, Rc::default(), None)
 }
 
-/// Parse runtime text that may call a `def`, located as the file `located`
+/// Parse runtime expression source that may call a `def`, located as the file `located`
 /// names in its archive, or unlocated.
 pub(crate) fn parse_expr_with_functions(
     input: &str,
@@ -188,18 +189,7 @@ fn reaches_an_owned_root(parsed: &syntax::ParsedSpecification) -> bool {
         })
 }
 
-pub use super::program::{LoadedProgram, collect_modules_from_file};
-
-/// Read a program, its modules included, and expand it.
-///
-/// A file that declares no module expands as a program of one; one that
-/// declares modules has their namespaces built first, in dependency order.
-pub async fn parse_program_file(
-    file: &str,
-    request: LanguageRequest,
-) -> anyhow::Result<LoadedProgram> {
-    super::program::load_program_file(file, request).await
-}
+pub use super::program::collect_modules_from_file;
 
 /// Accept a Core DSRV file. A file without a `language` line is read as Core;
 /// one that declares another dialect is rejected.
@@ -220,28 +210,131 @@ pub fn parse_syntax_for_benchmark(input: &str) -> Result<(), DsrvParseError> {
 
 #[cfg(test)]
 fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(result: &Result<T, E>) -> String {
-    let rendered = format!("{result:?}");
-    let Some(start) = rendered.find("declarations: [") else {
-        return rendered;
-    };
-    let mut depth = 0usize;
-    let mut end = start;
-    for (offset, character) in rendered[start..].char_indices() {
-        match character {
-            '[' => depth += 1,
-            ']' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = start + offset + 1;
-                    break;
-                }
-            }
-            _ => {}
+    format!("{result:?}")
+}
+
+#[cfg(test)]
+fn specification_result_to_string(result: &Result<DsrvSpecification, DsrvParseError>) -> String {
+    struct SemanticDebug<'a>(&'a DsrvSpecification);
+    struct NamesDebug<'a>(Vec<&'a crate::VarName>);
+    struct AnnotationsDebug<'a>(Vec<(&'a crate::VarName, &'a crate::core::StreamType)>);
+    struct ExpressionsDebug<'a>(Vec<(&'a crate::VarName, super::ast::ExprRef<'a>)>);
+
+    impl std::fmt::Debug for NamesDebug<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.debug_set().entries(&self.0).finish()
         }
     }
-    let mut compatible = rendered;
-    compatible.replace_range(start..end + 2, "");
-    compatible
+
+    impl std::fmt::Debug for AnnotationsDebug<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut map = formatter.debug_map();
+            for (name, annotation) in &self.0 {
+                map.entry(name, annotation);
+            }
+            map.finish()
+        }
+    }
+
+    impl std::fmt::Debug for ExpressionsDebug<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut map = formatter.debug_map();
+            for (name, expression) in &self.0 {
+                map.entry(name, &expression);
+            }
+            map.finish()
+        }
+    }
+
+    impl std::fmt::Debug for SemanticDebug<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let specification = self.0;
+            let declared_names = |include: fn(&Declaration) -> bool| {
+                NamesDebug(
+                    specification
+                        .declarations()
+                        .iter()
+                        .filter(|declaration| include(declaration))
+                        .filter_map(|declaration| match declaration {
+                            Declaration::Input { name, .. }
+                            | Declaration::Output { name, .. }
+                            | Declaration::Aux { name, .. }
+                            | Declaration::Equation { name, .. } => Some(name),
+                            Declaration::TypeAlias { .. } => None,
+                        })
+                        .collect(),
+                )
+            };
+            let expressions = ExpressionsDebug(
+                specification
+                    .declarations()
+                    .iter()
+                    .filter_map(|declaration| {
+                        let Declaration::Equation { name, .. } = declaration else {
+                            return None;
+                        };
+                        Some((
+                            name,
+                            specification
+                                .var_expr_ref(name)
+                                .expect("an equation has an expression"),
+                        ))
+                    })
+                    .collect(),
+            );
+            formatter
+                .debug_struct("DsrvSpecification")
+                .field(
+                    "input_vars",
+                    &declared_names(|declaration| matches!(declaration, Declaration::Input { .. })),
+                )
+                .field(
+                    "output_vars",
+                    &declared_names(|declaration| {
+                        matches!(declaration, Declaration::Output { .. })
+                    }),
+                )
+                .field(
+                    "aux_vars",
+                    &declared_names(|declaration| matches!(declaration, Declaration::Aux { .. })),
+                )
+                .field(
+                    "stream_vars",
+                    &declared_names(|declaration| {
+                        matches!(
+                            declaration,
+                            Declaration::Output { .. } | Declaration::Aux { .. }
+                        )
+                    }),
+                )
+                .field("exprs", &expressions)
+                .field(
+                    "type_annotations",
+                    &AnnotationsDebug(
+                        specification
+                            .declarations()
+                            .iter()
+                            .filter_map(|declaration| match declaration {
+                                Declaration::Input { name, .. }
+                                | Declaration::Output { name, .. }
+                                | Declaration::Aux { name, .. } => {
+                                    specification.type_annotation(name).map(|typ| (name, typ))
+                                }
+                                Declaration::Equation { .. } | Declaration::TypeAlias { .. } => {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    ),
+                )
+                .finish()
+        }
+    }
+
+    match result {
+        Ok(specification) => format!("Ok({:?})", SemanticDebug(specification)),
+        Err(error) => format!("Err({error:?})"),
+    }
 }
 
 #[cfg(test)]
@@ -2826,7 +2919,7 @@ mod spec_tests {
     #[test]
     fn test_dsrv_specs_normal() {
         for &(name, (spec, exp)) in specs().iter() {
-            let parsed = presult_to_string(&parse_str(spec));
+            let parsed = specification_result_to_string(&parse_str(spec));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2838,7 +2931,7 @@ mod spec_tests {
     fn test_dsrv_specs_added_newlines() {
         for &(name, (spec, exp)) in specs().iter() {
             let spec = spec.replace("\n", "\n\n");
-            let parsed = presult_to_string(&parse_str(spec.as_str()));
+            let parsed = specification_result_to_string(&parse_str(spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
@@ -2850,14 +2943,14 @@ mod spec_tests {
     fn test_dsrv_specs_added_comments() {
         for &(name, (spec, exp)) in specs().iter() {
             let mod_spec = spec.replace("\n", "\n//This is a comment\n");
-            let parsed = presult_to_string(&parse_str(mod_spec.as_str()));
+            let parsed = specification_result_to_string(&parse_str(mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)
             );
 
             let mod_spec = spec.replace("\n", "//This is a comment\n"); // Beginning \n
-            let parsed = presult_to_string(&parse_str(mod_spec.as_str()));
+            let parsed = specification_result_to_string(&parse_str(mod_spec.as_str()));
             assert_eq!(
                 format!("{}: {}", name, parsed),
                 format!("{}: {}", name, exp)

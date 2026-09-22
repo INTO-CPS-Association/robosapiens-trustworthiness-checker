@@ -39,6 +39,17 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             };
             lift_unary_with_state(*op, arg, last_input)
         }
+        StreamOp::Ascribe { input, target } => {
+            let input = context.read_value(state, input);
+            let NodeState::UnaryLift { last_input } = &mut state.node_states[node_id.index()]
+            else {
+                unreachable!("ascription node has incompatible runtime state")
+            };
+            let value = retain_last_value(input, last_input);
+            lift_one(value, |value| {
+                expect_value(value_operations::cast(value, target))
+            })
+        }
         StreamOp::Binary { op, lhs, rhs } => {
             let lhs = context.read_value(state, lhs);
             let rhs = context.read_value(state, rhs);

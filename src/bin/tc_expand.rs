@@ -1,7 +1,7 @@
 use std::{io, io::Write as _, process::ExitCode};
 
 use clap::{Parser, ValueEnum};
-use trustworthiness_checker::cli::expand::{self, CheckMode};
+use trustworthiness_checker::{cli::expand, lang::dsrv::TypeCheckMode};
 
 #[derive(Parser)]
 #[command(
@@ -27,10 +27,10 @@ enum Mode {
 fn main() -> ExitCode {
     let args = Args::parse();
     let mode = args.check_mode.map(|mode| match mode {
-        Mode::Strict => CheckMode::Strict,
-        Mode::Gradual => CheckMode::Gradual,
+        Mode::Strict => TypeCheckMode::Strict,
+        Mode::Gradual => TypeCheckMode::Gradual,
     });
-    match expand::run(
+    match expand::run_inspection(
         &args.model,
         mode,
         &mut io::stdout().lock(),
@@ -39,7 +39,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
-            if matches!(error, expand::ExpandIoError::Stdout(_)) {
+            if matches!(error, expand::InspectionIoError::Stdout(_)) {
                 let _ = writeln!(io::stderr().lock(), "error: {error}");
             }
             ExitCode::FAILURE

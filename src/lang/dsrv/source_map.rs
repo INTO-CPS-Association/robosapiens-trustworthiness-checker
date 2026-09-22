@@ -14,7 +14,7 @@
 //! - a finding materialises an owned [`SourceLocation`] when its checking
 //!   attempt finishes, so it can be rendered after the program, its loader
 //!   and the rest of the report are gone;
-//! - a `dynamic` or `defer` site captures the files its runtime text may
+//! - a `dynamic` or `defer` site captures the files its runtime expression source may
 //!   need, so that text can be located after the program is dropped.
 //!
 //! File handles are [`Arc`] whatever `thread-safe-ast` selects: findings

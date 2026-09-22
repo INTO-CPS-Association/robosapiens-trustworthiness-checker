@@ -15,7 +15,7 @@
 //! from the rest is time, not purity: an atemporal expression reads only
 //! this tick. A caller checks that before it gets here; meeting a temporal
 //! operator anyway is [`AtemporalError::Temporal`], not a panic, because
-//! runtime text can carry one.
+//! runtime expression source can carry one.
 
 use std::collections::BTreeMap;
 
@@ -73,6 +73,46 @@ pub(crate) enum AtemporalError {
 
 type Evaluated = Result<Value, AtemporalError>;
 
+fn apply_function(
+    function: ExprRef<'_>,
+    arguments: Vec<Value>,
+    environment: &dyn Environment,
+) -> Evaluated {
+    if let ExprView::Lambda(parameters, body) = function.view() {
+        if parameters.len() != arguments.len() {
+            return Err(AtemporalError::Operation(format!(
+                "function expected {} arguments, got {}",
+                parameters.len(),
+                arguments.len()
+            )));
+        }
+        let bound = parameters
+            .iter()
+            .map(|(name, _)| name.clone())
+            .zip(arguments)
+            .collect();
+        return eval_atemporal(
+            body,
+            &Scope {
+                bound,
+                outer: Some(environment),
+            },
+        );
+    }
+    match eval_atemporal(function, environment)? {
+        Value::Function(function) if function.has_value_callable() => function
+            .call_value(arguments.into())
+            .map_err(|error| AtemporalError::Operation(error.to_string())),
+        absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
+        Value::Function(_) => Err(AtemporalError::NotCallable {
+            span: function.span(),
+        }),
+        other => Err(AtemporalError::Operation(format!(
+            "{other} is not a function"
+        ))),
+    }
+}
+
 /// Evaluate `node` at one tick, reading free names from `environment`.
 pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -> Evaluated {
     use ExprView::*;
@@ -127,7 +167,7 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
                 }),
             }
         }
-        Cast(value, target) => lift1(child(value)?, |value| {
+        Cast(value, target) | Ascribe(value, target) => lift1(child(value)?, |value| {
             operation(value_operations::cast(value, target))
         }),
         Not(value) => lift1(child(value)?, |value| {
@@ -287,6 +327,65 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
                 value
             })
         }
+        Apply(function, arguments) => {
+            let arguments = arguments
+                .into_iter()
+                .map(child)
+                .collect::<Result<Vec<_>, _>>()?;
+            apply_function(function, arguments, environment)
+        }
+        LMap(function, list) => match child(list)? {
+            Value::List(values) => Ok(Value::List(
+                values
+                    .into_iter()
+                    .map(|value| apply_function(function, vec![value], environment))
+                    .collect::<Result<_, _>>()?,
+            )),
+            absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
+            other => Err(AtemporalError::Operation(format!(
+                "List.map requires a list, got {other}"
+            ))),
+        },
+        LFilter(function, list) => match child(list)? {
+            Value::List(values) => {
+                let mut filtered = EcoVec::new();
+                for value in values {
+                    match apply_function(function, vec![value.clone()], environment)? {
+                        Value::Bool(true) => filtered.push(value),
+                        Value::Bool(false) => {}
+                        other => {
+                            return Err(AtemporalError::Operation(format!(
+                                "List.filter returned non-bool value {other}"
+                            )));
+                        }
+                    }
+                }
+                Ok(Value::List(filtered))
+            }
+            absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
+            other => Err(AtemporalError::Operation(format!(
+                "List.filter requires a list, got {other}"
+            ))),
+        },
+        LFold(function, initial, list) => {
+            let mut accumulator = child(initial)?;
+            if matches!(accumulator, Value::NoVal | Value::Deferred) {
+                return Ok(accumulator);
+            }
+            match child(list)? {
+                Value::List(values) => {
+                    for value in values {
+                        accumulator =
+                            apply_function(function, vec![accumulator, value], environment)?;
+                    }
+                    Ok(accumulator)
+                }
+                absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
+                other => Err(AtemporalError::Operation(format!(
+                    "List.fold requires a list, got {other}"
+                ))),
+            }
+        }
         SIndex(..) => Err(temporal("x[n]", node.span())),
         Init(..) => Err(temporal("init", node.span())),
         Update(..) => Err(temporal("update", node.span())),
@@ -294,7 +393,7 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         When(..) => Err(temporal("when", node.span())),
         Dynamic(..) => Err(temporal("dynamic", node.span())),
         Defer(..) => Err(temporal("defer", node.span())),
-        Lambda(..) | Apply(..) | Fix(..) | Partial(..) | LMap(..) | LFilter(..) | LFold(..) => {
+        Lambda(..) | Fix(..) | Partial(..) => {
             Err(AtemporalError::NotCallable { span: node.span() })
         }
         MonitoredAt(..) | Dist(..) => Err(AtemporalError::Operation(
@@ -455,6 +554,18 @@ mod tests {
             evaluate_under("use experimental::lazy_if\n", source, &selected),
             Err(AtemporalError::Operation(_))
         ));
+    }
+
+    #[test]
+    fn higher_order_list_callbacks_use_the_ticks_environment() {
+        let bindings = environment([("bias", Value::Int(10)), ("unused", Value::Int(0))]);
+        assert_eq!(
+            evaluate(
+                "List.map(\\x: Int -> (\\v: Int -> v + bias)(x), List(1, 2))",
+                &bindings,
+            ),
+            Ok(Value::List(vec![Value::Int(11), Value::Int(12)].into()))
+        );
     }
 
     #[test]

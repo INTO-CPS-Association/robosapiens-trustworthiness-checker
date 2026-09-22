@@ -1242,7 +1242,7 @@ mod tests {
             }
             let mut sources = InputSourceSet::new(vec![source]);
 
-            // Let the relay admit the ready item and observe transport EOF. The
+            // Let the relay ensure_runtime_support the ready item and observe transport EOF. The
             // boundary partitions locally admitted relay data; it does not
             // claim that every future-ready transport message was admitted.
             let commands = sources.begin_boundary(1).await.unwrap();

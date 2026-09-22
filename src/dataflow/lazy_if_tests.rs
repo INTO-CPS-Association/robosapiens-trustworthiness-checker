@@ -81,7 +81,7 @@ fn an_if_is_eager_unless_its_module_takes_on_lazy_if() {
         run(&format!("{others}{DELAYED_THEN}"), &rows),
         [i(0), i(0), i(2)]
     );
-    // Lazy, whether named or through the umbrella: the first tick that
+    // Lazy, whether named directly or through the meta-feature: the first tick that
     // selects the branch is the first of its timeline.
     let lazy = [i(0), i(0), Value::Deferred];
     assert_eq!(run(&format!("{LAZY}{DELAYED_THEN}"), &rows), lazy);

@@ -684,7 +684,7 @@ fn a_site_captures_its_own_file_and_its_callable_files_only() {
 }
 
 #[test]
-fn runtime_text_errors_own_their_files_after_the_program_is_dropped() {
+fn runtime_expression_errors_own_their_files_after_the_program_is_dropped() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
     let elaborated = spec
         .check_and_elaborate(TypeCheckOptions::STRICT)
@@ -730,7 +730,7 @@ fn runtime_text_errors_own_their_files_after_the_program_is_dropped() {
 }
 
 #[test]
-fn sites_nested_in_runtime_text_capture_that_text() {
+fn sites_nested_in_runtime_expression_source_capture_that_source() {
     let spec = program(DYNAMIC_ROOT, &[("lib", LIB), ("types", TYPES)]);
     let lib = file_probe(&spec, "lib.dsrv");
     let elaborated = spec

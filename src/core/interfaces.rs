@@ -115,7 +115,10 @@ pub trait Specification: Debug + std::fmt::Display + Clone + 'static {
     /// The first construct, in declaration order, that needs a capability
     /// outside `supported`. Languages whose constructs every runtime
     /// evaluates keep the default.
-    fn first_unsupported(&self, supported: super::Capabilities) -> Option<super::Requirement> {
+    fn first_unsupported_construct(
+        &self,
+        supported: super::RuntimeCapabilities,
+    ) -> Option<super::RuntimeCapabilityRequirement> {
         let _ = supported;
         None
     }

@@ -67,15 +67,15 @@ fn runtime_source_is_admitted_against_the_receiving_runtime() {
     let source = "if condition then x[1] else 0";
 
     assert!(matches!(
-        site.parse_and_check_for(source, Capabilities::NONE, "untimed stream"),
+        site.parse_and_check_for(source, RuntimeCapabilities::NONE, "untimed stream"),
         Err(RuntimeExpressionError::Unsupported { .. })
     ));
     assert!(
-        site.parse_and_check_for(source, crate::dataflow::CAPABILITIES, "dataflow")
+        site.parse_and_check_for(source, crate::dataflow::RUNTIME_CAPABILITIES, "dataflow")
             .is_ok()
     );
     assert!(matches!(
-        site.parse_unchecked_for(source, Capabilities::NONE, "causal"),
+        site.parse_unchecked_for(source, RuntimeCapabilities::NONE, "causal"),
         Err(RuntimeExpressionError::Unsupported { .. })
     ));
 }

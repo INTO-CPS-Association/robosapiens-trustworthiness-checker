@@ -113,13 +113,17 @@ impl Display for LangSpecification {
 impl Specification for LangSpecification {
     type Expr = ();
 
-    fn first_unsupported(
+    fn first_unsupported_construct(
         &self,
-        supported: crate::core::Capabilities,
-    ) -> Option<crate::core::Requirement> {
+        supported: crate::core::RuntimeCapabilities,
+    ) -> Option<crate::core::RuntimeCapabilityRequirement> {
         match self {
-            LangSpecification::Dsrv(spec) => Specification::first_unsupported(spec, supported),
-            LangSpecification::Mstlo(spec) => Specification::first_unsupported(spec, supported),
+            LangSpecification::Dsrv(spec) => {
+                Specification::first_unsupported_construct(spec, supported)
+            }
+            LangSpecification::Mstlo(spec) => {
+                Specification::first_unsupported_construct(spec, supported)
+            }
         }
     }
 

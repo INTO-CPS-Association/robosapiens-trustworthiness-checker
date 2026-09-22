@@ -52,6 +52,8 @@ pub(crate) struct Def<'a> {
     /// Names bound by `<…>`. A parameter whose type mentions one cannot be
     /// ascribed at a call site, so it is left to inference.
     pub(crate) type_parameters: EcoVec<TypeName>,
+    /// The declared result is an ascription on every inlined call.
+    pub(crate) result: SourceType,
     /// Where the body is. Grafting copies from here.
     pub(crate) body: ParsedExprRef<'a>,
     /// Whether the call site must take the body's spans or replace them.
@@ -92,6 +94,7 @@ impl Stamp {
                         .map(|source| SourceSite::new(source, origin.span))
                 }),
                 lexical: origin.lexical.or(stamp.lexical),
+                generic_def: origin.generic_def,
             },
         }
     }
@@ -130,6 +133,7 @@ struct Declared {
     name: VarName,
     parameters: EcoVec<(VarName, SourceType)>,
     type_parameters: EcoVec<TypeName>,
+    result: SourceType,
     /// Which root of the file's forest holds the body.
     root: usize,
 }
@@ -147,12 +151,14 @@ pub(crate) fn inline_functions(
                 name,
                 type_parameters,
                 parameters,
+                result,
                 ..
             } => {
                 declared.push(Declared {
                     name: name.clone(),
                     parameters: parameters.clone(),
                     type_parameters: type_parameters.clone(),
+                    result: result.clone(),
                     root,
                 });
                 root += 1;
@@ -193,6 +199,7 @@ pub(crate) fn inline_functions(
             Def {
                 parameters: def.parameters,
                 type_parameters: def.type_parameters,
+                result: def.result,
                 body: trees[def.root],
                 foreign: false,
                 source: None,
@@ -326,8 +333,13 @@ fn graft(
     bound: &mut Vec<VarName>,
     stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
+    // A bare name a binder introduced is that binder's, not a def's: a
+    // lambda parameter, a pattern's name, or a def's own parameter called as
+    // a function is the value bound there. This is the rule a constant
+    // follows below, and the two agree by using the same `bound` names.
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind()
         && let ParsedExprKind::Var(name) = cursor.child(*function).kind()
+        && !bound.contains(name)
         && scope.bare(name).is_some()
     {
         let name = name.clone();
@@ -376,7 +388,12 @@ fn graft(
         if let ParsedExprKind::SIndex(input, parsed::SourceOffset::Named(path)) = cursor.kind() {
             let span = parsed::span_of(cursor);
             let found = if path.module().is_empty() {
-                constants.bare(path.name())
+                // A binder's name is not a constant here either, so an
+                // offset written with a shadowed name stands unfolded and
+                // is refused where offsets are resolved.
+                (!bound.contains(path.name()))
+                    .then(|| constants.bare(path.name()))
+                    .flatten()
             } else {
                 constants.through_module(path.module(), path.name())
             };
@@ -591,6 +608,15 @@ fn build_call(
         ParsedExprKind::Lambda(parameters, body),
         ParsedOrigin {
             lexical: def.lexical.or(at_call.lexical),
+            generic_def: (!def.type_parameters.is_empty()).then(|| {
+                crate::lang::dsrv::ast::AstShared::new(
+                    crate::lang::dsrv::syntax::parsed::GenericFunctionSignature {
+                        type_parameters: def.type_parameters.clone(),
+                        parameters: def.parameters.iter().map(|(_, ty)| ty.clone()).collect(),
+                        result: def.result.clone(),
+                    },
+                )
+            }),
             ..at_call
         },
     );
@@ -606,5 +632,24 @@ fn build_call(
             stamp,
         )?);
     }
-    Ok(builder.alloc(ParsedExprKind::Apply(lambda, grafted), at_call))
+    let mut call_origin = at_call.clone();
+    call_origin.definition = def.source.map(|source| SourceSite {
+        source,
+        span: def.result.span,
+    });
+    let call = builder.alloc(ParsedExprKind::Apply(lambda, grafted), call_origin);
+    Ok(match def.ascription(&def.result) {
+        Some(result) => builder.alloc(
+            ParsedExprKind::Ascribe(call, result),
+            ParsedOrigin {
+                definition: def.source.map(|source| SourceSite {
+                    source,
+                    span: def.result.span,
+                }),
+                lexical: def.lexical.or(at_call.lexical),
+                ..at_call
+            },
+        ),
+        None => call,
+    })
 }

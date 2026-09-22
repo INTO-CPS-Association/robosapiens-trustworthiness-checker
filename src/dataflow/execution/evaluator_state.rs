@@ -925,7 +925,9 @@ fn node_state_can_rewrite(
 impl NodeState {
     fn for_op_with_history(op: &BoundOp, history_bindings: &[Option<HistoryId>]) -> Self {
         match op {
-            StreamOp::Unary { .. } => Self::UnaryLift { last_input: None },
+            StreamOp::Unary { .. } | StreamOp::Ascribe { .. } => {
+                Self::UnaryLift { last_input: None }
+            }
             StreamOp::Binary { .. } => Self::BinaryLift {
                 last_left: None,
                 last_right: None,

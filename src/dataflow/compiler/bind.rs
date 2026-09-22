@@ -345,6 +345,10 @@ fn bind_op(
 
     Ok(match op {
         UnboundOp::Unary { op, arg } => BoundOp::Unary { op, arg: r!(arg) },
+        UnboundOp::Ascribe { input, target } => BoundOp::Ascribe {
+            input: r!(input),
+            target,
+        },
         UnboundOp::Binary { op, lhs, rhs } => BoundOp::Binary {
             op,
             lhs: r!(lhs),

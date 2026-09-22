@@ -19,9 +19,10 @@ where
 {
     // The only semantics that evaluates the distribution primitives. It
     // builds union values through the shared untimed evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
-        .with(crate::core::Capability::Distribution)
-        .with(crate::core::Capability::TaggedUnions);
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE
+            .with(crate::core::RuntimeCapability::Distribution)
+            .with(crate::core::RuntimeCapability::TaggedUnions);
 
     fn to_async_stream(
         expr: &AC::Expr,
@@ -41,9 +42,10 @@ where
 {
     // The only semantics that evaluates the distribution primitives. It
     // builds union values through the shared untimed evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
-        .with(crate::core::Capability::Distribution)
-        .with(crate::core::Capability::TaggedUnions);
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE
+            .with(crate::core::RuntimeCapability::Distribution)
+            .with(crate::core::RuntimeCapability::TaggedUnions);
 
     fn to_async_stream(
         expr: &AC::Expr,

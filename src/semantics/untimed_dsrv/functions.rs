@@ -8,7 +8,7 @@ use super::shared_output::SharedOutput;
 use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::RuntimeFunction;
-use crate::core::Value;
+use crate::core::{PartialMarker, Value, propagated_special};
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView};
 use crate::lang::dsrv::runtime_expression::{
     RuntimeExpressionSite, RuntimeExpressionSites, UntypedExpr,
@@ -63,6 +63,110 @@ where
 struct UntimedFunctionInstance {
     output: LocalStream<Value>,
     capture_drivers: Vec<LocalStream<Value>>,
+}
+
+/// One tree-backed callback invocation context for one collection tick.
+///
+/// Reusing the instance keeps captures fixed at this tick for every element.
+/// Unbounded argument ports also make list length independent of channel capacity.
+struct CollectionFunctionInstance {
+    arguments: Vec<futures::channel::mpsc::UnboundedSender<Value>>,
+    output: LocalStream<Value>,
+}
+
+impl CollectionFunctionInstance {
+    async fn new<AC>(definition: &UntimedFunctionDef<AC>) -> Self
+    where
+        AC: AsyncConfig<Val = Value>,
+    {
+        let mut arguments = Vec::with_capacity(definition.params.len());
+        let mut inputs = Vec::with_capacity(definition.params.len());
+        for _ in &definition.params {
+            let (sender, receiver) = futures::channel::mpsc::unbounded();
+            arguments.push(sender);
+            inputs.push(SharedOutput::new(Box::pin(receiver)));
+        }
+        let mut captures = Vec::with_capacity(definition.captures.len());
+        for (name, output) in &definition.captures {
+            let value = output.subscribe().next().await.unwrap_or(Value::NoVal);
+            captures.push((name.clone(), SharedOutput::new(mc::val(value))));
+        }
+        let body = definition.body.clone().bind_streams(captures).bind_streams(
+            definition
+                .params
+                .iter()
+                .zip(&inputs)
+                .map(|((name, _), stream)| (name.clone(), stream.clone())),
+        );
+        Self {
+            arguments,
+            output: evaluate_scope::<AC>(body, &definition.context),
+        }
+    }
+
+    async fn apply(&mut self, arguments: impl IntoIterator<Item = Value>) -> Value {
+        for (port, value) in self.arguments.iter_mut().zip(arguments) {
+            port.unbounded_send(value)
+                .expect("collection callback argument port closed");
+        }
+        self.output.next().await.unwrap_or(Value::NoVal)
+    }
+}
+
+enum CollectionCallback {
+    Atemporal {
+        callback: AtemporalCallback,
+        captures: BTreeMap<VarName, Value>,
+    },
+    Tree(CollectionFunctionInstance),
+    Stream(RuntimeFunction),
+}
+
+impl CollectionCallback {
+    async fn new<AC>(function: RuntimeFunction, operation: &'static str) -> Self
+    where
+        AC: AsyncConfig<Val = Value>,
+    {
+        if let Some(mut callback) = AtemporalCallback::of::<AC>(&function) {
+            let captures = callback.read_captures().await;
+            return Self::Atemporal { callback, captures };
+        }
+        reject_temporal_collection_function::<AC>(&function, operation);
+        if let Some(definition) = function.language_payload::<UntimedFunctionDef<AC>>() {
+            return Self::Tree(CollectionFunctionInstance::new(&definition).await);
+        }
+        Self::Stream(function)
+    }
+
+    async fn apply(&mut self, arguments: impl IntoIterator<Item = Value>) -> Value {
+        let arguments = arguments.into_iter().collect::<Vec<_>>();
+        match self {
+            Self::Atemporal { callback, captures } => callback.apply(captures, arguments),
+            Self::Tree(callback) => callback.apply(arguments).await,
+            Self::Stream(function) => {
+                eval_function_once(function.clone(), EcoVec::from(arguments)).await
+            }
+        }
+    }
+}
+
+/// Advance callback captures even when a collection operand makes this tick
+/// produce only a marker.
+async fn advance_collection_captures<AC>(function: &RuntimeFunction)
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let Some(definition) = function.language_payload::<UntimedFunctionDef<AC>>() else {
+        return;
+    };
+    for (_, capture) in &definition.captures {
+        let _ = capture.subscribe().next().await;
+    }
+}
+
+fn collection_marker(values: impl IntoIterator<Item = Value>) -> Option<Value> {
+    propagated_special(values.into_iter().map(|value| PartialMarker::of(&value)))
+        .map(PartialMarker::into_value)
 }
 
 impl<AC> UntimedFunctionDef<AC>
@@ -409,14 +513,29 @@ struct AtemporalCallback {
 
 impl AtemporalCallback {
     /// Whether this function can be run within a tick, and the means to do
-    /// it. A body that reads history cannot, and neither can one still
-    /// carrying lexical bindings, which only the stream path resolves.
+    /// it. A body that reads history cannot; lexical bindings are resolved to
+    /// one captured value for the surrounding tick.
     fn of<AC>(function: &RuntimeFunction) -> Option<Self>
     where
         AC: AsyncConfig<Val = Value>,
     {
         let definition = function.language_payload::<UntimedFunctionDef<AC>>()?;
-        if definition.temporal || definition.body.environment.is_some() {
+        if definition.body.expr.as_ref().postorder().any(|node| {
+            matches!(
+                node.view(),
+                ExprView::SIndex(..)
+                    | ExprView::Init(..)
+                    | ExprView::Update(..)
+                    | ExprView::Latch(..)
+                    | ExprView::When(..)
+                    | ExprView::Dynamic(..)
+                    | ExprView::Defer(..)
+                    | ExprView::Fix(..)
+                    | ExprView::Partial(..)
+                    | ExprView::MonitoredAt(..)
+                    | ExprView::Dist(..)
+            )
+        }) {
             return None;
         }
         Some(Self {
@@ -484,9 +603,13 @@ where
         .free_variables()
         .into_iter()
         .filter(|name| !param_names.contains(name))
-        .filter(|name| body.resolve(name).is_none() && body.resolve_stream(name).is_none())
         .filter_map(|name| {
-            ctx.var(&name)
+            body.resolve_stream(&name)
+                .or_else(|| {
+                    body.resolve(&name)
+                        .map(|expression| evaluate_scope::<AC>(expression, ctx))
+                })
+                .or_else(|| ctx.var(&name))
                 .map(|stream| (name, SharedOutput::new(stream)))
         })
         .collect();
@@ -773,33 +896,32 @@ pub(super) fn eval_list_map<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
-    let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
-    let mut callback: Option<Option<AtemporalCallback>> = None;
+    let mut func_stream = mc::stream_lift_base(evaluate_scope::<AC>(func_expr, ctx));
+    let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
-            match (func_value, list_value) {
-                (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
-                (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
-                (Value::Function(function), Value::List(values)) => {
-                    reject_temporal_collection_function::<AC>(&function, "List.map");
+            if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
+                if let Value::Function(function) = &func_value {
+                    advance_collection_captures::<AC>(function).await;
+                }
+                yield marker;
+                continue;
+            }
+            match func_value {
+                Value::NoVal => yield Value::NoVal,
+                Value::Deferred => yield Value::Deferred,
+                Value::Function(function) => {
+                    let Value::List(values) = list_value else {
+                        panic!("List.map requires a list, got {list_value}");
+                    };
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.map").await;
                     let mut mapped = EcoVec::new();
-                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
-                        Some(callback) => {
-                            let captures = callback.read_captures().await;
-                            for value in values {
-                                mapped.push(callback.apply(&captures, vec![value]));
-                            }
-                        }
-                        None => {
-                            for value in values {
-                                mapped.push(eval_function_once(function.clone(), EcoVec::from(vec![value])).await);
-                            }
-                        }
+                    for value in values {
+                        mapped.push(callback.apply([value]).await);
                     }
                     yield Value::List(mapped);
                 }
-                (func, list) => panic!("List.map requires a function and list, got {} and {}", func, list),
+                func => panic!("List.map requires a function, got {func}"),
             }
         }
     })
@@ -813,40 +935,38 @@ pub(super) fn eval_list_filter<AC>(
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
-    let mut list_stream = evaluate_scope::<AC>(list_expr, ctx);
-    let mut callback: Option<Option<AtemporalCallback>> = None;
+    let mut func_stream = mc::stream_lift_base(evaluate_scope::<AC>(func_expr, ctx));
+    let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
-            match (func_value, list_value) {
-                (Value::NoVal, _) | (_, Value::NoVal) => yield Value::NoVal,
-                (Value::Deferred, _) | (_, Value::Deferred) => yield Value::Deferred,
-                (Value::Function(function), Value::List(values)) => {
-                    reject_temporal_collection_function::<AC>(&function, "List.filter");
+            if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
+                if let Value::Function(function) = &func_value {
+                    advance_collection_captures::<AC>(function).await;
+                }
+                yield marker;
+                continue;
+            }
+            match func_value {
+                Value::NoVal => yield Value::NoVal,
+                Value::Deferred => yield Value::Deferred,
+                Value::Function(function) => {
+                    let Value::List(values) = list_value else {
+                        panic!("List.filter requires a list, got {list_value}");
+                    };
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.filter").await;
                     let mut filtered = EcoVec::new();
                     let keep = |kept: Value, value: Value, filtered: &mut EcoVec<Value>| match kept {
                         Value::Bool(true) => filtered.push(value),
                         Value::Bool(false) => {}
                         other => panic!("List.filter returned non-bool value {}", other),
                     };
-                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
-                        Some(callback) => {
-                            let captures = callback.read_captures().await;
-                            for value in values {
-                                let kept = callback.apply(&captures, vec![value.clone()]);
-                                keep(kept, value, &mut filtered);
-                            }
-                        }
-                        None => {
-                            for value in values {
-                                let kept = eval_function_once(function.clone(), EcoVec::from(vec![value.clone()])).await;
-                                keep(kept, value, &mut filtered);
-                            }
-                        }
+                    for value in values {
+                        let kept = callback.apply([value.clone()]).await;
+                        keep(kept, value, &mut filtered);
                     }
                     yield Value::List(filtered);
                 }
-                (func, list) => panic!("List.filter requires a function and list, got {} and {}", func, list),
+                func => panic!("List.filter requires a function, got {func}"),
             }
         }
     })
@@ -864,30 +984,39 @@ where
     let mut func_stream = mc::stream_lift_base(evaluate_scope::<AC>(func_expr, ctx));
     let mut init_stream = mc::stream_lift_base(evaluate_scope::<AC>(init_expr, ctx));
     let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
-    let mut callback: Option<Option<AtemporalCallback>> = None;
     Box::pin(stream! {
         while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
-            match (func_value, init, list_value) {
-                (Value::NoVal, _, _) | (_, Value::NoVal, _) | (_, _, Value::NoVal) => yield Value::NoVal,
-                (Value::Deferred, _, _) | (_, Value::Deferred, _) | (_, _, Value::Deferred) => yield Value::Deferred,
-                (Value::Function(function), mut acc, Value::List(values)) => {
-                    reject_temporal_collection_function::<AC>(&function, "List.fold");
-                    match callback.get_or_insert_with(|| AtemporalCallback::of::<AC>(&function)) {
-                        Some(callback) => {
-                            let captures = callback.read_captures().await;
-                            for value in values {
-                                acc = callback.apply(&captures, vec![acc, value]);
-                            }
-                        }
-                        None => {
-                            for value in values {
-                                acc = eval_function_once(function.clone(), EcoVec::from(vec![acc, value])).await;
-                            }
-                        }
+            if let Some(marker) = collection_marker([
+                func_value.clone(),
+                init.clone(),
+                list_value.clone(),
+            ]) {
+                if let Value::Function(function) = &func_value {
+                    advance_collection_captures::<AC>(function).await;
+                }
+                yield marker;
+                continue;
+            }
+            match func_value {
+                Value::NoVal => yield Value::NoVal,
+                Value::Deferred => yield Value::Deferred,
+                Value::Function(function) => {
+                    if let Some(marker) = collection_marker([init.clone(), list_value.clone()]) {
+                        advance_collection_captures::<AC>(&function).await;
+                        yield marker;
+                        continue;
+                    }
+                    let (mut acc, values) = match (init, list_value) {
+                        (acc, Value::List(values)) => (acc, values),
+                        (_, list) => panic!("List.fold requires a list, got {list}"),
+                    };
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.fold").await;
+                    for value in values {
+                        acc = callback.apply([acc, value]).await;
                     }
                     yield acc;
                 }
-                (func, _, list) => panic!("List.fold requires a function and list, got {} and {}", func, list),
+                func => panic!("List.fold requires a function, got {func}"),
             }
         }
     })

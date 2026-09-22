@@ -454,7 +454,7 @@
 //! ## `lazy_if`
 //!
 //! Each `ir::StreamOp::If` carries the `IfPolicy` of the module that wrote it, which lowering reads
-//! from the node's source context, so inlined library code and runtime text keep their own. The
+//! from the node's source context, so inlined library code and runtime expression source keep their own. The
 //! behaviour above is `IfPolicy::Eager`. Under `IfPolicy::Lazy` an effective `Bool` runs only the
 //! selected branch, and `Deferred` or `NoVal` without a retained Boolean runs neither and is the
 //! result. The branch output is retained on the branch's own timeline, and the other branch's
@@ -754,10 +754,11 @@ pub mod typed;
 
 /// What the dataflow compiler evaluates. Every compile path admits a
 /// specification against this before lowering it.
-pub const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
-    .with(crate::core::Capability::TaggedUnions)
-    .with(crate::core::Capability::PatternMatching)
-    .with(crate::core::Capability::LazyIf);
+pub const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+    crate::core::RuntimeCapabilities::NONE
+        .with(crate::core::RuntimeCapability::TaggedUnions)
+        .with(crate::core::RuntimeCapability::PatternMatching)
+        .with(crate::core::RuntimeCapability::LazyIf);
 
 pub use typed::{
     TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,

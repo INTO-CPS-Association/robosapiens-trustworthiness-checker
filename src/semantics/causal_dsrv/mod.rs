@@ -69,7 +69,8 @@ pub struct CausalDsrvSemantics;
 impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantics {
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE;
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -83,7 +84,8 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
 impl MonitoringSemantics<CausalCheckedSemiSyncConfig<CausalSet>> for CausalDsrvSemantics {
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE;
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -104,7 +106,8 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
 {
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE;
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -120,7 +123,8 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
 {
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE;
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE;
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -178,7 +182,9 @@ where
         Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
         Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
         Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
-        Cast(value, target) => combinators::cast(child(value), target.clone()),
+        Cast(value, target) | Ascribe(value, target) => {
+            combinators::cast(child(value), target.clone())
+        }
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -277,7 +283,9 @@ where
         Floor(value) => combinators::unary(UnaryOperator::Floor, child(value)),
         Ceil(value) => combinators::unary(UnaryOperator::Ceiling, child(value)),
         Round(value) => combinators::unary(UnaryOperator::Round, child(value)),
-        Cast(value, target) => combinators::cast(child(value), target.clone()),
+        Cast(value, target) | Ascribe(value, target) => {
+            combinators::cast(child(value), target.clone())
+        }
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);

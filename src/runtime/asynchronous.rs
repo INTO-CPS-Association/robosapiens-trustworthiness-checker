@@ -1190,7 +1190,7 @@ where
     cancel_after_input_completion: bool,
     /// A construct the semantics cannot evaluate: `run` reports it, and no
     /// expression stream was built.
-    admission_error: Option<crate::core::UnsupportedConstruct>,
+    admission_error: Option<crate::core::UnsupportedRuntimeConstruct>,
     #[allow(dead_code)]
     semantics_t: PhantomData<S>,
 }
@@ -1381,8 +1381,12 @@ where
 
             // Refuse, before building any expression stream, a construct the
             // semantics cannot evaluate; `run` reports it.
-            let admission_error =
-                crate::core::admit(&model, S::CAPABILITIES, self.runtime_name).err();
+            let admission_error = crate::core::ensure_runtime_support(
+                &model,
+                S::RUNTIME_CAPABILITIES,
+                self.runtime_name,
+            )
+            .err();
             let computed_txs = if admission_error.is_some() {
                 BTreeMap::new()
             } else {

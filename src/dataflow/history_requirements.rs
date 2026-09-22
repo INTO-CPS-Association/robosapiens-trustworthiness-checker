@@ -285,6 +285,7 @@ fn analyse_operation(
         BoundOp::RecursiveCall { .. } => (bounds, None),
         BoundOp::Reconfigurable(_) => (bounds, None),
         BoundOp::Unary { .. }
+        | BoundOp::Ascribe { .. }
         | BoundOp::Binary { .. }
         | BoundOp::Default { .. }
         | BoundOp::Init { .. }

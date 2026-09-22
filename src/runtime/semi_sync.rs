@@ -799,7 +799,7 @@ where
         Vec<ExprEvalutor<AC, MS>>,
     )> {
         // Refuse unsupported constructs before building the dependency graph.
-        crate::core::admit(&model, MS::CAPABILITIES, runtime)?;
+        crate::core::ensure_runtime_support(&model, MS::RUNTIME_CAPABILITIES, runtime)?;
         let input_vars = model.input_vars();
         // Starting-history rows must align before replaying them into the context.
         let hist_len = starting_history

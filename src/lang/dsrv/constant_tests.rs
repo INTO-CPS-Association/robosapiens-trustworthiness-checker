@@ -10,6 +10,7 @@ use crate::lang::dsrv::ast::DsrvSpecification;
 use crate::lang::dsrv::modules::{ModuleCollector, show_path};
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str};
 use crate::lang::dsrv::path::ModuleName;
+use crate::lang::dsrv::source_map::SourceLabel;
 
 use test_log::test;
 
@@ -241,6 +242,36 @@ fn a_constant_whose_declared_type_is_unknown_is_refused() {
         "{C}const limit: Missing = 3\nin x: Int\nout y: Int\ny = limit\n"
     ));
     assert!(message.contains("Missing"), "got {message}");
+}
+
+#[test]
+fn a_constant_value_must_have_its_declared_type() {
+    let source = format!("{C}type Flag = Bool\nconst wrong: Flag = 1\nout y: Int\ny = wrong\n");
+    let message = refusal(&source);
+    assert!(message.contains("constant `wrong`"), "got {message}");
+    assert!(message.contains("declared type Bool"), "got {message}");
+    assert!(message.contains("Span"), "got {message}");
+}
+
+#[test]
+fn an_imported_constant_type_error_names_its_source() {
+    let root = format!("{CM}mod lib\nuse lib::*\nout y: Int\ny = wrong\n");
+    let mut collector =
+        ModuleCollector::with_label(&root, SourceLabel::Path("root.dsrv".into())).unwrap();
+    collector
+        .supply_labelled(
+            &format!("{CM}const wrong: Bool = 1\n"),
+            SourceLabel::Path("library.dsrv".into()),
+        )
+        .unwrap();
+    let error = crate::lang::dsrv::expand::expand_program(
+        collector.finish().unwrap(),
+        crate::lang::dsrv::expand::language::LanguageRequest::default(),
+    )
+    .expect_err("the imported constant has the wrong type");
+    let message = error.to_string();
+    assert!(message.contains("library.dsrv"), "got {message}");
+    assert!(message.contains("Span"), "got {message}");
 }
 
 // ---------------------------------------------------------------------------

@@ -1104,7 +1104,7 @@ fn dynamic_no_val_source_and_dependency_reuse_retained_outer_values() {
 #[test]
 fn failed_function_application_is_an_evaluation_error() {
     // Checking rejects a visible arity mismatch, so the runtime check is reached
-    // through a function that arrives as runtime text and is therefore `Any`.
+    // through a function supplied at run time and is therefore `Any`.
     let spec = elaborated("in x\nin source: Str\naux f\nout z\nf = dynamic(source)\nz = f(x, x)");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
     let mut output = vec![Value::NoVal; monitor.output_vars().len()];
@@ -1263,6 +1263,30 @@ fn checking_reports_unavailable_variables_before_dataflow_compiles() {
                     (source.find("missing").unwrap() + "missing".len()) as u32,
                 )
     )));
+}
+
+#[test]
+fn dataflow_preserves_runtime_checks_for_function_result_ascriptions() {
+    let specification = "use experimental::functions\n\
+        in x: Any\nout y: Bool\ndef f(x: Any) -> Bool = x\ny = f(x)"
+        .parse::<DsrvSpecification>()
+        .unwrap()
+        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+        .without_warnings()
+        .unwrap();
+    let mut valid = DataflowMonitor::compile_checked(specification.clone()).unwrap();
+    let mut output = [Value::NoVal];
+    valid.evaluate(&[Value::Bool(true)], &mut output).unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+
+    let mut invalid = DataflowMonitor::compile_checked(specification).unwrap();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invalid.evaluate(&[Value::Int(7)], &mut output).unwrap();
+        }))
+        .is_err(),
+        "the declared Bool result must reject an Int at run time"
+    );
 }
 
 #[test]

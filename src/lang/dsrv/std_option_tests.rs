@@ -797,7 +797,7 @@ fn imports_never_read_the_filesystem() {
             ("option.dsrv", GARBAGE),
         ],
     );
-    let program = smol::block_on(crate::lang::dsrv::parser::parse_program_file(
+    let program = smol::block_on(crate::lang::dsrv::program::load_program_file(
         &scratch.root(),
         LanguageRequest::default(),
     ))
@@ -820,7 +820,7 @@ fn imports_never_read_the_filesystem() {
             ("lib.dsrv", GARBAGE),
         ],
     );
-    let error = smol::block_on(crate::lang::dsrv::parser::parse_program_file(
+    let error = smol::block_on(crate::lang::dsrv::program::load_program_file(
         &scratch.root(),
         LanguageRequest::default(),
     ))
@@ -855,7 +855,7 @@ fn a_reserved_mod_is_refused_before_reading() {
 }
 
 // -----------------------------------------------------------------------------
-// Identity and runtime text
+// Identity and runtime expression source
 // -----------------------------------------------------------------------------
 
 fn runtime_site(spec: &DsrvSpecification, var: &str) -> RuntimeExpressionSite {
@@ -908,7 +908,7 @@ fn activated_bodies_are_part_of_a_runtime_sites_identity() {
 }
 
 #[test]
-fn runtime_text_may_call_the_imported_defs() {
+fn runtime_expression_source_may_call_the_imported_defs() {
     let source = format!("{HEADER}{DYNAMIC}");
     let parsed = runtime_site(&parse(&source), "y")
         .parse("is_some(o)")

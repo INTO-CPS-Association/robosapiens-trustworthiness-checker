@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 use trustworthiness_checker::cli::args::RuntimeKind;
-use trustworthiness_checker::core::Capability;
+use trustworthiness_checker::core::RuntimeCapability;
 
 /// Runtimes that cannot be started from a specification and an input file,
 /// with the reason. Every other runtime is run.
@@ -30,19 +30,19 @@ const SEMANTICS: &[&str] = &["untimed", "typed-untimed", "gradual-typed-untimed"
 
 // The reference table documents stable language capabilities. Experimental
 // capabilities have focused admission tests without changing the docs yet.
-const DOCUMENTED_CAPABILITIES: &[Capability] = &[
-    Capability::Distribution,
-    Capability::TaggedUnions,
-    Capability::PatternMatching,
+const DOCUMENTED_RUNTIME_CAPABILITIES: &[RuntimeCapability] = &[
+    RuntimeCapability::Distribution,
+    RuntimeCapability::TaggedUnions,
+    RuntimeCapability::PatternMatching,
 ];
 
 /// A specification and input that use exactly one capability.
-fn fixture(capability: Capability) -> (&'static str, &'static str) {
+fn fixture(capability: RuntimeCapability) -> (&'static str, &'static str) {
     match capability {
-        Capability::Distribution => ("distribution.dsrv", "distribution.input"),
-        Capability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
-        Capability::PatternMatching => ("pattern_matching.dsrv", "pattern_matching.input"),
-        Capability::LazyIf => ("lazy_if.dsrv", "lazy_if.input"),
+        RuntimeCapability::Distribution => ("distribution.dsrv", "distribution.input"),
+        RuntimeCapability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
+        RuntimeCapability::PatternMatching => ("pattern_matching.dsrv", "pattern_matching.input"),
+        RuntimeCapability::LazyIf => ("lazy_if.dsrv", "lazy_if.input"),
     }
 }
 
@@ -52,7 +52,7 @@ enum Outcome {
     Refused,
 }
 
-fn run(runtime: &str, semantics: &str, capability: Capability) -> Outcome {
+fn run(runtime: &str, semantics: &str, capability: RuntimeCapability) -> Outcome {
     let (specification, input) = fixture(capability);
     let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
     let mut child = Command::new(env!("CARGO_BIN_EXE_trustworthiness_checker"))
@@ -105,18 +105,18 @@ fn runtimes() -> Vec<String> {
 
 fn table() -> String {
     let mut table = String::from("| Runtime |");
-    for capability in DOCUMENTED_CAPABILITIES {
+    for capability in DOCUMENTED_RUNTIME_CAPABILITIES {
         table.push_str(&format!(" {capability} |"));
     }
     table.push_str("\n|---|");
-    for _ in DOCUMENTED_CAPABILITIES {
+    for _ in DOCUMENTED_RUNTIME_CAPABILITIES {
         table.push_str("---|");
     }
     table.push('\n');
     for runtime in runtimes() {
         table.push_str(&format!("| `{runtime}` |"));
         let skipped = NOT_RUN.iter().find(|(name, _)| *name == runtime);
-        for capability in DOCUMENTED_CAPABILITIES {
+        for capability in DOCUMENTED_RUNTIME_CAPABILITIES {
             let cell = match skipped {
                 Some((_, reason)) => format!("not checked automatically ({reason})"),
                 None => {
@@ -168,7 +168,7 @@ fn only_dataflow_runs_a_lazy_if() {
         };
         for semantics in SEMANTICS {
             assert_eq!(
-                run(&runtime, semantics, Capability::LazyIf),
+                run(&runtime, semantics, RuntimeCapability::LazyIf),
                 expected,
                 "{runtime}/{semantics}"
             );

@@ -171,15 +171,15 @@ impl Feature {
             .join(", ")
     }
 
-    /// Whether `umbrella` enables this experiment. The match names every
+    /// Whether `meta_feature` enables this experiment. The match names every
     /// experiment, so a new one does not compile until it is placed in or
-    /// out of each umbrella.
-    fn is_in(self, umbrella: Umbrella) -> bool {
-        match umbrella {
+    /// out of each meta-feature.
+    fn is_in(self, meta_feature: MetaFeature) -> bool {
+        match meta_feature {
             // Every Full DSRV preview this release implements. Growing this
-            // set changes what a file naming the umbrella means, so it also
+            // set changes what a file naming the meta-feature means, so it also
             // bumps [`EXPERIMENTAL_REVISION`].
-            Umbrella::HighLevelDsrv => match self {
+            MetaFeature::HighLevelDsrv => match self {
                 Self::TaggedUnions
                 | Self::PatternMatching
                 | Self::Generics
@@ -196,20 +196,20 @@ impl Feature {
 /// A name that enables a fixed set of experiments at once, as in
 /// `use experimental::high_level_dsrv`.
 ///
-/// An umbrella is resolved when the header is read, so the settings, the
+/// A meta-feature is resolved when the header is read, so the settings, the
 /// fingerprint and the printed header hold its experiments rather than its
 /// name: a file that names it is the same program as one that lists them.
-/// An umbrella enables experiments only; it never changes the dialect, so it
-/// does not reach Distributed DSRV and does not change which runtimes admit a
+/// A meta-feature enables experiments only; it never changes the dialect, so it
+/// does not reach Distributed DSRV and does not change which runtimes ensure_runtime_support a
 /// specification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
-pub enum Umbrella {
+pub enum MetaFeature {
     /// Every Full DSRV preview experiment this release implements.
     HighLevelDsrv,
 }
 
-impl Umbrella {
-    /// Every umbrella.
+impl MetaFeature {
+    /// Every meta-feature.
     pub const ALL: &'static [Self] = &[Self::HighLevelDsrv];
 
     pub fn name(self) -> &'static str {
@@ -218,7 +218,7 @@ impl Umbrella {
         }
     }
 
-    /// The experiments this umbrella enables, in [`Feature::ALL`] order.
+    /// The experiments this meta-feature enables, in [`Feature::ALL`] order.
     pub fn experiments(self) -> impl Iterator<Item = Feature> {
         Feature::ALL
             .iter()
@@ -230,13 +230,13 @@ impl Umbrella {
         Self::ALL
             .iter()
             .copied()
-            .find(|umbrella| umbrella.name() == name)
+            .find(|meta_feature| meta_feature.name() == name)
     }
 
     fn known() -> String {
         Self::ALL
             .iter()
-            .map(|umbrella| umbrella.name())
+            .map(|meta_feature| meta_feature.name())
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -244,7 +244,7 @@ impl Umbrella {
 
 /// The revision of the experiments in this release. Bump it whenever any
 /// experiment's meaning changes, so compiled code cached under one meaning is
-/// never reused under another, and whenever an [`Umbrella`] gains an
+/// never reused under another, and whenever a [`MetaFeature`] gains an
 /// experiment.
 ///
 /// Revision 2: code inlined from another module's def is read under that
@@ -257,7 +257,7 @@ pub const EXPERIMENTAL_REVISION: u32 = 3;
 /// How an `if` chooses between its branches.
 ///
 /// This is a property of where the `if` was written: an `if` inlined from
-/// another module's def, or arriving as runtime text, keeps the policy of the
+/// another module's def, or arriving as runtime expression source, keeps the policy of the
 /// module that wrote it. Stages after expansion read it through
 /// [`crate::lang::dsrv::ast::ExprRef::if_policy`], never through the
 /// experiment itself.
@@ -284,7 +284,7 @@ pub struct LanguageConfig {
 }
 
 impl LanguageConfig {
-    /// The dialect decides which runtimes may admit a specification.
+    /// The dialect decides which runtimes may ensure_runtime_support a specification.
     pub fn dialect(&self) -> Dialect {
         self.dialect
     }
@@ -295,7 +295,7 @@ impl LanguageConfig {
     }
 
     /// These settings inside a program of `dialect`. A module's own header
-    /// decides the syntax its text may use, but which runtimes may admit
+    /// decides the syntax its text may use, but which runtimes may ensure_runtime_support
     /// that text is the program's to decide.
     pub(crate) fn admitted_as(&self, dialect: Dialect) -> Self {
         Self {
@@ -316,8 +316,6 @@ impl LanguageConfig {
         (!self.experiments.is_empty()).then_some(EXPERIMENTAL_REVISION)
     }
 
-    /// Whether an experiment is on. Only expansion may ask.
-    #[allow(dead_code)] // The first gated feature is its first caller.
     /// Whether `def` is available.
     pub(crate) fn has_functions(&self) -> bool {
         self.has(Feature::Functions)
@@ -406,12 +404,12 @@ pub enum LanguageError {
     },
 
     #[error(
-        "unknown experimental feature `{name}` at {span:?}; current experiments: {known}; umbrellas: {umbrellas}"
+        "unknown experimental feature `{name}` at {span:?}; current experiments: {known}; meta-features: {meta_features}"
     )]
     UnknownFeature {
         name: EcoString,
         known: String,
-        umbrellas: String,
+        meta_features: String,
         span: Span,
     },
 
@@ -458,7 +456,7 @@ pub enum LanguageError {
 ///
 /// The name may be grouped, starred or written on its own, so
 /// `use experimental::{a, b}`, `use experimental::*` and
-/// `use experimental::a` all read the same way. An umbrella's name reads as
+/// `use experimental::a` all read the same way. A meta-feature name reads as
 /// the experiments it stands for.
 fn experimental_features(tree: &UseTree) -> Result<Vec<Feature>, LanguageError> {
     match (tree.path(), tree.kind()) {
@@ -489,8 +487,8 @@ fn experiments_by_name(name: &str, span: Span) -> Result<Vec<Feature>, LanguageE
     if let Some(feature) = Feature::from_name(name) {
         return Ok(vec![feature]);
     }
-    if let Some(umbrella) = Umbrella::from_name(name) {
-        return Ok(umbrella.experiments().collect());
+    if let Some(meta_feature) = MetaFeature::from_name(name) {
+        return Ok(meta_feature.experiments().collect());
     }
     Err(unknown_feature(name.into(), span))
 }
@@ -503,7 +501,7 @@ fn unknown_feature(name: EcoString, span: Span) -> LanguageError {
     LanguageError::UnknownFeature {
         name,
         known: Feature::known(),
-        umbrellas: Umbrella::known(),
+        meta_features: MetaFeature::known(),
         span,
     }
 }
@@ -898,6 +896,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::SIndex(..)
         | ExprKind::BinOp(..)
         | ExprKind::Cast(..)
+        | ExprKind::Ascribe(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)
@@ -1313,7 +1312,7 @@ mod tests {
                 distributed.source_context().language().dialect(),
                 Dialect::Distributed
             );
-            // Runtime text follows the dialect of the specification it runs in.
+            // Runtime expression source follows the dialect of the specification it runs in.
             let full = parse_str(BODY).unwrap();
             assert!(matches!(
                 parse_expr_with_context(expression, full.source_context().clone()),
@@ -1413,14 +1412,14 @@ mod tests {
     ];
 
     // The resolved set is pinned together with the revision: an experiment
-    // joining the umbrella changes what files naming it mean, so it must
+    // joining the meta-feature changes what files naming it mean, so it must
     // bump `EXPERIMENTAL_REVISION` and update both lines here. Planned
     // experiments are absent until they are implemented.
     #[test]
     fn high_level_dsrv_is_exactly_this_releases_full_previews() {
         assert_eq!(
             (
-                Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>(),
+                MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>(),
                 EXPERIMENTAL_REVISION,
             ),
             (
@@ -1441,21 +1440,21 @@ mod tests {
             language_of(&format!("{HIGH_LEVEL}{BODY}")),
             config(
                 Dialect::Full,
-                &Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+                &MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>()
             )
         );
-        // Every experiment is placed in or out of every umbrella; for now
+        // Every experiment is placed in or out of every meta-feature; for now
         // every one is a Full DSRV preview.
         assert!(
             Feature::ALL
                 .iter()
-                .all(|f| f.is_in(Umbrella::HighLevelDsrv))
+                .all(|f| f.is_in(MetaFeature::HighLevelDsrv))
         );
     }
 
     #[test]
-    fn naming_the_umbrella_is_listing_its_experiments() {
-        let listed = Umbrella::HighLevelDsrv
+    fn naming_the_meta_feature_is_listing_its_experiments() {
+        let listed = MetaFeature::HighLevelDsrv
             .experiments()
             .map(Feature::name)
             .collect::<Vec<_>>()
@@ -1464,8 +1463,8 @@ mod tests {
         let spellings = [
             format!("{HIGH_LEVEL}{BODY}"),
             format!("use experimental::{{high_level_dsrv}}\n{BODY}"),
-            // Naming the umbrella and some of its experiments, or the
-            // umbrella twice, adds up as other repeated names do.
+            // Naming the meta-feature and some of its experiments, or the
+            // meta-feature twice, adds up as other repeated names do.
             format!("use experimental::{{casts, high_level_dsrv, tagged_unions}}\n{BODY}"),
             format!("{HIGH_LEVEL}{HIGH_LEVEL}use experimental::generics\n{BODY}"),
         ];
@@ -1485,8 +1484,8 @@ mod tests {
                 Some(EXPERIMENTAL_REVISION)
             );
         }
-        // The settings print as the experiments, not the umbrella, so a
-        // printed file keeps its meaning in a release where the umbrella
+        // The settings print as the experiments, not the meta-feature, so a
+        // printed file keeps its meaning in a release where the meta-feature
         // has grown.
         let printed = parse_str(&spellings[0]).unwrap().to_string();
         assert!(
@@ -1509,12 +1508,15 @@ mod tests {
     }
 
     #[test]
-    fn umbrella_names_are_their_own() {
-        for umbrella in Umbrella::ALL {
-            assert_eq!(Feature::from_name(umbrella.name()), None);
-            assert_eq!(Umbrella::from_name(umbrella.name()), Some(*umbrella));
+    fn meta_feature_names_are_their_own() {
+        for meta_feature in MetaFeature::ALL {
+            assert_eq!(Feature::from_name(meta_feature.name()), None);
+            assert_eq!(
+                MetaFeature::from_name(meta_feature.name()),
+                Some(*meta_feature)
+            );
         }
-        // An umbrella is a name, not a path or a namespace.
+        // A meta-feature is a name, not a path or a namespace.
         for header in [
             "use experimental::high_level_dsrv::casts\n",
             "use experimental::{high_level_dsrv::casts}\n",
@@ -1529,15 +1531,19 @@ mod tests {
         }
         let error = language_error(&format!("use experimental::{{teleporting}}\n{BODY}"));
         assert!(
-            matches!(&error, LanguageError::UnknownFeature { umbrellas, .. }
-                if umbrellas == "high_level_dsrv"),
+            matches!(&error, LanguageError::UnknownFeature { meta_features, .. }
+                if meta_features == "high_level_dsrv"),
             "{error}"
         );
-        assert!(error.to_string().ends_with("; umbrellas: high_level_dsrv"));
+        assert!(
+            error
+                .to_string()
+                .ends_with("; meta-features: high_level_dsrv")
+        );
     }
 
     #[test]
-    fn the_umbrella_satisfies_every_experiment_it_enables() {
+    fn the_meta_feature_satisfies_every_experiment_it_enables() {
         let mut covered = Vec::new();
         for (feature, body) in GATED {
             let error = language_error(body);
@@ -1558,7 +1564,7 @@ mod tests {
         covered.push(Feature::LazyIf);
         assert_eq!(
             covered,
-            Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+            MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>()
         );
     }
 
@@ -1598,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn the_umbrella_does_not_choose_the_dialect() {
+    fn the_meta_feature_does_not_choose_the_dialect() {
         let full = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
         assert_eq!(full.source_context().language().dialect(), Dialect::Full);
         // Distribution primitives still need `language distributed`.
@@ -1621,7 +1627,7 @@ mod tests {
             distributed.source_context().language(),
             &config(
                 Dialect::Distributed,
-                &Umbrella::HighLevelDsrv.experiments().collect::<Vec<_>>()
+                &MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>()
             )
         );
         assert_ne!(
@@ -1629,7 +1635,7 @@ mod tests {
             fingerprint_of(&format!("language distributed\n{HIGH_LEVEL}{BODY}"))
         );
         // Core accepts no experiments, however they are named, and a Core
-        // request is not overridden by the umbrella.
+        // request is not overridden by the meta-feature.
         assert!(matches!(
             language_error(&format!("language core\n{HIGH_LEVEL}{BODY}")),
             LanguageError::ExperimentsInCore { .. }
@@ -1645,29 +1651,32 @@ mod tests {
     }
 
     #[test]
-    fn the_umbrella_does_not_widen_runtime_capabilities() {
-        use crate::core::{Capabilities, Capability, admit};
+    fn the_meta_feature_does_not_widen_runtime_capabilities() {
+        use crate::core::{RuntimeCapabilities, RuntimeCapability, ensure_runtime_support};
         // Enabling experiments needs nothing from a runtime by itself.
         let plain = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
-        admit(&plain, Capabilities::NONE, "test").unwrap();
+        ensure_runtime_support(&plain, RuntimeCapabilities::NONE, "test").unwrap();
         // A construct still needs its capability, whatever enabled it.
         let source = format!(
             "{HIGH_LEVEL}type State = Union<Stopped, Moving: Int>\n\
              in x: Int\nout y: State\ny = State::Moving(x)\n"
         );
         let unions = parse_str(&source).unwrap();
-        let error = admit(&unions, Capabilities::NONE, "test").unwrap_err();
-        assert_eq!(error.requirement.capability, Capability::TaggedUnions);
-        admit(
+        let error = ensure_runtime_support(&unions, RuntimeCapabilities::NONE, "test").unwrap_err();
+        assert_eq!(
+            error.requirement.capability,
+            RuntimeCapability::TaggedUnions
+        );
+        ensure_runtime_support(
             &unions,
-            Capabilities::NONE.with(Capability::TaggedUnions),
+            RuntimeCapabilities::NONE.with(RuntimeCapability::TaggedUnions),
             "test",
         )
         .unwrap();
     }
 
     // Embedded modules declare the experiments they use by name, so what
-    // they mean does not change when an umbrella grows.
+    // they mean does not change when a meta-feature grows.
     #[test]
     fn embedded_modules_name_their_experiments() {
         use crate::lang::dsrv::catalogue::Catalogue;
@@ -1678,8 +1687,12 @@ mod tests {
                 .filter(|line| line.trim_start().starts_with("use experimental"))
             {
                 assert!(!line.contains('*'), "{}: {line}", module.file);
-                for umbrella in Umbrella::ALL {
-                    assert!(!line.contains(umbrella.name()), "{}: {line}", module.file);
+                for meta_feature in MetaFeature::ALL {
+                    assert!(
+                        !line.contains(meta_feature.name()),
+                        "{}: {line}",
+                        module.file
+                    );
                 }
             }
         }

@@ -86,5 +86,5 @@ pub enum DataflowCompilationError {
         reason: &'static str,
     },
     #[error("{0}")]
-    Unsupported(#[from] crate::core::UnsupportedConstruct),
+    Unsupported(#[from] crate::core::UnsupportedRuntimeConstruct),
 }

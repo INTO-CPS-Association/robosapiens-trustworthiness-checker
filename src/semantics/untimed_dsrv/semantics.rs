@@ -488,9 +488,10 @@ where
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation. Constructors are built by the shared evaluation, and a
     // `match` decides within its tick.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
-        .with(crate::core::Capability::TaggedUnions)
-        .with(crate::core::Capability::PatternMatching);
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE
+            .with(crate::core::RuntimeCapability::TaggedUnions)
+            .with(crate::core::RuntimeCapability::PatternMatching);
 
     fn to_async_stream(
         expr: &CheckedExpr,
@@ -516,9 +517,10 @@ where
     // The distribution primitives panic here; runtimes refuse them before
     // evaluation. Constructors are built by the shared evaluation, and a
     // `match` decides within its tick.
-    const CAPABILITIES: crate::core::Capabilities = crate::core::Capabilities::NONE
-        .with(crate::core::Capability::TaggedUnions)
-        .with(crate::core::Capability::PatternMatching);
+    const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+        crate::core::RuntimeCapabilities::NONE
+            .with(crate::core::RuntimeCapability::TaggedUnions)
+            .with(crate::core::RuntimeCapability::PatternMatching);
 
     fn to_async_stream(
         expr: &CheckedExpr,

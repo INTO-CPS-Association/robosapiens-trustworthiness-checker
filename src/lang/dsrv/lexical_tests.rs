@@ -4,7 +4,7 @@
 //! resolves names in that module's namespace, wherever it is called from;
 //! the arguments a caller writes are the caller's. Text supplied at run time
 //! to a `dynamic` a library wrote is read where the library wrote it. Which
-//! runtimes may admit any of it is still the program's to decide.
+//! runtimes may ensure_runtime_support any of it is still the program's to decide.
 
 use contiguous_tree::TreeCursorExt;
 
@@ -347,6 +347,60 @@ fn a_callers_def_does_not_capture_a_library_parameter() {
     assert!(!body(&spec, "y").contains("100"), "{}", body(&spec, "y"));
 }
 
+/// A binder's name is the binder's, even where a def of the same name is in
+/// scope: inlining a call to that def there would give the caller a body it
+/// never named. The rule is the one a constant already follows.
+#[test]
+fn a_binder_shadows_a_def_of_the_same_name() {
+    let functions = format!("{ROOT}def f(n: Int) -> Int = n + 100\n");
+
+    // A def's own parameter, called in its body.
+    let parameter = format!(
+        "{functions}def ap(f: (Int -> Int), n: Int) -> Int = f(n)\n\
+         out y: Int\ny = ap(\\v: Int -> v, 7)\n"
+    );
+    let spec = program(&parameter, &[]);
+    assert!(!body(&spec, "y").contains("100"), "{}", body(&spec, "y"));
+    assert_eq!(evaluate_only_output(spec), Value::Int(7));
+
+    // A lambda parameter, called in the lambda's body.
+    let lambda = format!("{functions}out y: Int\ny = (\\f: (Int -> Int) -> f(7))(\\v: Int -> v)\n");
+    let spec = program(&lambda, &[]);
+    assert!(!body(&spec, "y").contains("100"), "{}", body(&spec, "y"));
+    assert_eq!(evaluate_only_output(spec), Value::Int(7));
+
+    // A name a pattern bound, called in the arm it belongs to.
+    let matched = format!(
+        "{}def f(n: Int) -> Int = n + 100\n\
+         type Handler = Union<Handle: (Int -> Int)>\nuse self::Handler::*\n\
+         out y: Int\ny = match(Handle(\\v: Int -> v)) {{ Handle(f) -> f(7), }}\n",
+        ROOT.replace("functions}", "functions, tagged_unions, pattern_matching}")
+    );
+    let spec = program(&matched, &[]);
+    assert!(!body(&spec, "y").contains("100"), "{}", body(&spec, "y"));
+    assert_eq!(evaluate_only_output(spec), Value::Int(7));
+}
+
+/// The same rule decides whether an offset's name is a constant: a binder's
+/// name is not, so the offset is left for offset resolution to refuse.
+#[test]
+fn a_binder_shadows_a_constant_named_as_an_offset() {
+    let folded = format!(
+        "{CONSTANTS}const back: Int = 1\n\
+         def prev(n: Int) -> Int = n[back]\n\
+         in x: Int\nout y: Int\ny = prev(x)\n"
+    );
+    assert!(
+        body(&program(&folded, &[]), "y").contains("[1]"),
+        "the constant is folded where nothing shadows it"
+    );
+
+    let shadowed = folded.replace("def prev(n: Int)", "def prev(n: Int, back: Int)");
+    let shadowed = shadowed.replace("y = prev(x)", "y = prev(x, x)");
+    let error = expand(&shadowed, &[]).expect_err("a parameter is not a count");
+    assert!(error.to_string().contains("back"), "{error}");
+}
+
 /// An offset naming a constant is folded where it was written, too.
 #[test]
 fn a_library_offset_names_its_own_constant() {
@@ -455,7 +509,7 @@ fn text_supplied_to_a_library_dynamic_checks_and_runs_the_librarys_helper() {
 // -----------------------------------------------------------------------------
 
 /// A library that names no dialect is read inside the program's: its
-/// runtime text is admitted exactly as the program's own is.
+/// runtime expression source is admitted exactly as the program's own is.
 #[test]
 fn a_library_dynamic_keeps_the_programs_dialect() {
     let spec = program(
@@ -522,6 +576,27 @@ fn a_finding_in_library_code_is_primary_at_the_call_with_a_definition_note() {
     let (label, text) = named(location.definition()).expect("a definition note");
     assert_eq!(label, "lib.dsrv");
     assert!("(m as Float) + true".contains(&text), "defined at {text:?}");
+}
+
+#[test]
+fn an_imported_result_contract_names_its_definition() {
+    let lib = "use experimental::{modules, functions}\ndef bad(n: Int) -> Bool = n\n";
+    let errors = program(
+        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Bool\ny = lib::bad(x)\n"),
+        &[("lib", lib)],
+    )
+    .check(TypeCheckOptions::STRICT)
+    .discard_warnings()
+    .expect_err("the body does not return the declared Bool");
+    let location = errors[0].location();
+    assert_eq!(
+        named(location.primary()),
+        Some(("root.dsrv".to_owned(), "lib::bad(x)".to_owned()))
+    );
+    assert_eq!(
+        named(location.definition()),
+        Some(("lib.dsrv".to_owned(), "Bool".to_owned()))
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -732,7 +807,7 @@ const EAGER_PICK: &str = "use experimental::{modules, functions}\n\
 /// library's stays eager in a lazy one.
 #[test]
 fn an_inlined_if_keeps_the_policy_of_the_module_that_wrote_it() {
-    use crate::core::{Capabilities, Capability, Specification};
+    use crate::core::{RuntimeCapabilities, RuntimeCapability, Specification};
     use crate::lang::dsrv::IfPolicy::{Eager, Lazy};
 
     let eager_root = format!(
@@ -741,8 +816,10 @@ fn an_inlined_if_keeps_the_policy_of_the_module_that_wrote_it() {
     );
     let spec = program(&eager_root, &[("lib", LAZY_PICK)]);
     assert_eq!(if_policies(&spec, "y"), [Lazy, Eager]);
-    let requirement = spec.first_unsupported(Capabilities::NONE).unwrap();
-    assert_eq!(requirement.capability, Capability::LazyIf);
+    let requirement = spec
+        .first_unsupported_construct(RuntimeCapabilities::NONE)
+        .unwrap();
+    assert_eq!(requirement.capability, RuntimeCapability::LazyIf);
 
     let lazy_root = format!(
         "use experimental::{{modules, functions, lazy_if}}\nmod lib\nuse lib\n\
@@ -751,16 +828,19 @@ fn an_inlined_if_keeps_the_policy_of_the_module_that_wrote_it() {
     let spec = program(&lazy_root, &[("lib", EAGER_PICK)]);
     assert_eq!(if_policies(&spec, "y"), [Eager, Lazy]);
 
-    // Neither module lazy: nothing to admit.
+    // Neither module lazy: nothing to ensure_runtime_support.
     let spec = program(&eager_root, &[("lib", EAGER_PICK)]);
     assert_eq!(if_policies(&spec, "y"), [Eager, Eager]);
-    assert_eq!(spec.first_unsupported(Capabilities::NONE), None);
+    assert_eq!(
+        spec.first_unsupported_construct(RuntimeCapabilities::NONE),
+        None
+    );
 }
 
 /// Text supplied to a `dynamic` is read where the `dynamic` was written, so
 /// an `if` in it follows that module's policy, not the caller's.
 #[test]
-fn an_if_in_runtime_text_follows_the_module_that_wrote_the_site() {
+fn an_if_in_runtime_expression_source_follows_the_module_that_wrote_the_site() {
     use crate::lang::dsrv::IfPolicy::{Eager, Lazy};
 
     let root = format!(

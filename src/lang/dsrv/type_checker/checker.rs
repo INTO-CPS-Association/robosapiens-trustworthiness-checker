@@ -26,6 +26,7 @@ use crate::lang::dsrv::diagnostics::{
 };
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
+use crate::lang::dsrv::source::{SourceType, TypeName, match_source_type, substitute_source};
 use crate::lang::dsrv::source_map::{SourceArchive, SourceLocation};
 
 struct TypeContext<'types> {
@@ -396,6 +397,12 @@ fn check(
             }
             resolve_binary(expr, parsed, &lhs_type, &rhs_type)?
         }
+        Ascribe(value, target) => {
+            let target_type = TCType::from_stream_type(target);
+            let source = check(value, Some(&target_type), context)?;
+            require(source, &target_type, expr)?;
+            (target_type, None)
+        }
         Cast(value, target) => {
             let source = check(value, None, context)?;
             let target_type = TCType::from_stream_type(target);
@@ -572,6 +579,9 @@ fn check(
                 ),
                 None,
             )
+        }
+        Apply(function, args) if function.generic_function_signature().is_some() => {
+            check_generic_def_call(expr, function, args, expected, context)?
         }
         Apply(function, args)
             if matches!(
@@ -1363,6 +1373,16 @@ fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
         } else {
             None
         }
+    } else if let (TCType::Function(a_params, a_result), TCType::Function(b_params, b_result)) =
+        (a, b)
+    {
+        (a_params.len() == b_params.len()
+            && a_params
+                .iter()
+                .zip(b_params)
+                .all(|(a_param, b_param)| unify(a_param, b_param).is_some())
+            && unify(a_result, b_result).is_some())
+        .then(|| a.clone())
     } else if matches!(
         a,
         TCType::Any | TCType::Unknown | TCType::EmptyList | TCType::EmptyMap
@@ -1761,10 +1781,167 @@ fn tags_found_in(expr: ExprRef<'_>, tag: &EcoString) -> String {
     }
 }
 
+fn check_generic_def_call(
+    call: ExprRef<'_>,
+    function: ExprRef<'_>,
+    args: ExprRefs<'_>,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<(TCType, Option<()>), SemanticError> {
+    let signature = function
+        .generic_function_signature()
+        .expect("generic call guard supplies a signature");
+    if signature.parameters.len() != args.len() {
+        return Err(error(
+            call,
+            TypeErrorKind::FunctionArityMismatch,
+            "function argument count differs",
+        ));
+    }
+    let definition_context = function
+        .source_context()
+        .expect("expanded generic definitions retain their source context");
+    let parameters: BTreeSet<TypeName> = signature.type_parameters.iter().cloned().collect();
+    let mut bound = BTreeMap::new();
+    if let Some(expected) = expected.and_then(TCType::to_stream_type) {
+        if !match_source_type(
+            definition_context,
+            &signature.result,
+            &expected,
+            &parameters,
+            &mut bound,
+        ) {
+            return Err(error(
+                call,
+                TypeErrorKind::AnnotationTypeMismatch,
+                "generic def result does not satisfy the call-site expected type",
+            ));
+        }
+    }
+    let argument_hints: Vec<_> = {
+        let source_bound: BTreeMap<&TypeName, SourceType> = bound
+            .iter()
+            .map(|(name, ty)| (name, ty.clone().into()))
+            .collect();
+        let source_bound_refs: BTreeMap<&TypeName, &SourceType> =
+            source_bound.iter().map(|(name, ty)| (*name, ty)).collect();
+        signature
+            .parameters
+            .iter()
+            .map(|pattern| {
+                definition_context
+                    .resolve_type(&substitute_source(pattern, &source_bound_refs))
+                    .ok()
+                    .map(|ty| TCType::from_stream_type(&ty))
+            })
+            .collect()
+    };
+    let arguments = args
+        .clone()
+        .zip(argument_hints)
+        .map(|(arg, hint)| {
+            let actual = check(arg, None, context)?;
+            if hint
+                .as_ref()
+                .is_some_and(|_| contains_unresolved_type(&actual))
+            {
+                check(arg, hint.as_ref(), context)
+            } else {
+                Ok(actual)
+            }
+        })
+        .collect::<Result<EcoVec<_>, _>>()?;
+    for (pattern, actual) in signature.parameters.iter().zip(&arguments) {
+        let Some(actual) = actual.to_stream_type() else {
+            return Err(error(
+                call,
+                TypeErrorKind::AnnotationTypeMismatch,
+                "generic def argument has no concrete type",
+            ));
+        };
+        if !match_source_type(
+            definition_context,
+            pattern,
+            &actual,
+            &parameters,
+            &mut bound,
+        ) {
+            return Err(error(
+                call,
+                TypeErrorKind::AnnotationTypeMismatch,
+                "generic def argument does not satisfy its declared type",
+            ));
+        }
+    }
+    if bound.len() != parameters.len() {
+        return Err(error(
+            call,
+            TypeErrorKind::AnnotationTypeMismatch,
+            "generic function signature has an ungrounded type parameter",
+        ));
+    }
+    let hint_bound: BTreeMap<&TypeName, SourceType> = bound
+        .iter()
+        .map(|(name, ty)| (name, ty.clone().into()))
+        .collect();
+    let hint_bound_refs: BTreeMap<&TypeName, &SourceType> =
+        hint_bound.iter().map(|(name, ty)| (*name, ty)).collect();
+    let parameter_types = signature
+        .parameters
+        .iter()
+        .map(|pattern| {
+            definition_context
+                .resolve_type(&substitute_source(pattern, &hint_bound_refs))
+                .map(|ty| TCType::from_stream_type(&ty))
+        })
+        .collect::<Result<EcoVec<_>, _>>()
+        .map_err(|_| {
+            error(
+                call,
+                TypeErrorKind::AnnotationTypeMismatch,
+                "generic def parameter type could not be instantiated",
+            )
+        })?;
+    let result = definition_context
+        .resolve_type(&substitute_source(&signature.result, &hint_bound_refs))
+        .map(|ty| TCType::from_stream_type(&ty))
+        .map_err(|_| {
+            error(
+                call,
+                TypeErrorKind::AnnotationTypeMismatch,
+                "generic def result type could not be instantiated",
+            )
+        })?;
+    let function_type = TCType::Function(parameter_types.clone(), Box::new(result.clone()));
+    require(
+        check(function, Some(&function_type), context)?,
+        &function_type,
+        call,
+    )?;
+    for (actual, expected) in arguments.into_iter().zip(&parameter_types) {
+        require(actual, expected, call)?;
+    }
+    Ok((result, None))
+}
+
 fn require(actual: TCType, expected: &TCType, expr: ExprRef<'_>) -> Result<(), SemanticError> {
     unify(&actual, expected)
         .map(|_| ())
         .ok_or_else(|| mismatch(expr, expected, &actual))
+}
+
+fn contains_unresolved_type(typ: &TCType) -> bool {
+    match typ {
+        TCType::Unknown | TCType::EmptyList | TCType::EmptyMap => true,
+        TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => {
+            contains_unresolved_type(inner)
+        }
+        TCType::Tuple(items) => items.iter().any(contains_unresolved_type),
+        TCType::Struct(fields, _) => fields
+            .iter()
+            .any(|(_, field)| contains_unresolved_type(field)),
+        _ => false,
+    }
 }
 
 fn mismatch(expr: ExprRef<'_>, expected: &TCType, actual: &TCType) -> SemanticError {

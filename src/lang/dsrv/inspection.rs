@@ -15,17 +15,17 @@ use super::{
     source::SourceTypeDisplay,
 };
 
-pub struct ExpandedView<'a> {
+pub struct ExpandedProgramView<'a> {
     pub specification: &'a DsrvSpecification,
     pub modules: &'a [ActivatedModule],
 }
 
-pub struct CheckedSourceView<'a> {
+pub struct CheckedProgramView<'a> {
     pub specification: &'a CheckedDsrvSpecification,
     pub modules: &'a [ActivatedModule],
 }
 
-pub fn render_expanded(view: ExpandedView<'_>) -> String {
+pub fn render_expanded_program(view: ExpandedProgramView<'_>) -> String {
     render(
         view.specification,
         view.modules,
@@ -34,7 +34,7 @@ pub fn render_expanded(view: ExpandedView<'_>) -> String {
     )
 }
 
-pub fn render_checked(view: CheckedSourceView<'_>) -> String {
+pub fn render_checked_program(view: CheckedProgramView<'_>) -> String {
     render(
         view.specification.unchecked(),
         view.modules,
@@ -121,7 +121,7 @@ fn render<'a>(
                         .join(", ");
                     writeln!(
                         report,
-                        "type {name}<{parameters}> = <generic template; expanded when instantiated>"
+                        "type {name}<{parameters}> = <generic alias; expanded when instantiated>"
                     )
                     .unwrap();
                 } else {
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn expanded_report_marks_itself_and_keeps_declaration_order() {
         let specification = parse_str("out z: Int\nin x: Int\nz = x + 1").expect("fixture expands");
-        let report = render_expanded(ExpandedView {
+        let report = render_expanded_program(ExpandedProgramView {
             specification: &specification,
             modules: &[],
         });
@@ -174,7 +174,7 @@ mod tests {
                 origin: ModuleOrigin::Embedded,
             },
         ];
-        let report = render_checked(CheckedSourceView {
+        let report = render_checked_program(CheckedProgramView {
             specification: &checked,
             modules: &modules,
         });
@@ -185,14 +185,14 @@ mod tests {
     }
 
     #[test]
-    fn generic_aliases_are_identified_as_templates() {
+    fn generic_aliases_are_identified_as_generic_aliases() {
         let specification =
             parse_str("use experimental::{generics}\ntype Box<T> = List<T>\nin x: Box<Int>")
                 .expect("fixture expands");
-        let report = render_expanded(ExpandedView {
+        let report = render_expanded_program(ExpandedProgramView {
             specification: &specification,
             modules: &[],
         });
-        assert!(report.contains("type Box<T> = <generic template; expanded when instantiated>"));
+        assert!(report.contains("type Box<T> = <generic alias; expanded when instantiated>"));
     }
 }

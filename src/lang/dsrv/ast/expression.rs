@@ -29,6 +29,7 @@ use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::SourceContext;
 use crate::lang::dsrv::source_map::NodeOrigin;
 use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::syntax::parsed::GenericFunctionSignature;
 
 /// A literal that can occur in the syntax tree.
 ///
@@ -253,6 +254,8 @@ pub(crate) struct ExprMetadata {
     /// that wrote it. `None` where that module could call none, which is
     /// every program until it takes on the `functions` experiment.
     pub callable: Option<super::AstShared<Callable>>,
+    /// Source-only generic `def` contract on its generated lambda.
+    pub(crate) generic_def: Option<super::AstShared<GenericFunctionSignature>>,
 }
 
 impl PartialEq for ExprMetadata {
@@ -294,6 +297,7 @@ contiguous_tree::tree_schema! {
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(StreamType)),
+        Ascribe(value: child, target: data(StreamType)),
         Var(variable: data(VarName)),
         // A constructor before elaboration resolves it: a tag, the payload it
         // is given (none for a nullary alternative), and the union named by a
@@ -435,8 +439,12 @@ impl<'arena> ExprRef<'arena> {
         self.node().source.context.as_deref()
     }
 
+    pub(crate) fn generic_function_signature(self) -> Option<&'arena GenericFunctionSignature> {
+        self.node().source.generic_def.as_deref()
+    }
+
     /// How an `if` at this node chooses its branches: by the settings of
-    /// the module that wrote it, which for inlined code or runtime text is
+    /// the module that wrote it, which for inlined code or runtime expression source is
     /// where it was defined. A node built without a context is eager.
     pub fn if_policy(self) -> IfPolicy {
         self.source_context()

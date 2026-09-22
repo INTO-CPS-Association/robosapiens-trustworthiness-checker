@@ -571,6 +571,13 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, arg, layout);
             descriptor.push(')');
         }
+        StreamOp::Ascribe { input, target } => {
+            descriptor.push_str("ascribe:");
+            append_stream_type(descriptor, target);
+            descriptor.push('(');
+            append_ref_descriptor(descriptor, input, layout);
+            descriptor.push(')');
+        }
         StreamOp::Binary { op, lhs, rhs } => {
             descriptor.push_str("binary:");
             descriptor.push_str(op.name());
@@ -1119,6 +1126,10 @@ pub(super) enum StreamOp<E: GraphReference> {
         op: UnaryOperator,
         arg: DataRef<E>,
     },
+    Ascribe {
+        input: DataRef<E>,
+        target: StreamType,
+    },
     Binary {
         op: BinaryOperator,
         lhs: DataRef<E>,
@@ -1126,7 +1137,7 @@ pub(super) enum StreamOp<E: GraphReference> {
     },
     If {
         /// Decided by the module that wrote the `if`, so it survives
-        /// inlining and runtime text unchanged.
+        /// inlining and runtime expression source unchanged.
         policy: IfPolicy,
         cond: DataRef<E>,
         then_branch: EvaluationGraph<E>,
@@ -1268,6 +1279,7 @@ impl<E: GraphReference> StreamOp<E> {
     pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
         match self {
             StreamOp::Unary { arg, .. } => visit(arg),
+            StreamOp::Ascribe { input, .. } => visit(input),
             StreamOp::Binary { lhs, rhs, .. }
             | StreamOp::Default {
                 input: lhs,

@@ -60,7 +60,7 @@ impl LexicalId {
 pub(crate) struct Lexical {
     module: ModulePath,
     /// The module's own namespace and settings, with the dialect of the
-    /// program it is part of: which runtimes may admit code is the
+    /// program it is part of: which runtimes may ensure_runtime_support code is the
     /// program's to decide, wherever that code was written.
     context: AstShared<SourceContext>,
     /// What a name in this module stands for, folded once (19b).
@@ -75,6 +75,7 @@ pub(crate) struct Lexical {
 pub(crate) struct Entry {
     pub(crate) parameters: EcoVec<(VarName, SourceType)>,
     pub(crate) type_parameters: EcoVec<TypeName>,
+    pub(crate) result: SourceType,
     /// Hidden from importers, usable inside its own module (S12).
     pub(crate) internal: bool,
     /// The body, inlined, in a tree this entry owns.
@@ -212,6 +213,7 @@ fn add_module(
         usize,
         EcoVec<(VarName, SourceType)>,
         EcoVec<TypeName>,
+        SourceType,
         bool,
     )> = Vec::new();
     let mut root = 0usize;
@@ -221,6 +223,7 @@ fn add_module(
                 name,
                 type_parameters,
                 parameters,
+                result,
                 internal,
                 ..
             } => {
@@ -229,6 +232,7 @@ fn add_module(
                     root,
                     parameters.clone(),
                     type_parameters.clone(),
+                    result.clone(),
                     *internal,
                 ));
                 root += 1;
@@ -240,12 +244,13 @@ fn add_module(
             _ => {}
         }
     }
-    for (name, index, parameters, type_parameters, _) in &local {
+    for (name, index, parameters, type_parameters, result, _) in &local {
         scope.bare.insert(
             name.clone(),
             Def {
                 parameters: parameters.clone(),
                 type_parameters: type_parameters.clone(),
+                result: result.clone(),
                 body: trees[*index],
                 foreign: false,
                 source: parsed.source(),
@@ -254,7 +259,7 @@ fn add_module(
         );
     }
     let mut built = Vec::with_capacity(local.len());
-    for (name, index, parameters, type_parameters, internal) in local {
+    for (name, index, parameters, type_parameters, result, internal) in local {
         let body = standalone(
             trees[index],
             &scope,
@@ -265,6 +270,7 @@ fn add_module(
             Entry {
                 parameters,
                 type_parameters,
+                result,
                 internal,
                 body,
                 source: parsed.source(),
@@ -401,7 +407,7 @@ impl Callable {
             let _ = write!(out, "{}::{}", show_path(module), name.name());
             self.describe_def(out, def, &mut reached);
         }
-        // Runtime text accepted by a reachable definition may itself contain
+        // Runtime expression source accepted by a reachable definition may itself contain
         // dynamic/defer. Its lexical callable is semantic input even though
         // those helper definitions are not statically inlined here.
         let mut runtime_environments = self
@@ -533,6 +539,7 @@ impl Entry {
         Def {
             parameters: self.parameters.clone(),
             type_parameters: self.type_parameters.clone(),
+            result: self.result.clone(),
             body: self.body.as_ref(),
             foreign: true,
             source: self.source,
@@ -599,5 +606,5 @@ fn describe_def(out: &mut String, def: &Def<'_>) {
         .map(|(name, ty)| format!("{}:{ty:?}", name.name()))
         .collect::<Vec<_>>()
         .join(",");
-    let _ = write!(out, "({parameters})={:?};", def.body);
+    let _ = write!(out, "({parameters})->{:?}={:?};", def.result, def.body);
 }

@@ -157,18 +157,23 @@ pub enum SourceResolveError {
 /// This is the entire sorted name-to-expanded-type mapping, not a process-local
 /// hash or an address. Declaration order and source spelling of references do
 /// not affect it; changing even an unused alias does.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct SourceFingerprint {
     #[serde(serialize_with = "as_pairs")]
     aliases: BTreeMap<TypePath, StreamType>,
     /// Generic aliases have no type until they are used, so the namespace
     /// carries them as written. Changing one changes the program even when
     /// nothing has used it yet, as changing an unused alias does.
+    #[serde(skip)]
+    generic: BTreeMap<TypePath, AliasDeclaration>,
+    /// Span-free projection used for identity and serialization. The original
+    /// declarations above retain their locations for later diagnostics.
     #[serde(
+        rename = "generic",
         skip_serializing_if = "BTreeMap::is_empty",
         serialize_with = "as_pairs"
     )]
-    generic: BTreeMap<TypePath, AliasDeclaration>,
+    generic_identity: BTreeMap<TypePath, AliasDeclaration>,
     /// The names this module keeps to itself, which no import may take.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     internal: BTreeSet<TypePath>,
@@ -182,6 +187,87 @@ pub struct SourceFingerprint {
     /// different releases.
     #[serde(skip_serializing_if = "Option::is_none")]
     experimental_revision: Option<u32>,
+}
+
+impl PartialEq for SourceFingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        self.aliases == other.aliases
+            && self.generic_identity == other.generic_identity
+            && self.internal == other.internal
+            && self.constructors == other.constructors
+            && self.language == other.language
+            && self.experimental_revision == other.experimental_revision
+    }
+}
+impl Eq for SourceFingerprint {}
+
+impl PartialOrd for SourceFingerprint {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for SourceFingerprint {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (
+            &self.aliases,
+            &self.generic_identity,
+            &self.internal,
+            &self.constructors,
+            &self.language,
+            self.experimental_revision,
+        )
+            .cmp(&(
+                &other.aliases,
+                &other.generic_identity,
+                &other.internal,
+                &other.constructors,
+                &other.language,
+                other.experimental_revision,
+            ))
+    }
+}
+
+fn semantic_alias(declaration: &AliasDeclaration) -> AliasDeclaration {
+    let mut declaration = declaration.clone();
+    declaration.span = Span::default();
+    clear_type_spans(&mut declaration.ty);
+    declaration
+}
+
+fn clear_type_spans(ty: &mut SourceType) {
+    ty.span = Span::default();
+    match &mut ty.kind {
+        SourceTypeKind::Named(_, arguments) | SourceTypeKind::Tuple(arguments) => {
+            arguments.make_mut().iter_mut().for_each(clear_type_spans);
+        }
+        SourceTypeKind::List(inner) | SourceTypeKind::Map(inner) | SourceTypeKind::Expr(inner) => {
+            clear_type_spans(inner);
+        }
+        SourceTypeKind::Struct(fields, _) => {
+            fields
+                .make_mut()
+                .iter_mut()
+                .for_each(|(_, ty)| clear_type_spans(ty));
+        }
+        SourceTypeKind::Function(arguments, result) => {
+            arguments.make_mut().iter_mut().for_each(clear_type_spans);
+            clear_type_spans(result);
+        }
+        SourceTypeKind::Union(alternatives) => {
+            for alternative in alternatives.make_mut() {
+                alternative.span = Span::default();
+                if let Some(payload) = &mut alternative.payload {
+                    clear_type_spans(payload);
+                }
+            }
+        }
+        SourceTypeKind::Int
+        | SourceTypeKind::Float
+        | SourceTypeKind::Str
+        | SourceTypeKind::Bool
+        | SourceTypeKind::Unit
+        | SourceTypeKind::Any => {}
+    }
 }
 
 /// A map keyed by paths, written as its entries in order. A path is a
@@ -200,9 +286,14 @@ impl SourceFingerprint {
         internal: BTreeSet<TypePath>,
         language: LanguageConfig,
     ) -> Self {
+        let generic_identity = generic
+            .iter()
+            .map(|(path, declaration)| (path.clone(), semantic_alias(declaration)))
+            .collect();
         Self {
             aliases,
             generic,
+            generic_identity,
             internal,
             constructors: BTreeMap::new(),
             experimental_revision: language.experimental_revision(),
@@ -646,8 +737,8 @@ fn substitute(
     Ok(substituted(&declaration.ty, &bound))
 }
 
-/// Replace a template's parameters with source types rather than resolved
-/// ones, which is what inlining one template into another needs.
+/// Replace a generic alias's parameters with source types rather than resolved
+/// ones, which is what inlining one generic alias into another needs.
 pub(crate) fn substitute_source(
     source: &SourceType,
     bound: &BTreeMap<&TypeName, &SourceType>,
@@ -708,6 +799,148 @@ pub(crate) fn substitute_source(
         kind,
         span: source.span,
     }
+}
+
+/// Match a generic source pattern against one concrete structural type.
+pub(crate) fn match_source_type(
+    context: &SourceContext,
+    pattern: &SourceType,
+    actual: &StreamType,
+    parameters: &BTreeSet<TypeName>,
+    bound: &mut BTreeMap<TypeName, StreamType>,
+) -> bool {
+    fn matches(
+        context: &SourceContext,
+        pattern: &SourceType,
+        actual: &StreamType,
+        parameters: &BTreeSet<TypeName>,
+        bound: &mut BTreeMap<TypeName, StreamType>,
+        active: &mut Vec<TypePath>,
+    ) -> bool {
+        use SourceTypeKind::*;
+        if let Named(path, arguments) = &pattern.kind {
+            if arguments.is_empty() && !path.is_qualified() {
+                if let Some(parameter) = parameters.get(path.name()) {
+                    return match bound.get(parameter) {
+                        Some(previous) => {
+                            previous == actual
+                                || previous == &StreamType::Any
+                                || actual == &StreamType::Any
+                        }
+                        None => {
+                            bound.insert(parameter.clone(), actual.clone());
+                            true
+                        }
+                    };
+                }
+            }
+            let alias = context.generic().get(path).or_else(|| {
+                (!path.is_qualified()).then(|| {
+                    context
+                        .generic()
+                        .iter()
+                        .find(|(name, _)| name.name() == path.name())
+                        .map(|(_, alias)| alias)
+                })?
+            });
+            if let Some(alias) = alias {
+                if alias.parameters.len() != arguments.len() || active.contains(path) {
+                    return false;
+                }
+                let substitutions = alias.parameters.iter().zip(arguments).collect();
+                let expanded = substitute_source(&alias.ty, &substitutions);
+                active.push(path.clone());
+                let result = matches(context, &expanded, actual, parameters, bound, active);
+                active.pop();
+                return result;
+            }
+            return arguments.is_empty()
+                && context.get(path).is_some_and(|resolved| resolved == actual);
+        }
+        // `Any` remains gradually consistent with every structural shape.
+        // Bare parameters are handled above so an `Any` argument still binds
+        // the parameter and can ground a result-only inference.
+        if actual == &StreamType::Any {
+            return true;
+        }
+        match (&pattern.kind, actual) {
+            (Any, _) => true,
+            (Int, StreamType::Int)
+            | (Float, StreamType::Float)
+            | (Str, StreamType::Str)
+            | (Bool, StreamType::Bool)
+            | (Unit, StreamType::Unit) => true,
+            (List(pattern), StreamType::List(actual))
+            | (Map(pattern), StreamType::Map(actual))
+            | (Expr(pattern), StreamType::Expr(actual)) => {
+                matches(context, pattern, actual, parameters, bound, active)
+            }
+            (Tuple(patterns), StreamType::Tuple(actuals)) => {
+                patterns.len() == actuals.len()
+                    && patterns.iter().zip(actuals).all(|(pattern, actual)| {
+                        matches(context, pattern, actual, parameters, bound, active)
+                    })
+            }
+            (Struct(patterns, pattern_open), StreamType::Struct(actuals, actual_open)) => {
+                let fields_match = patterns.iter().all(|(name, pattern)| {
+                    actuals
+                        .iter()
+                        .find(|(actual, _)| actual == name)
+                        .is_some_and(|(_, actual)| {
+                            matches(context, pattern, actual, parameters, bound, active)
+                        })
+                });
+                let pattern_fields_present = patterns
+                    .iter()
+                    .all(|(name, _)| actuals.iter().any(|(actual, _)| actual == name));
+                let actual_fields_present = actuals
+                    .iter()
+                    .all(|(name, _)| patterns.iter().any(|(pattern, _)| pattern == name));
+                fields_match
+                    && ((*pattern_open && pattern_fields_present)
+                        || (*actual_open && actual_fields_present)
+                        || (!*pattern_open && !*actual_open && patterns.len() == actuals.len()))
+            }
+            (
+                Function(pattern_args, pattern_result),
+                StreamType::Function(actual_args, actual_result),
+            ) => {
+                pattern_args.len() == actual_args.len()
+                    && pattern_args
+                        .iter()
+                        .zip(actual_args)
+                        .all(|(pattern, actual)| {
+                            matches(context, pattern, actual, parameters, bound, active)
+                        })
+                    && matches(
+                        context,
+                        pattern_result,
+                        actual_result,
+                        parameters,
+                        bound,
+                        active,
+                    )
+            }
+            (Union(patterns), StreamType::Union(actual)) => {
+                patterns.len() == actual.alternatives().len()
+                    && patterns.iter().all(|pattern| {
+                        actual
+                            .alternatives()
+                            .iter()
+                            .find(|actual| pattern.tag == *actual.tag())
+                            .is_some_and(|actual| match (&pattern.payload, actual.payload()) {
+                                (None, UnionPayload::Nullary) => true,
+                                (Some(pattern), UnionPayload::Of(actual)) => {
+                                    matches(context, pattern, actual, parameters, bound, active)
+                                }
+                                _ => false,
+                            })
+                    })
+            }
+            _ => false,
+        }
+    }
+    matches(context, pattern, actual, parameters, bound, &mut Vec::new())
 }
 
 fn substituted(source: &SourceType, bound: &BTreeMap<&TypeName, &StreamType>) -> SourceType {

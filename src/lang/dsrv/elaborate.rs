@@ -19,7 +19,9 @@ use super::diagnostics::SemanticAnalysisReport;
 use super::parser::DsrvParseError;
 use super::pipeline::{TypeCheckMode, TypeCheckOptions};
 use super::type_checker::TCType;
-use crate::core::{Capabilities, Requirement, Specification, StreamType, VarName};
+use crate::core::{
+    RuntimeCapabilities, RuntimeCapabilityRequirement, Specification, StreamType, VarName,
+};
 
 /// A checked specification after elaboration: the tree every runtime runs,
 /// with a type for each of its nodes. Only elaboration constructs one, from a
@@ -182,8 +184,11 @@ impl Display for ElaboratedDsrvSpecification {
 impl Specification for ElaboratedDsrvSpecification {
     type Expr = CheckedExpr;
 
-    fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
-        Specification::first_unsupported(&self.elaborated, supported)
+    fn first_unsupported_construct(
+        &self,
+        supported: RuntimeCapabilities,
+    ) -> Option<RuntimeCapabilityRequirement> {
+        Specification::first_unsupported_construct(&self.elaborated, supported)
     }
 
     fn input_vars(&self) -> BTreeSet<VarName> {

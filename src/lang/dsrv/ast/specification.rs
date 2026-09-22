@@ -8,7 +8,7 @@ use super::checked::{CheckedExpressionContext, ExprTypes};
 use super::{
     AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
 };
-use crate::core::{Capabilities, Requirement};
+use crate::core::{RuntimeCapabilities, RuntimeCapabilityRequirement};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
@@ -494,8 +494,11 @@ impl CheckedDsrvSpecification {
 impl Specification for CheckedDsrvSpecification {
     type Expr = CheckedExpr;
 
-    fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
-        Specification::first_unsupported(&self.spec, supported)
+    fn first_unsupported_construct(
+        &self,
+        supported: RuntimeCapabilities,
+    ) -> Option<RuntimeCapabilityRequirement> {
+        Specification::first_unsupported_construct(&self.spec, supported)
     }
 
     fn input_vars(&self) -> BTreeSet<VarName> {
@@ -790,9 +793,12 @@ fn clone_unlocated(
 impl Specification for DsrvSpecification {
     type Expr = Expr;
 
-    fn first_unsupported(&self, supported: Capabilities) -> Option<Requirement> {
+    fn first_unsupported_construct(
+        &self,
+        supported: RuntimeCapabilities,
+    ) -> Option<RuntimeCapabilityRequirement> {
         self.roots()
-            .find_map(|(_, root)| super::requirements::first_unsupported(root, supported))
+            .find_map(|(_, root)| super::requirements::first_unsupported_construct(root, supported))
     }
 
     fn input_vars(&self) -> BTreeSet<VarName> {
@@ -1309,21 +1315,21 @@ mod tests {
 
     #[test]
     fn the_first_unsupported_construct_is_found_in_declaration_order() {
-        use crate::core::{Capabilities, Capability, Specification};
+        use crate::core::{RuntimeCapabilities, RuntimeCapability, Specification};
         let find = |source: &str| {
-            Specification::first_unsupported(
+            Specification::first_unsupported_construct(
                 &source.parse::<DsrvSpecification>().unwrap(),
-                Capabilities::NONE,
+                RuntimeCapabilities::NONE,
             )
             .map(|requirement| requirement.construct)
         };
         let distributed = "language distributed\nin x\nout a: Bool\nout b: Bool\n";
         assert_eq!(
-            Specification::first_unsupported(
+            Specification::first_unsupported_construct(
                 &format!("{distributed}a = monitored_at(x, n)\nb = true")
                     .parse::<DsrvSpecification>()
                     .unwrap(),
-                Capabilities::NONE.with(Capability::Distribution),
+                RuntimeCapabilities::NONE.with(RuntimeCapability::Distribution),
             ),
             None
         );
