@@ -17,7 +17,8 @@ use crate::causal::{CausalDomain, CausalSet, CausalValue, RoleCausalDomain};
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::lang::core::DependencyGraphExpr;
 use crate::lang::dsrv::ElaboratedDsrvSpecification;
-use crate::lang::dsrv::ast::{CheckedExpr, CheckedExprRef, Expr, ExprRef, ExprView};
+use crate::lang::dsrv::ast::{CheckedExpr, CheckedExprRef, ExprRef, ExprView};
+use crate::lang::dsrv::runtime_expression::UntypedExpr;
 use crate::runtime::semi_sync::SemiSyncContext;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use crate::{LocalStream, VarName};
@@ -75,7 +76,7 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
         owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
-        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.expr().clone(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.untyped(), ctx, owner)
     }
 }
 
@@ -110,7 +111,7 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
         owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
-        evaluate::<CausalSemiSyncConfig<D>, D>(expr.expr().clone(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<D>, D>(expr.untyped(), ctx, owner)
     }
 }
 
@@ -130,18 +131,25 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
     }
 }
 
-fn evaluate<AC, D>(expr: Expr, ctx: &AC::Ctx, owner: Option<VarName>) -> LocalStream<CausalValue<D>>
+/// Evaluate an expression without its types. Its runtime expressions are
+/// parsed at their prepared sites and evaluated unchecked.
+fn evaluate<AC, D>(
+    expr: UntypedExpr,
+    ctx: &AC::Ctx,
+    owner: Option<VarName>,
+) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    evaluate_ref::<AC, D>(expr.as_ref(), ctx, owner)
+    evaluate_ref::<AC, D>(expr.expr().as_ref(), &expr, ctx, owner)
 }
 
 fn evaluate_ref<AC, D>(
     node: ExprRef<'_>,
+    expr: &UntypedExpr,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
 ) -> LocalStream<CausalValue<D>>
@@ -153,7 +161,7 @@ where
 {
     use ExprView::*;
 
-    let child = |node: ExprRef<'_>| evaluate_ref::<AC, D>(node, ctx, owner.clone());
+    let child = |node: ExprRef<'_>| evaluate_ref::<AC, D>(node, expr, ctx, owner.clone());
 
     match node.view() {
         Val(value) => combinators::constant(value.clone().into_runtime_value()),
@@ -196,6 +204,7 @@ where
             child(source),
             scope.clone(),
             owner,
+            expr.site(node),
             |expr, subctx, owner| evaluate::<AC, D>(expr, subctx, owner),
         ),
         Defer(source, _, scope) => dynamic::defer::<AC, D>(
@@ -203,6 +212,7 @@ where
             child(source),
             scope.clone(),
             owner,
+            expr.site(node),
             |expr, subctx, owner| evaluate::<AC, D>(expr, subctx, owner),
         ),
         unsupported => panic!(
@@ -293,8 +303,7 @@ where
             child(source),
             scope.clone(),
             owner,
-            node.typ().clone(),
-            node.shared_type_environment().clone(),
+            node.runtime_expression().clone(),
             evaluate_checked_owned::<AC, D>,
         ),
         Defer(source, _, scope) => dynamic::defer_checked::<AC, D>(
@@ -302,8 +311,7 @@ where
             child(source),
             scope.clone(),
             owner,
-            node.typ().clone(),
-            node.shared_type_environment().clone(),
+            node.runtime_expression().clone(),
             evaluate_checked_owned::<AC, D>,
         ),
         _unsupported => panic!(

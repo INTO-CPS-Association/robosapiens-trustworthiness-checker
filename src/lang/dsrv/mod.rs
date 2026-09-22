@@ -9,7 +9,7 @@ pub mod parser;
 pub mod path;
 pub mod patterns;
 mod pipeline;
-pub(crate) mod runtime_text;
+pub(crate) mod runtime_expression;
 pub mod source;
 pub mod span;
 mod syntax;

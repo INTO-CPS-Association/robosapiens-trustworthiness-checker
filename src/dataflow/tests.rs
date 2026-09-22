@@ -1928,7 +1928,7 @@ fn dataflow_evaluation_failures_poison_the_monitor() {
 }
 
 #[test]
-fn untimed_dataflow_refuses_runtime_text_that_does_not_check() {
+fn untimed_dataflow_refuses_runtime_expression_that_does_not_check() {
     // `untimed` evaluation does not consult the elaborated types, but the
     // text it is given is checked against them all the same.
     let spec = elaborated("in source: Str\nout z: Int\nz = dynamic(source: Int)");
@@ -4548,4 +4548,126 @@ proptest! {
         prop_assert_eq!(after_reset, cold);
         prop_assert_eq!(lifecycle_property_jit_shape(&subject), lifecycle_property_jit_shape(&fresh));
     }
+}
+
+/// Runtime source is parsed at its occurrence's prepared site, so it may call
+/// a def that site could call, in every runtime and on both the typed and the
+/// unspecialised dataflow path.
+#[apply(async_test)]
+async fn runtime_source_calls_a_def_at_its_site_in_every_runtime(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let source = "use experimental::{functions}\n\
+        def twice(n: Int) -> Int = n * 2\n\
+        in source: Str\nin x: Int\nout y: Int\nout d: Int\n\
+        y = dynamic(source: Int)\nd = defer(source: Int)";
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("source"),
+            vec![
+                Value::Str("twice(x)".into()),
+                Value::Str("twice(x) + 1".into()),
+            ],
+        ),
+        (VarName::new("x"), vec![Value::Int(1), Value::Int(5)]),
+    ]);
+    let expected_y = vec![Value::Int(2), Value::Int(11)];
+    let expected_d = vec![Value::Int(2), Value::Int(10)];
+
+    let unspecialised = eval_dataflow_spec(elaborated(source), inputs.clone());
+    assert_eq!(output_trace(&unspecialised, "y"), expected_y);
+    assert_eq!(output_trace(&unspecialised, "d"), expected_d);
+
+    let mut typed = DataflowMonitor::compile_checked(elaborated(source)).unwrap();
+    let columns = typed
+        .input_vars()
+        .iter()
+        .map(|var| inputs[var].clone())
+        .collect::<Vec<_>>();
+    let typed = evaluate(&mut typed, &columns);
+    assert_eq!(typed, [expected_y.clone(), expected_d.clone()]);
+
+    // The asynchronous runtime reports each output separately.
+    let untyped = eval_runtime_with::<UntimedDsrvSemantics>(
+        executor.clone(),
+        elaborated(source),
+        inputs.clone(),
+        4,
+    )
+    .await;
+    assert_eq!(stream_trace(&untyped, "y"), expected_y);
+    assert_eq!(stream_trace(&untyped, "d"), expected_d);
+
+    let checked = eval_runtime_with::<crate::semantics::CheckedUntimedDsrvSemantics>(
+        executor,
+        elaborated(source),
+        inputs,
+        4,
+    )
+    .await;
+    assert_eq!(stream_trace(&checked, "y"), expected_y);
+    assert_eq!(stream_trace(&checked, "d"), expected_d);
+}
+
+/// The unspecialised dataflow path checks arriving source against the type
+/// elaboration gave its occurrence, as the typed path does, although neither
+/// graph was built from bare syntax.
+#[test]
+fn unspecialised_dataflow_checks_runtime_source_against_its_site() {
+    let spec = "in source: Str\nout y: Int\ny = dynamic(source: Int)";
+    for semantics in [Semantics::Untimed, Semantics::TypedUntimed] {
+        let mut monitor =
+            DataflowMonitor::compile_with_semantics(elaborated(spec), semantics).unwrap();
+        let mut output = vec![Value::NoVal];
+        let error = monitor
+            .evaluate(&[Value::Str("true".into())], &mut output)
+            .expect_err("a Bool source does not check against Int");
+        assert!(
+            matches!(
+                error,
+                DataflowEvaluationError::ReconfigurableExpressionType { .. }
+            ),
+            "{semantics:?}: {error:?}"
+        );
+    }
+}
+
+/// The checked untimed interpreter accepts nested runtime source. The nested
+/// occurrence belongs to no specification, so its site comes from the
+/// preparation of the accepted source itself. (Untyped evaluation checks
+/// runtime source with every variable of type `Any`, which a nested source
+/// stream does not satisfy.)
+#[apply(async_test)]
+async fn nested_runtime_source_is_accepted_at_its_own_prepared_site(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let spec =
+        elaborated("in outer: Str\nin inner: Str\nin x: Int\nout y: Int\ny = dynamic(outer: Int)");
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("outer"),
+            vec![Value::Str("dynamic(inner: Int) + 1".into()); 2],
+        ),
+        (
+            VarName::new("inner"),
+            vec![Value::Str("x".into()), Value::Str("x * 10".into())],
+        ),
+        (VarName::new("x"), vec![Value::Int(2), Value::Int(3)]),
+    ]);
+    let rows = eval_runtime_with::<crate::semantics::CheckedUntimedDsrvSemantics>(
+        executor, spec, inputs, 2,
+    )
+    .await;
+    assert_eq!(
+        output_trace(&rows, "y"),
+        vec![Value::Int(3), Value::Int(31)]
+    );
+}
+
+/// The values `name` took, in order, when each row reports some outputs.
+fn stream_trace(rows: &[BTreeMap<VarName, Value>], name: &str) -> Vec<Value> {
+    let name = VarName::new(name);
+    rows.iter()
+        .filter_map(|row| row.get(&name).cloned())
+        .collect()
 }

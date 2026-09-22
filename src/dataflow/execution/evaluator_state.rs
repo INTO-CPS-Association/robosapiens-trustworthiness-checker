@@ -247,10 +247,8 @@ impl ReconfigurableExpressionState {
 #[derive(Clone)]
 pub(in crate::dataflow) struct ReconfigurableExpressionTemplate {
     pub(in crate::dataflow) source_text: EcoString,
-    pub(in crate::dataflow) source_context:
-        crate::lang::dsrv::ast::AstShared<crate::lang::dsrv::source::SourceContext>,
-    pub(in crate::dataflow) callable:
-        crate::lang::dsrv::ast::AstShared<crate::lang::dsrv::expand::functions::Callable>,
+    /// The site the source was accepted at, which a cached template must share.
+    pub(in crate::dataflow) site: crate::lang::dsrv::runtime_expression::RuntimeExpressionSite,
     pub(in crate::dataflow) program: Rc<StreamProgram>,
     pub(in crate::dataflow) nested_dependency_slots: Vec<EnvironmentSlot>,
     pub(in crate::dataflow) nested_environment_slots: Vec<EnvironmentSlot>,

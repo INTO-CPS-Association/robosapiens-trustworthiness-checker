@@ -10,6 +10,9 @@ use crate::core::LocalStream;
 use crate::core::RuntimeFunction;
 use crate::core::Value;
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView};
+use crate::lang::dsrv::runtime_expression::{
+    RuntimeExpressionSite, RuntimeExpressionSites, UntypedExpr,
+};
 use crate::semantics::{AsyncConfig, StreamContext};
 use async_stream::stream;
 use contiguous_tree::TreeCursorExt;
@@ -27,7 +30,10 @@ pub(super) struct ScopedExpr {
 /// AST-owned checking state retained while an expression moves through lexical scopes.
 #[derive(Clone)]
 enum ExprPhase {
+    /// Bare syntax built directly by a program or test, never prepared.
     Unchecked,
+    /// A prepared expression evaluated without consulting its types.
+    Untyped(AstShared<RuntimeExpressionSites>),
     Checked(CheckedExpr),
 }
 
@@ -129,6 +135,15 @@ impl ScopedExpr {
         }
     }
 
+    pub(super) fn untyped(expr: UntypedExpr) -> Self {
+        Self {
+            phase: ExprPhase::Untyped(AstShared::clone(expr.sites())),
+            expr: expr.expr().clone(),
+            environment: None,
+            owner: None,
+        }
+    }
+
     pub(super) fn checked(checked: CheckedExpr) -> Self {
         Self {
             expr: checked.expr().clone(),
@@ -156,17 +171,27 @@ impl ScopedExpr {
         expr: ExprRef<'a>,
     ) -> Option<&'a crate::lang::dsrv::type_checker::TCType> {
         match &self.phase {
-            ExprPhase::Unchecked => None,
+            ExprPhase::Unchecked | ExprPhase::Untyped(_) => None,
             ExprPhase::Checked(checked) => Some(checked.cursor(expr).typ()),
         }
     }
 
+    #[cfg(test)]
     pub(super) fn shared_type_environment(
         &self,
     ) -> Option<&AstShared<crate::lang::dsrv::type_checker::StreamTypeEnvironment>> {
         match &self.phase {
-            ExprPhase::Unchecked => None,
+            ExprPhase::Unchecked | ExprPhase::Untyped(_) => None,
             ExprPhase::Checked(checked) => Some(checked.as_ref().shared_type_environment()),
+        }
+    }
+
+    /// The site of `expr`, a `dynamic` or `defer` occurrence of this expression.
+    pub(super) fn runtime_expression(&self, expr: ExprRef<'_>) -> RuntimeExpressionSite {
+        match &self.phase {
+            ExprPhase::Unchecked => RuntimeExpressionSite::unlocated(expr),
+            ExprPhase::Untyped(sites) => sites.site(expr).untyped(),
+            ExprPhase::Checked(checked) => checked.cursor(expr).runtime_expression().clone(),
         }
     }
 

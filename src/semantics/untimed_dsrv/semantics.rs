@@ -15,8 +15,10 @@ use crate::core::{
     BinaryOperator, BinaryOperatorKind, LocalStream, PartialStreamValue, from_typed_partial_stream,
     to_typed_partial_stream,
 };
-use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView, SyntaxLiteral};
-use crate::lang::dsrv::runtime_text::{RuntimeText, RuntimeTextTyping};
+#[cfg(test)]
+use crate::lang::dsrv::ast::Expr;
+use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprView, SyntaxLiteral};
+use crate::lang::dsrv::runtime_expression::UntypedExpr;
 use crate::lang::dsrv::type_checker::TCType;
 use crate::semantics::{AsyncConfig, MonitoringSemantics, StreamContext};
 use tracing::debug;
@@ -27,6 +29,9 @@ use ecow::EcoVec;
 #[derive(Clone)]
 pub struct UntimedDsrvSemantics;
 
+/// Evaluate bare syntax that was never prepared, such as an expression a
+/// test builds. Its runtime expressions are accepted without types.
+#[cfg(test)]
 pub(crate) fn evaluate<AC>(expr: Expr, owner: Option<VarName>, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
@@ -35,6 +40,23 @@ where
         ScopedExpr::unchecked(expr).with_owner(owner)
     } else {
         ScopedExpr::unchecked(expr)
+    };
+    evaluate_scope::<AC>(expression, ctx)
+}
+
+/// Evaluate a prepared expression without consulting its types.
+pub(crate) fn evaluate_ignoring_types<AC>(
+    expr: UntypedExpr,
+    owner: Option<VarName>,
+    ctx: &AC::Ctx,
+) -> LocalStream<Value>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    let expression = if let Some(owner) = owner {
+        ScopedExpr::untyped(expr).with_owner(owner)
+    } else {
+        ScopedExpr::untyped(expr)
     };
     evaluate_scope::<AC>(expression, ctx)
 }
@@ -80,25 +102,6 @@ where
     ))
 }
 
-/// What text supplied to this `dynamic` or `defer` node is checked against:
-/// the type and environment elaboration gave the node. Absent only where no
-/// elaborated node stands behind it, such as an expression a test builds.
-fn runtime_text(node: ExprRef<'_>, expression: &ScopedExpr) -> RuntimeText {
-    let typing = expression.typ(node).cloned().and_then(|expected| {
-        expression
-            .shared_type_environment()
-            .map(|environment| RuntimeTextTyping {
-                environment: AstShared::clone(environment),
-                expected,
-            })
-    });
-    RuntimeText::new(
-        node.metadata().context.clone().unwrap_or_default(),
-        node.metadata().callable.clone().unwrap_or_default(),
-        typing,
-    )
-}
-
 pub(super) fn evaluate_ref<'a, AC>(
     node: ExprRef<'a>,
     expression: &ScopedExpr,
@@ -138,14 +141,14 @@ where
             }
         }
         Dynamic(source, _, scope) => {
-            let text = runtime_text(node, expression);
+            let site = expression.runtime_expression(node);
             let e = evaluate(source);
-            dynamic::dynamic::<AC>(ctx, e, scope.clone(), owner, 1, text)
+            dynamic::dynamic::<AC>(ctx, e, scope.clone(), owner, 1, site)
         }
         Defer(source, _, scope) => {
-            let text = runtime_text(node, expression);
+            let site = expression.runtime_expression(node);
             let e = evaluate(source);
-            dynamic::defer::<AC>(ctx, e, scope.clone(), owner, 1, text)
+            dynamic::defer::<AC>(ctx, e, scope.clone(), owner, 1, site)
         }
         // An arm runs only when its pattern selects it, which a stream
         // cannot advance for, so the whole `match` is one stream: it reads
@@ -494,7 +497,7 @@ where
         ctx: &AC::Ctx,
         owner: Option<VarName>,
     ) -> LocalStream<Value> {
-        evaluate::<AC>(expr.expr().clone(), owner, ctx)
+        evaluate_ignoring_types::<AC>(expr.untyped(), owner, ctx)
     }
 }
 
@@ -573,6 +576,44 @@ mod tests {
         let source = framed.scope(source);
         assert!(source.typ(source.as_ref()).is_some());
         assert!(framed.resolve(&"p".into()).is_some());
+    }
+
+    /// Lexical frames and subtrees keep the prepared site of a `dynamic`
+    /// inside a lambda body after the specification is gone, with its types
+    /// for checked evaluation and without them for untyped evaluation.
+    #[test]
+    fn lexical_frames_keep_the_prepared_site_with_or_without_types() {
+        use ExprView::*;
+
+        let source =
+            "in property: Str\nout result: Int\nresult = (\\p: Str -> dynamic(p : Int))(property)";
+        let expr = crate::dsrv_fixtures::elaborated(source)
+            .var_expr(&"result".into())
+            .unwrap();
+        for (expression, typed) in [
+            (ScopedExpr::checked(expr.clone()), true),
+            (ScopedExpr::untyped(expr.untyped()), false),
+        ] {
+            let framed = {
+                let Apply(function, mut args) = expression.as_ref().view() else {
+                    panic!("expected application");
+                };
+                let argument = expression.scope(args.next().expect("application has an argument"));
+                let function = expression.scope(function);
+                let Lambda(params, body) = function.as_ref().view() else {
+                    panic!("expected lambda");
+                };
+                function
+                    .scope(body)
+                    .bind(params, EcoVec::from([argument]))
+                    .unwrap()
+            };
+            drop(expression);
+            assert!(matches!(framed.as_ref().view(), Dynamic(..)));
+            let site = framed.runtime_expression(framed.as_ref());
+            assert_eq!(site.typing().is_some(), typed);
+            assert!(site.parse_and_check("1").is_ok());
+        }
     }
 
     #[apply(async_test)]

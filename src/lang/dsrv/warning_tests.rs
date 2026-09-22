@@ -242,20 +242,20 @@ fn standalone_expression_checking_reports_warnings_with_its_result() {
 }
 
 #[test]
-fn runtime_text_discards_its_warnings() {
-    use crate::lang::dsrv::runtime_text::RuntimeText;
-    // Runtime text has no channel for warnings: it checks, and a runtime
-    // sees only the checked expression.
-    let checked = RuntimeText::default()
-        .accept("\"warn:alpha\"")
-        .expect("runtime text that warns still checks");
+fn runtime_expressions_discard_their_warnings() {
+    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
+    // A runtime expression has no channel for warnings: it checks, and a
+    // runtime sees only the checked expression.
+    let checked = RuntimeExpressionSite::default()
+        .parse_and_check("\"warn:alpha\"")
+        .expect("a runtime expression that warns still checks");
     assert_eq!(checked.expr().to_string(), "\"warn:alpha\"");
 }
 
 #[test]
-fn runtime_text_deliberately_discards_a_redundant_cast_warning() {
+fn runtime_expressions_deliberately_discard_a_redundant_cast_warning() {
     use crate::VarName;
-    use crate::lang::dsrv::runtime_text::RuntimeText;
+    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
     let spec = "use experimental::{casts}\nout y: Int = dynamic(\"1\": Int)"
         .parse::<DsrvSpecification>()
@@ -264,13 +264,13 @@ fn runtime_text_deliberately_discards_a_redundant_cast_warning() {
         .var_expr_ref(&VarName::new("y"))
         .expect("y is defined")
         .metadata();
-    let runtime_text = RuntimeText::new(
+    let runtime_expression = RuntimeExpressionSite::new(
         metadata.context.clone().expect("y has its source context"),
         metadata.callable.clone().unwrap_or_default(),
         None,
     );
-    let checked = runtime_text
-        .accept("1 as Int")
-        .expect("runtime text with a redundant cast still checks");
+    let checked = runtime_expression
+        .parse_and_check("1 as Int")
+        .expect("a runtime expression with a redundant cast still checks");
     assert_eq!(checked.expr().to_string(), "(1 as Int)");
 }

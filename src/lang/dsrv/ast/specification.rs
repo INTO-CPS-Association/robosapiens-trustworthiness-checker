@@ -4,7 +4,7 @@ use contiguous_tree::TreeCursorExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-use super::checked::{CheckedTypes, ExprTypes};
+use super::checked::{CheckedExpressionContext, ExprTypes};
 use super::{
     AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
 };
@@ -360,14 +360,14 @@ impl Debug for DsrvSpecification {
 #[derive(Clone, Debug)]
 pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
-    checked: AstShared<CheckedTypes>,
+    checked: AstShared<CheckedExpressionContext>,
     mode: TypeCheckMode,
 }
 
 impl CheckedDsrvSpecification {
     pub(crate) fn new(spec: DsrvSpecification, expr_types: ExprTypes, mode: TypeCheckMode) -> Self {
         let environment = AstShared::new(spec.type_annotations().clone());
-        let checked = AstShared::new(CheckedTypes::new(expr_types, environment));
+        let checked = AstShared::new(CheckedExpressionContext::new(expr_types, environment));
         Self {
             spec,
             checked,
@@ -418,6 +418,39 @@ impl CheckedDsrvSpecification {
             .get_owned(var)
             .map(|expr| CheckedExpr::from_checked_types(expr, self.checked.clone()))
     }
+
+    /// Prepare the sites of every runtime-expression occurrence before
+    /// execution handles escape.
+    ///
+    /// Sites are bound to expression storage. A specification whose sites
+    /// were prepared for its current storage keeps them; after a rewrite
+    /// that changed the storage they are prepared afresh.
+    pub(crate) fn prepare_sites(self) -> Self {
+        let ready = match self.spec.nodes().next() {
+            Some(node) => self.checked.sites_are_ready_for(node),
+            None => self.checked.prepared_site_count().is_some(),
+        };
+        if ready {
+            return self;
+        }
+        let checked = self.checked.prepare_sites(
+            self.spec.exprs.sparse_annotations_builder(),
+            self.spec.nodes(),
+        );
+        Self {
+            spec: self.spec,
+            checked: AstShared::new(checked),
+            mode: self.mode,
+        }
+    }
+
+    /// The number of prepared runtime-expression sites, or `None` if they
+    /// were never prepared.
+    #[cfg(test)]
+    pub(crate) fn prepared_site_count(&self) -> Option<usize> {
+        self.checked.prepared_site_count()
+    }
+
     pub fn input_vars(&self) -> &BTreeSet<VarName> {
         self.spec.input_vars()
     }

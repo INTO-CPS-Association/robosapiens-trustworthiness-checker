@@ -707,8 +707,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::core::{RuntimeFunction, StreamType, Value};
-use crate::lang::dsrv::ast::Expr;
-use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 use crate::{Specification, VarName};
 use ecow::{EcoString, EcoVec};
 

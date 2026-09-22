@@ -88,6 +88,7 @@ impl ElaboratedDsrvSpecification {
     /// A rewrite of an elaborated tree that keeps every node's type, such as
     /// distributed localisation, is itself elaborated; it has no other source.
     pub(crate) fn from_rewritten(elaborated: CheckedDsrvSpecification) -> Self {
+        let elaborated = elaborated.prepare_sites();
         Self {
             source: elaborated.clone(),
             elaborated,
@@ -98,7 +99,7 @@ impl ElaboratedDsrvSpecification {
 impl CheckedDsrvSpecification {
     /// Elaborate this checked specification into the tree runtimes run.
     pub fn elaborate(self) -> ElaboratedDsrvSpecification {
-        let elaborated = elaborate_tree(&self);
+        let elaborated = elaborate_tree(&self).prepare_sites();
         ElaboratedDsrvSpecification {
             source: self,
             elaborated,

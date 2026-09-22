@@ -7,7 +7,7 @@
 //! the corresponding stored node data and typed IDs.
 //!
 //! Type checking does not construct another AST. [`CheckedExprRef`] traverses
-//! the same expression tree while carrying immutable [`CheckedTypes`].
+//! the same expression tree while carrying immutable [`CheckedExpressionContext`].
 
 use crate::lang::dsrv::path::TypePath;
 use std::{
@@ -19,7 +19,7 @@ use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
 use super::CheckedExprRef;
-use super::checked::CheckedTypes;
+use super::checked::CheckedExpressionContext;
 use crate::core::{BinaryOperator, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
@@ -407,7 +407,7 @@ impl From<EcoVec<VarName>> for ReconfigurableExprScope {
 impl<'arena> ExprRef<'arena> {
     pub(super) fn with_checked_types(
         self,
-        checked: &'arena CheckedTypes,
+        checked: &'arena CheckedExpressionContext,
     ) -> CheckedExprRef<'arena> {
         CheckedExprRef::new(self, checked)
     }

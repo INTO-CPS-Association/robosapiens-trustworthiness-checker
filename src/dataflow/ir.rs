@@ -2,10 +2,9 @@ use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::reconfiguration::StreamStateKey;
 use super::*;
 use crate::core::{BinaryOperator, UnaryOperator};
-use crate::lang::dsrv::ast::{AstShared, ReconfigurableExprScope};
-use crate::lang::dsrv::expand::functions::Callable;
+use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::patterns::MatchPattern;
-use crate::lang::dsrv::source::SourceContext;
+use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -746,7 +745,7 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
                     allowed.sort_by_key(|variable| variable.name());
                     for variable in allowed {
                         append_identifier(descriptor, &variable.name());
-                        if let Some(typing) = &spec.typing
+                        if let Some(typing) = spec.site.typing()
                             && let Some(stream_type) = typing.environment.get(variable)
                         {
                             descriptor.push(':');
@@ -756,19 +755,19 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
                     }
                 }
             }
-            if let Some(typing) = &spec.typing {
+            if let Some(typing) = spec.site.typing() {
                 descriptor.push_str(",type=");
-                append_tc_type(descriptor, &typing.expected_type);
+                append_tc_type(descriptor, &typing.expected);
             }
             descriptor.push_str(",context=");
             descriptor.push_str(
-                &serde_json::to_string(spec.source_context.fingerprint())
+                &serde_json::to_string(spec.site.context().fingerprint())
                     .expect("source fingerprints are serializable"),
             );
             // Nothing is written where no def is callable, which is every
             // program that has not taken on the `functions` experiment.
             descriptor.push_str(",defs=");
-            spec.callable.describe(descriptor);
+            spec.site.callable().describe(descriptor);
             descriptor.push(')');
         }
         StreamOp::Function { func }
@@ -1091,26 +1090,17 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct ReconfigurableExpressionTyping {
-    pub(super) environment: AstShared<StreamTypeEnvironment>,
-    pub(super) expected_type: TCType,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(super) struct ReconfigurableExpressionSpec<E> {
     pub(super) input: DataRef<E>,
     pub(super) scope: ReconfigurableExpressionScope,
     /// The explicit `dynamic` or `defer` occurrence that owns this nested body.
     pub(super) kind: ReconfigurableExpressionKind,
-    /// The complete immutable source namespace captured by the owning AST.
-    /// Runtime source must resolve against this context, not a fresh default.
-    pub(super) source_context: AstShared<SourceContext>,
-    /// The defs the owning AST could call. Runtime source may call them too,
-    /// so they travel with the context rather than being resolved afresh.
-    pub(super) callable: AstShared<Callable>,
-    /// Type information for this node; absent only where no elaborated node
-    /// stands behind it, such as a graph a test builds from a bare `Expr`.
-    pub(super) typing: Option<ReconfigurableExpressionTyping>,
+    /// The occurrence's prepared site: the source namespace and defs its
+    /// runtime source resolves against, never a fresh default, and the type
+    /// and environment it is checked against. Untyped only where no
+    /// elaborated node stands behind it, such as a graph a test builds from
+    /// a bare `Expr`.
+    pub(super) site: RuntimeExpressionSite,
     /// Whether accepted text is lowered into a graph that specialises on its
     /// types, as the enclosing graph does.
     pub(super) specialise: bool,

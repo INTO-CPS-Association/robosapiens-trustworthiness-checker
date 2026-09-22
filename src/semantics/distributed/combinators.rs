@@ -61,7 +61,7 @@ mod tests {
     use crate::async_test;
     use crate::dsrv_fixtures::TestDistConfig;
     use crate::lang::dsrv::ast::ReconfigurableExprScope;
-    use crate::lang::dsrv::runtime_text::RuntimeText;
+    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
     use crate::{
         core::Value,
         distributed::distribution_graphs::{
@@ -99,7 +99,7 @@ mod tests {
             ReconfigurableExprScope::Automatic,
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

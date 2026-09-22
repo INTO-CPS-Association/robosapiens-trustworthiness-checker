@@ -23,7 +23,7 @@ use tracing::debug;
 #[cfg(test)]
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 #[cfg(test)]
-use crate::lang::dsrv::runtime_text::RuntimeText;
+use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
 pub use super::dynamic::{defer, dynamic};
 
@@ -699,7 +699,7 @@ mod combinator_tests {
             ReconfigurableExprScope::Automatic,
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -719,7 +719,7 @@ mod combinator_tests {
             ReconfigurableExprScope::Automatic,
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -742,7 +742,7 @@ mod combinator_tests {
             ReconfigurableExprScope::Automatic,
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -766,7 +766,7 @@ mod combinator_tests {
             ReconfigurableExprScope::Automatic,
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -803,7 +803,7 @@ mod combinator_tests {
             ReconfigurableExprScope::Automatic,
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -829,7 +829,7 @@ mod combinator_tests {
             eco_vec!["x".into()].into(),
             None,
             2,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         let _ = with_timeout(ctx.run(), 1, "ctx.run()")
             .await
@@ -854,7 +854,7 @@ mod combinator_tests {
             eco_vec!["x".into()].into(),
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -874,7 +874,7 @@ mod combinator_tests {
             eco_vec!["x".into()].into(),
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -899,7 +899,7 @@ mod combinator_tests {
             eco_vec!["x".into()].into(),
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -919,7 +919,7 @@ mod combinator_tests {
             eco_vec!["x".into()].into(),
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -964,7 +964,7 @@ mod combinator_tests {
             eco_vec!["x".into(), "y".into()].into(),
             None,
             10,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = with_timeout(res_stream.collect(), 10, "res_stream.collect")
@@ -1807,7 +1807,7 @@ mod noval_tests {
             ReconfigurableExprScope::Automatic,
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1827,7 +1827,7 @@ mod noval_tests {
             ReconfigurableExprScope::Automatic,
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1862,7 +1862,7 @@ mod noval_tests {
             ReconfigurableExprScope::Automatic,
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1910,7 +1910,7 @@ mod noval_tests {
             ReconfigurableExprScope::Automatic,
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1937,7 +1937,7 @@ mod noval_tests {
             eco_vec!["x".into()].into(),
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1957,7 +1957,7 @@ mod noval_tests {
             eco_vec!["x".into()].into(),
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;
@@ -1992,7 +1992,7 @@ mod noval_tests {
             eco_vec!["x".into()].into(),
             None,
             1,
-            RuntimeText::default(),
+            RuntimeExpressionSite::default(),
         );
         ctx.run().await;
         let res: Vec<Value> = res_stream.collect().await;

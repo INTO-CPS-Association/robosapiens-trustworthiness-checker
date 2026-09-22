@@ -199,7 +199,7 @@ fn a_constant_holding_a_stream_operation_is_refused() {
 }
 
 #[test]
-fn a_constant_holding_runtime_text_is_refused() {
+fn a_constant_holding_a_runtime_expression_is_refused() {
     let message = refusal(&format!(
         "{C}in x: Int\nconst limit: Int = dynamic(\"1\": Int)\nout y: Int\ny = limit\n"
     ));

@@ -1,13 +1,15 @@
 //! Lowering from DSRV expression views into evaluation graphs.
 //!
-//! Checked and unchecked inputs share an AST-owned cursor. Its child cursors
-//! preserve the phase and expose checked types only when they are present.
+//! Lowering walks a prepared checked expression. A graph that does not
+//! specialise on types ignores them, but still takes each `dynamic` and
+//! `defer` occurrence's prepared site.
 
 use super::super::ir::*;
 use super::super::*;
 use crate::core::UnaryOperator;
-use crate::lang::dsrv::ast::{AstShared, CheckedExpr, ExprCursor, ExprView};
+use crate::lang::dsrv::ast::{CheckedExpr, CheckedExprRef, ExprView};
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
+use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 use crate::lang::dsrv::type_checker::TCType;
 
 struct EvaluationGraphBuilder {
@@ -15,8 +17,8 @@ struct EvaluationGraphBuilder {
     scalar_signatures: Vec<Option<ScalarSignature>>,
     /// Whether the graph consults the elaborated types to specialise scalar
     /// operations. An unspecialised graph still carries each `dynamic` and
-    /// `defer` node's typing, so text arriving there is checked as it is
-    /// everywhere else.
+    /// `defer` node's prepared site, typing included, so source arriving
+    /// there is checked as it is everywhere else.
     specialise: bool,
 }
 
@@ -30,8 +32,8 @@ impl EvaluationGraphBuilder {
     }
 
     /// The elaborated type of `expr`, where this graph specialises on types.
-    fn scalar_typ<'a>(&self, expr: ExprCursor<'a>) -> Option<&'a TCType> {
-        if self.specialise { expr.typ() } else { None }
+    fn scalar_typ<'a>(&self, expr: CheckedExprRef<'a>) -> Option<&'a TCType> {
+        self.specialise.then(|| expr.typ())
     }
 
     fn push(&mut self, op: UnboundOp) -> UnboundRef {
@@ -55,7 +57,7 @@ impl EvaluationGraphBuilder {
 }
 
 /// One arm's guard or body, as a program of the names its pattern binds.
-fn lower_arm(arm: &MatchArm, expr: ExprCursor<'_>, specialise: bool) -> UnboundFunction {
+fn lower_arm(arm: &MatchArm, expr: CheckedExprRef<'_>, specialise: bool) -> UnboundFunction {
     UnboundFunction::new(
         arm.pattern.bound_names().into_iter().collect(),
         lower_branch(expr, specialise),
@@ -74,20 +76,16 @@ fn constant_arm(arm: &MatchArm, value: Value, specialise: bool) -> UnboundFuncti
     )
 }
 
-fn lower_branch(expr: ExprCursor<'_>, specialise: bool) -> UnboundEvaluationGraph {
+fn lower_branch(expr: CheckedExprRef<'_>, specialise: bool) -> UnboundEvaluationGraph {
     let mut builder = EvaluationGraphBuilder::new(specialise);
     let output = lower_expression(expr, &mut builder);
     builder.finish(output)
 }
 
-pub(in crate::dataflow) fn build_expression_graph(expr: Expr) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(ExprCursor::unchecked(expr.as_ref()), false)
-}
-
 pub(in crate::dataflow) fn build_checked_expression_graph(
     expr: CheckedExpr,
 ) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(expr.as_ref().erased(), true)
+    build_graph_from_cursor(expr.as_ref(), true)
 }
 
 /// Lower an elaborated expression without specialising on its types, as
@@ -96,16 +94,16 @@ pub(in crate::dataflow) fn build_checked_expression_graph(
 pub(in crate::dataflow) fn build_unspecialised_expression_graph(
     expr: CheckedExpr,
 ) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(expr.as_ref().erased(), false)
+    build_graph_from_cursor(expr.as_ref(), false)
 }
 
-fn build_graph_from_cursor(expr: ExprCursor<'_>, specialise: bool) -> UnboundEvaluationGraph {
+fn build_graph_from_cursor(expr: CheckedExprRef<'_>, specialise: bool) -> UnboundEvaluationGraph {
     let mut builder = EvaluationGraphBuilder::new(specialise);
     let output = lower_expression(expr, &mut builder);
     builder.finish(output)
 }
 
-fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) -> UnboundRef {
+fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuilder) -> UnboundRef {
     use ExprView::*;
 
     let result_kind = scalar_kind(builder.scalar_typ(expr));
@@ -280,42 +278,20 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
                 key: key.clone(),
             })
         }
-        Dynamic(source, _, scope) => {
-            lower_reconfigurable_expression(
-                builder,
-                source,
-                ReconfigurableExpressionScope::from_ast(scope.clone()),
-                ReconfigurableExpressionKind::Dynamic,
-                expr.expr().metadata().context.clone().unwrap_or_else(|| {
-                    AstShared::new(crate::lang::dsrv::source::SourceContext::default())
-                }),
-                expr.expr().metadata().callable.clone().unwrap_or_default(),
-                expr.shared_type_environment().zip(expr.typ()).map(
-                    |(environment, expected_type)| ReconfigurableExpressionTyping {
-                        environment: AstShared::clone(environment),
-                        expected_type: expected_type.clone(),
-                    },
-                ),
-            )
-        }
-        Defer(source, _, scope) => {
-            lower_reconfigurable_expression(
-                builder,
-                source,
-                ReconfigurableExpressionScope::from_ast(scope.clone()),
-                ReconfigurableExpressionKind::Deferred,
-                expr.expr().metadata().context.clone().unwrap_or_else(|| {
-                    AstShared::new(crate::lang::dsrv::source::SourceContext::default())
-                }),
-                expr.expr().metadata().callable.clone().unwrap_or_default(),
-                expr.shared_type_environment().zip(expr.typ()).map(
-                    |(environment, expected_type)| ReconfigurableExpressionTyping {
-                        environment: AstShared::clone(environment),
-                        expected_type: expected_type.clone(),
-                    },
-                ),
-            )
-        }
+        Dynamic(source, _, scope) => lower_reconfigurable_expression(
+            builder,
+            source,
+            ReconfigurableExpressionScope::from_ast(scope.clone()),
+            ReconfigurableExpressionKind::Dynamic,
+            expr.runtime_expression().clone(),
+        ),
+        Defer(source, _, scope) => lower_reconfigurable_expression(
+            builder,
+            source,
+            ReconfigurableExpressionScope::from_ast(scope.clone()),
+            ReconfigurableExpressionKind::Deferred,
+            expr.runtime_expression().clone(),
+        ),
         Lambda(params, body) => {
             let func = lower_function(params.clone(), body, builder.specialise);
             builder.push(UnboundOp::Function { func })
@@ -372,7 +348,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
         }
         Match(scrutinee, arms, shape) => {
             let scrutinee = lower_expression(scrutinee, builder);
-            let children: Vec<ExprCursor<'_>> = arms.into_iter().collect();
+            let children: Vec<CheckedExprRef<'_>> = arms.into_iter().collect();
             let mut place = 0;
             let arms = shape
                 .iter()
@@ -434,7 +410,7 @@ fn lower_expression(expr: ExprCursor<'_>, builder: &mut EvaluationGraphBuilder) 
 fn lower_unary(
     builder: &mut EvaluationGraphBuilder,
     op: UnaryOperator,
-    arg: ExprCursor<'_>,
+    arg: CheckedExprRef<'_>,
     output: Option<ScalarKind>,
 ) -> UnboundRef {
     let signature = scalar_unary_signature(builder.scalar_typ(arg), output);
@@ -474,7 +450,7 @@ fn scalar_binary_signature(
 }
 
 fn lower_expressions<'arena>(
-    items: impl IntoIterator<Item = ExprCursor<'arena>>,
+    items: impl IntoIterator<Item = CheckedExprRef<'arena>>,
     builder: &mut EvaluationGraphBuilder,
 ) -> Vec<UnboundRef> {
     items
@@ -485,12 +461,10 @@ fn lower_expressions<'arena>(
 
 fn lower_reconfigurable_expression(
     builder: &mut EvaluationGraphBuilder,
-    input: ExprCursor<'_>,
+    input: CheckedExprRef<'_>,
     scope: ReconfigurableExpressionScope,
     kind: ReconfigurableExpressionKind,
-    source_context: AstShared<crate::lang::dsrv::source::SourceContext>,
-    callable: AstShared<crate::lang::dsrv::expand::functions::Callable>,
-    typing: Option<ReconfigurableExpressionTyping>,
+    site: RuntimeExpressionSite,
 ) -> UnboundRef {
     let specialise = builder.specialise;
     let input = lower_expression(input, builder);
@@ -499,9 +473,7 @@ fn lower_reconfigurable_expression(
             input,
             scope,
             kind,
-            source_context,
-            callable,
-            typing,
+            site,
             specialise,
         },
     ))
@@ -509,7 +481,7 @@ fn lower_reconfigurable_expression(
 
 fn lower_function(
     params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
-    body: ExprCursor<'_>,
+    body: CheckedExprRef<'_>,
     specialise: bool,
 ) -> UnboundFunction {
     let params_display = params
@@ -524,8 +496,8 @@ fn lower_function(
 }
 
 fn try_lower_recursive_apply<'arena>(
-    func: ExprCursor<'arena>,
-    args: impl IntoIterator<Item = ExprCursor<'arena>>,
+    func: CheckedExprRef<'arena>,
+    args: impl IntoIterator<Item = CheckedExprRef<'arena>>,
     builder: &mut EvaluationGraphBuilder,
 ) -> Option<UnboundRef> {
     use ExprView::*;

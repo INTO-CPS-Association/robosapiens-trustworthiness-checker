@@ -8,7 +8,7 @@ use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::evaluator_state::*;
 use super::lifting::retain_last_value;
 use crate::lang::dsrv::ast::AstShared;
-use crate::lang::dsrv::runtime_text::{RuntimeText, RuntimeTextTyping};
+use crate::lang::dsrv::runtime_expression::{RuntimeExpressionError, RuntimeExpressionTyping};
 
 pub(in crate::dataflow) fn evaluate_reconfigurable_expression(
     current: Value,
@@ -93,7 +93,7 @@ pub(in crate::dataflow) struct SharedReconfigurableExpressionCache {
 
 struct SharedReconfigurableExpressionCacheEntry {
     environment: Rc<EnvironmentLayout>,
-    typing: Option<ReconfigurableExpressionTyping>,
+    typing: Option<RuntimeExpressionTyping>,
     template: Rc<ReconfigurableExpressionTemplate>,
 }
 
@@ -106,19 +106,18 @@ impl SharedReconfigurableExpressionCacheEntry {
     ) -> bool {
         let allowed_variables = spec.scope.allowed_variables();
         &*self.template.source_text == &*source_text
-            && self.template.source_context.fingerprint() == spec.source_context.fingerprint()
-            && *self.template.callable == *spec.callable
+            && self.template.site.same_lexical_environment(&spec.site)
             && Rc::ptr_eq(&self.environment, environment)
             && self.template.nested_environment_slots.iter().all(|slot| {
                 environment
                     .variable(*slot)
                     .is_some_and(|variable| allowed_variables.contains(variable))
             })
-            && match (&self.typing, &spec.typing) {
+            && match (&self.typing, spec.site.typing()) {
                 (None, None) => true,
                 (Some(cached), Some(requested)) => {
                     AstShared::ptr_eq(&cached.environment, &requested.environment)
-                        && cached.expected_type == requested.expected_type
+                        && cached.expected == requested.expected
                 }
                 _ => false,
             }
@@ -164,7 +163,7 @@ impl SharedReconfigurableExpressionCache {
         }
         self.entries.push(SharedReconfigurableExpressionCacheEntry {
             environment: Rc::clone(environment),
-            typing: spec.typing.clone(),
+            typing: spec.site.typing().cloned(),
             template,
         });
     }
@@ -199,8 +198,7 @@ pub(in crate::dataflow) fn prepare_active_expression_with_change(
         .iter()
         .find(|template| {
             template.source_text == source_text
-                && template.source_context.fingerprint() == spec.source_context.fingerprint()
-                && *template.callable == *spec.callable
+                && template.site.same_lexical_environment(&spec.site)
                 && Rc::ptr_eq(&template.program.environment_layout, environment)
         })
         .cloned()
@@ -322,8 +320,7 @@ fn compile_reconfigurable_expression_template(
     }
     Ok(Rc::new(ReconfigurableExpressionTemplate {
         source_text,
-        source_context: AstShared::clone(&spec.source_context),
-        callable: AstShared::clone(&spec.callable),
+        site: spec.site.clone(),
         program: compiled.program,
         nested_dependency_slots: compiled.nested_dependency_slots,
         nested_environment_slots: compiled.nested_environment_slots,
@@ -338,38 +335,31 @@ fn compile_dynamic_expression(
     spec: &BoundReconfigurableExpressionSpec,
     environment: &Rc<EnvironmentLayout>,
 ) -> Result<CompiledReconfigurableExpression, DataflowEvaluationError> {
-    // Text is checked on arrival whether or not this graph consults types:
-    // against the type and environment elaboration gave the node, or, where
-    // lowering erased them, against `Any` (see RuntimeText).
-    let text = RuntimeText::new(
-        AstShared::clone(&spec.source_context),
-        AstShared::clone(&spec.callable),
-        spec.typing.as_ref().map(
-            |ReconfigurableExpressionTyping {
-                 environment,
-                 expected_type,
-             }| RuntimeTextTyping {
-                environment: AstShared::clone(environment),
-                expected: expected_type.clone(),
-            },
-        ),
-    );
-    let expr = text.parse(source_text.as_ref()).map_err(|error| {
-        DataflowEvaluationError::ReconfigurableExpressionParse {
-            expression: source_text.clone(),
-            message: error.to_string(),
-        }
-    })?;
-    let checked = text.check(source_text.as_ref(), expr).map_err(|error| {
-        DataflowEvaluationError::ReconfigurableExpressionType {
-            expression: source_text.clone(),
-            message: error.to_string(),
-        }
-    })?;
+    // Source is checked on arrival whether or not this graph consults types:
+    // against the type and environment elaboration gave the occurrence, or,
+    // where it has none, against `Any` (see RuntimeExpressionSite). Checking
+    // prepares the sites of any nested occurrences before the graph is built.
+    let site = &spec.site;
+    let checked = site
+        .parse_and_check(source_text.as_ref())
+        .map_err(|error| match error {
+            RuntimeExpressionError::Parse { .. } => {
+                DataflowEvaluationError::ReconfigurableExpressionParse {
+                    expression: source_text.clone(),
+                    message: error.to_string(),
+                }
+            }
+            RuntimeExpressionError::TypeCheck { .. } => {
+                DataflowEvaluationError::ReconfigurableExpressionType {
+                    expression: source_text.clone(),
+                    message: error.to_string(),
+                }
+            }
+        })?;
     let mut graph = if spec.specialise {
         build_checked_expression_graph(checked)
     } else {
-        build_expression_graph(checked.expr().clone())
+        build_unspecialised_expression_graph(checked)
     };
     let allowed_vars = spec.scope.allowed_variables();
     graph.restrict_reconfigurable_scopes(allowed_vars);
@@ -418,6 +408,7 @@ fn compile_dynamic_expression(
 mod tests {
     use super::*;
     use crate::VarName;
+    use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
     fn fixture(
         kind: ReconfigurableExpressionKind,
@@ -434,11 +425,7 @@ mod tests {
                 allowed_variables: variables.into_iter().collect(),
             },
             kind,
-            callable: Default::default(),
-            source_context: crate::lang::dsrv::ast::AstShared::new(
-                crate::lang::dsrv::source::SourceContext::default(),
-            ),
-            typing: None,
+            site: RuntimeExpressionSite::default(),
             specialise: false,
         };
         (spec, environment)
@@ -462,24 +449,19 @@ mod tests {
     fn dynamic_spec(
         scope: ReconfigurableExpressionScope,
         kind: ReconfigurableExpressionKind,
-        typing: Option<ReconfigurableExpressionTyping>,
+        typing: Option<RuntimeExpressionTyping>,
     ) -> BoundReconfigurableExpressionSpec {
         BoundReconfigurableExpressionSpec {
             input: BoundRef::Const(Value::NoVal),
-            callable: Default::default(),
             scope,
             kind,
-            source_context: crate::lang::dsrv::ast::AstShared::new(
-                crate::lang::dsrv::source::SourceContext::default(),
-            ),
             specialise: typing.is_some(),
-            typing,
+            site: RuntimeExpressionSite::new(Default::default(), Default::default(), typing),
         }
     }
 
-    fn alias_context(
-        alias: &str,
-    ) -> crate::lang::dsrv::ast::AstShared<crate::lang::dsrv::source::SourceContext> {
+    /// An untyped site whose source context names `alias` as `Int`.
+    fn alias_site(alias: &str) -> RuntimeExpressionSite {
         let mut builder = crate::lang::dsrv::source::SourceContext::builder();
         builder
             .insert(
@@ -487,7 +469,11 @@ mod tests {
                 StreamType::Int,
             )
             .unwrap();
-        crate::lang::dsrv::ast::AstShared::new(builder.build().unwrap())
+        RuntimeExpressionSite::new(
+            crate::lang::dsrv::ast::AstShared::new(builder.build().unwrap()),
+            Default::default(),
+            None,
+        )
     }
 
     fn cache_template(
@@ -517,23 +503,23 @@ mod tests {
         let (mut spec, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
         let source = "\\v: U -> v + x".into();
         assert!(compile_dynamic_expression(&source, &spec, &environment).is_err());
-        spec.source_context = alias_context("U");
+        spec.site = alias_site("U");
         assert!(compile_dynamic_expression(&source, &spec, &environment).is_ok());
     }
 
     #[test]
     fn source_context_is_part_of_local_and_shared_template_identity() {
         let (mut first, environment) = fixture(ReconfigurableExpressionKind::Dynamic, &["x"]);
-        first.source_context = alias_context("U");
+        first.site = alias_site("U");
         let mut second = first.clone();
-        second.source_context = alias_context("V");
+        second.site = alias_site("V");
         let mut cache = SharedReconfigurableExpressionCache::default();
         let template = cache_template(&mut cache, "x", &first, &environment);
         assert!(cache.lookup(&"x".into(), &first, &environment).is_some());
         assert!(cache.lookup(&"x".into(), &second, &environment).is_none());
         assert_ne!(
-            template.source_context.fingerprint(),
-            second.source_context.fingerprint()
+            template.site.context().fingerprint(),
+            second.site.context().fingerprint()
         );
     }
 
@@ -756,17 +742,17 @@ mod tests {
         let typed_spec_a = dynamic_spec(
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
-            Some(ReconfigurableExpressionTyping {
+            Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_a),
-                expected_type: crate::lang::dsrv::type_checker::TCType::Int,
+                expected: crate::lang::dsrv::type_checker::TCType::Int,
             }),
         );
         let typed_spec_b = dynamic_spec(
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
-            Some(ReconfigurableExpressionTyping {
+            Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_b),
-                expected_type: crate::lang::dsrv::type_checker::TCType::Int,
+                expected: crate::lang::dsrv::type_checker::TCType::Int,
             }),
         );
         let typed_first = cache_template(&mut cache, "x", &typed_spec_a, &environment_a);
@@ -778,9 +764,9 @@ mod tests {
         let different_expected_type_spec = dynamic_spec(
             restricted_scope(&["x"]),
             ReconfigurableExpressionKind::Dynamic,
-            Some(ReconfigurableExpressionTyping {
+            Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&type_environment_a),
-                expected_type: crate::lang::dsrv::type_checker::TCType::Any,
+                expected: crate::lang::dsrv::type_checker::TCType::Any,
             }),
         );
         let different_expected_type = cache_template(

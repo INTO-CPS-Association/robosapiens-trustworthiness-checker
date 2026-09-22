@@ -11,7 +11,7 @@ use crate::lang::dsrv::LanguageError;
 use crate::lang::dsrv::ast::{DsrvSpecification, ExprView};
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str};
 use crate::lang::dsrv::path::{ModuleName, TypePath};
-use crate::lang::dsrv::runtime_text::RuntimeText;
+use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 
 use test_log::test;
 
@@ -55,17 +55,12 @@ fn program(root: &str, sources: &[(&str, &str)]) -> DsrvSpecification {
     .expect("expands")
 }
 
-/// The runtime text of `var`'s expression: what text supplied to that node
-/// would be checked and expanded against.
-fn runtime_text_at(spec: &DsrvSpecification, var: &str) -> RuntimeText {
-    let metadata = spec
-        .var_expr_ref(&VarName::from(var))
-        .expect("the variable is defined")
-        .metadata();
-    RuntimeText::new(
-        metadata.context.clone().unwrap_or_default(),
-        metadata.callable.clone().unwrap_or_default(),
-        None,
+/// The untyped site of `var`'s expression in an unchecked specification:
+/// what source supplied to that node would be parsed and expanded against.
+fn runtime_expression_at(spec: &DsrvSpecification, var: &str) -> RuntimeExpressionSite {
+    RuntimeExpressionSite::unlocated(
+        spec.var_expr_ref(&VarName::from(var))
+            .expect("the variable is defined"),
     )
 }
 
@@ -615,7 +610,7 @@ fn text_supplied_at_runtime_may_call_a_def() {
         "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n"
     ))
     .expect("parses");
-    let expr = runtime_text_at(&spec, "y")
+    let expr = runtime_expression_at(&spec, "y")
         .parse("twice(x)")
         .expect("the text may call twice");
     let printed = expr.to_string();
@@ -630,7 +625,7 @@ fn text_supplied_at_runtime_may_call_a_def() {
 #[test]
 fn text_supplied_at_runtime_calls_nothing_where_no_def_was_declared() {
     let spec = parse_str("in x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n").expect("parses");
-    let expr = runtime_text_at(&spec, "y")
+    let expr = runtime_expression_at(&spec, "y")
         .parse("twice(x)")
         .expect("parses");
     assert!(
@@ -647,7 +642,7 @@ fn text_supplied_at_runtime_may_call_a_def_declared_after_the_node() {
         "{FUNCTIONS}in x: Int\nout y: Int\ny = dynamic(\"1\": Int)\ndef twice(n: Int) -> Int = n * 2\n"
     ))
     .expect("parses");
-    let expr = runtime_text_at(&spec, "y")
+    let expr = runtime_expression_at(&spec, "y")
         .parse("twice(x)")
         .expect("the text may call twice");
     assert!(expr.to_string().contains('*'), "got {expr}");
@@ -656,20 +651,15 @@ fn text_supplied_at_runtime_may_call_a_def_declared_after_the_node() {
 /// Runtime text a def's own body supplies is expanded the same way, so a
 /// def may be called from inside text nested in a call to another.
 #[test]
-fn text_nested_in_runtime_text_may_call_a_def_in_turn() {
+fn source_nested_in_a_runtime_expression_may_call_a_def_in_turn() {
     let spec = parse_str(&format!(
         "{FUNCTIONS}def twice(n: Int) -> Int = n * 2\nin x: Int\nout y: Int\ny = dynamic(\"1\": Int)\n"
     ))
     .expect("parses");
-    let outer = runtime_text_at(&spec, "y")
+    let outer = runtime_expression_at(&spec, "y")
         .parse("dynamic(\"1\": Int)")
         .expect("the text may name another dynamic");
-    let metadata = outer.as_ref().metadata();
-    let inner = RuntimeText::new(
-        metadata.context.clone().unwrap_or_default(),
-        metadata.callable.clone().unwrap_or_default(),
-        None,
-    );
+    let inner = RuntimeExpressionSite::unlocated(outer.as_ref());
     let expr = inner
         .parse("twice(x)")
         .expect("the nested text may call it");
@@ -688,7 +678,7 @@ fn text_supplied_at_runtime_may_call_an_imported_def() {
         )],
     );
     for text in ["twice(x)", "store::twice(x)"] {
-        let expr = runtime_text_at(&spec, "y")
+        let expr = runtime_expression_at(&spec, "y")
             .parse(text)
             .unwrap_or_else(|error| panic!("{text}: {error}"));
         let printed = expr.to_string();
@@ -710,7 +700,7 @@ fn text_supplied_at_runtime_cannot_call_an_internal_def() {
             "use experimental::{modules, functions}\ninternal def twice(n: Int) -> Int = n * 2\n",
         )],
     );
-    let expr = runtime_text_at(&spec, "y")
+    let expr = runtime_expression_at(&spec, "y")
         .parse("twice(x)")
         .expect("parses");
     assert!(

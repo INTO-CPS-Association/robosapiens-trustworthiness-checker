@@ -3,24 +3,25 @@ use futures::StreamExt;
 
 use crate::causal::{CausalDomain, CausalRole, CausalValue};
 use crate::lang::core::DependencyGraphExpr;
-use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ReconfigurableExprScope};
-use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType, check_expression};
+use crate::lang::dsrv::ast::{CheckedExpr, ReconfigurableExprScope};
+use crate::lang::dsrv::runtime_expression::{
+    RuntimeExpressionError, RuntimeExpressionSite, UntypedExpr,
+};
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{LocalStream, Value, VarName};
 
 type Evaluator<AC, D> =
-    fn(Expr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
+    fn(UntypedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
 type CheckedEvaluator<AC, D> =
     fn(CheckedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
 
+/// How a runtime expression is accepted and evaluated. Monitors evaluated
+/// without types keep their parse-only policy: their runtime expressions are
+/// parsed at the occurrence's site but never checked.
 #[derive(Clone)]
 enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
     Unchecked(Evaluator<AC, D>),
-    Checked {
-        environment: AstShared<StreamTypeEnvironment>,
-        expected: TCType,
-        evaluator: CheckedEvaluator<AC, D>,
-    },
+    Checked(CheckedEvaluator<AC, D>),
 }
 
 fn subcontext<AC, D>(
@@ -74,6 +75,7 @@ pub fn dynamic<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
+    site: RuntimeExpressionSite,
     evaluator: Evaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -87,6 +89,7 @@ where
         source,
         scope,
         owner,
+        site,
         RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
     )
 }
@@ -96,8 +99,7 @@ pub fn dynamic_checked<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
-    expected: TCType,
-    environment: AstShared<StreamTypeEnvironment>,
+    site: RuntimeExpressionSite,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -111,11 +113,8 @@ where
         source,
         scope,
         owner,
-        RuntimeEvaluator::<AC, D>::Checked {
-            environment,
-            expected,
-            evaluator,
-        },
+        site,
+        RuntimeEvaluator::<AC, D>::Checked(evaluator),
     )
 }
 
@@ -124,6 +123,7 @@ fn dynamic_inner<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
+    site: RuntimeExpressionSite,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -173,6 +173,7 @@ where
                     }
                     let mut output = evaluate_property::<AC, D>(
                         property.as_ref(),
+                        &site,
                         &ctx,
                         owner.clone(),
                         evaluator.clone(),
@@ -195,6 +196,7 @@ where
 
 fn evaluate_property<AC, D>(
     property: &str,
+    site: &RuntimeExpressionSite,
     ctx: &AC::Ctx,
     owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
@@ -205,20 +207,23 @@ where
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    let expr = crate::lang::dsrv::parser::parse_expr(property)
-        .expect("invalid scalar dynamic DSRV expression");
     match evaluator {
-        RuntimeEvaluator::Unchecked(evaluator) => evaluator(expr, ctx, owner),
-        RuntimeEvaluator::Checked {
-            environment,
-            expected,
-            evaluator,
-        } => {
-            // Runtime text has nowhere to present warnings.
-            let checked = check_expression(expr, &expected, &environment)
-                .discard_warnings()
-                .unwrap_or_else(|errors| {
-                    panic!("Dynamic expression failed type checking: {errors:?}")
+        RuntimeEvaluator::Unchecked(evaluator) => {
+            let expr = site
+                .parse_unchecked(property)
+                .unwrap_or_else(|error| panic!("invalid scalar dynamic DSRV expression: {error}"));
+            evaluator(expr, ctx, owner)
+        }
+        RuntimeEvaluator::Checked(evaluator) => {
+            let checked = site
+                .parse_and_check(property)
+                .unwrap_or_else(|error| match error {
+                    RuntimeExpressionError::Parse { .. } => {
+                        panic!("invalid scalar dynamic DSRV expression: {error}")
+                    }
+                    RuntimeExpressionError::TypeCheck { errors, .. } => {
+                        panic!("Dynamic expression failed type checking: {errors:?}")
+                    }
                 });
             evaluator(checked, ctx, owner)
         }
@@ -230,6 +235,7 @@ pub fn defer<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
+    site: RuntimeExpressionSite,
     evaluator: Evaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -243,6 +249,7 @@ where
         source,
         scope,
         owner,
+        site,
         RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
     )
 }
@@ -252,8 +259,7 @@ pub fn defer_checked<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
-    expected: TCType,
-    environment: AstShared<StreamTypeEnvironment>,
+    site: RuntimeExpressionSite,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -267,11 +273,8 @@ where
         source,
         scope,
         owner,
-        RuntimeEvaluator::<AC, D>::Checked {
-            environment,
-            expected,
-            evaluator,
-        },
+        site,
+        RuntimeEvaluator::<AC, D>::Checked(evaluator),
     )
 }
 
@@ -280,6 +283,7 @@ fn defer_inner<AC, D>(
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
     owner: Option<VarName>,
+    site: RuntimeExpressionSite,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -310,6 +314,7 @@ where
                         .joint(current.explanation);
                     let mut output = evaluate_property::<AC, D>(
                         property.as_ref(),
+                        &site,
                         &ctx,
                         owner.clone(),
                         evaluator.clone(),

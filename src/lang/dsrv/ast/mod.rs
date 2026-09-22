@@ -4,6 +4,10 @@
 pub(crate) type AstShared<T> = std::sync::Arc<T>;
 #[cfg(not(feature = "thread-safe-ast"))]
 pub(crate) type AstShared<T> = std::rc::Rc<T>;
+#[cfg(all(test, feature = "thread-safe-ast"))]
+pub(crate) type AstWeak<T> = std::sync::Weak<T>;
+#[cfg(all(test, not(feature = "thread-safe-ast")))]
+pub(crate) type AstWeak<T> = std::rc::Weak<T>;
 
 // Core nodes and expression handles.
 mod expression;
@@ -22,7 +26,7 @@ mod display;
 
 pub(crate) use analysis::DependencyKind;
 pub use checked::{CheckedExpr, CheckedExprRef};
-pub(crate) use checked::{ExprCursor, ExprTypes, ExprTypesBuilder};
+pub(crate) use checked::{ExprTypes, ExprTypesBuilder};
 
 pub use expression::{
     Expr, ExprId, ExprRef, ExprView, ReconfigurableExprScope, SyntaxLiteral, SyntaxLiteralError,
