@@ -33,6 +33,13 @@ pub(crate) fn build_graph(
     let order = dependency_order(sources)?;
     let mut graph: ModuleGraph = BTreeMap::new();
     for path in order {
+        // An embedded module is read under its own header alone: settings
+        // requested for the application are the application's.
+        let request = if sources.is_embedded(&path) {
+            LanguageRequest::default()
+        } else {
+            request
+        };
         let context = build_module(&path, sources, &graph, request)?;
         graph.insert(path, Rc::new(context));
     }

@@ -1,0 +1,13 @@
+edition 2026-09
+use experimental::{tagged_unions, pattern_matching, generics, functions, modules}
+
+type Option<T> = Union<Some: T, None>
+
+def is_some<T>(option: Option<T>) -> Bool = matches(option, Some(_))
+
+def is_none<T>(option: Option<T>) -> Bool = matches(option, None)
+
+def unwrap_or<T>(option: Option<T>, fallback: T) -> T = match(option) {
+    Some(value) -> value,
+    None -> fallback,
+}

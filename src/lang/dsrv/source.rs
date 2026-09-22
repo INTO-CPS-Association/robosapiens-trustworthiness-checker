@@ -159,11 +159,15 @@ pub enum SourceResolveError {
 /// not affect it; changing even an unused alias does.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct SourceFingerprint {
+    #[serde(serialize_with = "as_pairs")]
     aliases: BTreeMap<TypePath, StreamType>,
     /// Generic aliases have no type until they are used, so the namespace
     /// carries them as written. Changing one changes the program even when
     /// nothing has used it yet, as changing an unused alias does.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        serialize_with = "as_pairs"
+    )]
     generic: BTreeMap<TypePath, AliasDeclaration>,
     /// The names this module keeps to itself, which no import may take.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
@@ -178,6 +182,15 @@ pub struct SourceFingerprint {
     /// different releases.
     #[serde(skip_serializing_if = "Option::is_none")]
     experimental_revision: Option<u32>,
+}
+
+/// A map keyed by paths, written as its entries in order. A path is a
+/// structure, which a format such as JSON cannot use as a key.
+fn as_pairs<V: serde::Serialize, S: serde::Serializer>(
+    map: &BTreeMap<TypePath, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(map)
 }
 
 impl SourceFingerprint {
@@ -880,6 +893,31 @@ mod tests {
         );
         other.insert(name("Unused"), StreamType::Bool).unwrap();
         assert_ne!(context.fingerprint(), other.build().unwrap().fingerprint());
+    }
+
+    /// A runtime-expression site writes its namespace's fingerprint into
+    /// its identity as JSON, whose keys must be strings, so aliases keyed by
+    /// path are written as entries rather than as a map.
+    #[test]
+    fn a_fingerprint_with_aliases_serializes_as_json() {
+        let mut builder = SourceContext::builder();
+        builder.insert(name("Count"), StreamType::Int).unwrap();
+        builder
+            .insert_source(AliasDeclaration {
+                parameters: EcoVec::from([name("A")]),
+                ..declaration("Box", named("A", Span::new(3, 4)))
+            })
+            .unwrap();
+        let context = builder.build().unwrap();
+        let written = serde_json::to_string(context.fingerprint()).unwrap();
+        assert!(
+            written.contains(r#""aliases":[[{"name":"Count"},"Int"]]"#),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#""generic":[[{"name":"Box"},"#),
+            "{written}"
+        );
     }
 
     #[test]

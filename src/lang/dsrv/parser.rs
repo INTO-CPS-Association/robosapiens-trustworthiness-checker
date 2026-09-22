@@ -4,8 +4,10 @@
 //! [`super::expand`]; these functions run both stages for existing callers.
 
 use super::ast::AstShared as Rc;
+use crate::lang::dsrv::catalogue::Catalogue;
 use crate::lang::dsrv::modules::{
-    ImportError, ModuleCollector, ModuleSources, module_file, show_path,
+    ImportError, ModuleCollectError, ModuleCollector, ModuleSources, imports_of, module_file,
+    show_path,
 };
 use crate::lang::dsrv::path::ModuleName;
 
@@ -58,6 +60,9 @@ pub enum DsrvParseError {
 
     #[error("invalid module structure: {0}")]
     Modules(String),
+
+    #[error("invalid module structure: {0}")]
+    Collect(#[from] ModuleCollectError),
 }
 
 impl From<DsrvSyntaxError> for DsrvParseError {
@@ -144,17 +149,46 @@ pub fn parse_str_with(
 }
 
 /// Parse a program of one file, which diagnostics name `label`.
+///
+/// The file may import modules built into the checker, which are the only
+/// ones a program with no filesystem can have; it is then expanded as a
+/// program of those modules and itself, and a `mod` it declares is a
+/// module nothing supplied. A file that imports none expands on its own,
+/// as it always has, with any `mod` it declares ignored.
 pub fn parse_labelled(
     input: &str,
     label: SourceLabel,
     request: LanguageRequest,
 ) -> Result<DsrvSpecification, DsrvParseError> {
-    let (parsed, archive) = syntax::parse_archived_specification(input, label)?;
-    Ok(expand::expand_specification(
-        parsed,
-        request,
-        Rc::new(archive),
-    )?)
+    let (parsed, archive) = syntax::parse_archived_specification(input, label.clone())?;
+    if !reaches_an_owned_root(&parsed) {
+        return Ok(expand::expand_specification(
+            parsed,
+            request,
+            Rc::new(archive),
+        )?);
+    }
+    let collector = ModuleCollector::with_label(input, label)?;
+    Ok(expand::expand_program(collector.finish()?, request)?)
+}
+
+/// Whether a file imports or declares anything under a package root the
+/// catalogue registers. Importing there is what activates an embedded
+/// module, and declaring there is refused, so either needs the collector.
+fn reaches_an_owned_root(parsed: &syntax::ParsedSpecification) -> bool {
+    let owned = |path: &[ModuleName]| Catalogue::STANDARD.owner(path).is_some();
+    parsed
+        .declarations()
+        .iter()
+        .any(|declaration| match declaration {
+            syntax::ParsedDeclaration::Use { tree, .. } => {
+                !tree.is_experimental()
+                    && imports_of(tree, &[])
+                        .is_ok_and(|imports| imports.iter().any(|import| owned(&import.module)))
+            }
+            syntax::ParsedDeclaration::Mod { path, .. } => owned(path),
+            _ => false,
+        })
 }
 
 /// Read a program and every module it declares.

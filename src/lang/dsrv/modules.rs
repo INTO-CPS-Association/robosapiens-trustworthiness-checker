@@ -9,11 +9,17 @@
 //! `mod a::b` inside module `m` therefore declares `m::a::b`, and the file it
 //! names is that path joined with `/` and suffixed `.dsrv`, relative to the
 //! root file's directory.
+//!
+//! Modules under a package root the [`Catalogue`] registers, such as `std`,
+//! are never asked for: the collector activates one itself when a `use`
+//! names it, from the text compiled into the checker. An import never asks
+//! for a file, so only `mod` reaches the filesystem.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::lang::dsrv::ast::AstShared;
+use crate::lang::dsrv::catalogue::Catalogue;
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, UseTree};
 use crate::lang::dsrv::source::TypeName;
 use crate::lang::dsrv::source_map::{SourceArchive, SourceFile, SourceLabel};
@@ -220,12 +226,45 @@ pub enum ModuleCollectError {
         #[source]
         source: DsrvSyntaxError,
     },
+
+    #[error(
+        "module {path} cannot be declared: the `{root}` package is built into the checker and owns every module under it"
+    )]
+    ReservedModule {
+        path: String,
+        root: &'static str,
+        span: Span,
+    },
+
+    #[error(
+        "no embedded module {path}, but {importer} imports it at {span:?}: the `{root}` package built into the checker does not provide it"
+    )]
+    UnknownEmbeddedModule {
+        path: String,
+        importer: String,
+        root: &'static str,
+        span: Span,
+    },
+
+    #[error(
+        "embedded module {importer} imports {path} at {span:?}, which is not built into the checker"
+    )]
+    EmbeddedImportOutsideCatalogue {
+        path: String,
+        importer: String,
+        span: Span,
+    },
+
+    #[error("embedded module {path} declares a module at {span:?}, which only an application may")]
+    EmbeddedModuleDeclaration { path: String, span: Span },
 }
 
 /// Every module of one program, parsed, keyed by absolute path, with the
 /// archive of their text.
 pub struct ModuleSources {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
+    /// The modules activated from the catalogue rather than supplied.
+    embedded: BTreeSet<ModulePath>,
     root_source: String,
     archive: AstShared<SourceArchive>,
 }
@@ -250,6 +289,12 @@ impl ModuleSources {
 
     pub(crate) fn get(&self, path: &[ModuleName]) -> Option<&ParsedSpecification> {
         self.modules.get(path)
+    }
+
+    /// Whether the module at `path` was activated from the catalogue, and
+    /// so is read under its own header alone.
+    pub fn is_embedded(&self, path: &[ModuleName]) -> bool {
+        self.embedded.contains(path)
     }
 
     /// Whether a module of this path was collected.
@@ -284,10 +329,13 @@ impl fmt::Debug for ModuleSources {
 /// Drives module collection without performing any IO.
 ///
 /// Ask it for the next module it needs, supply that module's source, repeat
-/// until it asks for nothing.
+/// until it asks for nothing. It asks only for modules a `mod` declared;
+/// the catalogue's are activated without asking.
 pub struct ModuleCollector {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
     pending: VecDeque<ModulePath>,
+    embedded: BTreeSet<ModulePath>,
+    catalogue: &'static Catalogue,
     root_source: String,
     archive: SourceArchive,
 }
@@ -305,9 +353,21 @@ impl ModuleCollector {
 
     /// Begin from the root module's source, which diagnostics name `label`.
     pub fn with_label(root: &str, label: SourceLabel) -> Result<Self, ModuleCollectError> {
+        Self::with_catalogue(root, label, &Catalogue::STANDARD)
+    }
+
+    /// Begin from the root module's source, activating embedded modules
+    /// from `catalogue`.
+    pub fn with_catalogue(
+        root: &str,
+        label: SourceLabel,
+        catalogue: &'static Catalogue,
+    ) -> Result<Self, ModuleCollectError> {
         let mut collector = Self {
             modules: BTreeMap::new(),
             pending: VecDeque::new(),
+            embedded: BTreeSet::new(),
+            catalogue,
             root_source: root.to_owned(),
             archive: SourceArchive::new(),
         };
@@ -352,16 +412,46 @@ impl ModuleCollector {
         }
         Ok(ModuleSources {
             modules: self.modules,
+            embedded: self.embedded,
             root_source: self.root_source,
             archive: AstShared::new(self.archive),
         })
     }
 
+    /// Add one module, then every embedded module it activates, and those
+    /// they activate in turn.
     fn add(
         &mut self,
         path: ModulePath,
         source: &str,
         label: SourceLabel,
+    ) -> Result<(), ModuleCollectError> {
+        let mut activated = Vec::new();
+        self.add_one(path, source, label, false, &mut activated)?;
+        while let Some(path) = activated.pop() {
+            let module = self
+                .catalogue
+                .get(&path)
+                .expect("only a module the catalogue holds is activated");
+            self.embedded.insert(path.clone());
+            self.add_one(
+                path,
+                module.source,
+                SourceLabel::Embedded(module.file.into()),
+                true,
+                &mut activated,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn add_one(
+        &mut self,
+        path: ModulePath,
+        source: &str,
+        label: SourceLabel,
+        embedded: bool,
+        activated: &mut Vec<ModulePath>,
     ) -> Result<(), ModuleCollectError> {
         let parsed = crate::lang::dsrv::syntax::parse_specification(source).map_err(|source| {
             ModuleCollectError::Syntax {
@@ -375,21 +465,89 @@ impl ModuleCollector {
             source,
         )));
         for declaration in parsed.declarations() {
-            let ParsedDeclaration::Mod { path: declared, .. } = declaration else {
-                continue;
-            };
-            let mut full = path.clone();
-            full.extend(declared.iter().cloned());
-            // A path names one file, so two declarations of it would read the
-            // same file twice under one name.
-            if self.modules.contains_key(&full) || self.pending.contains(&full) {
-                return Err(ModuleCollectError::DuplicateModule {
-                    path: show_path(&full),
-                });
+            match declaration {
+                ParsedDeclaration::Mod {
+                    path: declared,
+                    span,
+                } => {
+                    if embedded {
+                        return Err(ModuleCollectError::EmbeddedModuleDeclaration {
+                            path: show_path(&path),
+                            span: *span,
+                        });
+                    }
+                    let mut full = path.clone();
+                    full.extend(declared.iter().cloned());
+                    // A registered root owns its whole prefix, so nothing an
+                    // application declares may sit under it.
+                    if let Some(root) = self.catalogue.owner(&full) {
+                        return Err(ModuleCollectError::ReservedModule {
+                            path: show_path(&full),
+                            root,
+                            span: *span,
+                        });
+                    }
+                    // A path names one file, so two declarations of it would
+                    // read the same file twice under one name.
+                    if self.modules.contains_key(&full) || self.pending.contains(&full) {
+                        return Err(ModuleCollectError::DuplicateModule {
+                            path: show_path(&full),
+                        });
+                    }
+                    self.pending.push_back(full);
+                }
+                ParsedDeclaration::Use { tree, .. } if !tree.is_experimental() => {
+                    // A malformed import is expansion's to report, where it
+                    // is reported for every module alike.
+                    let Ok(imports) = imports_of(tree, &path) else {
+                        continue;
+                    };
+                    for import in imports {
+                        self.activate(&path, embedded, import, activated)?;
+                    }
+                }
+                _ => {}
             }
-            self.pending.push_back(full);
         }
         self.modules.insert(path, parsed);
+        Ok(())
+    }
+
+    /// Activate the embedded module `import` names, if it names one. Any
+    /// other import is left to expansion, which reports a module nothing
+    /// declared: an import never asks for a file.
+    fn activate(
+        &self,
+        importer: &ModulePath,
+        embedded: bool,
+        import: Import,
+        activated: &mut Vec<ModulePath>,
+    ) -> Result<(), ModuleCollectError> {
+        let Some(root) = self.catalogue.owner(&import.module) else {
+            if embedded && import.module != *importer {
+                return Err(ModuleCollectError::EmbeddedImportOutsideCatalogue {
+                    path: show_path(&import.module),
+                    importer: show_path(importer),
+                    span: import.span,
+                });
+            }
+            return Ok(());
+        };
+        if self.catalogue.get(&import.module).is_none() {
+            return Err(ModuleCollectError::UnknownEmbeddedModule {
+                path: show_path(&import.module),
+                importer: show_path(importer),
+                root,
+                span: import.span,
+            });
+        }
+        // A module imported twice, or reached along two paths, is read once.
+        if import.module != *importer
+            && !self.modules.contains_key(&import.module)
+            && !activated.contains(&import.module)
+        {
+            activated.push(import.module);
+        }
         Ok(())
     }
 }
