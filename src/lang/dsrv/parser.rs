@@ -5,10 +5,7 @@
 
 use super::ast::AstShared as Rc;
 use crate::lang::dsrv::catalogue::Catalogue;
-use crate::lang::dsrv::modules::{
-    ImportError, ModuleCollectError, ModuleCollector, ModuleSources, imports_of, module_file,
-    show_path,
-};
+use crate::lang::dsrv::modules::{ImportError, ModuleCollectError, ModuleCollector, imports_of};
 use crate::lang::dsrv::path::ModuleName;
 
 use anyhow::Error;
@@ -191,46 +188,7 @@ fn reaches_an_owned_root(parsed: &syntax::ParsedSpecification) -> bool {
         })
 }
 
-/// Read a program and every module it declares.
-///
-/// This is the one place modules touch the filesystem: the collector asks
-/// for each module in turn and this loop answers, so everything above it
-/// stays sans-IO.
-pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSources> {
-    use anyhow::Context;
-
-    let directory = std::path::Path::new(file)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_owned();
-    let root = smol::fs::read_to_string(file)
-        .await
-        .with_context(|| format!("reading {file}"))?;
-    let mut collector = ModuleCollector::with_label(&root, SourceLabel::Path(file.into()))?;
-    while let Some(path) = collector.next_request().map(<[ModuleName]>::to_vec) {
-        let location = directory.join(module_file(&path));
-        let source = smol::fs::read_to_string(&location).await.with_context(|| {
-            format!(
-                "reading module {} from {}",
-                show_path(&path),
-                location.display()
-            )
-        })?;
-        collector.supply_labelled(
-            &source,
-            SourceLabel::Path(location.display().to_string().into()),
-        )?;
-    }
-    Ok(collector.finish()?)
-}
-
-/// A program read from disk and expanded.
-pub struct LoadedProgram {
-    pub specification: DsrvSpecification,
-    /// The root file's text from the same read that produced the
-    /// specification, so diagnostics are presented against what was checked.
-    pub root_source: String,
-}
+pub use super::program::{LoadedProgram, collect_modules_from_file};
 
 /// Read a program, its modules included, and expand it.
 ///
@@ -240,12 +198,7 @@ pub async fn parse_program_file(
     file: &str,
     request: LanguageRequest,
 ) -> anyhow::Result<LoadedProgram> {
-    let sources = collect_modules_from_file(file).await?;
-    let root_source = sources.root_source().to_owned();
-    Ok(LoadedProgram {
-        specification: expand::expand_program(sources, request)?,
-        root_source,
-    })
+    super::program::load_program_file(file, request).await
 }
 
 /// Accept a Core DSRV file. A file without a `language` line is read as Core;

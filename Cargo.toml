@@ -23,6 +23,10 @@ path = "src/lib.rs"
 crate-type = ["lib"]
 bench = false
 
+[[bin]]
+name = "tc-expand"
+path = "src/bin/tc_expand.rs"
+
 [build-dependencies]
 lalrpop = "0.23.1"
 
