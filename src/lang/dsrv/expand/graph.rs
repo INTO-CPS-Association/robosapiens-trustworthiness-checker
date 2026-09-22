@@ -917,7 +917,12 @@ mod function_tests {
                 .1;
             collector.supply(source).expect("a parsable module");
         }
-        build_function_table(&collector.finish().expect("collected")).map(|_| ())
+        let sources = collector.finish().expect("collected");
+        let graph = build_graph(&sources, LanguageRequest::default())?;
+        let constants = Rc::new(crate::lang::dsrv::expand::constants::build_constant_table(
+            &sources, &graph,
+        )?);
+        build_function_table(&sources, &graph, &constants, Default::default()).map(|_| ())
     }
 
     #[test]

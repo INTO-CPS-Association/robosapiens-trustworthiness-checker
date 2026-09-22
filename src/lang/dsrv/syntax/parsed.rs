@@ -10,6 +10,7 @@ use crate::core::{BinaryOperator, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 
 use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
+use super::super::expand::functions::LexicalId;
 use super::super::path::{ModuleName, TypePath, UseTree, ValuePath};
 use super::super::patterns::{MatchArm, MatchPattern};
 use super::super::source::{AliasDeclaration, SourceType, TypeName};
@@ -96,12 +97,15 @@ contiguous_tree::tree_schema! {
 
 /// Where a parsed node came from. The span is in the file being parsed or
 /// inlined into; a node grafted from a def of another module additionally
-/// records where that def wrote it. The file itself is the parsed
-/// specification's, so no node carries it.
+/// records where that def wrote it, and whose lexical environment its names
+/// and syntax belong to. The file itself is the parsed specification's, so
+/// no node carries it, and a node without a lexical environment belongs to
+/// the text it sits in.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ParsedOrigin {
     pub(crate) span: Span,
     pub(crate) definition: Option<SourceSite>,
+    pub(crate) lexical: Option<LexicalId>,
 }
 
 impl From<Span> for ParsedOrigin {
@@ -109,6 +113,7 @@ impl From<Span> for ParsedOrigin {
         Self {
             span,
             definition: None,
+            lexical: None,
         }
     }
 }

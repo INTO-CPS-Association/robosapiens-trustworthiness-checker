@@ -171,7 +171,10 @@ impl Feature {
 /// The revision of the experiments in this release. Bump it whenever any
 /// experiment's meaning changes, so compiled code cached under one meaning is
 /// never reused under another.
-pub const EXPERIMENTAL_REVISION: u32 = 1;
+///
+/// Revision 2: code inlined from another module's def is read under that
+/// module's settings and in its namespace, rather than its caller's.
+pub const EXPERIMENTAL_REVISION: u32 = 2;
 
 /// The resolved settings of one specification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -190,6 +193,16 @@ impl LanguageConfig {
     /// The edition whose defaults a specification is read under.
     pub fn edition(&self) -> Edition {
         self.edition
+    }
+
+    /// These settings inside a program of `dialect`. A module's own header
+    /// decides the syntax its text may use, but which runtimes may admit
+    /// that text is the program's to decide.
+    pub(crate) fn admitted_as(&self, dialect: Dialect) -> Self {
+        Self {
+            dialect,
+            ..self.clone()
+        }
     }
 
     /// Experiment names, for diagnostics such as the warning printed when a

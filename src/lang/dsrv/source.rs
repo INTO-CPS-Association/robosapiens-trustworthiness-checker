@@ -14,7 +14,7 @@ use ecow::{EcoString, EcoVec};
 use crate::core::{ClosedUnion, StreamType, UnionAlternative, UnionPayload, UnionSchemaError};
 use crate::lang::dsrv::path::TypePath;
 
-use super::expand::language::LanguageConfig;
+use super::expand::language::{Dialect, LanguageConfig};
 use super::span::Span;
 
 /// Source spelling of structural types. Unlike core diagnostics, source fields
@@ -241,6 +241,16 @@ impl SourceContext {
     pub(crate) fn with_constructors(self, constructors: BTreeMap<EcoString, TypePath>) -> Self {
         let mut fingerprint = (*self.fingerprint).clone();
         fingerprint.constructors = constructors;
+        Self {
+            fingerprint: Rc::new(fingerprint),
+        }
+    }
+
+    /// The same namespace inside a program of `dialect`, which is how a
+    /// module's text is read when another module calls into it.
+    pub(crate) fn admitted_as(&self, dialect: Dialect) -> Self {
+        let mut fingerprint = (*self.fingerprint).clone();
+        fingerprint.language = fingerprint.language.admitted_as(dialect);
         Self {
             fingerprint: Rc::new(fingerprint),
         }

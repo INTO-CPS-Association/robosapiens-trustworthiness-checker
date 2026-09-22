@@ -19,8 +19,12 @@
 //!    from outside the file resolve to one [`language::LanguageConfig`]
 //!    ([`language::resolve_language`]).
 //! 2. **Namespace.** The type aliases resolve into a [`SourceContext`], which
-//!    also carries the language settings. Every expression expanded here, and
-//!    every runtime expression expanded later against this context, shares it.
+//!    also carries the language settings. Every expression written in this
+//!    file, and every runtime expression expanded later against this context,
+//!    shares it. Code inlined from another module's def is expanded in that
+//!    module's context instead, so its syntax is judged by that module's
+//!    header and its names resolve where it was written; only the dialect,
+//!    which decides admission, is the program's ([`functions::Lexical`]).
 //! 3. **Declarations and equations** ([`expand_declarations`]). Each
 //!    top-level form becomes a [`Declaration`] with its types resolved, in
 //!    source order. The header produces none: it lives on in the context. The
@@ -84,7 +88,7 @@ use crate::core::StreamTypeAscription;
 use crate::lang::dsrv::ast::DsrvSpecification;
 use crate::lang::dsrv::modules::{ImportError, ModulePath};
 use contiguous_tree::TreeCursor as _;
-use functions::Callable;
+use functions::{Callable, LexicalId};
 use language::{Dialect, LanguageError, LanguageRequest};
 
 /// A failure while expanding a parsed specification.
@@ -302,15 +306,16 @@ pub(crate) fn expand_declarations_in(
         // carrying nothing, as a program without the experiments does.
         Some(callable) if !callable.is_empty() => Some(callable),
         Some(_) => None,
-        None if declares_a_def_or_constant(parsed.declarations()) => Some(Rc::new(Callable::new(
-            Rc::new(functions::single_file_table(
+        None if declares_a_def_or_constant(parsed.declarations()) => {
+            let constants = Rc::new(constants::single_file_constants(&parsed, &context)?);
+            let table = functions::single_file_table(
                 &parsed,
                 parsed.source().map(|_| archive.token()),
-            )?),
-            Rc::new(constants::single_file_constants(&parsed, &context)?),
-            &ModulePath::new(),
-            parsed.declarations(),
-        )?)),
+                Rc::clone(&context),
+                &constants,
+            )?;
+            Some(Rc::new(Callable::new(Rc::new(table), &ModulePath::new())))
+        }
         None => None,
     };
     if let Some(callable) = &callable {
@@ -469,15 +474,68 @@ fn resolve_annotation(
     Ok(Some(context.resolve_type(ty)?))
 }
 
+/// The lexical environment each node of one tree is expanded in.
+///
+/// A node belongs to the text it sits in unless it was inlined from a def
+/// of another module, in which case it records the environment that def
+/// was written in: its names resolve in that module's namespace, and its
+/// syntax is judged by that module's header.
+struct Environments<'a> {
+    context: &'a Rc<SourceContext>,
+    callable: Option<&'a Rc<Callable>>,
+    inlined: BTreeMap<LexicalId, (Rc<SourceContext>, Option<Rc<Callable>>)>,
+}
+
+impl<'a> Environments<'a> {
+    fn new(
+        expression: ParsedExprRef<'_>,
+        context: &'a Rc<SourceContext>,
+        callable: Option<&'a Rc<Callable>>,
+    ) -> Self {
+        use contiguous_tree::TreeCursorExt;
+        let mut inlined = BTreeMap::new();
+        for node in expression.postorder() {
+            let Some(id) = parsed::origin_of(node).lexical else {
+                continue;
+            };
+            let callable = callable.expect("only a callable's table inlines code from elsewhere");
+            if !callable.is_own(id) {
+                inlined
+                    .entry(id)
+                    .or_insert_with(|| callable.environment(id));
+            }
+        }
+        Self {
+            context,
+            callable,
+            inlined,
+        }
+    }
+
+    /// The namespace `node` is read in, and what text supplied to it may
+    /// call.
+    fn of(&self, node: ParsedExprRef<'_>) -> (&Rc<SourceContext>, Option<&Rc<Callable>>) {
+        match parsed::origin_of(node)
+            .lexical
+            .and_then(|id| self.inlined.get(&id))
+        {
+            Some((context, callable)) => (context, callable.as_ref()),
+            None => (self.context, self.callable),
+        }
+    }
+}
+
 /// The types written inside an expression — a lambda parameter's, and the
 /// result a `dynamic` or `defer` ascribes — are checked before the tree is
-/// converted, so the conversion itself only resolves names.
+/// converted, so the conversion itself only resolves names. Each is checked
+/// against the settings of the module that wrote it.
 fn check_expression_types(
     expression: ParsedExprRef<'_>,
-    context: &SourceContext,
+    environments: &Environments<'_>,
 ) -> Result<(), DsrvExpandError> {
     use contiguous_tree::TreeCursorExt;
     for node in expression.postorder() {
+        let (context, _) = environments.of(node);
         // Writing an offset as a name is what `constants` adds to a
         // spelling every file can now parse, so the check belongs here
         // rather than in the grammar.
@@ -539,14 +597,21 @@ pub(crate) fn expand_program(
     request: LanguageRequest,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
     let graph = graph::build_graph(&sources, request)?;
+    let root_path = ModulePath::new();
     let context = graph
-        .get(&crate::lang::dsrv::modules::ModulePath::new())
+        .get(&root_path)
         .expect("the root has a namespace")
         .clone();
-    let table = Rc::new(functions::build_function_table(&sources)?);
+    // Def bodies fold the constants of the module that wrote them, so the
+    // constants come first.
     let folded = Rc::new(constants::build_constant_table(&sources, &graph)?);
-    let root_path = ModulePath::new();
-    let callable = Callable::new(table, folded, &root_path, sources.root_declarations())?;
+    let table = Rc::new(functions::build_function_table(
+        &sources,
+        &graph,
+        &folded,
+        context.language().dialect(),
+    )?);
+    let callable = Callable::new(table, &root_path);
     let archive = Rc::clone(sources.archive());
     let root = sources.into_root();
     finish_specification(
@@ -586,7 +651,12 @@ fn finish_specification(
     specification.sources = archive;
     let language = specification.source_context.language().clone();
     for node in specification.nodes() {
-        language::check_experiment_node(node, &language)?;
+        // Syntax is authorised by the header of the module that wrote it;
+        // admission is the program's.
+        let written = node
+            .source_context()
+            .map_or(&language, SourceContext::language);
+        language::check_experiment_node(node, written)?;
         language::check_dialect_node(node, language.dialect())?;
     }
     if language.dialect() == Dialect::Core {
@@ -611,7 +681,7 @@ pub(crate) fn expand_expression(
     // Runtime text may call a def, so it is inlined first, exactly as a
     // file's own expressions are.
     let scope = callable.scope();
-    let inlined = inline::standalone(parsed.as_ref(), &scope)?;
+    let inlined = inline::standalone(parsed.as_ref(), &scope, [])?;
     let parsed = &inlined;
     // Text nested inside this text may call a def in turn, so what this
     // text could call travels on into it.
@@ -632,7 +702,10 @@ pub(crate) fn expand_expression(
         use contiguous_tree::TreeCursorExt;
         let language = context.language();
         for node in expr.as_ref().postorder() {
-            language::check_experiment_node(node, language)?;
+            let written = node
+                .source_context()
+                .map_or(language, SourceContext::language);
+            language::check_experiment_node(node, written)?;
             language::check_dialect_node(node, language.dialect())?;
         }
     }
@@ -700,6 +773,10 @@ pub(crate) fn assemble_specification(
 ///
 /// `source` is the archived file the tree's spans are in. Without one the
 /// tree is unlocated, and definition sites are not kept either.
+///
+/// `context` and `callable` are the tree's own environment. A node inlined
+/// from another module's def is expanded in that module's instead, which
+/// `callable`'s table holds.
 pub(crate) fn expand_tree(
     expression: ParsedExprRef<'_>,
     builder: &mut ExprBuilder,
@@ -707,11 +784,13 @@ pub(crate) fn expand_tree(
     callable: Option<&Rc<Callable>>,
     source: Option<SourceId>,
 ) -> Result<ExprId, DsrvExpandError> {
-    check_expression_types(expression, context)?;
+    let environments = Environments::new(expression, context, callable);
+    check_expression_types(expression, &environments)?;
     builder
         .try_transcode(expression, |node| {
             use ParsedExprKind::*;
             let origin = parsed::origin_of(node.cursor());
+            let (context, callable) = environments.of(node.cursor());
             let metadata = ExprMetadata {
                 span: origin.span,
                 origin: NodeOrigin::new(source, source.and(origin.definition)),

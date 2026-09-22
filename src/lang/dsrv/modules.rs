@@ -231,14 +231,6 @@ pub struct ModuleSources {
 }
 
 impl ModuleSources {
-    /// The root module's declarations.
-    pub(crate) fn root_declarations(&self) -> &[ParsedDeclaration] {
-        self.modules
-            .get(&ModulePath::new())
-            .expect("the root module is always collected")
-            .declarations()
-    }
-
     /// Take the root module out, leaving the rest behind.
     pub(crate) fn into_root(mut self) -> ParsedSpecification {
         self.modules

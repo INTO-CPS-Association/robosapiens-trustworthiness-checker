@@ -23,6 +23,8 @@ mod constant_tests;
 #[cfg(test)]
 mod generic_tests;
 #[cfg(test)]
+mod lexical_tests;
+#[cfg(test)]
 mod match_tests;
 #[cfg(test)]
 mod module_tests;

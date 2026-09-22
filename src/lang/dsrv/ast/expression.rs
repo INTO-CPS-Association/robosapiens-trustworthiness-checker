@@ -245,10 +245,12 @@ pub(crate) struct ExprMetadata {
     /// written: compact IDs into the owning specification's archive, never
     /// a file handle.
     pub origin: NodeOrigin,
+    /// The namespace and settings of the module that wrote the node, which
+    /// for code inlined from another module's def is that module's.
     pub context: Option<super::AstShared<SourceContext>>,
-    /// The defs text supplied to this node may call. `None` where the
-    /// program declared none, which is every program until it takes on the
-    /// `functions` experiment.
+    /// The defs text supplied to this node may call: those of the module
+    /// that wrote it. `None` where that module could call none, which is
+    /// every program until it takes on the `functions` experiment.
     pub callable: Option<super::AstShared<Callable>>,
 }
 

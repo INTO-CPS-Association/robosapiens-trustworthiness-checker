@@ -3,8 +3,9 @@
 //! Every runtime checks such source when it arrives and refuses source that does
 //! not check, whether it then consults the types or not. The text is parsed
 //! in the source context of the node it was supplied to, may call the same
-//! defs that node's file could, and is checked against the type and
-//! environment elaboration gave that node.
+//! defs the module that wrote that node could, and is checked against the
+//! type and environment elaboration gave that node. For a node inlined from
+//! a library's def, that is the library's context and defs, not its caller's.
 //!
 //! Warnings proved while checking such text are discarded: runtime text has
 //! no channel to present them on, so a runtime sees only whether the text

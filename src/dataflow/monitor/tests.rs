@@ -3629,3 +3629,99 @@ fn relocated_files_keep_stream_identity_and_changed_defs_do_not() {
         .collect::<Vec<_>>();
     assert_eq!(initialized.len(), 1, "{report:?}");
 }
+
+/// A program whose runtime text may call `lib`'s defs.
+fn library_helper_program(lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecification {
+    use crate::lang::dsrv::modules::ModuleCollector;
+
+    let mut collector = ModuleCollector::new(
+        "use experimental::{modules, functions}\nmod lib\nuse lib::*\n\
+         in s: Str\nin x: Int\nout y: Int\nout z: Int\ny = dynamic(s: Int)\nz = x + 1\n",
+    )
+    .unwrap();
+    collector.supply(lib).unwrap();
+    crate::lang::dsrv::expand::expand_program(collector.finish().unwrap(), Default::default())
+        .unwrap()
+        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .without_warnings()
+        .unwrap()
+}
+
+/// The helper uses casts, which only the library opted into.
+const CASTING_LIB: &str = "use experimental::{modules, functions, casts}\n\
+    def helper(n: Int) -> Int = trunc(n as Float * 2.5)\n";
+
+/// Runtime text that calls a library def runs that def as the library
+/// wrote it, under the library's settings rather than the root's.
+#[test]
+fn runtime_text_runs_a_library_def_under_the_librarys_settings() {
+    let mut monitor = DataflowMonitor::compile_with_semantics(
+        library_helper_program(CASTING_LIB),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let mut output = [Value::NoVal, Value::NoVal];
+    monitor
+        .evaluate(
+            &input_row(
+                &monitor,
+                &[("s", Value::Str("helper(x)".into())), ("x", Value::Int(2))],
+            ),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, [Value::Int(5), Value::Int(3)]);
+}
+
+/// The library's settings are part of what the defs runtime text may call
+/// mean, so changing them starts the `dynamic` stream afresh and leaves the
+/// others alone.
+#[test]
+fn changed_library_settings_change_the_dynamic_stream() {
+    // The two headers are the same length, so only the settings differ and
+    // no span moves.
+    let padded = CASTING_LIB.replace("casts}", "casts,  generics}");
+    let mut monitor = DataflowMonitor::compile_with_semantics(
+        library_helper_program(&padded),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let unchanged = DataflowMonitor::compile_with_semantics(
+        library_helper_program(&padded),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let report = monitor
+        .reconfigure(
+            unchanged.program,
+            ContextTransferPolicy::MatchingStreamState,
+        )
+        .unwrap();
+    assert_eq!(
+        report_count(
+            &report.context_transfer,
+            StreamStateTransferOutcome::Initialized
+        ),
+        0,
+        "{report:?}"
+    );
+
+    let resettled = DataflowMonitor::compile_with_semantics(
+        library_helper_program(&padded.replace("casts,  generics}", "casts, constants}")),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let report = monitor
+        .reconfigure(
+            resettled.program,
+            ContextTransferPolicy::MatchingStreamState,
+        )
+        .unwrap();
+    let initialized = report
+        .context_transfer
+        .streams
+        .iter()
+        .filter(|entry| entry.outcome == StreamStateTransferOutcome::Initialized)
+        .collect::<Vec<_>>();
+    assert_eq!(initialized.len(), 1, "{report:?}");
+}

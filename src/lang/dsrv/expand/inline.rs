@@ -15,6 +15,14 @@
 //! survives further inlining unchanged, so code reached through several
 //! modules names the module that wrote it. Arguments are the caller's
 //! text and keep the caller's provenance.
+//!
+//! Such a body also keeps its lexical environment. It was inlined where it
+//! was written, so nothing the caller can name reaches into it: a caller's
+//! constant or def of the same name as something in the body is not
+//! substituted there. Each of its nodes records the environment it was
+//! written in, which survives further inlining as the definition site does,
+//! and expansion reads that node in that environment. Arguments are read in
+//! the caller's.
 
 use std::collections::BTreeMap;
 
@@ -26,6 +34,8 @@ use crate::lang::dsrv::path::{ModuleName, ValuePath};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind, TypeName};
 use crate::lang::dsrv::source_map::{SourceId, SourceSite};
 use crate::lang::dsrv::span::Span;
+
+use super::functions::LexicalId;
 
 use super::super::syntax::parsed::{
     self, ParsedExpr, ParsedExprBuilder, ParsedExprId, ParsedExprKind, ParsedExprRef, ParsedOrigin,
@@ -52,14 +62,18 @@ pub(crate) struct Def<'a> {
     /// The archived file that declared the def, which a foreign body's
     /// nodes name as their definition site.
     pub(crate) source: Option<SourceId>,
+    /// The environment a foreign body was written in, which its nodes are
+    /// read in. `None` for a def of the text being inlined into.
+    pub(crate) lexical: Option<LexicalId>,
 }
 
 /// How a subtree grafted from another module's def is placed: at the
-/// call's span, remembering the file it was written in.
+/// call's span, remembering the file and environment it was written in.
 #[derive(Clone, Copy)]
 struct Stamp {
     span: Span,
     definition: Option<SourceId>,
+    lexical: Option<LexicalId>,
 }
 
 impl Stamp {
@@ -77,6 +91,7 @@ impl Stamp {
                         .definition
                         .map(|source| SourceSite::new(source, origin.span))
                 }),
+                lexical: origin.lexical.or(stamp.lexical),
             },
         }
     }
@@ -181,6 +196,7 @@ pub(crate) fn inline_functions(
                 body: trees[def.root],
                 foreign: false,
                 source: None,
+                lexical: None,
             },
         );
     }
@@ -189,7 +205,14 @@ pub(crate) fn inline_functions(
     let mut roots = Vec::with_capacity(trees.len());
     for tree in &trees {
         let mut active = Vec::new();
-        roots.push(graft(*tree, &scope, &mut builder, &mut active, None)?);
+        roots.push(graft(
+            *tree,
+            &scope,
+            &mut builder,
+            &mut active,
+            &mut Vec::new(),
+            None,
+        )?);
     }
 
     // Declarations name their root by id, so each takes the id its tree was
@@ -277,10 +300,12 @@ impl<'a> Scope<'a> {
 pub(crate) fn standalone(
     cursor: ParsedExprRef<'_>,
     scope: &Scope<'_>,
+    bound: impl IntoIterator<Item = VarName>,
 ) -> Result<ParsedExpr, DsrvExpandError> {
     let mut builder = ParsedExprBuilder::with_capacity(cursor.subtree_ids().len());
     let mut active = Vec::new();
-    let root = graft(cursor, scope, &mut builder, &mut active, None)?;
+    let mut bound = bound.into_iter().collect();
+    let root = graft(cursor, scope, &mut builder, &mut active, &mut bound, None)?;
     let forest = builder
         .finish_forest([root])
         .map_err(|error| DsrvExpandError::Inlined(error.to_string()))?;
@@ -298,6 +323,7 @@ fn graft(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
+    bound: &mut Vec<VarName>,
     stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind()
@@ -306,7 +332,9 @@ fn graft(
     {
         let name = name.clone();
         let arguments = arguments.clone();
-        return inline_call(&name, cursor, &arguments, scope, builder, active, stamp);
+        return inline_call(
+            &name, cursor, &arguments, scope, builder, active, bound, stamp,
+        );
     }
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind()
         && let ParsedExprKind::ModuleItem(path) = cursor.child(*function).kind()
@@ -320,13 +348,14 @@ fn graft(
             })?;
         let named = path.to_string();
         return build_call(
-            def, None, named, cursor, &arguments, scope, builder, active, stamp,
+            def, None, named, cursor, &arguments, scope, builder, active, bound, stamp,
         );
     }
     // A constant is a value, so it replaces the name with a literal leaf.
     // Allocating a leaf keeps the trailing-roots discipline trivially.
     if let Some(constants) = scope.constants {
         if let ParsedExprKind::Var(name) = cursor.kind()
+            && !bound.contains(name)
             && let Some(value) = constants.bare(name)
         {
             return Ok(builder.alloc(
@@ -353,7 +382,7 @@ fn graft(
             };
             if let Some(value) = found {
                 let offset = offset_of(value, path, span)?;
-                let input = graft(cursor.child(*input), scope, builder, active, stamp)?;
+                let input = graft(cursor.child(*input), scope, builder, active, bound, stamp)?;
                 return Ok(builder.alloc(
                     ParsedExprKind::SIndex(input, parsed::SourceOffset::Literal(offset)),
                     Stamp::place(stamp, cursor),
@@ -361,9 +390,79 @@ fn graft(
             }
         }
     }
+    if let ParsedExprKind::Lambda(parameters, body) = cursor.kind() {
+        let count = bound.len();
+        bound.extend(parameters.iter().map(|(name, _)| name.clone()));
+        let body = graft(cursor.child(*body), scope, builder, active, bound, stamp)?;
+        bound.truncate(count);
+        return Ok(builder.alloc(
+            ParsedExprKind::Lambda(parameters.clone(), body),
+            Stamp::place(stamp, cursor),
+        ));
+    }
+    if let ParsedExprKind::Match(scrutinee, arms, shape) = cursor.kind() {
+        let scrutinee = graft(
+            cursor.child(*scrutinee),
+            scope,
+            builder,
+            active,
+            bound,
+            stamp,
+        )?;
+        let mut source_arms = arms.iter();
+        let mut grafted_arms = EcoVec::new();
+        for arm in shape {
+            let count = bound.len();
+            bound.extend(arm.pattern.bound_names());
+            for _ in 0..arm.children() {
+                let child = source_arms.next().expect("match shape covers its children");
+                grafted_arms.push(graft(
+                    cursor.child(*child),
+                    scope,
+                    builder,
+                    active,
+                    bound,
+                    stamp,
+                )?);
+            }
+            bound.truncate(count);
+        }
+        return Ok(builder.alloc(
+            ParsedExprKind::Match(scrutinee, grafted_arms, shape.clone()),
+            Stamp::place(stamp, cursor),
+        ));
+    }
+    if let ParsedExprKind::Matches(scrutinee, guard, pattern) = cursor.kind() {
+        let scrutinee = graft(
+            cursor.child(*scrutinee),
+            scope,
+            builder,
+            active,
+            bound,
+            stamp,
+        )?;
+        let count = bound.len();
+        bound.extend(pattern.bound_names());
+        let guard = guard
+            .iter()
+            .map(|child| graft(cursor.child(*child), scope, builder, active, bound, stamp))
+            .collect::<Result<EcoVec<_>, _>>()?;
+        bound.truncate(count);
+        return Ok(builder.alloc(
+            ParsedExprKind::Matches(scrutinee, guard, pattern.clone()),
+            Stamp::place(stamp, cursor),
+        ));
+    }
     let mut grafted = Vec::new();
     for child in cursor.child_ids() {
-        grafted.push(graft(cursor.child(child), scope, builder, active, stamp)?);
+        grafted.push(graft(
+            cursor.child(child),
+            scope,
+            builder,
+            active,
+            bound,
+            stamp,
+        )?);
     }
     let mut kind = cursor.kind().clone();
     let mut next = grafted.into_iter();
@@ -396,6 +495,7 @@ fn inline_call(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
+    bound: &mut Vec<VarName>,
     stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     let def = scope.bare(name).expect("the caller matched on it");
@@ -415,6 +515,7 @@ fn inline_call(
         scope,
         builder,
         active,
+        bound,
         stamp,
     )
 }
@@ -430,6 +531,7 @@ fn build_call(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
+    bound: &mut Vec<VarName>,
     stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     if def.parameters.len() != arguments.len() {
@@ -449,14 +551,31 @@ fn build_call(
         Some(Stamp {
             span: at_call.span,
             definition: def.source,
+            lexical: def.lexical,
         })
     } else {
         stamp
     };
+    // A foreign body was inlined where it was written, so the caller's
+    // names must not reach into it.
+    let written = Scope::default();
+    let body_scope = if def.foreign { &written } else { scope };
     if let Some(guard) = &guard {
         active.push(guard.clone());
     }
-    let body = graft(def.body, scope, builder, active, inner)?;
+    let mut body_bound = def
+        .parameters
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let body = graft(
+        def.body,
+        body_scope,
+        builder,
+        active,
+        &mut body_bound,
+        inner,
+    )?;
     if guard.is_some() {
         active.pop();
     }
@@ -465,11 +584,27 @@ fn build_call(
         .iter()
         .map(|(parameter, ty)| (parameter.clone(), def.ascription(ty)))
         .collect();
-    let lambda = builder.alloc(ParsedExprKind::Lambda(parameters, body), at_call);
+    // The parameters and their types were written with the body, so the
+    // lambda binding them is read where the body is, though it stands at
+    // the call.
+    let lambda = builder.alloc(
+        ParsedExprKind::Lambda(parameters, body),
+        ParsedOrigin {
+            lexical: def.lexical.or(at_call.lexical),
+            ..at_call
+        },
+    );
 
     let mut grafted = EcoVec::new();
     for argument in arguments {
-        grafted.push(graft(call.child(*argument), scope, builder, active, stamp)?);
+        grafted.push(graft(
+            call.child(*argument),
+            scope,
+            builder,
+            active,
+            bound,
+            stamp,
+        )?);
     }
     Ok(builder.alloc(ParsedExprKind::Apply(lambda, grafted), at_call))
 }
