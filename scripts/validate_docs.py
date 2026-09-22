@@ -301,6 +301,122 @@ def check_code_includes(report: Report) -> int:
     return checked
 
 
+def check_dsrv_experiment_table(report: Report) -> int:
+    """The user-facing experiment table must match the implemented registry.
+
+    `Feature::ALL` is the language parser's source of truth. Extracting its
+    variants and resolving their `name` match arms keeps this check independent
+    of a second handwritten experiment list.
+    """
+    registry = ROOT / "src" / "lang" / "dsrv" / "expand" / "language.rs"
+    page = SRC / "reference" / "dsrv-language-settings.md"
+    source = registry.read_text(encoding="utf-8")
+    markdown = page.read_text(encoding="utf-8")
+
+    def without_comments(fragment: str) -> str:
+        clean: list[str] = []
+        index = 0
+        block_depth = 0
+        quoted: str | None = None
+        escaped = False
+        while index < len(fragment):
+            pair = fragment[index : index + 2]
+            character = fragment[index]
+            if block_depth:
+                if pair == "/*":
+                    block_depth += 1
+                    index += 2
+                    continue
+                if pair == "*/":
+                    block_depth -= 1
+                    index += 2
+                    continue
+                if character == "\n":
+                    clean.append(character)
+                index += 1
+                continue
+            if quoted:
+                clean.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quoted:
+                    quoted = None
+                index += 1
+                continue
+            if pair == "//":
+                newline = fragment.find("\n", index + 2)
+                if newline < 0:
+                    break
+                clean.append("\n")
+                index = newline + 1
+                continue
+            if pair == "/*":
+                block_depth = 1
+                index += 2
+                continue
+            if character == '"':
+                quoted = character
+            clean.append(character)
+            index += 1
+        return "".join(clean)
+
+    feature_impl = without_comments(
+        source.partition("impl Feature {")[2].partition("/// A name that enables")[0]
+    )
+
+    all_match = re.search(
+        r"pub const ALL: &'static \[Self\] = &\[(.*?)\];", feature_impl, re.S
+    )
+    names_match = re.search(
+        r"pub fn name\(self\) -> &'static str \{\s*match self \{(.*?)\n\s*\}\s*\}",
+        feature_impl,
+        re.S,
+    )
+    table_match = re.search(
+        r"<!-- dsrv-experiments:start -->\n(.*?)\n<!-- dsrv-experiments:end -->",
+        markdown,
+        re.S,
+    )
+    if all_match is None or names_match is None:
+        report.error(rel(registry), "cannot read Feature::ALL and Feature::name")
+        return 0
+    if table_match is None:
+        report.error(rel(page), "missing dsrv-experiments table markers")
+        return 0
+
+    variants = re.findall(
+        r"^\s*Self::([A-Za-z0-9_]+),\s*$",
+        all_match.group(1),
+        re.M,
+    )
+    names = dict(
+        re.findall(
+            r'^\s*Self::([A-Za-z0-9_]+)\s*=>\s*"([a-z0-9_]+)",?\s*$',
+            names_match.group(1),
+            re.M,
+        )
+    )
+    missing_names = [variant for variant in variants if variant not in names]
+    if missing_names:
+        report.error(
+            rel(registry),
+            "Feature::ALL variants missing from Feature::name: " + ", ".join(missing_names),
+        )
+        return 0
+
+    implemented = [names[variant] for variant in variants]
+    documented = re.findall(r"^\| `([a-z0-9_]+)` \|", table_match.group(1), re.M)
+    if documented != implemented:
+        report.error(
+            rel(page),
+            "experiment rows do not match Feature::ALL "
+            f"(implemented: {', '.join(implemented)}; documented: {', '.join(documented)})",
+        )
+    return len(documented)
+
+
 MERMAID_BLOCK = re.compile(r"```mermaid\n(.*?)```", re.S)
 MERMAID_COLOUR = re.compile(r"(?:fill|stroke|color)\s*:\s*(#[0-9a-fA-F]{3,8})")
 
@@ -458,6 +574,7 @@ def main() -> int:
     check_include_sites(report)
     mermaid = check_mermaid(report)
     code = check_code_includes(report)
+    experiments = check_dsrv_experiment_table(report)
     check_mermaid_initialiser(report)
 
     verified = check_book(report) if args.book else 0
@@ -481,7 +598,8 @@ def main() -> int:
 
     summary = (
         f"ok: {len(assets)} figures, {len(includes)} figure includes, "
-        f"{code} code includes, {mermaid} mermaid diagrams"
+        f"{code} code includes, {mermaid} mermaid diagrams, "
+        f"{experiments} DSRV experiments"
     )
     if args.book:
         summary += f", {verified} embedded correctly in the built book"
