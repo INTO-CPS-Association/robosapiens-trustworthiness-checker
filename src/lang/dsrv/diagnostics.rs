@@ -6,7 +6,16 @@
 //! checking succeeds, and a failed check keeps the warnings it had already
 //! proved. Parse and expansion errors are reported before checking begins and
 //! are not diagnostics of this kind.
+//!
+//! Every finding keeps its byte [`span`](SemanticError::span) as before, and
+//! owns a [`SourceLocation`]: the file its primary site is in, and for code
+//! inlined from another module, the definition site as a note. The location
+//! owns the files it names, so a report can be split with
+//! [`into_parts`](SemanticAnalysisReport::into_parts), and either half
+//! rendered, after the program that was checked has been dropped. A finding
+//! about a programmatically constructed tree has no location.
 
+use crate::lang::dsrv::source_map::{NodeOrigin, SourceArchive, SourceLocation};
 use crate::lang::dsrv::span::Span;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -51,6 +60,7 @@ pub struct TypeError {
     kind: TypeErrorKind,
     message: String,
     span: Option<Span>,
+    location: SourceLocation,
 }
 
 impl TypeError {
@@ -59,6 +69,7 @@ impl TypeError {
             kind,
             message: message.into(),
             span: None,
+            location: SourceLocation::default(),
         }
     }
 
@@ -67,6 +78,7 @@ impl TypeError {
             kind,
             message: message.into(),
             span: Some(span),
+            location: SourceLocation::default(),
         }
     }
 
@@ -80,6 +92,10 @@ impl TypeError {
 
     pub fn span(&self) -> Option<Span> {
         self.span
+    }
+
+    pub fn location(&self) -> &SourceLocation {
+        &self.location
     }
 
     fn set_span_if_absent(&mut self, span: Span) {
@@ -104,6 +120,7 @@ pub struct UnresolvedTypeError {
     kind: UnresolvedTypeKind,
     message: String,
     span: Option<Span>,
+    location: SourceLocation,
 }
 
 impl UnresolvedTypeError {
@@ -112,6 +129,7 @@ impl UnresolvedTypeError {
             kind,
             message: message.into(),
             span: None,
+            location: SourceLocation::default(),
         }
     }
 
@@ -120,6 +138,7 @@ impl UnresolvedTypeError {
             kind,
             message: message.into(),
             span: Some(span),
+            location: SourceLocation::default(),
         }
     }
 
@@ -135,6 +154,10 @@ impl UnresolvedTypeError {
         self.span
     }
 
+    pub fn location(&self) -> &SourceLocation {
+        &self.location
+    }
+
     fn set_span_if_absent(&mut self, span: Span) {
         self.span.get_or_insert(span);
     }
@@ -146,15 +169,16 @@ pub enum SemanticError {
         variable: crate::VarName,
         first: Span,
         duplicate: Span,
+        location: SourceLocation,
     },
     TypeError(TypeError),
-    DeferredError(String, Option<Span>),
-    UndeclaredVariable(String, Option<Span>),
-    MissingTypeAnnotation(String, Option<Span>),
-    MissingTypeAscription(String, Option<Span>),
-    UnsupportedLiteral(String, Option<Span>),
-    UnsupportedExpression(String, Option<Span>),
-    InvalidRuntimeScope(String, Option<Span>),
+    DeferredError(String, Option<Span>, SourceLocation),
+    UndeclaredVariable(String, Option<Span>, SourceLocation),
+    MissingTypeAnnotation(String, Option<Span>, SourceLocation),
+    MissingTypeAscription(String, Option<Span>, SourceLocation),
+    UnsupportedLiteral(String, Option<Span>, SourceLocation),
+    UnsupportedExpression(String, Option<Span>, SourceLocation),
+    InvalidRuntimeScope(String, Option<Span>, SourceLocation),
     UnresolvedType(UnresolvedTypeError),
 }
 
@@ -179,32 +203,100 @@ impl SemanticError {
         match self {
             Self::DuplicateDeclaration { duplicate, .. } => Some(*duplicate),
             Self::TypeError(error) => error.span(),
-            Self::DeferredError(_, span)
-            | Self::UndeclaredVariable(_, span)
-            | Self::MissingTypeAnnotation(_, span)
-            | Self::MissingTypeAscription(_, span)
-            | Self::UnsupportedLiteral(_, span)
-            | Self::UnsupportedExpression(_, span)
-            | Self::InvalidRuntimeScope(_, span) => *span,
+            Self::DeferredError(_, span, _)
+            | Self::UndeclaredVariable(_, span, _)
+            | Self::MissingTypeAnnotation(_, span, _)
+            | Self::MissingTypeAscription(_, span, _)
+            | Self::UnsupportedLiteral(_, span, _)
+            | Self::UnsupportedExpression(_, span, _)
+            | Self::InvalidRuntimeScope(_, span, _) => *span,
             Self::UnresolvedType(error) => error.span(),
         }
+    }
+
+    /// Where the error applies, owning the files it names: the primary
+    /// site, and where inlined code was defined.
+    pub fn location(&self) -> &SourceLocation {
+        match self {
+            Self::DuplicateDeclaration { location, .. }
+            | Self::DeferredError(_, _, location)
+            | Self::UndeclaredVariable(_, _, location)
+            | Self::MissingTypeAnnotation(_, _, location)
+            | Self::MissingTypeAscription(_, _, location)
+            | Self::UnsupportedLiteral(_, _, location)
+            | Self::UnsupportedExpression(_, _, location)
+            | Self::InvalidRuntimeScope(_, _, location) => location,
+            Self::TypeError(error) => &error.location,
+            Self::UnresolvedType(error) => &error.location,
+        }
+    }
+
+    fn location_mut(&mut self) -> &mut SourceLocation {
+        match self {
+            Self::DuplicateDeclaration { location, .. }
+            | Self::DeferredError(_, _, location)
+            | Self::UndeclaredVariable(_, _, location)
+            | Self::MissingTypeAnnotation(_, _, location)
+            | Self::MissingTypeAscription(_, _, location)
+            | Self::UnsupportedLiteral(_, _, location)
+            | Self::UnsupportedExpression(_, _, location)
+            | Self::InvalidRuntimeScope(_, _, location) => location,
+            Self::TypeError(error) => &mut error.location,
+            Self::UnresolvedType(error) => &mut error.location,
+        }
+    }
+
+    /// Record, while checking, the node this error's span came from. An
+    /// error without a span, or already located, is unchanged.
+    pub(crate) fn located(mut self, origin: NodeOrigin) -> Self {
+        if let Some(span) = self.span()
+            && self.location().is_unset()
+        {
+            *self.location_mut() = SourceLocation::pending(origin, span);
+        }
+        self
+    }
+
+    /// Locate this error where `cause` was located, or failing that at
+    /// `origin`: for an error that restates another at the other's span.
+    pub(crate) fn located_as(mut self, cause: &Self, origin: NodeOrigin) -> Self {
+        if !cause.location().is_unset() && self.span() == cause.span() {
+            *self.location_mut() = cause.location().clone();
+            self
+        } else {
+            self.located(origin)
+        }
+    }
+
+    /// Give the error owned files from `archive`, the one its checking
+    /// attempt addressed, as that attempt finishes.
+    pub(crate) fn materialise(&mut self, archive: Option<&SourceArchive>) {
+        self.location_mut().materialise(archive);
     }
 
     pub fn set_span_if_absent(&mut self, span: Span) {
         match self {
             Self::DuplicateDeclaration { duplicate, .. } => *duplicate = span,
             Self::TypeError(error) => error.set_span_if_absent(span),
-            Self::DeferredError(_, error_span)
-            | Self::UndeclaredVariable(_, error_span)
-            | Self::MissingTypeAnnotation(_, error_span)
-            | Self::MissingTypeAscription(_, error_span)
-            | Self::UnsupportedLiteral(_, error_span)
-            | Self::UnsupportedExpression(_, error_span)
-            | Self::InvalidRuntimeScope(_, error_span) => {
+            Self::DeferredError(_, error_span, _)
+            | Self::UndeclaredVariable(_, error_span, _)
+            | Self::MissingTypeAnnotation(_, error_span, _)
+            | Self::MissingTypeAscription(_, error_span, _)
+            | Self::UnsupportedLiteral(_, error_span, _)
+            | Self::UnsupportedExpression(_, error_span, _)
+            | Self::InvalidRuntimeScope(_, error_span, _) => {
                 error_span.get_or_insert(span);
             }
             Self::UnresolvedType(error) => error.set_span_if_absent(span),
         }
+    }
+}
+
+/// Give every error owned files from `archive` as a checking attempt that
+/// addressed it finishes.
+pub(crate) fn materialise_errors(errors: &mut [SemanticError], archive: Option<&SourceArchive>) {
+    for error in errors {
+        error.materialise(archive);
     }
 }
 
@@ -246,6 +338,7 @@ pub struct SemanticWarning {
     kind: SemanticWarningKind,
     message: String,
     span: Option<Span>,
+    location: SourceLocation,
 }
 
 impl SemanticWarning {
@@ -258,7 +351,30 @@ impl SemanticWarning {
             kind,
             message: message.into(),
             span,
+            location: SourceLocation::default(),
         }
+    }
+
+    /// Record, while checking, the node this warning's span came from.
+    pub(crate) fn located(mut self, origin: NodeOrigin) -> Self {
+        if let Some(span) = self.span
+            && self.location.is_unset()
+        {
+            self.location = SourceLocation::pending(origin, span);
+        }
+        self
+    }
+
+    /// Give the warning owned files from `archive` as its checking attempt
+    /// finishes.
+    pub(crate) fn materialise(&mut self, archive: Option<&SourceArchive>) {
+        self.location.materialise(archive);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_location(mut self, location: SourceLocation) -> Self {
+        self.location = location;
+        self
     }
 
     pub fn kind(&self) -> SemanticWarningKind {
@@ -278,6 +394,13 @@ impl SemanticWarning {
     /// checked. Code from another module is attributed to the call site.
     pub fn span(&self) -> Option<Span> {
         self.span
+    }
+
+    /// Where the warning applies, owning the files it names: the primary
+    /// site, which is [`span`](Self::span) in its file, and where inlined
+    /// code was defined.
+    pub fn location(&self) -> &SourceLocation {
+        &self.location
     }
 }
 
@@ -350,7 +473,11 @@ mod tests {
         assert_eq!(success.into_parts(), (Ok(1), warnings()));
 
         let failure = SemanticAnalysisReport::<i32>::new(
-            Err(vec![SemanticError::DeferredError("no".into(), None)]),
+            Err(vec![SemanticError::DeferredError(
+                "no".into(),
+                None,
+                Default::default(),
+            )]),
             warnings(),
         );
         assert!(failure.result().is_err());

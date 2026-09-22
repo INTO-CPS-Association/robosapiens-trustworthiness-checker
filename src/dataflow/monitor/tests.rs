@@ -3558,3 +3558,74 @@ proptest::proptest! {
         }
     }
 }
+
+/// A program whose files are labelled with `prefix`, with `lib` supplying
+/// the defs its runtime text may call.
+fn labelled_program(prefix: &str, lib: &str) -> crate::lang::dsrv::ElaboratedDsrvSpecification {
+    use crate::lang::dsrv::modules::ModuleCollector;
+    use crate::lang::dsrv::source_map::SourceLabel;
+
+    let label = |name: &str| SourceLabel::Path(format!("{prefix}{name}").into());
+    let mut collector = ModuleCollector::with_label(
+        "use experimental::{modules, functions}\nmod lib\nuse lib::*\n\
+         in s: Str\nin x: Int\nout y: Int\nout z: Int\ny = dynamic(s: Int)\nz = x + 1\n",
+        label("root.dsrv"),
+    )
+    .unwrap();
+    collector.supply_labelled(lib, label("lib.dsrv")).unwrap();
+    crate::lang::dsrv::expand::expand_program(collector.finish().unwrap(), Default::default())
+        .unwrap()
+        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .without_warnings()
+        .unwrap()
+}
+
+/// Where a program's files are, and what they are called, is not what
+/// its streams mean: relocating it keeps every stream's state. Changing a
+/// def its runtime text may call does change the `dynamic` stream.
+#[test]
+fn relocated_files_keep_stream_identity_and_changed_defs_do_not() {
+    const LIB: &str = "use experimental::{modules, functions}\ndef good(n: Int) -> Int = n * 2\n";
+    let mut monitor =
+        DataflowMonitor::compile_with_semantics(labelled_program("a/", LIB), Semantics::Untimed)
+            .unwrap();
+    let relocated =
+        DataflowMonitor::compile_with_semantics(labelled_program("b/", LIB), Semantics::Untimed)
+            .unwrap();
+    let report = monitor
+        .reconfigure(
+            relocated.program,
+            ContextTransferPolicy::MatchingStreamState,
+        )
+        .unwrap();
+    assert_eq!(
+        report_count(
+            &report.context_transfer,
+            StreamStateTransferOutcome::Initialized
+        ),
+        0,
+        "{report:?}"
+    );
+    assert!(
+        report_count(
+            &report.context_transfer,
+            StreamStateTransferOutcome::Transferred
+        ) > 0
+    );
+
+    let changed = DataflowMonitor::compile_with_semantics(
+        labelled_program("b/", &LIB.replace("n * 2", "n * 3")),
+        Semantics::Untimed,
+    )
+    .unwrap();
+    let report = monitor
+        .reconfigure(changed.program, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    let initialized = report
+        .context_transfer
+        .streams
+        .iter()
+        .filter(|entry| entry.outcome == StreamStateTransferOutcome::Initialized)
+        .collect::<Vec<_>>();
+    assert_eq!(initialized.len(), 1, "{report:?}");
+}

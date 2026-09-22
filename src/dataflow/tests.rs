@@ -1256,7 +1256,7 @@ fn checking_reports_unavailable_variables_before_dataflow_compiles() {
 
     assert!(errors.iter().any(|error| matches!(
         error,
-        crate::lang::dsrv::diagnostics::SemanticError::UndeclaredVariable(message, Some(span))
+        crate::lang::dsrv::diagnostics::SemanticError::UndeclaredVariable(message, Some(span), _)
             if message.contains("missing")
                 && *span == crate::lang::dsrv::span::Span::new(
                     source.find("missing").unwrap() as u32,
@@ -1362,7 +1362,7 @@ fn static_noval_is_refused_by_checking() {
         .expect_err("static NoVal is not a source literal");
     assert!(errors.iter().any(|error| matches!(
         error,
-        crate::lang::dsrv::diagnostics::SemanticError::UnsupportedLiteral(message, _)
+        crate::lang::dsrv::diagnostics::SemanticError::UnsupportedLiteral(message, _, _)
             if message.contains("runtime states")
     )));
 }

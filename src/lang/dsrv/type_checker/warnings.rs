@@ -17,7 +17,9 @@ use super::TCType;
 use crate::lang::dsrv::ast::{ExprId, ExprRef};
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticErrors, SemanticWarning, SemanticWarningKind,
+    materialise_errors,
 };
+use crate::lang::dsrv::source_map::SourceArchive;
 
 /// A rule proving a warning from one checked node and its type.
 pub(super) type WarningRule = fn(ExprRef<'_>, &TCType) -> Option<SemanticWarning>;
@@ -59,9 +61,23 @@ impl WarningCollector {
     /// Close the attempt. Warnings are ordered by source position, those
     /// without one last, then by node and rule, whatever order they were
     /// proved in.
-    pub(super) fn report<T>(self, result: Result<T, SemanticErrors>) -> SemanticAnalysisReport<T> {
+    ///
+    /// Every finding takes owned files from `sources`, the archive the
+    /// checked nodes' IDs belong to, so the report outlives it.
+    pub(super) fn report<T>(
+        self,
+        result: Result<T, SemanticErrors>,
+        sources: Option<&SourceArchive>,
+    ) -> SemanticAnalysisReport<T> {
         let mut warnings = self.found.into_values().collect::<Vec<_>>();
         warnings.sort_by_key(|warning| (warning.span().is_none(), warning.span()));
+        for warning in &mut warnings {
+            warning.materialise(sources);
+        }
+        let result = result.map_err(|mut errors| {
+            materialise_errors(&mut errors, sources);
+            errors
+        });
         SemanticAnalysisReport::new(result, warnings)
     }
 }
@@ -89,16 +105,20 @@ mod fixture {
                 "alpha fixture",
                 Some(expr.span()),
             )
+            .located(expr.origin())
         })
     }
 
     pub(super) fn beta(expr: ExprRef<'_>, _: &TCType) -> Option<SemanticWarning> {
         match literal(expr)? {
-            "warn:beta" | "warn:both" => Some(SemanticWarning::new(
-                SemanticWarningKind::TestBeta,
-                "beta fixture",
-                Some(expr.span()),
-            )),
+            "warn:beta" | "warn:both" => Some(
+                SemanticWarning::new(
+                    SemanticWarningKind::TestBeta,
+                    "beta fixture",
+                    Some(expr.span()),
+                )
+                .located(expr.origin()),
+            ),
             "warn:unplaced" => Some(SemanticWarning::new(
                 SemanticWarningKind::TestBeta,
                 "beta fixture",

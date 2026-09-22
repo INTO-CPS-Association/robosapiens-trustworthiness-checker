@@ -58,11 +58,7 @@ impl FromStr for DsrvSpecification {
             let (parse, strict, gradual) = counts.get();
             counts.set((parse + 1, strict, gradual));
         });
-        super::expand::expand_specification(
-            super::syntax::parse_specification(source)?,
-            Default::default(),
-        )
-        .map_err(Into::into)
+        parser::parse_str(source)
     }
 }
 
@@ -298,7 +294,7 @@ mod tests {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
-                SemanticError::MissingTypeAnnotation(message, Some(_))
+                SemanticError::MissingTypeAnnotation(message, Some(_), _)
                     if message.contains("lambda parameter `f`")
             )),
             "{errors:?}"
@@ -398,7 +394,7 @@ mod tests {
             .expect_err("undeclared references must fail common admission");
         assert!(semantic.iter().any(|error| matches!(
             error,
-            SemanticError::UndeclaredVariable(message, _) if message.contains("missing")
+            SemanticError::UndeclaredVariable(message, _, _) if message.contains("missing")
         )));
         let type_error = checked("out y: Bool\ny = 1", TypeCheckOptions::STRICT)
             .expect_err("well-formed but ill-typed source must reach type checking");
@@ -581,11 +577,11 @@ mod tests {
                 if *variable == VarName::new("z"))
         }
         fn undeclared(error: &SemanticError) -> bool {
-            matches!(error, SemanticError::UndeclaredVariable(message, _)
+            matches!(error, SemanticError::UndeclaredVariable(message, _, _)
                 if message.contains("missing"))
         }
         fn invalid_scope(error: &SemanticError) -> bool {
-            matches!(error, SemanticError::InvalidRuntimeScope(message, _)
+            matches!(error, SemanticError::InvalidRuntimeScope(message, _, _)
                 if message.contains("missing"))
         }
         let cases = [
@@ -630,7 +626,7 @@ mod tests {
                 assert!(
                     errors
                         .iter()
-                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _)))
+                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _, _)))
                 );
             }
         }
@@ -649,7 +645,7 @@ mod tests {
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
-                SemanticError::UndeclaredVariable(message, _)
+                SemanticError::UndeclaredVariable(message, _, _)
                     if message.contains("missing")
             )));
         }
@@ -677,7 +673,7 @@ mod tests {
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
-                SemanticError::UndeclaredVariable(message, _)
+                SemanticError::UndeclaredVariable(message, _, _)
                     if message.contains("missing")
             )));
         }
@@ -698,6 +694,7 @@ mod tests {
                         variable,
                         first,
                         duplicate,
+                        ..
                     } if *variable == VarName::new("z") => Some((*first, *duplicate)),
                     _ => None,
                 })

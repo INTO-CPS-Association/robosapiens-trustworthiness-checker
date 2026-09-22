@@ -10,7 +10,10 @@ use crate::lang::dsrv::ast::{
     Declaration, DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope,
     SyntaxLiteral, ValidatedDsrvSpecification,
 };
-use crate::lang::dsrv::diagnostics::{SemanticError, SemanticResult, TypeErrorKind};
+use crate::lang::dsrv::diagnostics::{
+    SemanticError, SemanticResult, TypeErrorKind, materialise_errors,
+};
+use crate::lang::dsrv::source_map::{NodeOrigin, SourceLocation};
 use crate::{Value, VarName};
 use ecow::EcoVec;
 
@@ -47,10 +50,15 @@ pub(crate) fn validate_specification(spec: &DsrvSpecification) -> SemanticResult
             continue;
         };
         if let Some(first) = declarations.get(name) {
+            // Declarations are the root file's.
             errors.push(SemanticError::DuplicateDeclaration {
                 variable: name.clone(),
                 first: *first,
                 duplicate: *span,
+                location: SourceLocation::pending(
+                    NodeOrigin::new(spec.sources().root(), None),
+                    *span,
+                ),
             });
         } else {
             declarations.insert(name.clone(), *span);
@@ -76,7 +84,10 @@ pub(crate) fn validate_specification(spec: &DsrvSpecification) -> SemanticResult
 }
 
 pub fn validate(spec: DsrvSpecification) -> SemanticResult<ValidatedDsrvSpecification> {
-    validate_specification(&spec)?;
+    validate_specification(&spec).map_err(|mut errors| {
+        materialise_errors(&mut errors, Some(spec.sources()));
+        errors
+    })?;
     Ok(ValidatedDsrvSpecification::new(spec))
 }
 
@@ -90,11 +101,15 @@ fn validate_expression(
         Val(SyntaxLiteral::NoVal) => Err(SemanticError::UnsupportedLiteral(
             "Deferred and NoVal are runtime states, not source literals".to_owned(),
             Some(expression.span()),
-        )),
+            SourceLocation::default(),
+        )
+        .located(expression.origin())),
         Var(var) if !context.contains(var) => Err(SemanticError::UndeclaredVariable(
             format!("undeclared variable {var}"),
             Some(expression.span()),
-        )),
+            SourceLocation::default(),
+        )
+        .located(expression.origin())),
         Lambda(parameters, body) => {
             let frame_start = context.bindings.len();
             context
@@ -185,7 +200,9 @@ fn validate_runtime_scope(
             return Err(SemanticError::InvalidRuntimeScope(
                 message,
                 Some(expression.span()),
-            ));
+                SourceLocation::default(),
+            )
+            .located(expression.origin()));
         }
     }
     Ok(())
@@ -200,7 +217,8 @@ fn validate_unique_fields(
             TypeErrorKind::DuplicateField,
             format!("expression contains duplicate field {key:?}"),
             expression.span(),
-        ));
+        )
+        .located(expression.origin()));
     }
     Ok(())
 }
@@ -304,7 +322,7 @@ mod tests {
 
         assert!(errors.iter().any(|error| matches!(
             error,
-            SemanticError::InvalidRuntimeScope(message, _)
+            SemanticError::InvalidRuntimeScope(message, _, _)
                 if message.contains("unknown variable missing")
         )));
     }

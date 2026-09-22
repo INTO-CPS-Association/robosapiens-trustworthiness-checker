@@ -13,6 +13,7 @@ use super::super::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
 use super::super::path::{ModuleName, TypePath, UseTree, ValuePath};
 use super::super::patterns::{MatchArm, MatchPattern};
 use super::super::source::{AliasDeclaration, SourceType, TypeName};
+use super::super::source_map::{SourceId, SourceSite};
 use super::super::span::Span;
 use super::DsrvSyntaxError;
 
@@ -25,7 +26,7 @@ pub(crate) enum SourceAscription {
 contiguous_tree::tree_schema! {
     pub(crate) tree ParsedExpr {
         schema: pub(crate),
-        metadata: span: Span = Span::default(),
+        metadata: origin: ParsedOrigin = ParsedOrigin::default(),
         id: u32,
         key: EcoString,
         children: EcoVec,
@@ -93,6 +94,48 @@ contiguous_tree::tree_schema! {
     }
 }
 
+/// Where a parsed node came from. The span is in the file being parsed or
+/// inlined into; a node grafted from a def of another module additionally
+/// records where that def wrote it. The file itself is the parsed
+/// specification's, so no node carries it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ParsedOrigin {
+    pub(crate) span: Span,
+    pub(crate) definition: Option<SourceSite>,
+}
+
+impl From<Span> for ParsedOrigin {
+    fn from(span: Span) -> Self {
+        Self {
+            span,
+            definition: None,
+        }
+    }
+}
+
+/// The builder the grammar allocates through: every node it parses is
+/// written in the file being parsed, so it gives a span alone.
+pub(crate) struct SpanningBuilder(ParsedExprBuilder);
+
+impl SpanningBuilder {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self(ParsedExprBuilder::with_capacity(capacity))
+    }
+
+    pub(crate) fn alloc(&mut self, node: ParsedExprKind, span: Span) -> ParsedExprId {
+        self.0.alloc(node, span.into())
+    }
+
+    /// The span of a node already allocated.
+    pub(crate) fn metadata(&self, id: ParsedExprId) -> Span {
+        self.0.metadata(id).span
+    }
+
+    pub(crate) fn into_inner(self) -> ParsedExprBuilder {
+        self.0
+    }
+}
+
 /// How far back a stream offset reaches, before names are resolved.
 ///
 /// The core AST keeps a number; a constant naming one is folded away in
@@ -153,6 +196,9 @@ pub(crate) enum ParsedDeclaration {
 pub(crate) struct ParsedSpecification {
     expressions: ParsedExprForest,
     declarations: EcoVec<ParsedDeclaration>,
+    /// The archived file this was parsed from; `None` for text no archive
+    /// holds.
+    source: Option<SourceId>,
 }
 
 impl ParsedSpecification {
@@ -176,7 +222,19 @@ impl ParsedSpecification {
         Ok(Self {
             expressions,
             declarations,
+            source: None,
         })
+    }
+
+    /// Record the archived file this was parsed from.
+    pub(crate) fn with_source(mut self, source: SourceId) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// The archived file this was parsed from.
+    pub(crate) fn source(&self) -> Option<SourceId> {
+        self.source
     }
 
     /// How many declarations the source contained.
@@ -198,12 +256,23 @@ impl ParsedSpecification {
         self.expressions.clone().into_roots().collect()
     }
 
-    pub(crate) fn into_parts(self) -> (ParsedExprForest, EcoVec<ParsedDeclaration>) {
-        (self.expressions, self.declarations)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ParsedExprForest,
+        EcoVec<ParsedDeclaration>,
+        Option<SourceId>,
+    ) {
+        (self.expressions, self.declarations, self.source)
     }
 }
 
 /// The source span of a parsed node, for the expansion stage.
 pub(crate) fn span_of(cursor: ParsedExprRef<'_>) -> Span {
-    cursor.node().span
+    cursor.node().origin.span
+}
+
+/// Where a parsed node came from.
+pub(crate) fn origin_of(cursor: ParsedExprRef<'_>) -> ParsedOrigin {
+    cursor.node().origin
 }

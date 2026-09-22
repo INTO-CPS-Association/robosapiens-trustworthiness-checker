@@ -747,9 +747,14 @@ mod tests {
             .var_expr_ref(&VarName::new("result"))
             .expect("result expression should exist");
         let expression = parse_expr("true").expect("runtime expression should parse");
-        let errors = check_expression(expression, dynamic.typ(), dynamic.shared_type_environment())
-            .discard_warnings()
-            .expect_err("a Bool runtime expression must not satisfy an Int annotation");
+        let errors = check_expression(
+            expression,
+            dynamic.typ(),
+            dynamic.shared_type_environment(),
+            None,
+        )
+        .discard_warnings()
+        .expect_err("a Bool runtime expression must not satisfy an Int annotation");
         assert!(!errors.is_empty());
     }
 }

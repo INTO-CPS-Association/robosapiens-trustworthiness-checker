@@ -93,7 +93,7 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
 
 fn can_widen_gradual_error(error: &SemanticError) -> bool {
     match error {
-        SemanticError::UndeclaredVariable(_, _) => true,
+        SemanticError::UndeclaredVariable(..) => true,
         SemanticError::TypeError(type_error) => matches!(
             type_error.kind(),
             TypeErrorKind::IfBranchTypeMismatch
@@ -110,8 +110,9 @@ fn type_check_gradual_for(
     spec: DsrvSpecification,
 ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     let mut warnings = WarningCollector::default();
+    let sources = crate::lang::dsrv::ast::AstShared::clone(spec.sources());
     let result = type_check_gradual_with(spec, &mut warnings);
-    warnings.report(result)
+    warnings.report(result, Some(&sources))
 }
 
 /// Infer root types to a fixed point, retaining findings only from successful
@@ -175,7 +176,8 @@ fn type_check_gradual_with(
                                     "Variable {var} has declared type {expected}, but expression has inconsistent type {actual}"
                                 ),
                                 expr.span(),
-                            ));
+                            )
+                            .located(expr.origin()));
                         }
                     } else {
                         let inferred = gradual_fallback_type(actual);
@@ -485,7 +487,7 @@ mod tests {
         let errors = type_check_gradual(spec).expect_err("NoVal literal AST should be rejected");
         assert!(matches!(
             errors.as_slice(),
-            [SemanticError::UnsupportedLiteral(_, _)]
+            [SemanticError::UnsupportedLiteral(_, _, _)]
         ));
     }
 

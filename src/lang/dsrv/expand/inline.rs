@@ -8,6 +8,13 @@
 //! This runs on the parsed tree, before expansion resolves any name, which
 //! is where the pipeline puts inlining. Each call site gets its own copy of
 //! the body, so a def called twice is expanded twice.
+//!
+//! A body from another module is reported at the call: its nodes take the
+//! call's span, since their own offsets belong to a different file. Each
+//! such node records where it was written as its definition site, which
+//! survives further inlining unchanged, so code reached through several
+//! modules names the module that wrote it. Arguments are the caller's
+//! text and keep the caller's provenance.
 
 use std::collections::BTreeMap;
 
@@ -17,9 +24,11 @@ use ecow::EcoVec;
 use crate::VarName;
 use crate::lang::dsrv::path::{ModuleName, ValuePath};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind, TypeName};
+use crate::lang::dsrv::source_map::{SourceId, SourceSite};
+use crate::lang::dsrv::span::Span;
 
 use super::super::syntax::parsed::{
-    self, ParsedExpr, ParsedExprBuilder, ParsedExprId, ParsedExprKind, ParsedExprRef,
+    self, ParsedExpr, ParsedExprBuilder, ParsedExprId, ParsedExprKind, ParsedExprRef, ParsedOrigin,
 };
 
 use super::super::syntax::{ParsedDeclaration, ParsedSpecification};
@@ -40,6 +49,37 @@ pub(crate) struct Def<'a> {
     /// A body from another module carries that module's byte offsets, which
     /// mean nothing in this one, so those nodes take the call's span.
     pub(crate) foreign: bool,
+    /// The archived file that declared the def, which a foreign body's
+    /// nodes name as their definition site.
+    pub(crate) source: Option<SourceId>,
+}
+
+/// How a subtree grafted from another module's def is placed: at the
+/// call's span, remembering the file it was written in.
+#[derive(Clone, Copy)]
+struct Stamp {
+    span: Span,
+    definition: Option<SourceId>,
+}
+
+impl Stamp {
+    /// Where the copy of `cursor` is placed.
+    fn place(stamp: Option<Self>, cursor: ParsedExprRef<'_>) -> ParsedOrigin {
+        let origin = parsed::origin_of(cursor);
+        match stamp {
+            None => origin,
+            Some(stamp) => ParsedOrigin {
+                span: stamp.span,
+                // Code inlined into the def was written elsewhere again,
+                // and keeps naming where.
+                definition: origin.definition.or_else(|| {
+                    stamp
+                        .definition
+                        .map(|source| SourceSite::new(source, origin.span))
+                }),
+            },
+        }
+    }
 }
 
 impl Def<'_> {
@@ -123,7 +163,7 @@ pub(crate) fn inline_functions(
         return Ok(parsed);
     }
 
-    let (forest, declarations) = parsed.into_parts();
+    let (forest, declarations, source) = parsed.into_parts();
     let node_count = forest.nodes().count();
     let held: Vec<_> = forest.into_roots().collect();
     // The handles stay alive here so every root cursor, including a def's
@@ -140,6 +180,7 @@ pub(crate) fn inline_functions(
                 type_parameters: def.type_parameters,
                 body: trees[def.root],
                 foreign: false,
+                source: None,
             },
         );
     }
@@ -199,9 +240,13 @@ pub(crate) fn inline_functions(
             other => other,
         })
         .collect();
-    ParsedSpecification::new(builder, declarations).map_err(|error| match error {
+    let inlined = ParsedSpecification::new(builder, declarations).map_err(|error| match error {
         super::super::syntax::DsrvSyntaxError::Ast(error) => DsrvExpandError::Ast(error),
         other => DsrvExpandError::Inlined(other.to_string()),
+    })?;
+    Ok(match source {
+        Some(source) => inlined.with_source(source),
+        None => inlined,
     })
 }
 
@@ -253,7 +298,7 @@ fn graft(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
-    stamp: Option<crate::lang::dsrv::span::Span>,
+    stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind()
         && let ParsedExprKind::Var(name) = cursor.child(*function).kind()
@@ -286,7 +331,7 @@ fn graft(
         {
             return Ok(builder.alloc(
                 ParsedExprKind::Val(value.clone()),
-                stamp.unwrap_or_else(|| parsed::span_of(cursor)),
+                Stamp::place(stamp, cursor),
             ));
         }
         if let ParsedExprKind::ModuleItem(path) = cursor.kind()
@@ -294,7 +339,7 @@ fn graft(
         {
             return Ok(builder.alloc(
                 ParsedExprKind::Val(value.clone()),
-                stamp.unwrap_or_else(|| parsed::span_of(cursor)),
+                Stamp::place(stamp, cursor),
             ));
         }
         // An offset is a number rather than an expression, so a constant
@@ -311,7 +356,7 @@ fn graft(
                 let input = graft(cursor.child(*input), scope, builder, active, stamp)?;
                 return Ok(builder.alloc(
                     ParsedExprKind::SIndex(input, parsed::SourceOffset::Literal(offset)),
-                    stamp.unwrap_or(span),
+                    Stamp::place(stamp, cursor),
                 ));
             }
         }
@@ -325,7 +370,7 @@ fn graft(
     kind.for_each_child_id_mut(|child| {
         *child = next.next().expect("one grafted child per child id");
     });
-    Ok(builder.alloc(kind, stamp.unwrap_or_else(|| parsed::span_of(cursor))))
+    Ok(builder.alloc(kind, Stamp::place(stamp, cursor)))
 }
 
 /// The number an offset's constant stands for, which must be a count.
@@ -351,7 +396,7 @@ fn inline_call(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
-    stamp: Option<crate::lang::dsrv::span::Span>,
+    stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     let def = scope.bare(name).expect("the caller matched on it");
     // Only a def of this file can recurse: a def from the table was already
@@ -385,7 +430,7 @@ fn build_call(
     scope: &Scope<'_>,
     builder: &mut ParsedExprBuilder,
     active: &mut Vec<VarName>,
-    stamp: Option<crate::lang::dsrv::span::Span>,
+    stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
     if def.parameters.len() != arguments.len() {
         return Err(DsrvExpandError::FunctionArity {
@@ -394,12 +439,20 @@ fn build_call(
             found: arguments.len(),
         });
     }
-    let span = stamp.unwrap_or_else(|| parsed::span_of(call));
+    // The lambda and application stand for the call itself.
+    let at_call = Stamp::place(stamp, call);
 
     // `Apply`'s first child is the function, so the lambda is allocated
     // before the arguments. A body from another module takes this call's
     // span throughout, since its own offsets belong to a different file.
-    let inner = if def.foreign { Some(span) } else { stamp };
+    let inner = if def.foreign {
+        Some(Stamp {
+            span: at_call.span,
+            definition: def.source,
+        })
+    } else {
+        stamp
+    };
     if let Some(guard) = &guard {
         active.push(guard.clone());
     }
@@ -412,11 +465,11 @@ fn build_call(
         .iter()
         .map(|(parameter, ty)| (parameter.clone(), def.ascription(ty)))
         .collect();
-    let lambda = builder.alloc(ParsedExprKind::Lambda(parameters, body), span);
+    let lambda = builder.alloc(ParsedExprKind::Lambda(parameters, body), at_call);
 
     let mut grafted = EcoVec::new();
     for argument in arguments {
         grafted.push(graft(call.child(*argument), scope, builder, active, stamp)?);
     }
-    Ok(builder.alloc(ParsedExprKind::Apply(lambda, grafted), span))
+    Ok(builder.alloc(ParsedExprKind::Apply(lambda, grafted), at_call))
 }

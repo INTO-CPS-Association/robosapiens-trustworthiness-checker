@@ -11,6 +11,7 @@ pub mod patterns;
 mod pipeline;
 pub(crate) mod runtime_expression;
 pub mod source;
+pub mod source_map;
 pub mod span;
 mod syntax;
 pub mod type_checker;

@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 
 use super::ast::{
-    CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification, ExprBuilder,
-    ExprForestMap, ExprId,
+    AstShared, CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification,
+    ExprBuilder, ExprForestMap, ExprId,
 };
 use super::diagnostics::SemanticAnalysisReport;
 use super::parser::DsrvParseError;
@@ -169,6 +169,7 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
         spec.declarations.clone(),
     );
     elaborated.source_context = spec.source_context.clone();
+    elaborated.sources = AstShared::clone(&spec.sources);
     CheckedDsrvSpecification::new(elaborated, expr_types, checked.check_mode())
 }
 

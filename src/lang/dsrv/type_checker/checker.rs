@@ -26,6 +26,7 @@ use crate::lang::dsrv::diagnostics::{
 };
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
+use crate::lang::dsrv::source_map::{SourceArchive, SourceLocation};
 
 struct TypeContext<'types> {
     environment: Cow<'types, StreamTypeEnvironment>,
@@ -63,8 +64,9 @@ pub(super) fn check_specification(
     spec: DsrvSpecification,
 ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     let mut warnings = WarningCollector::default();
+    let sources = AstShared::clone(spec.sources());
     let result = check_specification_with(spec, &mut warnings);
-    warnings.report(result)
+    warnings.report(result, Some(&sources))
 }
 
 fn check_specification_with(
@@ -89,6 +91,7 @@ fn check_specification_with(
             errors.push(SemanticError::MissingTypeAnnotation(
                 format!("Variable {var} is missing a type annotation"),
                 None,
+                SourceLocation::default(),
             ));
             continue;
         };
@@ -115,14 +118,17 @@ fn check_specification_with(
     }
 }
 
+/// Check a standalone expression. Its findings are located in `sources`,
+/// the archive its IDs belong to, or are unlocated without one.
 pub(crate) fn check_expression(
     expr: Expr,
     expected: &TCType,
     environment: &AstShared<StreamTypeEnvironment>,
+    sources: Option<&SourceArchive>,
 ) -> SemanticAnalysisReport<CheckedExpr> {
     let mut warnings = WarningCollector::default();
     let result = check_expression_with(expr, expected, environment, &mut warnings);
-    warnings.report(result)
+    warnings.report(result, sources)
 }
 
 fn check_expression_with(
@@ -167,6 +173,7 @@ pub fn type_check_expression(
         expr.clone(),
         &TCType::from_stream_type(expected),
         &AstShared::new(environment.clone()),
+        None,
     )
 }
 
@@ -283,7 +290,9 @@ fn check(
             return Err(SemanticError::UnsupportedLiteral(
                 "Deferred and NoVal are runtime states, not source literals".to_owned(),
                 Some(expr.span()),
-            ));
+                SourceLocation::default(),
+            )
+            .located(expr.origin()));
         }
         Val(value) => (value_type(value, expected)?, None),
         Match(scrutinee, arms, shape) => {
@@ -363,7 +372,9 @@ fn check(
                     SemanticError::UndeclaredVariable(
                         format!("undeclared variable {var}"),
                         Some(expr.span()),
+                        SourceLocation::default(),
                     )
+                    .located(expr.origin())
                 })?,
             None,
         ),
@@ -397,7 +408,8 @@ fn check(
                         SemanticWarningKind::RedundantCast,
                         format!("cast from {target} to {target} is redundant"),
                         Some(expr.span()),
-                    ),
+                    )
+                    .located(expr.origin()),
                 );
             }
             let valid = source == target_type
@@ -538,7 +550,8 @@ fn check(
                                         "cannot infer the type of lambda parameter `{name}` from its context; annotate it"
                                     ),
                                     Some(expr.span()),
-                                ));
+                                    SourceLocation::default(),
+                                ).located(expr.origin()));
                             }
                         }
                     }
@@ -1319,7 +1332,9 @@ fn validate_runtime_scope(
             return Err(SemanticError::InvalidRuntimeScope(
                 message,
                 Some(expr.span()),
-            ));
+                SourceLocation::default(),
+            )
+            .located(expr.origin()));
         }
     }
     Ok(())
@@ -1627,7 +1642,8 @@ fn check_constructor(
                         tags_found_in(expr, tag)
                     ),
                     expr.span(),
-                ));
+                )
+                .located(expr.origin()));
             }
             Some(other) => {
                 return Err(error(
@@ -1671,6 +1687,7 @@ fn check_constructor(
                         format!("`{tag}` carries {declared}, and {}", mismatch.message()),
                         mismatch.span().unwrap_or_else(|| payload.span()),
                     )
+                    .located_as(&error, payload.origin())
                 }
                 _ => error,
             })?;
@@ -1773,5 +1790,5 @@ fn reject_duplicate_fields(
 }
 
 fn error(expr: ExprRef<'_>, kind: TypeErrorKind, message: impl Into<String>) -> SemanticError {
-    SemanticError::type_error_at(kind, message.into(), expr.span())
+    SemanticError::type_error_at(kind, message.into(), expr.span()).located(expr.origin())
 }

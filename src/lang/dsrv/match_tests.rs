@@ -133,7 +133,7 @@ fn a_binder_takes_the_type_of_what_it_matched() {
 
     let errors = check_err("out y: Int\ny = match(state) { Moving(n) -> 0, Stopped -> n, }\n");
     assert!(
-        matches!(&errors[0], SemanticError::UndeclaredVariable(message, _) if message.contains('n')),
+        matches!(&errors[0], SemanticError::UndeclaredVariable(message, _, _) if message.contains('n')),
         "{errors:?}"
     );
 }

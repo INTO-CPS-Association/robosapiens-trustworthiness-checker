@@ -3,7 +3,7 @@ use ecow::{EcoString, EcoVec};
 use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
-use crate::lang::dsrv::syntax::parsed::{ParsedExprBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset};
+use crate::lang::dsrv::syntax::parsed::{SpanningBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree, ValuePath};
 use crate::core::{BinaryOperator, VarName};

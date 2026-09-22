@@ -259,6 +259,7 @@ fn try_inline_aux(
         declarations,
     );
     inlined.source_context = spec.source_context;
+    inlined.sources = spec.sources;
     Ok(CheckedDsrvSpecification::new(
         inlined,
         expr_types,
@@ -866,6 +867,45 @@ mod tests {
             assert_eq!(before.typ(), after.typ());
             assert_eq!(before.expr().span(), after.expr().span());
         }
+    }
+
+    /// Inlining an auxiliary stream copies its nodes within one program, so
+    /// each copy keeps its origin, and the localised form shares the
+    /// program's archive.
+    #[test]
+    fn localisation_keeps_every_copied_nodes_origin_and_the_archive() {
+        use crate::lang::dsrv::modules::ModuleCollector;
+
+        let mut collector = ModuleCollector::new(
+            "use experimental::{modules, functions}\nmod lib\nuse lib\n\
+             in x: Int\naux h: Int\nout y: Int\nh = lib::twice(x)\ny = h + 1",
+        )
+        .unwrap();
+        collector
+            .supply("use experimental::{modules, functions}\ndef twice(n: Int) -> Int = n * 2\n")
+            .unwrap();
+        let spec = elaborate(
+            crate::lang::dsrv::expand::expand_program(
+                collector.finish().unwrap(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
+        assert!(crate::lang::dsrv::ast::AstShared::ptr_eq(
+            tree(&spec).sources(),
+            tree(&localised).sources()
+        ));
+        let original = tree(&spec)
+            .nodes()
+            .map(|node| (node.span(), node.origin()))
+            .collect::<Vec<_>>();
+        let copied = tree(&localised)
+            .nodes()
+            .map(|node| (node.span(), node.origin()))
+            .collect::<Vec<_>>();
+        assert!(copied.iter().all(|node| original.contains(node)));
+        assert!(copied.iter().any(|(_, origin)| origin.definition.is_some()));
     }
 
     #[test]

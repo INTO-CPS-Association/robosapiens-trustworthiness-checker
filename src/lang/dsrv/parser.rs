@@ -19,6 +19,7 @@ use super::ast::{DsrvAstError, Expr, ExprId};
 use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError, LanguageRequest};
 use super::expand::{self, DsrvExpandError};
 use super::source::{SourceContext, SourceResolveError};
+use super::source_map::{ProvenanceError, STRING_LABEL, SourceArchive, SourceId, SourceLabel};
 use super::syntax::{self, DsrvSyntaxError};
 use crate::DsrvSpecification;
 
@@ -52,6 +53,9 @@ pub enum DsrvParseError {
     #[error("invalid import: {0}")]
     Import(#[from] ImportError),
 
+    #[error("invalid source provenance: {0}")]
+    Provenance(#[from] ProvenanceError),
+
     #[error("invalid module structure: {0}")]
     Modules(String),
 }
@@ -73,6 +77,7 @@ impl From<DsrvExpandError> for DsrvParseError {
             DsrvExpandError::Transcode(error) => Self::Transcode(error),
             DsrvExpandError::Language(error) => Self::Language(error),
             DsrvExpandError::Import(error) => Self::Import(error),
+            DsrvExpandError::Provenance(error) => Self::Provenance(error),
             // The message is the whole of these; nothing downstream
             // discriminates them further.
             other @ (DsrvExpandError::ModuleCycle { .. }
@@ -93,6 +98,8 @@ impl From<DsrvExpandError> for DsrvParseError {
     }
 }
 
+/// Parse a standalone expression. The result is unlocated: it belongs to
+/// no archive, so findings about it carry spans but no file.
 pub fn parse_expr(input: &str) -> Result<Expr, Error> {
     parse_expr_with_context(input, Rc::new(SourceContext::default())).map_err(|error| {
         let message = format!("Parse error: {error}");
@@ -106,17 +113,21 @@ pub fn parse_expr_with_context(
     input: &str,
     context: Rc<SourceContext>,
 ) -> Result<Expr, DsrvParseError> {
-    parse_expr_with_functions(input, context, Rc::default())
+    parse_expr_with_functions(input, context, Rc::default(), None)
 }
 
-/// Parse runtime text that may call a `def`.
+/// Parse runtime text that may call a `def`, located as the file `located`
+/// names in its archive, or unlocated.
 pub(crate) fn parse_expr_with_functions(
     input: &str,
     context: Rc<SourceContext>,
     callable: Rc<expand::functions::Callable>,
+    located: Option<(&SourceArchive, SourceId)>,
 ) -> Result<Expr, DsrvParseError> {
     let parsed = syntax::parse_expression(input)?;
-    Ok(expand::expand_expression(&parsed, &context, &callable)?)
+    Ok(expand::expand_expression(
+        &parsed, &context, &callable, located,
+    )?)
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
@@ -129,9 +140,20 @@ pub fn parse_str_with(
     input: &str,
     request: LanguageRequest,
 ) -> Result<DsrvSpecification, DsrvParseError> {
+    parse_labelled(input, SourceLabel::Supplied(STRING_LABEL.into()), request)
+}
+
+/// Parse a program of one file, which diagnostics name `label`.
+pub fn parse_labelled(
+    input: &str,
+    label: SourceLabel,
+    request: LanguageRequest,
+) -> Result<DsrvSpecification, DsrvParseError> {
+    let (parsed, archive) = syntax::parse_archived_specification(input, label)?;
     Ok(expand::expand_specification(
-        syntax::parse_specification(input)?,
+        parsed,
         request,
+        Rc::new(archive),
     )?)
 }
 
@@ -150,7 +172,7 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
     let root = smol::fs::read_to_string(file)
         .await
         .with_context(|| format!("reading {file}"))?;
-    let mut collector = ModuleCollector::new(&root)?;
+    let mut collector = ModuleCollector::with_label(&root, SourceLabel::Path(file.into()))?;
     while let Some(path) = collector.next_request().map(<[ModuleName]>::to_vec) {
         let location = directory.join(module_file(&path));
         let source = smol::fs::read_to_string(&location).await.with_context(|| {
@@ -160,7 +182,10 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
                 location.display()
             )
         })?;
-        collector.supply(&source)?;
+        collector.supply_labelled(
+            &source,
+            SourceLabel::Path(location.display().to_string().into()),
+        )?;
     }
     Ok(collector.finish()?)
 }
@@ -246,7 +271,7 @@ fn parse_declaration(input: &str) -> Result<(Option<Expr>, Declaration), Error> 
         declarations,
         roots,
         ..
-    } = expand::expand_declarations(parsed, Default::default())?;
+    } = expand::expand_declarations(parsed, Default::default(), &SourceArchive::new())?;
     let declaration = declarations
         .into_iter()
         .next()

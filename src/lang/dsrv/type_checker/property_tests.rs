@@ -360,7 +360,7 @@ proptest! {
     fn strict_requires_output_annotations(case in arb_type_directed_case()) {
         let errors = type_check(specification(&case, false))
             .expect_err("strict checker must reject a missing output annotation");
-        prop_assert!(errors.iter().any(|error| matches!(error, SemanticError::MissingTypeAnnotation(_, _))));
+        prop_assert!(errors.iter().any(|error| matches!(error, SemanticError::MissingTypeAnnotation(_, _, _))));
     }
 
     #[test]

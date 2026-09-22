@@ -390,7 +390,7 @@ mod tests {
                 assert!(
                     errors
                         .iter()
-                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _))),
+                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _, _))),
                     "expected a scope error for `{expression}`, got {errors:?}"
                 );
             }

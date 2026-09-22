@@ -320,7 +320,9 @@ fn compile_reconfigurable_expression_template(
     }
     Ok(Rc::new(ReconfigurableExpressionTemplate {
         source_text,
-        site: spec.site.clone(),
+        // A template is reused by other occurrences, so it keeps what the
+        // site means but not where it was written.
+        site: spec.site.without_sources(),
         program: compiled.program,
         nested_dependency_slots: compiled.nested_dependency_slots,
         nested_environment_slots: compiled.nested_environment_slots,
@@ -496,6 +498,149 @@ mod tests {
         let template = prepared.template;
         cache.insert(spec, environment, Rc::clone(&template));
         template
+    }
+
+    const LOCATED_ROOT: &str = "use experimental::{modules, functions}\nmod lib\nuse lib::*\n\
+        in s: Str\nin x: Int\nout y: Int\ny = dynamic(s: Int)\n";
+    const LOCATED_LIB: &str = "use experimental::{modules, functions}\n\
+        def good(n: Int) -> Int = n * 2\ndef bad(n: Int) -> Int = n + true\n";
+
+    /// The prepared site of `y`'s `dynamic` in a program whose files are
+    /// labelled with `prefix`, and a probe on its library file.
+    fn located_site(
+        prefix: &str,
+    ) -> (
+        RuntimeExpressionSite,
+        std::sync::Weak<crate::lang::dsrv::source_map::SourceFile>,
+    ) {
+        use crate::dsrv_fixtures::WithoutWarnings;
+        use crate::lang::dsrv::modules::ModuleCollector;
+        use crate::lang::dsrv::source_map::SourceLabel;
+
+        let label = |name: &str| SourceLabel::Path(format!("{prefix}{name}").into());
+        let mut collector = ModuleCollector::with_label(LOCATED_ROOT, label("root.dsrv")).unwrap();
+        collector
+            .supply_labelled(LOCATED_LIB, label("lib.dsrv"))
+            .unwrap();
+        let spec = crate::lang::dsrv::expand::expand_program(
+            collector.finish().unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        let lib = spec
+            .sources()
+            .files()
+            .find(|(_, file)| file.label() == &label("lib.dsrv"))
+            .map(|(_, file)| std::sync::Arc::downgrade(file))
+            .unwrap();
+        let elaborated = spec
+            .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+            .without_warnings()
+            .unwrap();
+        let site = elaborated
+            .var_expr_ref(&VarName::new("y"))
+            .unwrap()
+            .runtime_expression()
+            .clone();
+        (site, lib)
+    }
+
+    fn located_spec(site: RuntimeExpressionSite) -> BoundReconfigurableExpressionSpec {
+        BoundReconfigurableExpressionSpec {
+            input: BoundRef::Const(Value::NoVal),
+            scope: restricted_scope(&["x"]),
+            kind: ReconfigurableExpressionKind::Dynamic,
+            specialise: true,
+            site,
+        }
+    }
+
+    /// A template outlives the occurrence that compiled it and is reused by
+    /// others, so it keeps what the site means and none of the files its
+    /// occurrence captured: no later text is located at a stale occurrence,
+    /// and no archive stays alive for it.
+    #[test]
+    fn a_cached_template_keeps_no_occurrence_provenance() {
+        let environment = Rc::new(EnvironmentLayout::from_variables([VarName::new("x")]));
+        let (site, lib) = located_site("first/");
+        let spec = located_spec(site);
+        assert!(spec.site.sources().is_some());
+        let mut cache = SharedReconfigurableExpressionCache::default();
+        let template = cache_template(&mut cache, "good(x)", &spec, &environment);
+        assert!(template.site.sources().is_none());
+        assert!(
+            cache
+                .lookup(&"good(x)".into(), &spec, &environment)
+                .is_some()
+        );
+        drop(spec);
+        assert!(lib.upgrade().is_none(), "the cached template holds no file");
+
+        // Text refused at another occurrence is located there.
+        let (other, _) = located_site("second/");
+        let other = located_spec(other);
+        let Err(DataflowEvaluationError::ReconfigurableExpressionType { message, .. }) =
+            compile_dynamic_expression(&"bad(x)".into(), &other, &environment)
+        else {
+            panic!("bad does not check");
+        };
+        assert!(message.contains("second/lib.dsrv"), "{message}");
+        assert!(!message.contains("first/"), "{message}");
+        drop(template);
+    }
+
+    #[test]
+    fn a_runtime_site_does_not_retain_defs_outside_its_callable_scope() {
+        use crate::dsrv_fixtures::WithoutWarnings;
+        use crate::lang::dsrv::modules::ModuleCollector;
+        use crate::lang::dsrv::source_map::SourceLabel;
+
+        let root = "use experimental::{modules, functions}\n\
+            mod lib\nmod unused\nuse lib::*\n\
+            in s: Str\nout y: Int\ny = dynamic(s: Int)";
+        let mut collector =
+            ModuleCollector::with_label(root, SourceLabel::Path("root.dsrv".into())).unwrap();
+        collector
+            .supply_labelled(
+                "use experimental::{modules, functions}\n\
+                    def available(n: Int) -> Int = n",
+                SourceLabel::Path("lib.dsrv".into()),
+            )
+            .unwrap();
+        collector
+            .supply_labelled(
+                "use experimental::{modules, functions}\n\
+                    def unreachable(n: Int) -> Int = n",
+                SourceLabel::Path("unused.dsrv".into()),
+            )
+            .unwrap();
+        let specification = crate::lang::dsrv::expand::expand_program(
+            collector.finish().unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        let unused = specification
+            .sources()
+            .files()
+            .find(|(_, file)| file.label() == &SourceLabel::Path("unused.dsrv".into()))
+            .map(|(_, file)| std::sync::Arc::downgrade(file))
+            .unwrap();
+        let elaborated = specification
+            .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+            .without_warnings()
+            .unwrap();
+        let site = elaborated
+            .var_expr_ref(&VarName::new("y"))
+            .unwrap()
+            .runtime_expression()
+            .clone();
+
+        drop(elaborated);
+        assert!(
+            unused.upgrade().is_none(),
+            "a runtime site must not retain an unreachable module"
+        );
+        assert!(site.sources().is_some());
     }
 
     #[test]

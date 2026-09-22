@@ -175,7 +175,7 @@ use crate::lang::dsrv::syntax::{ParsedDeclaration, parse_specification};
 /// Every `use` in a file, as it was written.
 fn imports(source: &str) -> Vec<UseTree> {
     let parsed = parse_specification(source).unwrap_or_else(|error| panic!("{source}: {error}"));
-    let (_, declarations) = parsed.into_parts();
+    let (_, declarations, _) = parsed.into_parts();
     declarations
         .iter()
         .filter_map(|declaration| match declaration {
@@ -359,7 +359,7 @@ fn use_experimental_with_nothing_after_it_is_not_an_experiment() {
 /// Every `mod` path in a file, each printed as it was written.
 fn modules(source: &str) -> Vec<String> {
     let parsed = parse_specification(source).unwrap_or_else(|error| panic!("{source}: {error}"));
-    let (_, declarations) = parsed.into_parts();
+    let (_, declarations, _) = parsed.into_parts();
     declarations
         .iter()
         .filter_map(|declaration| match declaration {

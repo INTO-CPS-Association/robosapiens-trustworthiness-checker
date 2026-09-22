@@ -9,6 +9,7 @@ use crate::lang::dsrv::runtime_expression::{
     RuntimeExpressionSite, RuntimeExpressionSites, RuntimeExpressionTyping, UntypedExpr,
     prepare_site_table,
 };
+use crate::lang::dsrv::source_map::SourceArchive;
 use crate::lang::dsrv::type_checker::{StreamTypeEnvironment, TCType};
 
 pub(crate) type ExprTypes = contiguous_tree::NodeAnnotations<ExprArena, TCType>;
@@ -61,13 +62,16 @@ impl CheckedExpressionContext {
     }
 
     /// Prepare the sites of every runtime-expression occurrence among
-    /// `nodes`, as a new context; this one is unchanged.
+    /// `nodes`, as a new context; this one is unchanged. Each site captures
+    /// from `sources`, the archive the nodes' IDs belong to, what its text
+    /// may need.
     pub(super) fn prepare_sites<'arena>(
         &self,
         builder: contiguous_tree::SparseNodeAnnotationsBuilder<ExprArena, RuntimeExpressionSite>,
         nodes: impl IntoIterator<Item = ExprRef<'arena>>,
+        sources: Option<&SourceArchive>,
     ) -> Self {
-        let sites = prepare_site_table(builder, nodes, |node| {
+        let sites = prepare_site_table(builder, nodes, sources, |node| {
             Some(RuntimeExpressionTyping {
                 environment: AstShared::clone(&self.environment),
                 expected: self.type_of(node).clone(),
@@ -167,12 +171,21 @@ impl CheckedExpr {
         self.checked.prepared_site_count()
     }
 
-    /// Prepare the sites of this expression's runtime-expression occurrences
-    /// before it escapes to a runtime.
+    /// Prepare the sites of this unlocated expression's runtime-expression
+    /// occurrences before it escapes to a runtime.
+    #[cfg(test)]
     pub(crate) fn prepare_sites(self) -> Self {
+        self.prepare_sites_with(None)
+    }
+
+    /// Prepare the sites of this expression's runtime-expression occurrences
+    /// before it escapes to a runtime, capturing from `sources`, the archive
+    /// its IDs belong to, the files each needs.
+    pub(crate) fn prepare_sites_with(self, sources: Option<&SourceArchive>) -> Self {
         let checked = self.checked.prepare_sites(
             self.expr.sparse_annotations_builder(),
             self.expr.as_ref().postorder(),
+            sources,
         );
         Self {
             expr: self.expr,

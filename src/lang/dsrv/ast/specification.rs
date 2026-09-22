@@ -12,6 +12,7 @@ use crate::core::{Capabilities, Requirement};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
+use crate::lang::dsrv::source_map::{NodeOrigin, SourceArchive};
 use crate::lang::dsrv::span::Span;
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
@@ -252,6 +253,11 @@ pub struct DsrvSpecification {
     pub(crate) declarations: Vec<Declaration>,
     #[serde(skip)]
     pub(crate) source_context: AstShared<SourceContext>,
+    /// The text of every file the specification was expanded from, which
+    /// its nodes address by ID. Checked, elaborated and rewritten forms
+    /// share it; it is never part of the specification's meaning.
+    #[serde(skip)]
+    pub(crate) sources: AstShared<SourceArchive>,
 }
 
 impl PartialEq for DsrvSpecification {
@@ -436,6 +442,7 @@ impl CheckedDsrvSpecification {
         let checked = self.checked.prepare_sites(
             self.spec.exprs.sparse_annotations_builder(),
             self.spec.nodes(),
+            Some(&self.spec.sources),
         );
         Self {
             spec: self.spec,
@@ -615,7 +622,13 @@ impl DsrvSpecification {
             type_annotations,
             declarations,
             source_context: AstShared::new(SourceContext::default()),
+            sources: AstShared::new(SourceArchive::new()),
         }
+    }
+
+    /// The archive of the text the specification was expanded from.
+    pub(crate) fn sources(&self) -> &AstShared<SourceArchive> {
+        &self.sources
     }
 
     /// The complete expanded namespace, including aliases unused by annotations.
@@ -625,6 +638,16 @@ impl DsrvSpecification {
 
     /// Build a specification from independently constructed expression roots.
     /// The roots are copied once into compact shared storage.
+    ///
+    /// A bare [`Expr`] owns no source archive, so the roots are copied
+    /// unlocated: findings about them keep their spans but name no file.
+    /// Whatever archive a root was parsed against is not guessed at.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a root retains definitions from a source archive. Use
+    /// [`Self::try_new`] to reject that unsupported cross-program graft
+    /// explicitly.
     pub fn new(
         input_vars: BTreeSet<VarName>,
         output_vars: BTreeSet<VarName>,
@@ -632,6 +655,19 @@ impl DsrvSpecification {
         type_annotations: BTreeMap<VarName, StreamType>,
         aux_vars: impl IntoIterator<Item = VarName>,
     ) -> Self {
+        Self::try_new(input_vars, output_vars, exprs, type_annotations, aux_vars)
+            .expect("source provenance from another program cannot be grafted without remapping it")
+    }
+
+    /// Build a specification from independent roots that carry no
+    /// archive-bound definitions.
+    pub fn try_new(
+        input_vars: BTreeSet<VarName>,
+        output_vars: BTreeSet<VarName>,
+        exprs: BTreeMap<VarName, Expr>,
+        type_annotations: BTreeMap<VarName, StreamType>,
+        aux_vars: impl IntoIterator<Item = VarName>,
+    ) -> Result<Self, crate::lang::dsrv::source_map::ProvenanceError> {
         // Copy each root independently so a root cannot accidentally include unrelated nodes
         // from its original expression.
         let capacity = exprs.values().map(|expr| expr.as_ref().subtree_len()).sum();
@@ -640,14 +676,20 @@ impl DsrvSpecification {
         let mut roots = Vec::with_capacity(exprs.len());
         for (name, expression) in &exprs {
             names.push(name.clone());
-            roots.push(builder.clone_subtree(expression.as_ref()));
+            roots.push(clone_unlocated(&mut builder, expression.as_ref())?);
         }
         let forest = builder
             .finish_forest(roots)
             .expect("independently cloned expressions form a complete forest");
         let exprs = ExprForestMap::new(names, forest)
             .expect("specification expression names are sorted and unique");
-        Self::from_expression_forest(input_vars, output_vars, exprs, type_annotations, aux_vars)
+        Ok(Self::from_expression_forest(
+            input_vars,
+            output_vars,
+            exprs,
+            type_annotations,
+            aux_vars,
+        ))
     }
 
     pub fn var_expr_ref(&self, var: &VarName) -> Option<ExprRef<'_>> {
@@ -712,6 +754,37 @@ impl DsrvSpecification {
     pub fn type_annotation(&self, var: &VarName) -> Option<&StreamType> {
         self.type_annotations.get(var)
     }
+}
+
+/// Copy a tree without the archive IDs it carries, which mean nothing
+/// once it is separated from its archive.
+fn clone_unlocated(
+    builder: &mut ExprBuilder,
+    root: ExprRef<'_>,
+) -> Result<super::ExprId, crate::lang::dsrv::source_map::ProvenanceError> {
+    if root.postorder().any(|node| {
+        node.metadata()
+            .callable
+            .as_ref()
+            .is_some_and(|callable| callable.archive().is_some())
+    }) {
+        return Err(crate::lang::dsrv::source_map::ProvenanceError::ForeignArchive);
+    }
+    if root.postorder().all(|node| node.origin().is_unlocated()) {
+        return Ok(builder.clone_subtree(root));
+    }
+    Ok(builder
+        .try_rewrite_forest([root], |mut node| {
+            let source = node.source();
+            let kind = node.source_node().rebuild(source.kind().clone());
+            let mut metadata = source.metadata().clone();
+            metadata.origin = NodeOrigin::UNLOCATED;
+            node.alloc(kind, metadata)
+        })
+        .expect("copying keeps every node's children")
+        .into_iter()
+        .next()
+        .expect("one tree was copied"))
 }
 
 impl Specification for DsrvSpecification {
@@ -1050,6 +1123,30 @@ mod tests {
         let b = spec.var_expr(&VarName::new("b")).unwrap();
         assert_eq!(spec.nodes().count(), source_nodes * 2);
         assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn specification_construction_rejects_archive_bound_callables() {
+        let parsed = "use experimental::{functions}\n\
+            def f(n: Int) -> Int = n\n\
+            in source: Str\nout y: Int\ny = dynamic(source: Int)"
+            .parse::<DsrvSpecification>()
+            .unwrap();
+        let y = VarName::new("y");
+
+        let error = DsrvSpecification::try_new(
+            parsed.input_vars().clone(),
+            parsed.output_vars().clone(),
+            BTreeMap::from([(y.clone(), parsed.var_expr(&y).unwrap())]),
+            parsed.type_annotations().clone(),
+            Vec::new(),
+        )
+        .expect_err("a bare expression cannot carry another program's callable archive");
+
+        assert_eq!(
+            error,
+            crate::lang::dsrv::source_map::ProvenanceError::ForeignArchive
+        );
     }
 
     #[test]
@@ -1430,7 +1527,7 @@ mod tests {
         ] {
             assert!(errors.iter().any(|error| matches!(
                 error,
-                SemanticError::DuplicateDeclaration { variable, first, duplicate }
+                SemanticError::DuplicateDeclaration { variable, first, duplicate, .. }
                     if *variable == VarName::new("z")
                         && &source[first.to_range()] == "in z: Int"
                         && &source[duplicate.to_range()] == "in z: Bool"
@@ -1657,7 +1754,7 @@ mod tests {
             .expect_err("runtime NoVal must not be source syntax");
         assert!(errors.iter().any(|error| matches!(
             error,
-            SemanticError::UnsupportedLiteral(message, Some(_))
+            SemanticError::UnsupportedLiteral(message, Some(_), _)
                 if message.contains("runtime states")
         )));
     }

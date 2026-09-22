@@ -75,6 +75,7 @@ use super::ast::{
 };
 use super::source::SourceType;
 use super::source::{SourceContext, SourceResolveError};
+use super::source_map::{NodeOrigin, ProvenanceError, SourceArchive, SourceId};
 use super::span::Span;
 use super::syntax::parsed::{self, ParsedExprKind, ParsedExprRef};
 use super::syntax::{ParsedDeclaration, ParsedExpr, ParsedSpecification, SourceAscription};
@@ -103,6 +104,9 @@ pub enum DsrvExpandError {
 
     #[error("invalid import: {0}")]
     Import(#[from] ImportError),
+
+    #[error("invalid source provenance: {0}")]
+    Provenance(#[from] ProvenanceError),
 
     #[error("modules import each other in a cycle: {path}")]
     ModuleCycle { path: String },
@@ -182,8 +186,9 @@ impl SourceAscription {
 pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
     request: LanguageRequest,
+    archive: &SourceArchive,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
-    expand_declarations_in(parsed, request, None, None)
+    expand_declarations_in(parsed, request, None, None, archive)
 }
 
 /// Expand a file's declarations, optionally against a namespace built
@@ -193,7 +198,14 @@ pub(crate) fn expand_declarations_in(
     request: LanguageRequest,
     supplied: Option<Rc<SourceContext>>,
     callable: Option<Rc<Callable>>,
+    archive: &SourceArchive,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
+    debug_assert!(
+        parsed
+            .source()
+            .is_none_or(|source| archive.file(source).is_some()),
+        "a parsed file is expanded against the archive that holds it"
+    );
     let language = language::resolve_language(parsed.declarations(), request)?;
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
@@ -291,20 +303,26 @@ pub(crate) fn expand_declarations_in(
         Some(callable) if !callable.is_empty() => Some(callable),
         Some(_) => None,
         None if declares_a_def_or_constant(parsed.declarations()) => Some(Rc::new(Callable::new(
-            Rc::new(functions::single_file_table(&parsed)?),
+            Rc::new(functions::single_file_table(
+                &parsed,
+                parsed.source().map(|_| archive.token()),
+            )?),
             Rc::new(constants::single_file_constants(&parsed, &context)?),
             &ModulePath::new(),
             parsed.declarations(),
         )?)),
         None => None,
     };
+    if let Some(callable) = &callable {
+        check_provenance(callable, parsed.source().map(|_| archive))?;
+    }
     // A call to a def becomes an immediate lambda application before any
     // name is resolved, which is where the pipeline puts inlining.
     let scope = callable
         .as_ref()
         .map_or_else(inline::Scope::default, |callable| callable.scope());
     let parsed = inline::inline_functions(parsed, scope)?;
-    let (expressions, parsed_declarations) = parsed.into_parts();
+    let (expressions, parsed_declarations, source) = parsed.into_parts();
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
     let mut declarations = EcoVec::new();
@@ -343,6 +361,7 @@ pub(crate) fn expand_declarations_in(
                     &mut builder,
                     &context,
                     callable.as_ref(),
+                    source,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -361,6 +380,7 @@ pub(crate) fn expand_declarations_in(
                     &mut builder,
                     &context,
                     callable.as_ref(),
+                    source,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -371,6 +391,7 @@ pub(crate) fn expand_declarations_in(
                     &mut builder,
                     &context,
                     callable.as_ref(),
+                    source,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -405,6 +426,25 @@ pub(crate) fn expand_declarations_in(
         roots: equation_roots,
         context,
     })
+}
+
+/// Refuse to inline defs whose provenance `target` cannot address.
+///
+/// A located expansion takes definition sites from `callable`'s defs, so
+/// they must be IDs of the archive the result will be located against, or
+/// of one it was derived from. Grafting them anywhere else would name the
+/// wrong file; they are never silently dropped. An unlocated expansion
+/// keeps no provenance at all, so it grafts from anywhere.
+fn check_provenance(
+    callable: &Callable,
+    target: Option<&SourceArchive>,
+) -> Result<(), ProvenanceError> {
+    match (target, callable.archive()) {
+        (Some(target), Some(defs)) if !target.resolves(defs) => {
+            Err(ProvenanceError::ForeignArchive)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Whether a file declares a function or a constant, which is what makes
@@ -507,35 +547,33 @@ pub(crate) fn expand_program(
     let folded = Rc::new(constants::build_constant_table(&sources, &graph)?);
     let root_path = ModulePath::new();
     let callable = Callable::new(table, folded, &root_path, sources.root_declarations())?;
+    let archive = Rc::clone(sources.archive());
     let root = sources.into_root();
-    finish_specification(expand_declarations_in(
-        root,
-        request,
-        Some(context),
-        Some(Rc::new(callable)),
-    )?)
+    finish_specification(
+        expand_declarations_in(
+            root,
+            request,
+            Some(context),
+            Some(Rc::new(callable)),
+            &archive,
+        )?,
+        archive,
+    )
 }
 
+/// Expand one file, which `archive` holds, as a program of its own.
 pub(crate) fn expand_specification(
     parsed: ParsedSpecification,
     request: LanguageRequest,
+    archive: Rc<SourceArchive>,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
-    let ExpandedDeclarations {
-        builder,
-        declarations,
-        roots,
-        context,
-    } = expand_declarations(parsed, request)?;
-    finish_specification(ExpandedDeclarations {
-        builder,
-        declarations,
-        roots,
-        context,
-    })
+    let expanded = expand_declarations(parsed, request, &archive)?;
+    finish_specification(expanded, archive)
 }
 
 fn finish_specification(
     expanded: ExpandedDeclarations,
+    archive: Rc<SourceArchive>,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
     let ExpandedDeclarations {
         builder,
@@ -545,6 +583,7 @@ fn finish_specification(
     } = expanded;
     let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
+    specification.sources = archive;
     let language = specification.source_context.language().clone();
     for node in specification.nodes() {
         language::check_experiment_node(node, &language)?;
@@ -559,11 +598,16 @@ fn finish_specification(
 
 /// Expand one parsed expression against an existing namespace, as `dynamic`
 /// and `defer` sources are.
+///
+/// `located` names the archive the result is located against and the file
+/// of that archive the text is; without it the result is unlocated.
 pub(crate) fn expand_expression(
     parsed: &ParsedExpr,
     context: &Rc<SourceContext>,
     callable: &Rc<Callable>,
+    located: Option<(&SourceArchive, SourceId)>,
 ) -> Result<Expr, DsrvExpandError> {
+    check_provenance(callable, located.map(|(archive, _)| archive))?;
     // Runtime text may call a def, so it is inlined first, exactly as a
     // file's own expressions are.
     let scope = callable.scope();
@@ -573,7 +617,13 @@ pub(crate) fn expand_expression(
     // text could call travels on into it.
     let onwards = (!callable.is_empty()).then(|| Rc::clone(callable));
     let mut builder = ExprBuilder::with_capacity(parsed.as_ref().subtree_ids().len());
-    let root = expand_tree(parsed.as_ref(), &mut builder, context, onwards.as_ref())?;
+    let root = expand_tree(
+        parsed.as_ref(),
+        &mut builder,
+        context,
+        onwards.as_ref(),
+        located.map(|(_, source)| source),
+    )?;
     let expr = builder.finish(root).map_err(DsrvAstError::from)?;
     if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
@@ -647,18 +697,24 @@ pub(crate) fn assemble_specification(
 
 /// All child IDs come from the generic transcode's destination mapping.
 /// A conversion failure rolls back the destination builder's allocation.
+///
+/// `source` is the archived file the tree's spans are in. Without one the
+/// tree is unlocated, and definition sites are not kept either.
 pub(crate) fn expand_tree(
     expression: ParsedExprRef<'_>,
     builder: &mut ExprBuilder,
     context: &Rc<SourceContext>,
     callable: Option<&Rc<Callable>>,
+    source: Option<SourceId>,
 ) -> Result<ExprId, DsrvExpandError> {
     check_expression_types(expression, context)?;
     builder
         .try_transcode(expression, |node| {
             use ParsedExprKind::*;
+            let origin = parsed::origin_of(node.cursor());
             let metadata = ExprMetadata {
-                span: parsed::span_of(node.cursor()),
+                span: origin.span,
+                origin: NodeOrigin::new(source, source.and(origin.definition)),
                 context: Some(context.clone()),
                 callable: callable.cloned(),
             };

@@ -10,13 +10,18 @@
 //! the span's byte range. A span that does not fit the text is shown as its
 //! byte range alone, and a warning without a span is shown without a
 //! position.
+//!
+//! A warning about code inlined from another module is reported at the
+//! call, and followed by a note naming the file and position where that
+//! code was defined. The note is rendered from the file the warning owns,
+//! so it needs nothing from the loader.
 
 use std::io::{self, Write};
 
 use anyhow::Context;
 
 use crate::lang::dsrv::diagnostics::SemanticWarning;
-use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::source_map::{OwnedSite, position};
 
 /// The label a live replacement's warnings are shown under; it has no file.
 pub const REPLACEMENT_LABEL: &str = "<reconfiguration>";
@@ -42,8 +47,28 @@ pub fn render_warnings(
                 None => writeln!(out, "  --> {label} (bytes {}..{})", span.start, span.end)?,
             },
         }
+        if let Some(definition) = warning.location().definition() {
+            render_definition(out, definition)?;
+        }
     }
     out.flush()
+}
+
+/// The note naming where inlined code was defined.
+fn render_definition(out: &mut impl Write, definition: &OwnedSite) -> io::Result<()> {
+    let (label, span) = (definition.label(), definition.span());
+    match definition.position() {
+        Some((line, column)) => writeln!(
+            out,
+            "  = note: defined at {label}:{line}:{column} (bytes {}..{})",
+            span.start, span.end
+        ),
+        None => writeln!(
+            out,
+            "  = note: defined at {label} (bytes {}..{})",
+            span.start, span.end
+        ),
+    }
 }
 
 /// Write `warnings` to standard error. Failing to write them is an error.
@@ -56,25 +81,11 @@ pub fn present_warnings(
         .context("semantic warnings could not be written to standard error")
 }
 
-/// The one-based line and Unicode-scalar column at which `span` starts, if
-/// `span` lies within `source` on character boundaries.
-fn position(source: &str, span: Span) -> Option<(usize, usize)> {
-    let (start, end) = (span.start as usize, span.end as usize);
-    if start > end || !source.is_char_boundary(start) || !source.is_char_boundary(end) {
-        return None;
-    }
-    let before = &source[..start];
-    let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
-    Some((
-        before.matches('\n').count() + 1,
-        before[line_start..].chars().count() + 1,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lang::dsrv::diagnostics::SemanticWarningKind;
+    use crate::lang::dsrv::span::Span;
 
     fn warning(kind: SemanticWarningKind, span: Option<Span>) -> SemanticWarning {
         SemanticWarning::new(kind, "fixture message", span)
@@ -154,6 +165,47 @@ mod tests {
             "warning[test-beta]: fixture message\n  --> model.dsrv:1:3 (bytes 2..3)\n\
              warning[test-alpha]: fixture message\n  --> model.dsrv\n\
              warning[test-alpha]: fixture message\n  --> model.dsrv:1:1 (bytes 0..1)\n"
+        );
+    }
+
+    /// A generic definition site from a file other than the one checked,
+    /// embedded or on disk, is named in a note after the primary position.
+    #[test]
+    fn a_definition_site_is_rendered_as_a_note_from_its_own_file() {
+        use crate::lang::dsrv::source_map::{
+            NodeOrigin, SourceArchive, SourceFile, SourceLabel, SourceSite,
+        };
+
+        let source = "out y: Str\ny = helper()";
+        let mut archive = SourceArchive::new();
+        let root = archive.push(SourceFile::new(
+            SourceLabel::Path("model.dsrv".into()),
+            Vec::new(),
+            source,
+        ));
+        let library = archive.push(SourceFile::new(
+            SourceLabel::Embedded("std/helper.dsrv".into()),
+            Vec::new(),
+            "def helper() -> Str =\n  \"é\" as Str",
+        ));
+        let call = Span::new(15, 23);
+        let cast = Span::new(24, 35);
+        let located = |definition| {
+            warning(SemanticWarningKind::TestAlpha, Some(call)).with_location(archive.locate(
+                NodeOrigin::new(Some(root), Some(SourceSite::new(library, definition))),
+                call,
+            ))
+        };
+        assert_eq!(
+            rendered(source, &[located(cast)]),
+            "warning[test-alpha]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
+             = note: defined at <embedded std/helper.dsrv>:2:3 (bytes 24..35)\n"
+        );
+        // A definition span that does not fit its file shows its bytes alone.
+        assert_eq!(
+            rendered(source, &[located(Span::new(26, 27))]),
+            "warning[test-alpha]: fixture message\n  --> model.dsrv:2:5 (bytes 15..23)\n  \
+             = note: defined at <embedded std/helper.dsrv> (bytes 26..27)\n"
         );
     }
 

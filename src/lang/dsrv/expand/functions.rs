@@ -8,8 +8,10 @@
 //! Entries are built in the same dependency order the namespaces are, since
 //! function imports follow the same `use` edges as type imports.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+
+use contiguous_tree::TreeCursorExt;
 
 use ecow::EcoVec;
 
@@ -17,7 +19,8 @@ use crate::VarName;
 use crate::lang::dsrv::ast::AstShared;
 use crate::lang::dsrv::modules::{ImportItems, ModulePath, ModuleSources, imports_of, show_path};
 use crate::lang::dsrv::source::{SourceType, TypeName};
-use crate::lang::dsrv::syntax::parsed::{ParsedExpr, ParsedExprRef};
+use crate::lang::dsrv::source_map::{ArchiveToken, SourceId};
+use crate::lang::dsrv::syntax::parsed::{ParsedExpr, ParsedExprRef, origin_of};
 use crate::lang::dsrv::syntax::{ParsedDeclaration, ParsedSpecification};
 
 use super::constants::{ConstantTable, Constants};
@@ -33,12 +36,16 @@ pub(crate) struct Entry {
     pub(crate) internal: bool,
     /// The body, inlined, in a tree this entry owns.
     pub(crate) body: ParsedExpr,
+    /// The archived file that declared it, by ID: an entry holds no file.
+    pub(crate) source: Option<SourceId>,
 }
 
 /// Every def of a program, by the module that declared it.
 #[derive(Debug, Default)]
 pub(crate) struct FunctionTable {
     entries: BTreeMap<(ModulePath, VarName), Entry>,
+    /// The archive whose IDs the entries carry.
+    archive: Option<ArchiveToken>,
 }
 
 impl FunctionTable {
@@ -67,7 +74,10 @@ use crate::lang::dsrv::path::ModuleName;
 pub(crate) fn build_function_table(
     sources: &ModuleSources,
 ) -> Result<FunctionTable, DsrvExpandError> {
-    let mut table = FunctionTable::default();
+    let mut table = FunctionTable {
+        archive: Some(sources.archive().token()),
+        ..FunctionTable::default()
+    };
     for path in graph::dependency_order(sources)? {
         let parsed = sources
             .get(&path)
@@ -81,8 +91,12 @@ pub(crate) fn build_function_table(
 /// takes on modules. The file is its own root module.
 pub(crate) fn single_file_table(
     parsed: &ParsedSpecification,
+    archive: Option<ArchiveToken>,
 ) -> Result<FunctionTable, DsrvExpandError> {
-    let mut table = FunctionTable::default();
+    let mut table = FunctionTable {
+        archive,
+        ..FunctionTable::default()
+    };
     add_module(&mut table, &ModulePath::new(), parsed)?;
     Ok(table)
 }
@@ -145,6 +159,7 @@ fn add_module(
                 type_parameters: type_parameters.clone(),
                 body: trees[*index],
                 foreign: false,
+                source: parsed.source(),
             },
         );
     }
@@ -158,6 +173,7 @@ fn add_module(
                 type_parameters,
                 internal,
                 body,
+                source: parsed.source(),
             },
         ));
     }
@@ -224,6 +240,27 @@ impl Callable {
         }
     }
 
+    /// The archive whose IDs this callable's defs carry, if any.
+    pub(crate) fn archive(&self) -> Option<ArchiveToken> {
+        self.table.archive
+    }
+
+    /// Every archived file the defs this callable reaches were written in.
+    pub(crate) fn source_closure(&self) -> BTreeSet<SourceId> {
+        let scope = self.scope();
+        let mut sources = BTreeSet::new();
+        for def in scope.bare.values().chain(scope.qualified.values()) {
+            sources.extend(def.source);
+            sources.extend(
+                def.body
+                    .postorder()
+                    .filter_map(|node| origin_of(node).definition)
+                    .map(|site| site.source),
+            );
+        }
+        sources
+    }
+
     /// Borrow the table into a scope for one expansion.
     pub(crate) fn scope(&self) -> Scope<'_> {
         let mut scope = scope_of(&self.imported, &self.table);
@@ -264,6 +301,7 @@ impl Entry {
             type_parameters: self.type_parameters.clone(),
             body: self.body.as_ref(),
             foreign: true,
+            source: self.source,
         }
     }
 }

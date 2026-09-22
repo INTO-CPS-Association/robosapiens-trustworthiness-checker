@@ -26,6 +26,7 @@ use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::expand::functions::Callable;
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern};
 use crate::lang::dsrv::source::SourceContext;
+use crate::lang::dsrv::source_map::NodeOrigin;
 use crate::lang::dsrv::span::Span;
 
 /// A literal that can occur in the syntax tree.
@@ -236,10 +237,14 @@ impl Display for SyntaxLiteral {
 static_assertions::assert_impl_all!(SyntaxLiteral: Send, Sync);
 
 /// Source-only ownership. Equality continues to compare spans, but neither
-/// namespace nor function snapshots.
+/// namespace nor function snapshots, nor where the node came from.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExprMetadata {
     pub span: Span,
+    /// The archived file the span is in, and where inlined code was
+    /// written: compact IDs into the owning specification's archive, never
+    /// a file handle.
+    pub origin: NodeOrigin,
     pub context: Option<super::AstShared<SourceContext>>,
     /// The defs text supplied to this node may call. `None` where the
     /// program declared none, which is every program until it takes on the
@@ -414,6 +419,11 @@ impl<'arena> ExprRef<'arena> {
 
     pub fn span(self) -> Span {
         self.node().source.span
+    }
+
+    /// Where this node came from, in its specification's archive.
+    pub(crate) fn origin(self) -> NodeOrigin {
+        self.node().source.origin
     }
 
     /// The namespace this node was expanded in, which is where a

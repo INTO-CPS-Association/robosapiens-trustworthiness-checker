@@ -13,8 +13,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
+use crate::lang::dsrv::ast::AstShared;
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, UseTree};
 use crate::lang::dsrv::source::TypeName;
+use crate::lang::dsrv::source_map::{SourceArchive, SourceFile, SourceLabel};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::{DsrvSyntaxError, ParsedDeclaration, ParsedSpecification};
 
@@ -220,10 +222,12 @@ pub enum ModuleCollectError {
     },
 }
 
-/// Every module of one program, parsed, keyed by absolute path.
+/// Every module of one program, parsed, keyed by absolute path, with the
+/// archive of their text.
 pub struct ModuleSources {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
     root_source: String,
+    archive: AstShared<SourceArchive>,
 }
 
 impl ModuleSources {
@@ -245,6 +249,11 @@ impl ModuleSources {
     /// The root module's text, exactly as it was supplied.
     pub fn root_source(&self) -> &str {
         &self.root_source
+    }
+
+    /// The text of every module, which the expanded program owns.
+    pub(crate) fn archive(&self) -> &AstShared<SourceArchive> {
+        &self.archive
     }
 
     pub(crate) fn get(&self, path: &[ModuleName]) -> Option<&ParsedSpecification> {
@@ -288,17 +297,29 @@ pub struct ModuleCollector {
     modules: BTreeMap<ModulePath, ParsedSpecification>,
     pending: VecDeque<ModulePath>,
     root_source: String,
+    archive: SourceArchive,
+}
+
+/// The label of a module supplied without one.
+fn supplied_label(path: &[ModuleName]) -> SourceLabel {
+    SourceLabel::Supplied(format!("<{}>", show_path(path)).into())
 }
 
 impl ModuleCollector {
     /// Begin from the root module's source.
     pub fn new(root: &str) -> Result<Self, ModuleCollectError> {
+        Self::with_label(root, supplied_label(&[]))
+    }
+
+    /// Begin from the root module's source, which diagnostics name `label`.
+    pub fn with_label(root: &str, label: SourceLabel) -> Result<Self, ModuleCollectError> {
         let mut collector = Self {
             modules: BTreeMap::new(),
             pending: VecDeque::new(),
             root_source: root.to_owned(),
+            archive: SourceArchive::new(),
         };
-        collector.add(ModulePath::new(), root)?;
+        collector.add(ModulePath::new(), root, label)?;
         Ok(collector)
     }
 
@@ -309,11 +330,26 @@ impl ModuleCollector {
 
     /// Supply the source of the module `next_request` last named.
     pub fn supply(&mut self, source: &str) -> Result<(), ModuleCollectError> {
+        let label = supplied_label(
+            self.pending
+                .front()
+                .expect("supply answers an outstanding request"),
+        );
+        self.supply_labelled(source, label)
+    }
+
+    /// Supply the source of the module `next_request` last named, which
+    /// diagnostics name `label`.
+    pub fn supply_labelled(
+        &mut self,
+        source: &str,
+        label: SourceLabel,
+    ) -> Result<(), ModuleCollectError> {
         let path = self
             .pending
             .pop_front()
             .expect("supply answers an outstanding request");
-        self.add(path, source)
+        self.add(path, source, label)
     }
 
     pub fn finish(self) -> Result<ModuleSources, ModuleCollectError> {
@@ -325,16 +361,27 @@ impl ModuleCollector {
         Ok(ModuleSources {
             modules: self.modules,
             root_source: self.root_source,
+            archive: AstShared::new(self.archive),
         })
     }
 
-    fn add(&mut self, path: ModulePath, source: &str) -> Result<(), ModuleCollectError> {
+    fn add(
+        &mut self,
+        path: ModulePath,
+        source: &str,
+        label: SourceLabel,
+    ) -> Result<(), ModuleCollectError> {
         let parsed = crate::lang::dsrv::syntax::parse_specification(source).map_err(|source| {
             ModuleCollectError::Syntax {
                 path: show_path(&path),
                 source,
             }
         })?;
+        let parsed = parsed.with_source(self.archive.push(SourceFile::new(
+            label,
+            path.clone(),
+            source,
+        )));
         for declaration in parsed.declarations() {
             let ParsedDeclaration::Mod { path: declared, .. } = declaration else {
                 continue;
@@ -541,7 +588,7 @@ mod import_tests {
     fn imports(line: &str, current: &[ModuleName]) -> Vec<Import> {
         let source = format!("use experimental::{{modules}}\n{line}\nin x: Int\n");
         let parsed = parse_specification(&source).unwrap_or_else(|e| panic!("{source}: {e}"));
-        let (_, declarations) = parsed.into_parts();
+        let (_, declarations, _) = parsed.into_parts();
         declarations
             .iter()
             .filter_map(|declaration| match declaration {
@@ -555,7 +602,7 @@ mod import_tests {
     fn error(line: &str) -> ImportError {
         let source = format!("use experimental::{{modules}}\n{line}\nin x: Int\n");
         let parsed = parse_specification(&source).unwrap_or_else(|e| panic!("{source}: {e}"));
-        let (_, declarations) = parsed.into_parts();
+        let (_, declarations, _) = parsed.into_parts();
         let tree = declarations
             .iter()
             .find_map(|declaration| match declaration {
