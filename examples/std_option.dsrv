@@ -1,0 +1,9 @@
+use experimental::{modules, generics, tagged_unions}
+use std::option
+
+in reading: option::Option<Int>
+out present: Bool = std::option::is_some(reading)
+out absent: Bool = std::option::is_none(reading)
+out value: Int = std::option::unwrap_or(reading, 7)
+out sample: option::Option<Int> = Some(7)
+out empty: option::Option<Int> = None

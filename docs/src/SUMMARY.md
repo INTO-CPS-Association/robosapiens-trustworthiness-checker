@@ -28,6 +28,7 @@
 # Reference
 
 - [CLI reference](./reference/cli.md)
+- [Developer expansion inspection](./reference/developer-inspection.md)
 - [DSRV syntax](./reference/dsrv-syntax.md)
 - [DSRV language settings](./reference/dsrv-language-settings.md)
 - [Runtime capabilities](./reference/runtime-capabilities.md)
