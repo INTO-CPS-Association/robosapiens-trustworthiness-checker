@@ -102,7 +102,9 @@ def check_include_sites(report: Report) -> None:
             report.error(where, f"include target does not exist: {raw}")
             continue
         if lines[number - 1].strip() != "{{#include " + raw + "}}":
-            report.error(where, "the include must stand alone on its line to open an HTML block")
+            report.error(
+                where, "the include must stand alone on its line to open an HTML block"
+            )
         following = lines[number] if number < len(lines) else ""
         if following.strip():
             report.error(
@@ -130,7 +132,7 @@ def check_svg_source(
         return None
 
     if inline:
-        opening = re.match(r"<svg\b[^>]*>", text, re.S)
+        opening = re.match(r"<svg\b[^>]*>", text, re.DOTALL)
         if not opening:
             report.error(
                 where,
@@ -166,7 +168,9 @@ def check_svg_source(
 
 def viewbox(root: ET.Element) -> tuple[float, float] | None:
     try:
-        _, _, width, height = (float(value) for value in root.get("viewBox", "").split())
+        _, _, width, height = (
+            float(value) for value in root.get("viewBox", "").split()
+        )
     except ValueError:
         return None
     return width, height
@@ -234,7 +238,9 @@ def check_monospace_labels(path: Path, root: ET.Element, report: Report) -> None
             continue
         span = len(content) * MONO_ADVANCE_EM * size
         anchor = element.get("text-anchor", "start")
-        left = x - span / 2 if anchor == "middle" else x - span if anchor == "end" else x
+        left = (
+            x - span / 2 if anchor == "middle" else x - span if anchor == "end" else x
+        )
         right = left + span
         if right > width + 1 or left < -1:
             report.error(
@@ -255,7 +261,9 @@ def check_mermaid_initialiser(report: Report) -> None:
     generated = ROOT / "docs" / "mermaid-init.js"
     tracked = ROOT / "docs" / "theme" / "mermaid-theme.js"
     if not tracked.exists():
-        report.error(rel(tracked), "missing; it is the tracked source of the Mermaid initialiser")
+        report.error(
+            rel(tracked), "missing; it is the tracked source of the Mermaid initialiser"
+        )
         return
     if not generated.exists():
         report.warn(rel(generated), "absent; run `mdbook-mermaid install docs`")
@@ -367,17 +375,17 @@ def check_dsrv_experiment_table(report: Report) -> int:
     )
 
     all_match = re.search(
-        r"pub const ALL: &'static \[Self\] = &\[(.*?)\];", feature_impl, re.S
+        r"pub const ALL: &'static \[Self\] = &\[(.*?)\];", feature_impl, re.DOTALL
     )
     names_match = re.search(
         r"pub fn name\(self\) -> &'static str \{\s*match self \{(.*?)\n\s*\}\s*\}",
         feature_impl,
-        re.S,
+        re.DOTALL,
     )
     table_match = re.search(
         r"<!-- dsrv-experiments:start -->\n(.*?)\n<!-- dsrv-experiments:end -->",
         markdown,
-        re.S,
+        re.DOTALL,
     )
     if all_match is None or names_match is None:
         report.error(rel(registry), "cannot read Feature::ALL and Feature::name")
@@ -389,25 +397,28 @@ def check_dsrv_experiment_table(report: Report) -> int:
     variants = re.findall(
         r"^\s*Self::([A-Za-z0-9_]+),\s*$",
         all_match.group(1),
-        re.M,
+        re.MULTILINE,
     )
     names = dict(
         re.findall(
             r'^\s*Self::([A-Za-z0-9_]+)\s*=>\s*"([a-z0-9_]+)",?\s*$',
             names_match.group(1),
-            re.M,
+            re.MULTILINE,
         )
     )
     missing_names = [variant for variant in variants if variant not in names]
     if missing_names:
         report.error(
             rel(registry),
-            "Feature::ALL variants missing from Feature::name: " + ", ".join(missing_names),
+            "Feature::ALL variants missing from Feature::name: "
+            + ", ".join(missing_names),
         )
         return 0
 
     implemented = [names[variant] for variant in variants]
-    documented = re.findall(r"^\| `([a-z0-9_]+)` \|", table_match.group(1), re.M)
+    documented = re.findall(
+        r"^\| `([a-z0-9_]+)` \|", table_match.group(1), re.MULTILINE
+    )
     if documented != implemented:
         report.error(
             rel(page),
@@ -417,7 +428,7 @@ def check_dsrv_experiment_table(report: Report) -> int:
     return len(documented)
 
 
-MERMAID_BLOCK = re.compile(r"```mermaid\n(.*?)```", re.S)
+MERMAID_BLOCK = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 MERMAID_COLOUR = re.compile(r"(?:fill|stroke|color)\s*:\s*(#[0-9a-fA-F]{3,8})")
 
 
@@ -438,7 +449,9 @@ def check_mermaid(report: Report) -> int:
             if include and include.group(1).strip().endswith(".mmd"):
                 source = (md.parent / include.group(1).strip()).resolve()
                 if not source.is_file():
-                    report.error(where, f"Mermaid include does not exist: {rel(source)}")
+                    report.error(
+                        where, f"Mermaid include does not exist: {rel(source)}"
+                    )
                     continue
                 block = source.read_text(encoding="utf-8")
             for colour in MERMAID_COLOUR.findall(block):
@@ -448,7 +461,10 @@ def check_mermaid(report: Report) -> int:
                     "default styling, which is driven by the shared figure palette",
                 )
             if "accTitle" not in block or "accDescr" not in block:
-                report.warn(where, "no accTitle/accDescr, so the diagram has no accessible description")
+                report.warn(
+                    where,
+                    "no accTitle/accDescr, so the diagram has no accessible description",
+                )
     return blocks
 
 
@@ -469,7 +485,9 @@ def check_book(report: Report) -> int:
         page = BOOK / md.relative_to(SRC).with_suffix(".html")
         where = rel(page)
         if not page.exists():
-            report.warn(where, f"page absent from the built book (is {rel(md)} in SUMMARY.md?)")
+            report.warn(
+                where, f"page absent from the built book (is {rel(md)} in SUMMARY.md?)"
+            )
             continue
         html = page.read_text(encoding="utf-8")
 
@@ -485,9 +503,11 @@ def check_book(report: Report) -> int:
         # paragraph the `<svg` is present but a `</p>` between them has already closed it,
         # which is the case this check exists for.
         source = target.read_text(encoding="utf-8")
-        desc = re.search(r"<desc[^>]*>(.{0,60})", source, re.S)
+        desc = re.search(r"<desc[^>]*>(.{0,60})", source, re.DOTALL)
         if desc is None:
-            report.warn(rel(target), "no <desc>, so the figure has no accessible description")
+            report.warn(
+                rel(target), "no <desc>, so the figure has no accessible description"
+            )
             continue
         index = html.find(desc.group(1).strip())
         if index < 0:
@@ -515,7 +535,9 @@ def check_book(report: Report) -> int:
     # An anchored include that resolved to nothing leaves an empty code block.
     for page in sorted(BOOK.rglob("*.html")):
         text = page.read_text(encoding="utf-8")
-        for match in re.finditer(r'<code class="language-\w[^"]*">(.*?)</code>', text, re.S):
+        for match in re.finditer(
+            r'<code class="language-\w[^"]*">(.*?)</code>', text, re.DOTALL
+        ):
             stripped = re.sub(r"<[^>]+>", "", match.group(1)).strip()
             if stripped in ("", "#![allow(unused)]\nfn main() {\n}"):
                 report.error(
@@ -544,10 +566,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--book", action="store_true",
-                        help="also validate the built HTML under docs/book")
-    parser.add_argument("--list", action="store_true",
-                        help="list the figures and include sites, then exit")
+    parser.add_argument(
+        "--book",
+        action="store_true",
+        help="also validate the built HTML under docs/book",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="list the figures and include sites, then exit",
+    )
     args = parser.parse_args()
 
     assets = sorted((SRC / "assets").rglob("*.svg"))
@@ -593,7 +621,10 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
 
     if report.errors:
-        print(f"\n{len(report.errors)} problem(s) across {len(assets)} figures", file=sys.stderr)
+        print(
+            f"\n{len(report.errors)} problem(s) across {len(assets)} figures",
+            file=sys.stderr,
+        )
         return 1
 
     summary = (
