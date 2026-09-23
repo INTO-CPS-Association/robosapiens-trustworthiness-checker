@@ -49,22 +49,19 @@ impl AsyncExecutor for LocalSmolExecutor {
     }
 }
 
-/// Wait for all fanout senders to have at least one new subscriber registered.
-async fn wait_for_input_stream_subscription<T: Clone + 'static>(
+/// Wait for the runtime to open its initial input subscriptions.
+async fn wait_for_initial_input_subscriptions<T: Clone + 'static>(
     tx_fans: &BTreeMap<VarName, FanoutSender<T>>,
 ) {
-    let sub_event_futs: Vec<_> = tx_fans
-        .iter()
-        .map(|(_, fan_tx)| {
-            let fan_rc = fan_tx.fanout();
-            let seen = fan_rc.sub_events();
-            async move {
-                let fan = fan_rc.as_ref();
-                fan.wait_for_sub_event(seen).await
+    futures::future::join_all(tx_fans.values().map(|sender| {
+        let fanout = sender.fanout();
+        async move {
+            if fanout.sub_events() == 0 {
+                fanout.wait_for_sub_event(0).await;
             }
-        })
-        .collect();
-    futures::future::join_all(sub_event_futs).await;
+        }
+    }))
+    .await;
 }
 
 #[derive(Clone, Copy)]
@@ -213,15 +210,21 @@ async fn run_reconf_bench(
         ct,
     ));
 
-    wait_for_input_stream_subscription(&tx_fans).await;
+    with_timeout(
+        wait_for_initial_input_subscriptions(&tx_fans),
+        5,
+        "initial input subscriptions",
+    )
+    .await
+    .expect("Failed to open benchmark input subscriptions");
 
+    // Reconfiguration rebinds the input session in place, so it does not
+    // create a new fanout subscription. The output receive below is the
+    // completion barrier for each input tick.
     for i in 0..size {
         let inputs = input_fn(i);
 
         if percent > 0 && (i + 1) % (100 / percent) == 0 {
-            for name in inputs.keys() {
-                tx_fans[name].send(Value::NoVal).await;
-            }
             let spec = if is_spec_1 {
                 is_spec_1 = false;
                 spec_2.to_string()
@@ -237,9 +240,6 @@ async fn run_reconf_bench(
             tx_fans[&VarName::new(RECONF_TOPIC)]
                 .send(Value::Str(reconf_json))
                 .await;
-            if matches!(runtime, ReconfigurationRuntime::Semisync) {
-                wait_for_input_stream_subscription(&tx_fans).await;
-            }
         }
 
         for (name, val) in &inputs {
@@ -251,13 +251,6 @@ async fn run_reconf_bench(
             .await
             .expect(&format!("Failed to send {name} on iteration {i}"));
         }
-        with_timeout(
-            tx_fans[&VarName::new(RECONF_TOPIC)].send(Value::NoVal),
-            1,
-            "r_send",
-        )
-        .await
-        .expect("Failed to send reconf trigger");
         let _: BTreeMap<VarName, Value> = with_timeout(rx.recv(), 1, "recv")
             .await
             .expect("Failed to receive output")
