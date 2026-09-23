@@ -2,14 +2,18 @@
 
 The key dashboard separates end-to-end runtime measurements from sustained monitor measurements. Runtime routes include input handling, the asynchronous runtime, output handling, the first 1,024 interpreted events on delayed-JIT routes, and any native compilation during the measured workload.
 
-The `jit/sustained/<fixture>/<route>` matrix uses six fixed fixtures. Each iteration runs 10,000 untimed setup events followed by 100,000 timed events. The `untyped_value`, `checked_canonical_value`, `checked_quickened_value`, and `native_value_eager` routes use `DataflowMonitor::evaluate` with `Value` rows. The `native_direct_*` routes use the tuple-typed monitor interface. `native_direct_warmed` is configured to activate after 1,024 events and is checked to be native before timing. The six current route names are:
+The `jit/sustained/<fixture>/<route>` matrix uses six fixed fixtures. Each iteration runs 10,000 untimed setup events followed by 100,000 timed events. The `gradually_checked_value`, `checked_canonical_value`, `checked_quickened_value`, and `native_value_eager` routes use `DataflowMonitor::evaluate` with `Value` rows. The `native_direct_*` routes use the tuple-typed monitor interface. `native_direct_warmed` is configured to activate after 1,024 events and is checked to be native before timing. The six current route names are:
 
-- `untyped_value`
+- `gradually_checked_value`
 - `checked_canonical_value`
 - `checked_quickened_value`
 - `native_value_eager`
 - `native_direct_eager`
 - `native_direct_warmed`
+
+The older `untyped_value` series remains visible as historical data; it is not
+an alias for `gradually_checked_value`. The latter has no measurement in a run
+whose CI filter excluded it.
 
 Dashboard history is classified by the source commit timestamp, rather than the later date on which a backfill may have collected the result. Source inspection establishes these benchmark-ID epochs:
 

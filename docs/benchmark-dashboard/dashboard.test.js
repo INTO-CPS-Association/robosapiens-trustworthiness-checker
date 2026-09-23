@@ -6,6 +6,7 @@ const {
     allBenchmarkNames,
     benchmarkFor,
     cardHasData,
+    sustainedMonitorCard,
 } = require("./dashboard.js");
 
 const THRESHOLD_UNTYPED = "threshold_property/dsrv_dataflow_untyped/10000";
@@ -144,4 +145,19 @@ test("collapses both legacy sustained Value-JIT routes and prefers the current I
     assert.equal(benchmarkFor(history, current).name, current);
     assert.equal(benchmarkFor(run("2026-08-01T12:00:00Z", [eagerLegacy]), current).name, eagerLegacy);
     assert.equal(benchmarkFor(run("2026-08-01T12:00:00Z", [warmedLegacy]), current).name, warmedLegacy);
+});
+
+test("keeps historical untyped and current gradually checked sustained routes distinct", () => {
+    const prefix = "jit/sustained/arithmetic";
+    const old = `${prefix}/untyped_value`;
+    const current = `${prefix}/gradually_checked_value`;
+    const names = sustainedMonitorCard(["Scalar arithmetic", "arithmetic"]).series.map(
+        (series) => series.name,
+    );
+    assert.ok(names.includes(old));
+    assert.ok(names.includes(current));
+    const history = run("2026-09-23T17:25:24Z", [old, current]);
+    assert.deepEqual(allBenchmarkNames([history]), [current, old]);
+    assert.equal(benchmarkFor(history, current).name, current);
+    assert.equal(benchmarkFor(history, old).name, old);
 });

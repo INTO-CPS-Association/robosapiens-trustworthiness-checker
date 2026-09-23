@@ -31,7 +31,8 @@ function sustainedMonitorCard([title, fixture]) {
         description:
             "Sustained execution over 100,000 timed events after 10,000 untimed setup events. Value-interface routes include Value-row dispatch and conversion; direct routes use the typed monitor interface. The warmed route is verified native before timing.",
         series: [
-            { label: "Untyped value interface", name: `${prefix}/untyped_value` },
+            { label: "Untyped value interface (historical)", name: `${prefix}/untyped_value` },
+            { label: "Gradually checked value interface", name: `${prefix}/gradually_checked_value` },
             {
                 label: "Checked canonical value interface",
                 name: `${prefix}/checked_canonical_value`,
@@ -998,5 +999,6 @@ if (typeof module !== "undefined") {
         benchmarkFor,
         cardHasData,
         classifiedBenchmarkName,
+        sustainedMonitorCard,
     };
 }
