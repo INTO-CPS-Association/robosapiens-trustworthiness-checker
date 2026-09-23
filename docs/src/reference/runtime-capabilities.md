@@ -1,45 +1,37 @@
 # Runtime capabilities
 
-Not every DSRV runtime evaluates every construct. A runtime refuses a
-specification that needs something it does not support before it builds any
-stream, naming the first such construct:
+A DSRV source file must enable the [dialect or experiment](dsrv-language-settings.md)
+for a construct it uses. The selected runtime must also be able to evaluate
+that construct. If a specification contains an unsupported construct, the
+runtime names it and refuses the specification before evaluating any stream.
 
-```text
-Error: `monitored_at` at Span { start: 105, end: 127 } cannot run on the semi-sync runtime, which does not support distribution; see "Runtime capabilities" in the documentation
-```
-
-| Runtime capability | Constructs |
+| Capability | Constructs that require it |
 |---|---|
-| distribution | `dist` and `monitored_at`, which also need `language distributed` |
+| Distribution | `dist`, `monitored_at` (also require `language distributed`) |
+| Tagged unions | Union values and constructors |
+| Pattern matching | `match`, `matches` |
+| Lazy `if` | An `if` under the `lazy_if` experiment; ordinary `if` does not require it |
 
-The table below is produced by running each runtime against a specification
-for each capability, under every `--semantics` value, so it records what this
-build does:
+The matrix shows each runtime's evaluator capabilities. `yes` means the
+runtime admits the construct; `no` means it refuses it. The `distributed`
+runtime accepts only `untimed` semantics and needs distribution settings.
+Reconfigurable runtimes need a live input pipeline.
 
 <!-- runtime-capabilities:start -->
-| Runtime | distribution | tagged unions | pattern matching |
-|---|---|---|---|
-| `async` | no | yes | yes |
-| `dataflow` | no | yes | yes |
-| `distributed` | not checked automatically (needs distribution settings) | not checked automatically (needs distribution settings) | not checked automatically (needs distribution settings) |
-| `semi-sync` | no | yes | yes |
-| `reconf-semi-sync` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
-| `reconf-dataflow` | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) | not checked automatically (needs an input pipeline) |
+| Runtime | distribution | tagged unions | pattern matching | lazy if |
+|---|---|---|---|---|
+| `async` | no | yes | yes | no |
+| `dataflow` | no | yes | yes | yes |
+| `distributed` | yes | yes | no | no |
+| `semi-sync` | no | yes | yes | no |
+| `reconf-semi-sync` | no | yes | yes | no |
+| `reconf-dataflow` | no | yes | yes | yes |
 <!-- runtime-capabilities:end -->
 
-Text supplied while a specification runs, through `dynamic` or `defer`, is
-not checked in advance: a construct the runtime does not support stops it
-while it runs.
+The `async`, `dataflow`, and `semi-sync` rows are also exercised with file
+input under each DSRV semantics. The other rows reflect the evaluators selected
+by their runtime builders; those runtimes need additional setup to start.
 
-## For contributors
-
-- `core::RuntimeCapability` lists the capabilities, and
-  `src/lang/dsrv/ast/requirements.rs` says which expression needs which. That
-  match has no wildcard, so a new expression kind must be placed.
-- Each evaluator declares what it supports where it is implemented: every
-  `MonitoringSemantics` has a `RUNTIME_CAPABILITIES` constant, and each runtime calls
-  `core::ensure_runtime_support` with its evaluator's declaration at its own entry point.
-- `tests/runtime_capabilities.rs` runs every runtime it can start from files
-  and fails on a panic, a timeout or a failure other than the refusal, and on
-  any difference from this table. Regenerate the table with
-  `CAPABILITY_TABLE=overwrite cargo test --test runtime_capabilities`.
+A runtime expression accepted by `dynamic` or `defer` is checked when it is
+accepted. An unsupported construct in it therefore fails during the run,
+rather than at initial admission.

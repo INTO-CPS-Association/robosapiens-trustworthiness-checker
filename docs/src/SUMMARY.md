@@ -28,9 +28,8 @@
 # Reference
 
 - [CLI reference](./reference/cli.md)
-- [Developer expansion inspection](./reference/developer-inspection.md)
 - [DSRV syntax](./reference/dsrv-syntax.md)
-- [DSRV language settings](./reference/dsrv-language-settings.md)
+- [DSRV dialects, editions, and experiments](./reference/dsrv-language-settings.md)
 - [Runtime capabilities](./reference/runtime-capabilities.md)
 - [Input configuration](./reference/input-configuration.md)
 - [Output configuration](./reference/output-configuration.md)
@@ -40,7 +39,6 @@
 
 # Architecture
 
-- [DSRV type aliases and source contexts](./architecture/dsrv-source-contexts.md)
 - [I/O architecture](./io.md)
   - [Batch representation](./io-batches.md)
   - [Input architecture](./input-architecture.md)
@@ -73,3 +71,7 @@
     - [Context transfer](./architecture/dataflow/context-transfer.md)
     - [Failure and termination](./architecture/dataflow/failure-model.md)
   - [Implementation mapping](./architecture/dataflow/implementation-guide.md)
+
+# Developer tools
+
+- [Inspect expanded DSRV with `tc-expand`](./developer-tools/tc-expand.md)

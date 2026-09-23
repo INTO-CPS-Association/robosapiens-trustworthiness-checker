@@ -1,13 +1,11 @@
-//! What each runtime does with each capability, observed by running it.
+//! What each runtime declares and, where file input permits, runs.
 //!
 //! Runtimes declare their capabilities where they are implemented; nothing
-//! lists them centrally. This test runs the checker for every `--runtime`
-//! value and every capability fixture, and requires one of two outcomes: the
-//! specification is admitted and runs to completion, or it is refused with the
-//! admission error. A panic, a timeout or any other failure fails the test,
-//! so a runtime that declares a capability it cannot deliver is caught.
+//! lists them centrally. This test runs the checker for every runtime that
+//! accepts file input. A capability fixture must finish or receive the
+//! expected admission refusal; a panic, timeout, or other failure fails.
 //!
-//! The observed outcomes are rendered as the table in
+//! The declarations, checked against those runnable outcomes, form the table in
 //! `docs/src/reference/runtime-capabilities.md`. Regenerate it with
 //! `CAPABILITY_TABLE=overwrite cargo test --test runtime_capabilities`.
 
@@ -16,7 +14,13 @@ use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 use trustworthiness_checker::cli::args::RuntimeKind;
-use trustworthiness_checker::core::RuntimeCapability;
+use trustworthiness_checker::core::{RuntimeCapabilities, RuntimeCapability};
+use trustworthiness_checker::runtime::builder::{
+    DistValueConfig, SemiSyncValueConfig, ValueConfig,
+};
+use trustworthiness_checker::semantics::{
+    DistributedSemantics, MonitoringSemantics, UntimedDsrvSemantics,
+};
 
 /// Runtimes that cannot be started from a specification and an input file,
 /// with the reason. Every other runtime is run.
@@ -28,13 +32,28 @@ const NOT_RUN: &[(&str, &str)] = &[
 
 const SEMANTICS: &[&str] = &["untimed", "typed-untimed", "gradual-typed-untimed"];
 
-// The reference table documents stable language capabilities. Experimental
-// capabilities have focused admission tests without changing the docs yet.
 const DOCUMENTED_RUNTIME_CAPABILITIES: &[RuntimeCapability] = &[
     RuntimeCapability::Distribution,
     RuntimeCapability::TaggedUnions,
     RuntimeCapability::PatternMatching,
+    RuntimeCapability::LazyIf,
 ];
+
+/// The evaluator selected by each CLI runtime. Reconfigurable variants use
+/// the same evaluator capability set as their ordinary counterparts.
+fn declared(runtime: &str) -> RuntimeCapabilities {
+    match runtime {
+        "async" => <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES,
+        "semi-sync" | "reconf-semi-sync" => {
+            <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::RUNTIME_CAPABILITIES
+        }
+        "dataflow" | "reconf-dataflow" => trustworthiness_checker::dataflow::RUNTIME_CAPABILITIES,
+        "distributed" => {
+            <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::RUNTIME_CAPABILITIES
+        }
+        _ => panic!("no capability declaration mapped for {runtime}"),
+    }
+}
 
 /// A specification and input that use exactly one capability.
 fn fixture(capability: RuntimeCapability) -> (&'static str, &'static str) {
@@ -117,24 +136,18 @@ fn table() -> String {
         table.push_str(&format!("| `{runtime}` |"));
         let skipped = NOT_RUN.iter().find(|(name, _)| *name == runtime);
         for capability in DOCUMENTED_RUNTIME_CAPABILITIES {
-            let cell = match skipped {
-                Some((_, reason)) => format!("not checked automatically ({reason})"),
-                None => {
-                    let outcomes: Vec<Outcome> = SEMANTICS
-                        .iter()
-                        .map(|semantics| run(&runtime, semantics, *capability))
-                        .collect();
-                    assert!(
-                        outcomes.windows(2).all(|pair| pair[0] == pair[1]),
-                        "{runtime} treats {capability} differently across semantics: {outcomes:?}"
+            let admitted = declared(&runtime).contains(*capability);
+            if skipped.is_none() {
+                for semantics in SEMANTICS {
+                    let observed = run(&runtime, semantics, *capability);
+                    assert_eq!(
+                        observed == Outcome::Admitted,
+                        admitted,
+                        "{runtime}/{semantics} differs from its declared {capability} capability"
                     );
-                    match outcomes[0] {
-                        Outcome::Admitted => "yes".to_owned(),
-                        Outcome::Refused => "no".to_owned(),
-                    }
                 }
-            };
-            table.push_str(&format!(" {cell} |"));
+            }
+            table.push_str(if admitted { " yes |" } else { " no |" });
         }
         table.push('\n');
     }

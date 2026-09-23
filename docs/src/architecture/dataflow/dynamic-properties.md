@@ -139,10 +139,32 @@ What an activation *does* add is depth to the monitor's own bounded history for 
 
 Runtime bodies may read only variables admitted by their compiled scope. Checked monitors type-check each active body against the retained checked environment and expected result type.
 
-Caches may retain immutable compiled `StreamProgram` values. They do not retain a bank of mutable evaluators for old activations. A later nested resolution failure makes the current tick fail and the enclosing monitor terminal; earlier nested changes in the same pass are not rolled back.
+Each `dynamic` or `defer` occurrence also retains the DSRV context in which it
+was written. The runtime expression can use that module's aliases, constants,
+callable definitions, and language settings even after the original program
+has been dropped. An occurrence in an inlined library definition uses the
+library's context, while an occurrence written by the caller uses the caller's.
+The [DSRV syntax reference](../../reference/dsrv-syntax.md#type-aliases)
+describes alias resolution; [language settings](../../reference/dsrv-language-settings.md#experiments)
+describes the per-module settings.
+
+Caches may retain immutable compiled `StreamProgram` values. Cache identity
+includes the semantic namespace and callable environment, so identical source
+strings from different contexts cannot share an incompatible body. Source
+labels, paths, and diagnostic spans are excluded from that identity. Caches do
+not retain a bank of mutable evaluators for old activations. A later nested
+resolution failure makes the current tick fail and the enclosing monitor
+terminal; earlier nested changes in the same pass are not rolled back.
 
 ## Implementation mapping
 
-The implementation mapping leads through `src/dataflow/execution/reconfigurable_expressions.rs`, `src/dataflow/execution/evaluator/reconfiguration.rs`, `src/dataflow/execution/evaluator/expression_state.rs`, and `src/dataflow/monitor/reconfiguration.rs`, with focused evaluator and monitor tests.
+The DSRV frontend prepares each occurrence's context and typing in
+`src/lang/dsrv/runtime_expression.rs`, using module namespaces from
+`src/lang/dsrv/source.rs` and `src/lang/dsrv/expand/`. Dataflow activation
+continues through `src/dataflow/execution/reconfigurable_expressions.rs`,
+`src/dataflow/execution/evaluator/reconfiguration.rs`,
+`src/dataflow/execution/evaluator/expression_state.rs`, and
+`src/dataflow/monitor/reconfiguration.rs`, with focused frontend, evaluator,
+and monitor tests.
 
 Continue with [tick execution](tick-execution.md), [replacement identity](replacement-contract.md), or [context transfer](context-transfer.md).

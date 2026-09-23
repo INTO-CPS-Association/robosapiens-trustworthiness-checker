@@ -28,5 +28,5 @@ The stdout sink writes `<variable>[<zero-based row>] = <Debug-formatted value>`.
 
 Use the task pages for complete workflows: [writing and running DSRV models](../tutorials/write-dsrv-monitor.md), [live MQTT](../tutorials/live-mqtt.md), [ROS input/output](../tutorials/ros-input-output.md), [Redis knowledge input](../redis-knowledge-input.md), [reconfiguration](../tutorials/reconfigure-running-monitor.md), [distributed monitoring](../tutorials/distributed-monitoring.md), and [Docker service](../tutorials/docker-service.md).
 
-The separate developer-only [`tc-expand` inspection tool](developer-inspection.md)
+The separate developer-only [`tc-expand` inspection tool](../developer-tools/tc-expand.md)
 is intentionally absent from the monitoring command tree above.

@@ -2,7 +2,8 @@
 
 This page records DSRV expression syntax and its boundary behavior. Start with
 the [DSRV tutorial](../tutorials/write-dsrv-monitor.md) if you are writing your
-first monitor.
+first monitor. For `language`, `edition`, and `use experimental` declarations,
+see [DSRV dialects, editions, and experiments](dsrv-language-settings.md).
 
 ## Declarations and equations
 
@@ -39,12 +40,21 @@ is a type error.
 `type State = Struct<speed: Int, stopped: Bool>` declares a structural alias.
 Aliases can name any supported type, refer to later declarations, and nest in
 collections and structs. Duplicate names, unknown names, and recursive alias
-cycles are rejected. Aliases do not create nominally distinct types.
+cycles are rejected. Aliases do not create nominally distinct types: two aliases
+that expand to the same structure are interchangeable.
+
+An alias belongs to the module that declares it, in a namespace separate from
+stream and local names. Forward references resolve within that module; imports
+make selected aliases available to another module. A function imported from a
+module keeps the aliases and language settings of the module that wrote its
+body. An argument passed to that function keeps the caller's context. See
+[language settings](dsrv-language-settings.md#experiments) for the `modules`
+and `functions` experiments.
 
 Struct field names in types can be quoted, as in
-`Struct<"quoted field": Int>`. See the
-[source-context architecture](../architecture/dsrv-source-contexts.md) for
-how aliases reach runtime expressions.
+`Struct<"quoted field": Int>`. Printed specifications put alias declarations
+before stream declarations and print other types in expanded structural form,
+so the result parses back to the same specification.
 
 ### Generic aliases
 
@@ -64,6 +74,24 @@ still is.
 Parameters are positional and scoped to the alias that declares them. They are
 capitalised like any other type name, and a parameter shadows a declared alias
 of the same name within that body.
+
+### Embedded `std::option`
+
+The embedded `std::option` module provides the generic alias
+`Option<T> = Union<Some: T, None>` and the functions `is_some`, `is_none`, and
+`unwrap_or`. It has no prelude: `use std::option` activates the module, and
+`use std::option::*` also brings its names into unqualified scope. With a plain
+module import, the current spellings are `option::Option<T>` for the type and
+`std::option::is_some`, `std::option::is_none`, and
+`std::option::unwrap_or` for functions.
+
+A caller enables `modules` and `generics` to import and use `Option<T>`, plus
+`tagged_unions` if it writes `Some` or `None`. Constructors need an expected
+`Option<T>` type; an unanchored `unwrap_or(None, 7)` cannot infer one.
+`unwrap_or` evaluates its fallback argument even for `Some`. The module does
+not currently provide `unwrap`, `or`, `map`, or `and_then`. The
+[inspection example](../developer-tools/tc-expand.md#example) shows a complete
+model using the module.
 
 ## Tagged unions and `match`
 

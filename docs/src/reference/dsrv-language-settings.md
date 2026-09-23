@@ -1,4 +1,4 @@
-# DSRV language settings
+# DSRV dialects, editions, and experiments
 
 A DSRV specification can select its edition, dialect, and experimental
 features. The checker resolves those declarations into one set of language
@@ -10,7 +10,7 @@ the interpretation of existing specifications.
 language core                       // optional: core or distributed
 edition 2026-09                     // optional
 use experimental::{tagged_unions}   // optional
-use experimental::high_level_dsrv   // every implemented Full preview
+use experimental::high_level_dsrv   // prototype extended language
 ```
 
 `language`, `edition` and `use` are keywords everywhere, so they cannot be
@@ -77,60 +77,26 @@ unknown edition is an error that lists the known ones.
 designed. They may change or disappear between releases. Several such lines
 add up. Core DSRV accepts no experiments.
 
-The table is the complete implemented experiment registry. “Capability
-admission” means that, after the language checks succeed, the selected runtime
-must separately support constructs introduced by that experiment.
+The table is the complete implemented experiment registry. In the last column,
+`all` means every DSRV runtime; it does not include MSTLO. An experiment may
+still use a construct that has a narrower runtime requirement.
 
 <!-- dsrv-experiments:start -->
-| Experiment | User-visible behavior | Material dependencies and interactions | Capability admission |
+| Experiment | User-visible behavior | Material dependencies and interactions | Supported runtimes |
 |---|---|---|---|
-| `tagged_unions` | Adds `Union<…>` types and union constructors. | Constructors are used by `pattern_matching`; embedded libraries can expose union values under their own settings. | Yes — tagged unions |
-| `pattern_matching` | Adds `match`, `matches`, and their patterns. | Commonly used with `tagged_unions`; a selected `match` arm is already lazy and is distinct from `lazy_if`. | Yes — pattern matching |
-| `generics` | Adds parameters to type aliases and arguments to alias uses. | Used with `modules` by generic library types such as `std::option::Option<T>`. | No |
-| `modules` | Adds filesystem and embedded-module declarations and imports. | Each module's own header governs syntax written in that module; imports do not transfer the caller's experiments into it. | No |
-| `functions` | Adds named `def` functions. | Functions imported through `modules` are expanded under the defining module's language settings. | No |
-| `constants` | Adds `const` declarations and named stream offsets. | A constant declared inside a module also requires `modules`. | No |
-| `casts` | Adds `as`, `trunc`, `floor`, `ceil`, and `round`. | Float-to-integer conversion uses an explicit rounding function; see [DSRV syntax](dsrv-syntax.md#operators). | No |
-| `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | Yes — lazy if |
+| `tagged_unions` | Adds `Union<…>` types and union constructors. | Constructors are used by `pattern_matching`; embedded libraries can expose union values under their own settings. | all |
+| `pattern_matching` | Adds `match`, `matches`, and their patterns. | Commonly used with `tagged_unions`; a selected `match` arm is already lazy and is distinct from `lazy_if`. | all except `distributed` |
+| `generics` | Adds parameters to type aliases and arguments to alias uses. | Used with `modules` by generic library types such as `std::option::Option<T>`. | all |
+| `modules` | Adds filesystem and embedded-module declarations and imports. | Each module's own header governs syntax written in that module; imports do not transfer the caller's experiments into it. | all |
+| `functions` | Adds named `def` functions. | Functions imported through `modules` are expanded under the defining module's language settings. | all |
+| `constants` | Adds `const` declarations and named stream offsets. | A constant declared inside a module also requires `modules`. | all |
+| `casts` | Adds `as`, `trunc`, `floor`, `ceil`, and `round`. | Float-to-integer conversion uses an explicit rounding function; see [DSRV syntax](dsrv-syntax.md#operators). | all |
+| `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
 <!-- dsrv-experiments:end -->
 
-`use experimental::high_level_dsrv` is a meta-feature for **all experiments in
-that table**, including the behavior-changing `lazy_if`. `use experimental::*`
-currently resolves to the same set. Both forms are resolved to explicit
-experiment settings, so adding a future experiment can change what a source
-file using either broad form means. Neither form selects Distributed DSRV.
-They also do not bypass runtime capability admission, the selected semantics'
-constraint profile, or distributed localisation admission.
-
-Under `lazy_if`, only the selected branch executes on an outer tick. Each
-branch's local timeline advances only on ticks that select that branch:
-temporal state in the other branch does not advance or commit, and its missing
-values and errors are not observed. Initially, only the `dataflow` runtime
-admits this construct; other runtimes refuse it before building streams. See
-[runtime capabilities](runtime-capabilities.md) for the admission boundary and
-the runtime matrix for stable capabilities.
-
-When the checker runs a specification with experiments, it logs a warning
-naming the resolved explicit experiments. This notice is visible when logging
-is enabled at warning level or above, for example with `RUST_LOG=warn`;
-semantic warnings about the specification itself are always written to
-standard error.
-
-Any experimental name that is neither implemented nor a meta-feature is an error
-listing the current names. Without `modules`, `use` of another namespace is
-rejected.
-
-An embedded library is checked under its own explicit experiment header. A
-caller enables experiments for syntax the caller writes; it need not copy the
-library's implementation experiments merely to call an imported function.
-Conversely, `high_level_dsrv` in the caller does not rewrite the embedded
-library's settings.
-
-Two specifications whose settings differ, experiments included, are different
-programs: the source fingerprint that reconfiguration caches are keyed on
-carries the settings, and carries the release's experiment revision whenever
-any experiment is on, so work compiled under one meaning of an experiment is
-never reused under another.
+`use experimental::high_level_dsrv` selects a prototype for an extended
+Trustworthiness Checker language. It currently includes every experiment in
+the table. `use experimental::*` currently selects the same set.
 
 ## Command line
 
@@ -152,9 +118,3 @@ CLI requests apply to the root specification and filesystem modules; each may
 use a matching header or inherit the request when its header is absent.
 Embedded libraries are different: their explicit headers remain their own.
 There is no CLI option that enables experiments; they are selected in source.
-
-## Printing
-
-A specification printed by the checker, for example in its logs, begins
-with its settings when they differ from the defaults, so printed text parses
-back to the same specification.

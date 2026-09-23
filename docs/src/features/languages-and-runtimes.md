@@ -9,6 +9,9 @@ The TC accepts two specification languages. DSRV is the default stream-monitorin
 Use the default `dsrv` language for declarations such as `in x`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, and `gradual-typed-untimed`; the default is `gradual-typed-untimed`. The distributed DSRV runtime currently accepts only `untimed`.
 
 Start with [writing and running DSRV models](../tutorials/write-dsrv-monitor.md). Language-level `dynamic` and `defer` are distinct from root monitor reconfiguration.
+The [DSRV dialects, editions, and experiments reference](../reference/dsrv-language-settings.md)
+explains what a source file can select and how those selections affect its
+meaning.
 
 ### MSTLO
 
