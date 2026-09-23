@@ -52,9 +52,9 @@ jobs:
                   $output | ForEach-Object { Write-Host $_ }
 
                   $expected = @(
-                    "z[0] = Int(3)"
-                    "z[1] = Int(7)"
-                    "z[2] = Int(11)"
+                    "z[0] = 3"
+                    "z[1] = 7"
+                    "z[2] = 11"
                   )
 
                   foreach ($line in $expected) {

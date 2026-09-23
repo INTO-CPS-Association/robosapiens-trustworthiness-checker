@@ -54,11 +54,11 @@ cargo run --quiet -- examples/simple_add.dsrv \
 The exact stdout is:
 
 ```text
-z[0] = Int(3)
-z[1] = Int(7)
+z[0] = 3
+z[1] = 7
 ```
 
-Here `z[0]` in stdout labels the result at tick 0, and `Int(3)` displays its type and value. The process exits after both input pairs have been evaluated. It creates no external resources that require cleanup. DSRV and its default runtime are selected automatically; no language or runtime flag is needed for these examples.
+Here `z[0]` labels the result at tick 0, and `3` is its value. The `Int` type is declared in the model; stdout prints the value in DSRV source form. The process exits after both input pairs have been evaluated. It creates no external resources that require cleanup. DSRV and its default runtime are selected automatically; no language or runtime flag is needed for these examples.
 
 ### Type declarations and checking
 
@@ -101,10 +101,10 @@ cargo run --quiet -- examples/counter.dsrv \
 The exact Trustworthiness Checker stdout is:
 
 ```text
-z[0] = Int(1)
-z[1] = Int(2)
-z[2] = Int(3)
-z[3] = Int(4)
+z[0] = 1
+z[1] = 2
+z[2] = 3
+z[3] = 4
 ```
 
 The process exits after the fourth input value. It needs only Cargo and the files included in the repository.
@@ -134,10 +134,10 @@ cargo run --quiet -- examples/counter_threshold.dsrv \
 The exact stdout is:
 
 ```text
-below_limit[0] = Bool(true)
-below_limit[1] = Bool(true)
-below_limit[2] = Bool(false)
-below_limit[3] = Bool(false)
+below_limit[0] = true
+below_limit[1] = true
+below_limit[2] = false
+below_limit[3] = false
 ```
 
 | Logical tick | Input `x` | Current `total` | `total < 3` |
@@ -195,9 +195,9 @@ cargo run --quiet -- examples/structured_reading.dsrv \
 The exact stdout is:
 
 ```text
-below_limit[0] = Bool(true)
-below_limit[1] = Bool(false)
-below_limit[2] = Bool(false)
+below_limit[0] = true
+below_limit[1] = false
+below_limit[2] = false
 ```
 
 At tick 1 the level reaches 3; at tick 2 the level is below 3 but the reading is invalid. Both produce false. The process exits after the third reading.
@@ -228,10 +228,10 @@ cargo run --quiet -- examples/dups/defer.dsrv \
 This run emits one visible line for every output index from 1 through 14. The beginning and end of the output are:
 
 ```text
-z[1] = Int(2)
-z[2] = Int(3)
+z[1] = 2
+z[2] = 3
 ...
-z[14] = Int(15)
+z[14] = 15
 ```
 
 There is no visible `z[0]` line because `e` is absent at tick zero and the stdout sink suppresses the resulting `NoVal`. At tick 1, `defer` accepts `"x + 1"` and produces `2`. It then keeps evaluating that expression with each new `x`; later expressions on `e` do not replace it.
@@ -262,5 +262,5 @@ For the language's dynamically updated-property context, see [Kristensen et al.,
   `dsrv` file path before changing runtime options.
 - If the checker does not exit after reading a file, confirm that the selected input is `--input-file`; MQTT, Redis, and ROS sources remain active while waiting for messages.
 - If a result is absent, check whether the current value is `NoVal` or
-  `Deferred`. Stdout suppresses `NoVal`; a `Deferred` value has its own
-  Debug-style encoding and is not a numeric fallback.
+  `Deferred`. Stdout suppresses `NoVal`; a `Deferred` value prints as `⊥`
+  and is not a numeric fallback.

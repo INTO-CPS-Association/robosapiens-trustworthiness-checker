@@ -6,7 +6,7 @@ Choose where model output values are observed. If no output flag is selected, th
 
 | Destination | CLI selection | Observable encoding |
 |---|---|---|
-| stdout | `--output-stdout`, or no output selection | `<variable>[<zero-based row>] = <Debug-formatted value>` |
+| stdout | `--output-stdout`, or no output selection | `<variable>[<zero-based row>] = <rendered value>`; DSRV values use source syntax, MSTLO values use JSON. |
 | MQTT | `--mqtt-output` or `--output-mqtt-file PATH` | Compact JSON envelope such as `{"value":42}`. |
 | Redis | `--redis-output` or `--output-redis-file PATH` | JSON/JSON5 value itself, such as `42`; no MQTT `value` envelope. |
 | ROS 2 | `--output-ros-file PATH` | Message type and route come from the mapping; requires `--features ros`. |
@@ -23,10 +23,10 @@ z = default(z[1], 0) + x
 With four input values of `1`, stdout is:
 
 ```text
-z[0] = Int(1)
-z[1] = Int(2)
-z[2] = Int(3)
-z[3] = Int(4)
+z[0] = 1
+z[1] = 2
+z[2] = 3
+z[3] = 4
 ```
 
 MQTT and Redis route files use the compact variable-to-route object described in the [input catalogue](inputs.md). ROS entries include the message codec.

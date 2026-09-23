@@ -83,13 +83,13 @@ cargo run --quiet -- examples/redis-knowledge/robot-mode.dsrv \
 startup. The stdout sink's exact framing is:
 
 ```text
-<output-variable>[<zero-based-output-index>] = <Debug-style-value>
+<output-variable>[<zero-based-output-index>] = <DSRV-source-value>
 ```
 
 For the sequence in this walkthrough, representative stdout is:
 
 ```text
-observed_mode[0] = Str("idle")
+observed_mode[0] = "idle"
 ```
 
 The first expected line is the useful readiness observation for the checker: it
@@ -111,7 +111,7 @@ The checker should emit a second line. With no other visible updates, the
 representative output is:
 
 ```text
-observed_mode[1] = Str("active")
+observed_mode[1] = "active"
 ```
 
 Writing the same decoded value again sends a Redis notification but does not
@@ -216,7 +216,7 @@ After both `true` values have been observed, stdout should contain a line framed
 like:
 
 ```text
-legitimate_plan[<zero-based-output-index>] = Str("inspect-area")
+legitimate_plan[<zero-based-output-index>] = "inspect-area"
 ```
 
 The exact index is representative rather than fixed because it depends on which
@@ -231,7 +231,7 @@ The latest phase values remain retained for the sparse inputs, so the later key
 update can produce a line framed like:
 
 ```text
-legitimate_plan[<later-zero-based-index>] = Str("return-to-base")
+legitimate_plan[<later-zero-based-index>] = "return-to-base"
 ```
 
 Without an input window, the key snapshot and each Pub/Sub event are independent

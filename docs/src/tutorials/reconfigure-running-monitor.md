@@ -87,15 +87,14 @@ catalog. The accepted input forms are `source` plus `inputs`, `inputs`, or
 
 ## Observe the result
 
-Stdout uses the form `<variable>[<row>] = <debug value>`. For integer values,
-the current debug representation is `Int(...)`. You should observe a result
-containing the initial value `3` and, after the control message, a result
-containing `15`:
+Stdout uses the form `<variable>[<row>] = <rendered value>`. Integer values
+print as numbers. You should observe a result containing the initial value `3`
+and, after the control message, a result containing `15`:
 
 ```text
-z[<row>] = Int(3)
+z[<row>] = 3
 ...
-z[<row>] = Int(15)
+z[<row>] = 15
 ```
 
 The row numbers and exact interleaving are not a contract for this asynchronous

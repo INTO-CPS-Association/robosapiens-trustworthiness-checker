@@ -64,10 +64,10 @@ cargo +1.95 build `
 The process writes these results to stdout and exits:
 
 ```text
-z[0] = Int(1)
-z[1] = Int(2)
-z[2] = Int(3)
-z[3] = Int(4)
+z[0] = 1
+z[1] = 2
+z[2] = 3
+z[3] = 4
 ```
 
 This file-input process reaches end of input and exits without manual cleanup. To check the broader default feature set on a prepared Windows development host, run:
@@ -121,7 +121,7 @@ rustup target list --toolchain 1.95 --installed
 
 The installed-target list must contain `x86_64-pc-windows-gnu`.
 
-The checked-in `.cargo/config.toml` selects `x86_64-w64-mingw32-gcc` as the linker and Wine as the Cargo runner.
+The repository's `.cargo/config.toml` selects `x86_64-w64-mingw32-gcc` as the linker and Wine as the Cargo runner.
 
 ### Initialize Wine and run the typed running total
 
@@ -193,7 +193,7 @@ docker exec tc-mqtt mosquitto_pub -t x -m 2
 docker exec tc-mqtt mosquitto_pub -t y -m 4
 ```
 
-The TC evaluates each received update as a logical input tick. Its stdout includes a line containing `Int(4)` after receiving `x = 1` and `y = 3`, and a line containing `Int(6)` after receiving `x = 2` and `y = 4`. Updates arrive independently, so stdout may also contain an intermediate result between the two pairs.
+The TC evaluates each received update as a logical input tick. Its stdout includes a line ending in `= 4` after receiving `x = 1` and `y = 3`, and a line ending in `= 6` after receiving `x = 2` and `y = 4`. Updates arrive independently, so stdout may also contain an intermediate result between the two pairs.
 
 Stop the TC with `Ctrl+C`, then remove the broker:
 
@@ -236,7 +236,7 @@ docker exec tc-redis redis-cli PUBLISH x 2
 docker exec tc-redis redis-cli PUBLISH y 4
 ```
 
-As with MQTT, stdout includes lines containing `Int(4)` and `Int(6)` and may include an intermediate result. Redis Pub/Sub does not retain these messages, so publish only after the TC is running.
+As with MQTT, stdout includes lines ending in `= 4` and `= 6` and may include an intermediate result. Redis Pub/Sub does not retain these messages, so publish only after the TC is running.
 
 Stop the TC with `Ctrl+C`, then remove Redis:
 

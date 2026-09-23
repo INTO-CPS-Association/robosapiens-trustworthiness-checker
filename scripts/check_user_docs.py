@@ -157,7 +157,7 @@ def check_finite_examples() -> None:
                 "examples/simple_add.input",
                 "--output-stdout",
             ],
-            "z[0] = Int(3)\nz[1] = Int(7)\n",
+            "z[0] = 3\nz[1] = 7\n",
         ),
         (
             [
@@ -172,7 +172,7 @@ def check_finite_examples() -> None:
                 "examples/counter.input",
                 "--output-stdout",
             ],
-            "z[0] = Int(1)\nz[1] = Int(2)\nz[2] = Int(3)\nz[3] = Int(4)\n",
+            "z[0] = 1\nz[1] = 2\nz[2] = 3\nz[3] = 4\n",
         ),
         (
             [
@@ -188,10 +188,10 @@ def check_finite_examples() -> None:
                 "--output-stdout",
             ],
             (
-                "below_limit[0] = Bool(true)\n"
-                "below_limit[1] = Bool(true)\n"
-                "below_limit[2] = Bool(false)\n"
-                "below_limit[3] = Bool(false)\n"
+                "below_limit[0] = true\n"
+                "below_limit[1] = true\n"
+                "below_limit[2] = false\n"
+                "below_limit[3] = false\n"
             ),
         ),
         (
@@ -208,9 +208,9 @@ def check_finite_examples() -> None:
                 "--output-stdout",
             ],
             (
-                "below_limit[0] = Bool(true)\n"
-                "below_limit[1] = Bool(false)\n"
-                "below_limit[2] = Bool(false)\n"
+                "below_limit[0] = true\n"
+                "below_limit[1] = false\n"
+                "below_limit[2] = false\n"
             ),
         ),
         (

@@ -50,11 +50,11 @@ cargo run -- examples/simple_add_distributable.dsrv \
   --local-node A
 ```
 
-The checked-in graph assigns `w` to `A`; the local stdout is:
+The example graph assigns `w` to `A`; the local stdout is:
 
 ```text
-w[0] = Int(3)
-w[1] = Int(7)
+w[0] = 3
+w[1] = 7
 ```
 
 This verifies the local graph projection only. It does not exercise cross-process MQTT exchange.

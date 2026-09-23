@@ -68,10 +68,10 @@ cargo run --quiet -- examples/counter.dsrv \
 Cargo builds the TC on the first run. The example evaluates the four inputs and writes this exact result to stdout:
 
 ```text
-z[0] = Int(1)
-z[1] = Int(2)
-z[2] = Int(3)
-z[3] = Int(4)
+z[0] = 1
+z[1] = 2
+z[2] = 3
+z[3] = 4
 ```
 
 The process exits after the fourth input. The output index is zero-based, so `z[0]` is the first result. DSRV calls each input position a logical tick; `z[1]` reads `z` from the preceding tick.

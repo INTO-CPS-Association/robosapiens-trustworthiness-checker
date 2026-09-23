@@ -24,12 +24,12 @@ cargo run -- \
   --output-stdout
 ```
 
-The checked-in input produces integer values `3` and `7`; stdout uses the
-current debug representation:
+The input produces integer values `3` and `7`; stdout writes them in DSRV
+source form:
 
 ```text
-z[0] = Int(3)
-z[1] = Int(7)
+z[0] = 3
+z[1] = 7
 ```
 
 The exact output boundary depends on the selected runtime and destination:

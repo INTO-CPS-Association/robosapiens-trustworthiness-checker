@@ -38,8 +38,8 @@ cargo run -- \
 `--distribution-graph` selects the predefined graph and `--local-node A` selects node A's localized projection. In the program shown above, node A owns `w`. The included input supplies two pairs of `x` and `y` values, so stdout is:
 
 ```text
-w[0] = Int(3)
-w[1] = Int(7)
+w[0] = 3
+w[1] = 7
 ```
 
 The command exits after producing both local results. To exercise node B

@@ -24,7 +24,7 @@ MQTT is always compiled; Redis is enabled by default. ROS routes, ROS distributi
 
 ## Observable process behavior
 
-The stdout sink writes `<variable>[<zero-based row>] = <Debug-formatted value>`. It suppresses auxiliary and `NoVal` outputs. Tracing defaults to stderr and can be appended to a file with `--log-file PATH`. File input is finite; live transports remain in the foreground until source/process termination or error. The checker currently has no separate readiness endpoint, custom signal handler, or cross-destination transaction.
+The stdout sink writes `<variable>[<zero-based row>] = <rendered value>`. DSRV values use source syntax; MSTLO values use JSON. The sink suppresses auxiliary and `NoVal` outputs. Tracing defaults to stderr and can be appended to a file with `--log-file PATH`. File input is finite; live transports remain in the foreground until source/process termination or error. The checker currently has no separate readiness endpoint, custom signal handler, or cross-destination transaction.
 
 Use the task pages for complete workflows: [writing and running DSRV models](../tutorials/write-dsrv-monitor.md), [live MQTT](../tutorials/live-mqtt.md), [ROS input/output](../tutorials/ros-input-output.md), [Redis knowledge input](../redis-knowledge-input.md), [reconfiguration](../tutorials/reconfigure-running-monitor.md), [distributed monitoring](../tutorials/distributed-monitoring.md), and [Docker service](../tutorials/docker-service.md).
 

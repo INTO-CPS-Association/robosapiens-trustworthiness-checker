@@ -23,10 +23,10 @@ cargo run -- examples/counter.dsrv --input-file examples/counter.input --output-
 The command exits after the four input ticks. Its exact stdout is:
 
 ```text
-z[0] = Int(1)
-z[1] = Int(2)
-z[2] = Int(3)
-z[3] = Int(4)
+z[0] = 1
+z[1] = 2
+z[2] = 3
+z[3] = 4
 ```
 
 The output index is zero-based. `z[1]` reads the preceding logical tick and `default(z[1], 0)` supplies the initial value at tick zero. The example needs no broker, ROS installation, or extra Cargo feature.

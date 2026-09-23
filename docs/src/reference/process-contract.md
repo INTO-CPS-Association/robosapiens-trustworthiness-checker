@@ -16,7 +16,7 @@ The current process has no separate readiness endpoint or healthcheck. Process e
 
 ## Result and diagnostic channels
 
-- stdout carries stdout-destination results in the form `<variable>[<zero-based row>] = <Debug-formatted value>`.
+- stdout carries stdout-destination results in the form `<variable>[<zero-based row>] = <rendered value>`; DSRV values use source syntax, and MSTLO values use JSON.
 - MQTT, Redis, ROS, and configured outputs use their transport-specific routes instead of stdout for those values.
 - tracing diagnostics default to stderr; `--log-file PATH` appends them to the specified file.
 - auxiliary and `NoVal` outputs are suppressed by the stdout sink.
