@@ -21,9 +21,8 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
-    time::Instant,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 use unsync::spsc;
 
 const CHANNEL_SIZE: usize = 8;
@@ -617,46 +616,11 @@ where
         expr_evals: &mut Vec<ExprEvalutor<AC, MS>>,
     ) -> anyhow::Result<StreamState> {
         info!("SemiSyncRuntime work_task: Waiting for next tick...");
-        let step_started = Instant::now();
         let aux_vars = ctx.aux_vars.clone();
-        let expr_evaluator_count = expr_evals.len();
-        let non_aux_expr_evaluator_count = expr_evals
-            .iter()
-            .filter(|expr_eval| !aux_vars.contains(&expr_eval.var_name))
-            .count();
-        let result = futures::join!(
-            async {
-                let started = Instant::now();
-                let result = ctx.forward_values().await;
-                (result, started.elapsed().as_secs_f64() * 1000.0)
-            },
-            async {
-                let started = Instant::now();
-                let result = Self::eval_expr_evals(expr_evals, &aux_vars).await;
-                (result, started.elapsed().as_secs_f64() * 1000.0)
-            }
-        );
-        let ((forward_result, forward_values_duration_ms), (eval_result, eval_expr_duration_ms)) =
-            result;
-        let total_duration_ms = step_started.elapsed().as_secs_f64() * 1000.0;
-        let forward_state = stream_state_name(forward_result.as_ref().ok());
-        let eval_state = stream_state_name(eval_result.as_ref().ok());
-
-        // ACSOS paper benchmark instrumentation: log additional timing information
-        warn!(
-            target: "benchmark",
-            event = "benchmark_monitoring_step",
-            context_id = ctx.id,
-            expr_evaluator_count,
-            non_aux_expr_evaluator_count,
-            aux_var_count = aux_vars.len(),
-            forward_state,
-            eval_state,
-            forward_values_duration_ms,
-            eval_expr_duration_ms,
-            duration_ms = total_duration_ms,
-            "benchmark_monitoring_step"
-        );
+        let result = futures::join!(async { ctx.forward_values().await }, async {
+            Self::eval_expr_evals(expr_evals, &aux_vars).await
+        });
+        let (forward_result, eval_result) = result;
 
         // A bit verbose but it is nice for debugging...
         match (forward_result, eval_result) {
@@ -944,14 +908,6 @@ fn combine_runtime_errors(primary: anyhow::Error, additional: anyhow::Error) -> 
         primary
     } else {
         anyhow!("{primary_message}; additionally: {additional_message}")
-    }
-}
-
-fn stream_state_name(state: Option<&StreamState>) -> &'static str {
-    match state {
-        Some(StreamState::Pending) => "pending",
-        Some(StreamState::Finished) => "finished",
-        None => "error",
     }
 }
 
