@@ -12,7 +12,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_identity(counter: &AtomicU64, kind: &str) -> u64 {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .unwrap_or_else(|_| panic!("exhausted {kind} identities"))
