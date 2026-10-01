@@ -20,7 +20,8 @@ use crate::lang::dsrv::source::{
 };
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
-use super::{DsrvExpandError, LanguageRequest, language};
+use super::{DsrvExpandError, language};
+use language::Dialect;
 
 /// One namespace per module, keyed by absolute path.
 pub(crate) type ModuleGraph = BTreeMap<ModulePath, Rc<SourceContext>>;
@@ -28,7 +29,7 @@ pub(crate) type ModuleGraph = BTreeMap<ModulePath, Rc<SourceContext>>;
 /// Build every module's namespace, importers after the modules they import.
 pub(crate) fn build_graph(
     sources: &ModuleSources,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<ModuleGraph, DsrvExpandError> {
     let order = dependency_order(sources)?;
     let mut graph: ModuleGraph = BTreeMap::new();
@@ -36,9 +37,9 @@ pub(crate) fn build_graph(
         // An embedded module is read under its own header alone: settings
         // requested for the application are the application's.
         let request = if sources.is_embedded(&path) {
-            LanguageRequest::default()
+            None
         } else {
-            request
+            requested_dialect
         };
         let context = build_module(&path, sources, &graph, request)?;
         graph.insert(path, Rc::new(context));
@@ -219,13 +220,13 @@ fn build_module(
     path: &ModulePath,
     sources: &ModuleSources,
     graph: &ModuleGraph,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<SourceContext, DsrvExpandError> {
     let parsed = sources
         .get(path)
         .expect("every path in the graph was collected");
     let declarations = parsed.declarations();
-    let config = language::resolve_language(declarations, request)?;
+    let config = language::resolve_language(declarations, requested_dialect)?;
 
     // Three tiers, merged by precedence: a local declaration shadows a glob
     // silently, and an explicit clash is an error (S15).
@@ -383,10 +384,7 @@ mod tests {
                 .1;
             collector.supply(source).expect("a parsable module");
         }
-        build_graph(
-            &collector.finish().expect("collected"),
-            LanguageRequest::default(),
-        )
+        build_graph(&collector.finish().expect("collected"), None)
     }
 
     fn root_of(graph: &ModuleGraph) -> &Rc<SourceContext> {
@@ -929,7 +927,7 @@ mod function_tests {
             collector.supply(source).expect("a parsable module");
         }
         let sources = collector.finish().expect("collected");
-        let graph = build_graph(&sources, LanguageRequest::default())?;
+        let graph = build_graph(&sources, None)?;
         let constants = Rc::new(crate::lang::dsrv::expand::constants::build_constant_table(
             &sources, &graph,
         )?);

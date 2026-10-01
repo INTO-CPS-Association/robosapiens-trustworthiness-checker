@@ -15,7 +15,7 @@ use crate::dsrv_fixtures::WithoutWarnings;
 use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::{DsrvSpecification, ExprRef};
 use crate::lang::dsrv::expand::DsrvExpandError;
-use crate::lang::dsrv::expand::language::{Dialect, LanguageError, LanguageRequest};
+use crate::lang::dsrv::expand::language::{Dialect, LanguageError};
 use crate::lang::dsrv::modules::{ModuleCollector, show_path};
 use crate::lang::dsrv::path::ModuleName;
 use crate::lang::dsrv::runtime_expression::{
@@ -48,10 +48,7 @@ fn expand_labelled(
             .supply_labelled(text, label(&wanted))
             .expect("a parsable module");
     }
-    crate::lang::dsrv::expand::expand_program(
-        collector.finish().expect("collected"),
-        LanguageRequest::default(),
-    )
+    crate::lang::dsrv::expand::expand_program(collector.finish().expect("collected"), None)
 }
 
 fn expand(root: &str, modules: &[(&str, &str)]) -> Result<DsrvSpecification, DsrvExpandError> {

@@ -7,7 +7,7 @@ use anyhow::Context;
 use super::{
     ast::DsrvSpecification,
     expand,
-    expand::language::LanguageRequest,
+    expand::language::Dialect,
     modules::{ModuleCollector, ModuleSources, module_file, show_path},
     path::ModuleName,
     source_map::SourceLabel,
@@ -62,7 +62,7 @@ pub async fn collect_modules_from_file(file: &str) -> anyhow::Result<ModuleSourc
 /// Load and expand the complete global root program without checking it.
 pub async fn load_program_file(
     file: &str,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> anyhow::Result<LoadedProgram> {
     let sources = collect_modules_from_file(file).await?;
     let directory = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
@@ -80,7 +80,7 @@ pub async fn load_program_file(
         .collect();
     let root_source = sources.root_source().to_owned();
     Ok(LoadedProgram {
-        specification: expand::expand_program(sources, request)?,
+        specification: expand::expand_program(sources, requested_dialect)?,
         root_source,
         modules,
     })

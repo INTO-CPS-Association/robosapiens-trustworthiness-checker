@@ -18,7 +18,7 @@ use crate::lang::dsrv::ast::{CheckedDsrvSpecification, DsrvSpecification};
 use crate::lang::dsrv::catalogue::{Catalogue, EmbeddedModule};
 use crate::lang::dsrv::diagnostics::SemanticError;
 use crate::lang::dsrv::expand::DsrvExpandError;
-use crate::lang::dsrv::expand::language::{Dialect, LanguageError, LanguageRequest};
+use crate::lang::dsrv::expand::language::{Dialect, LanguageError};
 use crate::lang::dsrv::modules::{ModuleCollectError, ModuleCollector, ModuleSources, show_path};
 use crate::lang::dsrv::parser::{DsrvParseError, parse_str, parse_str_with};
 use crate::lang::dsrv::path::ModuleName;
@@ -138,7 +138,7 @@ fn std_option_declares_exactly_its_api() {
                 assert_eq!(type_parameters.len(), 1);
                 items.push(name.name().to_string());
             }
-            ParsedDeclaration::Edition(..) | ParsedDeclaration::Use { .. } => {}
+            ParsedDeclaration::Use { .. } => {}
             other => panic!("std::option declares something else: {other:?}"),
         }
     }
@@ -472,10 +472,7 @@ fn the_embedded_header_authorises_the_embedded_body() {
 fn requested_settings_do_not_reach_the_embedded_module() {
     let root = format!("{HEADER}in x: Int\n");
     let sources = collect(&root).expect("collected");
-    let request = LanguageRequest {
-        dialect: Some(Dialect::Distributed),
-        edition: None,
-    };
+    let request = Some(Dialect::Distributed);
     let graph = crate::lang::dsrv::expand::graph::build_graph(&sources, request).expect("built");
     assert_eq!(
         graph[&Vec::new()].language().dialect(),
@@ -487,10 +484,7 @@ fn requested_settings_do_not_reach_the_embedded_module() {
     );
 
     // A Core request refuses the root's experiments, not the library's alias.
-    let core = LanguageRequest {
-        dialect: Some(Dialect::Core),
-        edition: None,
-    };
+    let core = Some(Dialect::Core);
     match parse_str_with(&root, core) {
         Err(DsrvParseError::Language(LanguageError::ExperimentsInCore { span })) => {
             assert_eq!(&root[span.to_range()], HEADER.lines().next().unwrap());
@@ -655,8 +649,7 @@ fn embedded_imports_activate_transitively_and_deduplicate() {
             .skip(1)
             .all(|path| sources.is_embedded(path))
     );
-    let spec = crate::lang::dsrv::expand::expand_program(sources, LanguageRequest::default())
-        .expect("expands");
+    let spec = crate::lang::dsrv::expand::expand_program(sources, None).expect("expands");
     assert_eq!(
         spec.type_annotation(&VarName::from("x")),
         Some(&StreamType::Tuple(
@@ -688,7 +681,7 @@ fn an_embedded_cycle_is_an_ordinary_cycle() {
     let sources = collect_with(&format!("{TYPES}use std::a::*\nin x: A\n"), &CYCLIC)
         .expect("a cycle still collects");
     assert_eq!(sources.len(), 3);
-    match crate::lang::dsrv::expand::expand_program(sources, LanguageRequest::default()) {
+    match crate::lang::dsrv::expand::expand_program(sources, None) {
         Err(DsrvExpandError::ModuleCycle { path }) => {
             assert_eq!(path, "std::a -> std::b -> std::a");
         }
@@ -799,7 +792,7 @@ fn imports_never_read_the_filesystem() {
     );
     let program = smol::block_on(crate::lang::dsrv::program::load_program_file(
         &scratch.root(),
-        LanguageRequest::default(),
+        None,
     ))
     .expect("the embedded module is used");
     let labels = program
@@ -822,7 +815,7 @@ fn imports_never_read_the_filesystem() {
     );
     let error = smol::block_on(crate::lang::dsrv::program::load_program_file(
         &scratch.root(),
-        LanguageRequest::default(),
+        None,
     ))
     .err()
     .expect("lib was never declared");
@@ -892,11 +885,9 @@ fn activated_bodies_are_part_of_a_runtime_sites_identity() {
     assert!(!described.contains("option.dsrv"), "{described}");
 
     // Collected from a file tree instead of a string: the same identity.
-    let collected = crate::lang::dsrv::expand::expand_program(
-        collect(&source).expect("collected"),
-        LanguageRequest::default(),
-    )
-    .expect("expands");
+    let collected =
+        crate::lang::dsrv::expand::expand_program(collect(&source).expect("collected"), None)
+            .expect("expands");
     assert_eq!(identity(&collected, "y"), described);
 
     // Importing the type alone offers no defs, and a site offering none is

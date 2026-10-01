@@ -15,7 +15,7 @@ use anyhow::anyhow;
 #[cfg(test)]
 use super::ast::Declaration;
 use super::ast::{DsrvAstError, Expr, ExprId};
-use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError, LanguageRequest};
+use super::expand::language::{CoreDsrvSpecification, Dialect, LanguageError};
 use super::expand::{self, DsrvExpandError};
 use super::source::{SourceContext, SourceResolveError};
 use super::source_map::{ProvenanceError, STRING_LABEL, SourceArchive, SourceId, SourceLabel};
@@ -134,16 +134,20 @@ pub(crate) fn parse_expr_with_functions(
 }
 
 pub fn parse_str(input: &str) -> Result<DsrvSpecification, DsrvParseError> {
-    parse_str_with(input, LanguageRequest::default())
+    parse_str_with(input, None)
 }
 
 /// Parse a specification, applying settings requested from outside the file
 /// (such as on the command line) where the file declares none.
 pub fn parse_str_with(
     input: &str,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<DsrvSpecification, DsrvParseError> {
-    parse_labelled(input, SourceLabel::Supplied(STRING_LABEL.into()), request)
+    parse_labelled(
+        input,
+        SourceLabel::Supplied(STRING_LABEL.into()),
+        requested_dialect,
+    )
 }
 
 /// Parse a program of one file, which diagnostics name `label`.
@@ -156,18 +160,21 @@ pub fn parse_str_with(
 pub fn parse_labelled(
     input: &str,
     label: SourceLabel,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<DsrvSpecification, DsrvParseError> {
     let (parsed, archive) = syntax::parse_archived_specification(input, label.clone())?;
     if !reaches_an_owned_root(&parsed) {
         return Ok(expand::expand_specification(
             parsed,
-            request,
+            requested_dialect,
             Rc::new(archive),
         )?);
     }
     let collector = ModuleCollector::with_label(input, label)?;
-    Ok(expand::expand_program(collector.finish()?, request)?)
+    Ok(expand::expand_program(
+        collector.finish()?,
+        requested_dialect,
+    )?)
 }
 
 /// Whether a file imports or declares anything under a package root the
@@ -194,10 +201,7 @@ pub use super::program::collect_modules_from_file;
 /// Accept a Core DSRV file. A file without a `language` line is read as Core;
 /// one that declares another dialect is rejected.
 pub fn check_core_source(input: &str) -> Result<CoreDsrvSpecification, DsrvParseError> {
-    let request = LanguageRequest {
-        dialect: Some(Dialect::Core),
-        edition: None,
-    };
+    let request = Some(Dialect::Core);
     let specification = parse_str_with(input, request)?;
     Ok(CoreDsrvSpecification::check(specification)?)
 }

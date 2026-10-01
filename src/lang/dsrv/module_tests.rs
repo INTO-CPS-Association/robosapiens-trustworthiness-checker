@@ -48,11 +48,8 @@ fn program(root: &str, sources: &[(&str, &str)]) -> DsrvSpecification {
             .1;
         collector.supply(source).expect("a parsable module");
     }
-    crate::lang::dsrv::expand::expand_program(
-        collector.finish().expect("collected"),
-        crate::lang::dsrv::expand::language::LanguageRequest::default(),
-    )
-    .expect("expands")
+    crate::lang::dsrv::expand::expand_program(collector.finish().expect("collected"), None)
+        .expect("expands")
 }
 
 /// The untyped site of `var`'s expression in an unchecked specification:
@@ -285,14 +282,14 @@ fn a_late_use_experimental_is_still_an_error() {
 }
 
 #[test]
-fn a_late_edition_is_still_an_error_even_after_an_item_import() {
-    let source = format!("{HEADER}use lib::inner\nedition 2026-09\nin x: Int\n");
+fn a_late_language_is_still_an_error_even_after_an_item_import() {
+    let source = format!("{HEADER}use lib::inner\nlanguage core\nin x: Int\n");
     match parse_str(&source) {
         Err(DsrvParseError::Language(LanguageError::HeaderAfterDeclaration {
-            keyword: "edition",
+            keyword: "language",
             ..
         })) => {}
-        other => panic!("expected a late-edition error, got {other:?}"),
+        other => panic!("expected a late-language error, got {other:?}"),
     }
 }
 

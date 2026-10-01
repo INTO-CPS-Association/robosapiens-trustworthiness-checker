@@ -8,7 +8,7 @@ use strum_macros::Display;
 
 use crate::core::{ExecutionPolicy, RuntimeSpec, Semantics};
 use crate::io::mqtt::MqttProtocol;
-use crate::lang::dsrv::{Dialect, Edition, LanguageRequest};
+use crate::lang::dsrv::Dialect;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -386,11 +386,6 @@ pub struct Cli {
 
     #[arg(long, help = "Specification language to use", default_value_t = Language::DSRV)]
     pub language: Language,
-    #[arg(
-        long,
-        help = "DSRV edition for a specification without an `edition` line, as YYYY-MM"
-    )]
-    pub dsrv_edition: Option<Edition>,
     #[arg(long, help = "Semantics engine to use for monitoring", default_value_t = Semantics::GradualTypedUntimed)]
     pub semantics: Semantics,
     #[arg(long, help = "DSRV runtime system to use for execution", default_value_t = RuntimeKind::Dataflow)]
@@ -570,12 +565,9 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// The DSRV settings requested on the command line.
-    pub fn dsrv_language_request(&self) -> LanguageRequest {
-        LanguageRequest {
-            dialect: self.language.dsrv_dialect(),
-            edition: self.dsrv_edition,
-        }
+    /// The DSRV dialect requested on the command line, if any.
+    pub fn dsrv_requested_dialect(&self) -> Option<Dialect> {
+        self.language.dsrv_dialect()
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -593,10 +585,6 @@ impl Cli {
         if self.language.is_dsrv() {
             validate_dsrv_runtime_semantics(self.runtime, self.semantics)?;
         }
-        anyhow::ensure!(
-            self.dsrv_edition.is_none() || self.language.is_dsrv(),
-            "--dsrv-edition applies only to DSRV specifications"
-        );
         if reconfigurable {
             anyhow::ensure!(
                 self.input_mode.input_file.is_none(),
@@ -792,7 +780,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn dsrv_dialects_and_edition_become_a_language_request() {
+    fn dsrv_dialects_become_a_requested_dialect() {
         let parse = |extra: &[&str]| {
             let mut args = vec![
                 "trustworthiness_checker",
@@ -806,21 +794,15 @@ mod runtime_tests {
         };
 
         let plain = parse(&[]).unwrap();
-        assert_eq!(plain.dsrv_language_request(), LanguageRequest::default());
+        assert_eq!(plain.dsrv_requested_dialect(), None);
 
-        let core = parse(&["--language", "core-dsrv", "--dsrv-edition", "2026-09"]).unwrap();
+        let core = parse(&["--language", "core-dsrv"]).unwrap();
         core.validate().unwrap();
-        assert_eq!(
-            core.dsrv_language_request(),
-            LanguageRequest {
-                dialect: Some(Dialect::Core),
-                edition: Some(Edition::BASE),
-            }
-        );
+        assert_eq!(core.dsrv_requested_dialect(), Some(Dialect::Core));
 
         let distributed = parse(&["--language", "distributed-dsrv"]).unwrap();
         assert_eq!(
-            distributed.dsrv_language_request().dialect,
+            distributed.dsrv_requested_dialect(),
             Some(Dialect::Distributed)
         );
         for language in [Language::CoreDSRV, Language::DistributedDSRV] {
@@ -834,11 +816,6 @@ mod runtime_tests {
                 .is_ok()
             );
         }
-
-        let error = parse(&["--dsrv-edition", "2027-03"])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("known editions: 2026-09"), "{error}");
     }
 
     #[test]

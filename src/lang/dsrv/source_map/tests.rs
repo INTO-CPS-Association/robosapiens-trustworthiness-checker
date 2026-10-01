@@ -13,7 +13,6 @@ use crate::core::StreamType;
 use crate::lang::dsrv::TypeCheckOptions;
 use crate::lang::dsrv::ast::{AstShared, CheckedDsrvSpecification, DsrvSpecification, Expr};
 use crate::lang::dsrv::diagnostics::{SemanticError, SemanticWarning};
-use crate::lang::dsrv::expand::language::LanguageRequest;
 use crate::lang::dsrv::modules::ModuleCollector;
 use crate::lang::dsrv::parser::{DsrvParseError, parse_expr, parse_expr_with_functions};
 use crate::lang::dsrv::path::ModuleName;
@@ -53,11 +52,8 @@ fn program_labelled(
             .supply_labelled(text, path(&format!("{prefix}{wanted}.dsrv")))
             .expect("a parsable module");
     }
-    crate::lang::dsrv::expand::expand_program(
-        collector.finish().expect("collected"),
-        LanguageRequest::default(),
-    )
-    .expect("expands")
+    crate::lang::dsrv::expand::expand_program(collector.finish().expect("collected"), None)
+        .expect("expands")
 }
 
 /// A weak handle on the archived file labelled `label`.

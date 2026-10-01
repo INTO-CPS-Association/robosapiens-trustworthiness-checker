@@ -1,4 +1,4 @@
-//! Language settings: the dialect, edition and experiments a specification
+//! Language settings: the dialect and experiments a specification
 //! declares, resolved once during expansion.
 //!
 //! Expansion is the only stage that may branch on a feature, so the accessor
@@ -9,7 +9,6 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::str::FromStr;
 
 use ecow::EcoString;
 
@@ -43,6 +42,14 @@ impl Dialect {
         }
     }
 
+    /// How a request conflict names this dialect.
+    fn described(self) -> String {
+        match self.header_name() {
+            Some(name) => format!("`language {name}`"),
+            None => "Full DSRV".to_owned(),
+        }
+    }
+
     fn from_header_name(name: &str) -> Option<Self> {
         [Self::Core, Self::Distributed]
             .into_iter()
@@ -57,60 +64,6 @@ impl fmt::Display for Dialect {
             Self::Full => "Full DSRV",
             Self::Distributed => "Distributed DSRV",
         })
-    }
-}
-
-/// A dated set of default behaviours. Each edition is a variant, so an
-/// edition is always one the checker knows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
-pub enum Edition {
-    /// The language as of 16 September 2026: eager `if` and failing lookups.
-    #[default]
-    E2026_09,
-}
-
-impl Edition {
-    /// The edition of a specification that names none.
-    pub const BASE: Self = Self::E2026_09;
-    /// Every edition, oldest first.
-    pub const ALL: &'static [Self] = &[Self::E2026_09];
-
-    fn year_month(self) -> (u16, u8) {
-        match self {
-            Self::E2026_09 => (2026, 9),
-        }
-    }
-
-    fn known() -> String {
-        Self::ALL
-            .iter()
-            .map(Self::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
-
-impl fmt::Display for Edition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (year, month) = self.year_month();
-        write!(f, "{year}-{month:02}")
-    }
-}
-
-impl FromStr for Edition {
-    type Err = String;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|edition| edition.to_string() == text)
-            .ok_or_else(|| {
-                format!(
-                    "unknown edition `{text}`; known editions: {}",
-                    Self::known()
-                )
-            })
     }
 }
 
@@ -279,7 +232,6 @@ pub enum IfPolicy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct LanguageConfig {
     dialect: Dialect,
-    edition: Edition,
     experiments: BTreeSet<Feature>,
 }
 
@@ -287,11 +239,6 @@ impl LanguageConfig {
     /// The dialect decides which runtimes may ensure_runtime_support a specification.
     pub fn dialect(&self) -> Dialect {
         self.dialect
-    }
-
-    /// The edition whose defaults a specification is read under.
-    pub fn edition(&self) -> Edition {
-        self.edition
     }
 
     /// These settings inside a program of `dialect`. A module's own header
@@ -348,15 +295,11 @@ impl LanguageConfig {
     pub(crate) fn header(&self) -> String {
         let Self {
             dialect,
-            edition,
             experiments,
         } = self;
         let mut header = String::new();
         if let Some(name) = dialect.header_name() {
             header.push_str(&format!("language {name}\n"));
-        }
-        if *edition != Edition::BASE {
-            header.push_str(&format!("edition {edition}\n"));
         }
         if !experiments.is_empty() {
             let names = experiments
@@ -372,7 +315,7 @@ impl LanguageConfig {
 
 impl fmt::Display for LanguageConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, edition {}", self.dialect, self.edition)?;
+        write!(f, "{}", self.dialect)?;
         let names = self.experiment_names().collect::<Vec<_>>();
         if !names.is_empty() {
             write!(f, ", experiments {}", names.join(", "))?;
@@ -381,27 +324,11 @@ impl fmt::Display for LanguageConfig {
     }
 }
 
-/// Settings requested from outside a file, such as on the command line.
-/// They apply to a file that does not declare them; a file that declares
-/// something different is an error.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LanguageRequest {
-    pub dialect: Option<Dialect>,
-    pub edition: Option<Edition>,
-}
-
 /// A problem with a specification's language settings.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LanguageError {
     #[error("unknown language `{name}` at {span:?}; expected `core` or `distributed`")]
     UnknownDialect { name: EcoString, span: Span },
-
-    #[error("unknown edition `{text}` at {span:?}; known editions: {known}")]
-    UnknownEdition {
-        text: EcoString,
-        known: String,
-        span: Span,
-    },
 
     #[error(
         "unknown experimental feature `{name}` at {span:?}; current experiments: {known}; meta-features: {meta_features}"
@@ -506,13 +433,15 @@ fn unknown_feature(name: EcoString, span: Span) -> LanguageError {
     }
 }
 
-/// Read the header declarations and combine them with any outside request.
+/// Read the header declarations and combine them with a dialect requested
+/// from outside the file, such as on the command line. The request applies to
+/// a file that declares no dialect; a file that declares a different one is
+/// an error.
 pub(crate) fn resolve_language(
     declarations: &[ParsedDeclaration],
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<LanguageConfig, LanguageError> {
     let mut dialect: Option<(Dialect, Span)> = None;
-    let mut edition: Option<(Edition, Span)> = None;
     let mut experiments = BTreeSet::new();
     let mut experiments_span = None;
     let mut body_started = false;
@@ -523,7 +452,6 @@ pub(crate) fn resolve_language(
             // `mod` pulls a file into the program, so it stays in the header
             // region (S6) even though an item import no longer does (S9).
             ParsedDeclaration::Mod { span, .. } => ("mod", *span),
-            ParsedDeclaration::Edition(_, span) => ("edition", *span),
             // An item import populates a namespace rather than configuring
             // the file, so it belongs to the body and may sit anywhere (S9).
             ParsedDeclaration::Use { tree, span } => {
@@ -558,23 +486,6 @@ pub(crate) fn resolve_language(
                 })?;
                 dialect = Some((resolved, *span));
             }
-            ParsedDeclaration::Edition(text, span) => {
-                if let Some((_, first)) = edition {
-                    return Err(LanguageError::DuplicateHeader {
-                        keyword,
-                        first,
-                        span: *span,
-                    });
-                }
-                let resolved =
-                    text.parse::<Edition>()
-                        .map_err(|_| LanguageError::UnknownEdition {
-                            text: text.clone(),
-                            known: Edition::known(),
-                            span: *span,
-                        })?;
-                edition = Some((resolved, *span));
-            }
             // Several `use experimental` lines add up, so they are not
             // duplicate headers.
             ParsedDeclaration::Use { tree, span } => {
@@ -588,44 +499,30 @@ pub(crate) fn resolve_language(
         }
     }
 
-    let dialect = reconcile(
-        dialect.map(|(value, _)| value),
-        request.dialect,
-        |dialect| match dialect.header_name() {
-            Some(name) => format!("`language {name}`"),
-            None => "Full DSRV".to_owned(),
-        },
-    )?;
-    let edition = reconcile(
-        edition.map(|(value, _)| value),
-        request.edition,
-        |edition| format!("edition {edition}"),
-    )?;
+    let dialect = reconcile_dialect(dialect.map(|(value, _)| value), requested_dialect)?;
     if let (Dialect::Core, Some(span)) = (dialect, experiments_span) {
         return Err(LanguageError::ExperimentsInCore { span });
     }
     Ok(LanguageConfig {
         dialect,
-        edition,
         experiments,
     })
 }
 
-/// A setting declared in the file wins only when the request agrees with it.
-fn reconcile<T: Copy + PartialEq + Default>(
-    declared: Option<T>,
-    requested: Option<T>,
-    describe: impl Fn(T) -> String,
-) -> Result<T, LanguageError> {
+/// A dialect declared in the file wins only when the request agrees with it.
+fn reconcile_dialect(
+    declared: Option<Dialect>,
+    requested: Option<Dialect>,
+) -> Result<Dialect, LanguageError> {
     match (declared, requested) {
         (Some(declared), Some(requested)) if declared != requested => {
             Err(LanguageError::RequestConflict {
-                declared: describe(declared),
-                requested: describe(requested),
+                declared: declared.described(),
+                requested: requested.described(),
             })
         }
-        (Some(value), _) | (None, Some(value)) => Ok(value),
-        (None, None) => Ok(T::default()),
+        (Some(dialect), _) | (None, Some(dialect)) => Ok(dialect),
+        (None, None) => Ok(Dialect::default()),
     }
 }
 
@@ -990,11 +887,11 @@ mod tests {
     }
 
     fn language_error(source: &str) -> LanguageError {
-        language_error_with(source, LanguageRequest::default())
+        language_error_with(source, None)
     }
 
-    fn language_error_with(source: &str, request: LanguageRequest) -> LanguageError {
-        match parse_str_with(source, request) {
+    fn language_error_with(source: &str, requested_dialect: Option<Dialect>) -> LanguageError {
+        match parse_str_with(source, requested_dialect) {
             Err(DsrvParseError::Language(error)) => error,
             other => panic!("expected a language error for {source:?}, got {other:?}"),
         }
@@ -1003,7 +900,6 @@ mod tests {
     fn config(dialect: Dialect, experiments: &[Feature]) -> LanguageConfig {
         LanguageConfig {
             dialect,
-            edition: Edition::BASE,
             experiments: experiments.iter().copied().collect(),
         }
     }
@@ -1012,7 +908,7 @@ mod tests {
 
     // R3.1-a
     #[test]
-    fn a_file_without_a_header_is_full_base_edition_without_experiments() {
+    fn a_file_without_a_header_is_full_without_experiments() {
         assert_eq!(language_of(BODY), LanguageConfig::default());
         assert_eq!(LanguageConfig::default(), config(Dialect::Full, &[]));
     }
@@ -1020,10 +916,9 @@ mod tests {
     // R3.1-b
     #[test]
     fn each_header_form_resolves() {
-        let cases: [(&str, LanguageConfig); 5] = [
+        let cases: [(&str, LanguageConfig); 4] = [
             ("language core\n", config(Dialect::Core, &[])),
             ("language distributed\n", config(Dialect::Distributed, &[])),
-            ("edition 2026-09\n", config(Dialect::Full, &[])),
             (
                 "use experimental::{tagged_unions}\n",
                 config(Dialect::Full, &[Feature::TaggedUnions]),
@@ -1039,7 +934,7 @@ mod tests {
         }
         assert_eq!(
             language_of(&format!(
-                "language distributed\nedition 2026-09\nuse experimental::{{tagged_unions}}\n{BODY}"
+                "language distributed\nuse experimental::{{tagged_unions}}\n{BODY}"
             )),
             config(Dialect::Distributed, &[Feature::TaggedUnions])
         );
@@ -1100,34 +995,16 @@ mod tests {
     #[test]
     fn header_errors_name_the_problem() {
         use LanguageError::*;
-        let cases: [(&str, fn(&LanguageError) -> bool); 6] = [
+        let cases: [(&str, fn(&LanguageError) -> bool); 2] = [
             (
                 "language paper\n",
                 |e| matches!(e, UnknownDialect { name, .. } if name == "paper"),
             ),
-            (
-                "edition 2027-03\n",
-                |e| matches!(e, UnknownEdition { text, known, .. } if text == "2027-03" && known == "2026-09"),
-            ),
-            (
-                "edition 2026-9\n",
-                |e| matches!(e, UnknownEdition { text, .. } if text == "2026-9"),
-            ),
-            ("edition 2026-13\n", |e| matches!(e, UnknownEdition { .. })),
             ("language core\nlanguage core\n", |e| {
                 matches!(
                     e,
                     DuplicateHeader {
                         keyword: "language",
-                        ..
-                    }
-                )
-            }),
-            ("edition 2026-09\nedition 2026-09\n", |e| {
-                matches!(
-                    e,
-                    DuplicateHeader {
-                        keyword: "edition",
                         ..
                     }
                 )
@@ -1162,30 +1039,19 @@ mod tests {
             "language core\nuse experimental::{{tagged_unions}}\n{BODY}"
         ));
         assert!(matches!(in_core, ExperimentsInCore { .. }), "{in_core}");
-
-        let late = language_error(&format!("{BODY}edition 2026-09\n"));
-        assert!(
-            matches!(
-                late,
-                HeaderAfterDeclaration {
-                    keyword: "edition",
-                    ..
-                }
-            ),
-            "{late}"
-        );
     }
 
     // R3.3
     #[test]
     fn header_keywords_are_reserved_but_the_names_they_take_are_not() {
-        for source in ["out edition\nedition = 1", "in language\n", "in use\n"] {
+        for source in ["in language\n", "in use\n"] {
             assert!(
                 matches!(parse_str(source), Err(DsrvParseError::Syntax(_))),
                 "{source}"
             );
         }
         for source in [
+            "in edition\nout y\ny = edition",
             "in core\nout y\ny = core",
             "in distributed\nout y\ny = distributed",
             "in experimental\nout y\ny = experimental",
@@ -1364,10 +1230,7 @@ mod tests {
     // R3.8-a, b
     #[test]
     fn a_request_applies_only_where_the_file_is_silent() {
-        let core = LanguageRequest {
-            dialect: Some(Dialect::Core),
-            edition: None,
-        };
+        let core = Some(Dialect::Core);
         assert_eq!(
             parse_str_with(BODY, core)
                 .unwrap()
@@ -1380,11 +1243,6 @@ mod tests {
             error.to_string(),
             "the file declares `language distributed` but `language core` was requested"
         );
-        let edition = LanguageRequest {
-            dialect: None,
-            edition: Some(Edition::BASE),
-        };
-        parse_str_with(&format!("edition 2026-09\n{BODY}"), edition).unwrap();
     }
 
     const HIGH_LEVEL: &str = "use experimental::high_level_dsrv\n";
@@ -1640,10 +1498,7 @@ mod tests {
             language_error(&format!("language core\n{HIGH_LEVEL}{BODY}")),
             LanguageError::ExperimentsInCore { .. }
         ));
-        let core = LanguageRequest {
-            dialect: Some(Dialect::Core),
-            edition: None,
-        };
+        let core = Some(Dialect::Core);
         assert!(matches!(
             language_error_with(&format!("{HIGH_LEVEL}{BODY}"), core),
             LanguageError::ExperimentsInCore { .. }

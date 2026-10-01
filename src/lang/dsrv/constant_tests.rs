@@ -57,11 +57,8 @@ fn program(root: &str, sources: &[(&str, &str)]) -> DsrvSpecification {
             .1;
         collector.supply(source).expect("a parsable module");
     }
-    crate::lang::dsrv::expand::expand_program(
-        collector.finish().expect("collected"),
-        crate::lang::dsrv::expand::language::LanguageRequest::default(),
-    )
-    .expect("expands")
+    crate::lang::dsrv::expand::expand_program(collector.finish().expect("collected"), None)
+        .expect("expands")
 }
 
 fn program_body(root: &str, sources: &[(&str, &str)], var: &str) -> String {
@@ -264,11 +261,8 @@ fn an_imported_constant_type_error_names_its_source() {
             SourceLabel::Path("library.dsrv".into()),
         )
         .unwrap();
-    let error = crate::lang::dsrv::expand::expand_program(
-        collector.finish().unwrap(),
-        crate::lang::dsrv::expand::language::LanguageRequest::default(),
-    )
-    .expect_err("the imported constant has the wrong type");
+    let error = crate::lang::dsrv::expand::expand_program(collector.finish().unwrap(), None)
+        .expect_err("the imported constant has the wrong type");
     let message = error.to_string();
     assert!(message.contains("library.dsrv"), "got {message}");
     assert!(message.contains("Span"), "got {message}");

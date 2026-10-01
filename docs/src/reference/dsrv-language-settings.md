@@ -1,19 +1,17 @@
-# DSRV dialects, editions, and experiments
+# DSRV dialects and experiments
 
-A DSRV specification can select its edition, dialect, and experimental
-features. The checker resolves those declarations into one set of language
+A DSRV specification can select its dialect and experimental features. The checker resolves those declarations into one set of language
 settings before it expands or checks the specification. A file that states
-none of them is Full DSRV, edition `2026-09`, with no experiments, preserving
-the interpretation of existing specifications.
+none of them is Full DSRV with no experiments, preserving the
+interpretation of existing specifications.
 
 ```dsrv
 language core                       // optional: core or distributed
-edition 2026-09                     // optional
 use experimental::{tagged_unions}   // optional
 use experimental::high_level_dsrv   // prototype extended language
 ```
 
-`language`, `edition` and `use` are keywords everywhere, so they cannot be
+`language` and `use` are keywords everywhere, so they cannot be
 used as stream names. The words after them are not reserved: a stream may
 still be called `core` or `experimental`.
 
@@ -64,13 +62,6 @@ From Rust, `trustworthiness_checker::lang::dsrv::check_core_source` accepts a
 Core file and returns a `CoreDsrvSpecification`, a type that only a
 successful Core check can produce.
 
-## Editions
-
-An edition fixes the language's default behaviours at a date, so a
-specification keeps its meaning when later releases change a default. The
-only edition is `2026-09`, the language as of September 2026. Naming an
-unknown edition is an error that lists the known ones.
-
 ## Experiments
 
 `use experimental::{…}` opts into implemented features that are still being
@@ -103,9 +94,7 @@ the table. `use experimental::*` currently selects the same set.
 `--language dsrv`, the CLI default, makes no dialect request: a source header
 selects Core or Distributed, and a file without one resolves to Full.
 `--language core-dsrv` and `--language distributed-dsrv` request a dialect for
-a file without a `language` line. `--dsrv-edition YYYY-MM` similarly requests
-an edition for a file without an `edition` line; without either a header or
-that option, the edition is `2026-09`.
+a file without a `language` line.
 
 A matching source declaration and CLI request are accepted. A conflicting
 declaration is rejected rather than overridden:

@@ -175,8 +175,6 @@ pub(crate) enum ParsedDeclaration {
     Alias(AliasDeclaration),
     /// `language <name>`, with the name unchecked.
     Language(EcoString, Span),
-    /// `edition <year>-<month>`, as written.
-    Edition(EcoString, Span),
     /// `use <path>`, `use <path>::*` or `use <path>::{…}`, as written.
     Use {
         tree: UseTree,

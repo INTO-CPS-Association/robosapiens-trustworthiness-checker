@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
-use trustworthiness_checker::lang::dsrv::{Dialect, Edition, TypeCheckOptions};
+use trustworthiness_checker::lang::dsrv::{Dialect, TypeCheckOptions};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
@@ -65,8 +65,8 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
         let parsed = parse_str(&source);
         if let Ok(specification) = &parsed {
             // A file declares Distributed DSRV exactly when it uses the
-            // distribution primitives; everything else is Full DSRV at the
-            // base edition, with no experiments.
+            // distribution primitives; everything else is Full DSRV
+            // with no experiments.
             let language = specification.source_context().language();
             let expected_dialect = if source.contains("monitored_at(") || source.contains("dist(") {
                 Dialect::Distributed
@@ -77,7 +77,6 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
             // the dialect its constructs need and the experiments it declares.
             let declares_experiments = source.contains("use experimental::");
             if language.dialect() != expected_dialect
-                || language.edition() != Edition::BASE
                 || language.experiment_names().next().is_some() != declares_experiments
             {
                 unexpected.push(format!("{name} resolves to {language}"));

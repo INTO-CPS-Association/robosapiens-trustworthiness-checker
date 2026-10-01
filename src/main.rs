@@ -124,7 +124,7 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     debug!(?distribution_mode, "Distribution mode built");
     let builder = builder.distribution_mode(distribution_mode);
 
-    let program = load_program_file(cli.model.as_str(), cli.dsrv_language_request())
+    let program = load_program_file(cli.model.as_str(), cli.dsrv_requested_dialect())
         .await
         .context("Model file could not be parsed")?;
     let model = program.specification;

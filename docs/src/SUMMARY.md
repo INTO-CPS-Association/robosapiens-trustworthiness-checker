@@ -29,7 +29,7 @@
 
 - [CLI reference](./reference/cli.md)
 - [DSRV syntax](./reference/dsrv-syntax.md)
-- [DSRV dialects, editions, and experiments](./reference/dsrv-language-settings.md)
+- [DSRV dialects and experiments](./reference/dsrv-language-settings.md)
 - [Runtime capabilities](./reference/runtime-capabilities.md)
 - [Input configuration](./reference/input-configuration.md)
 - [Output configuration](./reference/output-configuration.md)

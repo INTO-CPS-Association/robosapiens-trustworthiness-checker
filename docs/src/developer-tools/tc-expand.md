@@ -25,7 +25,7 @@ The report begins:
 
 ```text
 # tc-expand inspection (checked (strict)); non-standalone source report
-# language: Full DSRV, edition 2026-09, experiments tagged_unions, generics, modules
+# language: Full DSRV, experiments tagged_unions, generics, modules
 # activated modules:
 #   std::option [embedded catalogue]
 

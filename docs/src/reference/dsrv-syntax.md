@@ -2,8 +2,8 @@
 
 This page records DSRV expression syntax and its boundary behavior. Start with
 the [DSRV tutorial](../tutorials/write-dsrv-monitor.md) if you are writing your
-first monitor. For `language`, `edition`, and `use experimental` declarations,
-see [DSRV dialects, editions, and experiments](dsrv-language-settings.md).
+first monitor. For `language` and `use experimental` declarations,
+see [DSRV dialects and experiments](dsrv-language-settings.md).
 
 ## Declarations and equations
 

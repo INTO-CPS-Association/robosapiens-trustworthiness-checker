@@ -240,7 +240,7 @@ fn unions_need_their_experiment() {
 }
 
 // R16.3-b: Core DSRV takes no experiments, and names both constructs as
-// outside Core in case a later edition stabilises them.
+// outside Core in case a later release stabilises them.
 #[test]
 fn unions_are_outside_core() {
     assert!(matches!(

@@ -1,4 +1,3 @@
-edition 2026-09
 use experimental::{tagged_unions, pattern_matching, generics, functions, modules}
 
 type Option<T> = Union<Some: T, None>

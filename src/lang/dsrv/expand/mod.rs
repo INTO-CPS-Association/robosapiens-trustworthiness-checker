@@ -16,7 +16,7 @@
 //! [`expand_specification`] runs them in this order, and each failure is a
 //! [`DsrvExpandError`]:
 //!
-//! 1. **Language.** The header lines (`language`, `edition`) and any request
+//! 1. **Language.** The header lines (`language`, `use experimental`) and any request
 //!    from outside the file resolve to one [`language::LanguageConfig`]
 //!    ([`language::resolve_language`]).
 //! 2. **Namespace.** The type aliases resolve into a [`SourceContext`], which
@@ -90,7 +90,7 @@ use crate::lang::dsrv::ast::DsrvSpecification;
 use crate::lang::dsrv::modules::{ImportError, ModulePath};
 use contiguous_tree::TreeCursor as _;
 use functions::{Callable, LexicalId};
-use language::{Dialect, LanguageError, LanguageRequest};
+use language::{Dialect, LanguageError};
 
 /// A failure while expanding a parsed specification.
 #[derive(Debug, thiserror::Error)]
@@ -201,17 +201,17 @@ impl SourceAscription {
 /// Resolve a parsed specification's names into semantic declarations.
 pub(crate) fn expand_declarations(
     parsed: ParsedSpecification,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
     archive: &SourceArchive,
 ) -> Result<ExpandedDeclarations, DsrvExpandError> {
-    expand_declarations_in(parsed, request, None, None, archive)
+    expand_declarations_in(parsed, requested_dialect, None, None, archive)
 }
 
 /// Expand a file's declarations, optionally against a namespace built
 /// elsewhere — which is how a module's imports reach it.
 pub(crate) fn expand_declarations_in(
     parsed: ParsedSpecification,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
     supplied: Option<Rc<SourceContext>>,
     callable: Option<Rc<Callable>>,
     archive: &SourceArchive,
@@ -222,7 +222,7 @@ pub(crate) fn expand_declarations_in(
             .is_none_or(|source| archive.file(source).is_some()),
         "a parsed file is expanded against the archive that holds it"
     );
-    let language = language::resolve_language(parsed.declarations(), request)?;
+    let language = language::resolve_language(parsed.declarations(), requested_dialect)?;
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     // What a file may write is settled before anything is inlined, so a
@@ -431,7 +431,6 @@ pub(crate) fn expand_declarations_in(
             }
             // The header is expanded into the source context, not kept.
             ParsedDeclaration::Language(..)
-            | ParsedDeclaration::Edition(..)
             | ParsedDeclaration::Use { .. }
             | ParsedDeclaration::Mod { .. } => continue,
         };
@@ -606,9 +605,9 @@ fn check_expression_types(
 /// its own.
 pub(crate) fn expand_program(
     sources: crate::lang::dsrv::modules::ModuleSources,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
-    let graph = graph::build_graph(&sources, request)?;
+    let graph = graph::build_graph(&sources, requested_dialect)?;
     let root_path = ModulePath::new();
     let context = graph
         .get(&root_path)
@@ -629,7 +628,7 @@ pub(crate) fn expand_program(
     finish_specification(
         expand_declarations_in(
             root,
-            request,
+            requested_dialect,
             Some(context),
             Some(Rc::new(callable)),
             &archive,
@@ -641,10 +640,10 @@ pub(crate) fn expand_program(
 /// Expand one file, which `archive` holds, as a program of its own.
 pub(crate) fn expand_specification(
     parsed: ParsedSpecification,
-    request: LanguageRequest,
+    requested_dialect: Option<Dialect>,
     archive: Rc<SourceArchive>,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
-    let expanded = expand_declarations(parsed, request, &archive)?;
+    let expanded = expand_declarations(parsed, requested_dialect, &archive)?;
     finish_specification(expanded, archive)
 }
 
