@@ -555,13 +555,14 @@ proptest! {
         );
     }
 
+    // Totality is about not panicking, so a generated spec may warn.
     #[test]
     fn strict_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = type_check(spec);
+        let _ = super::strict::type_check(spec).into_parts();
     }
 
     #[test]
     fn gradual_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = type_check_gradual(spec);
+        let _ = super::gradual::type_check_gradual(spec).into_parts();
     }
 }

@@ -307,6 +307,7 @@ pub type SemanticResult<Expected> = Result<Expected, SemanticErrors>;
 #[non_exhaustive]
 pub enum SemanticWarningKind {
     RedundantCast,
+    HeterogeneousBranches,
     #[cfg(test)]
     TestAlpha,
     #[cfg(test)]
@@ -318,6 +319,7 @@ impl SemanticWarningKind {
     pub fn code(self) -> &'static str {
         match self {
             Self::RedundantCast => "dsrv.redundant-cast",
+            Self::HeterogeneousBranches => "dsrv.heterogeneous-branches",
             #[cfg(test)]
             Self::TestAlpha => "test-alpha",
             #[cfg(test)]

@@ -41,6 +41,10 @@ their types differ, the result is `Any`: `if c then 1 else "a"` is `Any`, and
 `[1, "a"]` is `List<Any>`. Where a type is expected, each branch must have it,
 so `out z: Int` rejects the `"a"` branch.
 
+Checking warns (`dsrv.heterogeneous-branches`) when branches merge into an
+`Any` nobody asked for, since that is usually a mistake. Annotating the result
+as `Any` says it is meant. Elements of a list or map do not warn.
+
 ## Type aliases
 
 `type State = Struct<speed: Int, stopped: Bool>` declares a structural alias.

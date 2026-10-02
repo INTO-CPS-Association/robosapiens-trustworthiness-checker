@@ -107,15 +107,71 @@ fn gradual_inference_failure_does_not_retain_findings_from_the_failed_root() {
 }
 
 #[test]
-fn redundant_cast_warning_survives_an_enclosing_gradual_widening() {
+fn redundant_cast_warning_survives_an_enclosing_merge_to_any() {
     let source = "use experimental::{casts}\n\
-                  out y = if true then (1 as Int) else \"other\"";
+                  out y: Any = if true then (1 as Int) else \"other\"";
     let report = check(source, TypeCheckOptions::GRADUAL);
     assert!(report.result().is_ok());
     assert_eq!(
         found(source, report.warnings()),
         [(SemanticWarningKind::RedundantCast, Some("1 as Int"))]
     );
+}
+
+/// Branches that each say what they are, and differ, merge into an `Any`
+/// nobody asked for: that is warned about, in either checking mode.
+#[test]
+fn branches_of_different_types_merged_into_an_unrequested_any_warn() {
+    for (source, span) in [
+        (
+            "in c: Bool\nout b: Bool\nb = (if c then 1 else \"a\") == 1",
+            "if c then 1 else \"a\"",
+        ),
+        (
+            "in x: Int\nin s: Str\nout b: Bool\nb = default(x, s) == 1",
+            "default(x, s)",
+        ),
+        // The merge introduces an `Any` inside the list, not at the top.
+        (
+            "in c: Bool\nin xs: List<Int>\nin ys: List<Str>\nout b: Bool\n\
+             b = (if c then xs else ys) == xs",
+            "if c then xs else ys",
+        ),
+    ] {
+        for options in MODES {
+            let report = check(source, options);
+            assert!(report.result().is_ok(), "{source} {options:?}");
+            assert_eq!(
+                found(source, report.warnings()),
+                [(SemanticWarningKind::HeterogeneousBranches, Some(span))],
+                "{source} {options:?}"
+            );
+            assert_eq!(report.warnings()[0].code(), "dsrv.heterogeneous-branches");
+        }
+    }
+}
+
+/// An annotation says the `Any` is meant, an `Any` branch is dynamic
+/// already, equal types merge to themselves, and list elements are often
+/// mixed on purpose: none of these warn.
+#[test]
+fn merges_that_are_not_surprising_do_not_warn() {
+    for source in [
+        "in c: Bool\nout z: Any\nz = if c then 1 else \"a\"",
+        "in c: Bool\nin d: Any\nout b: Bool\nb = (if c then 1 else d) == 1",
+        "in c: Bool\nout z: Int\nz = if c then 1 else 2",
+        "in c: Bool\nin f: Float\nout z: Float\nz = if c then 1 else f",
+    ] {
+        for options in MODES {
+            let report = check(source, options);
+            assert!(report.result().is_ok(), "{source} {options:?}");
+            assert!(report.warnings().is_empty(), "{source} {options:?}");
+        }
+    }
+    let source = "out z\nz = [1, \"a\"]";
+    let report = check(source, TypeCheckOptions::GRADUAL);
+    assert!(report.result().is_ok());
+    assert!(report.warnings().is_empty());
 }
 
 #[test]

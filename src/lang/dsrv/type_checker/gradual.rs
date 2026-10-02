@@ -847,9 +847,18 @@ mod tests {
             BTreeSet::new(),
         );
 
-        let typed = type_check_gradual(spec).expect("heterogeneous if should widen to Any");
+        let (typed, warnings) = super::type_check_gradual(spec).into_parts();
+        let typed = typed.expect("heterogeneous if should join to Any");
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
         assert_eq!(typed.var_expr_ref(&z).unwrap().typ(), &TCType::Any);
+        // The branches say what they are, differ, and nothing asked for Any.
+        assert_eq!(
+            warnings
+                .iter()
+                .map(|warning| warning.kind())
+                .collect::<Vec<_>>(),
+            [crate::lang::dsrv::diagnostics::SemanticWarningKind::HeterogeneousBranches]
+        );
     }
 
     #[test]

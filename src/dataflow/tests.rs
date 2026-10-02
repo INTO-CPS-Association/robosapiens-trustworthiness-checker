@@ -359,7 +359,7 @@ proptest! {
 
     #[test]
     fn dataflow_compilation_without_types_is_total(spec in arb_dsrv_spec()) {
-        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).without_warnings() {
+        if let Ok(spec) = spec.check_and_elaborate(TypeCheckOptions::GRADUAL).into_parts().0 {
             let _ = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed);
         }
     }

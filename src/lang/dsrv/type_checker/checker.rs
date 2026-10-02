@@ -316,6 +316,7 @@ fn check(
             let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
             let mut place = 0;
             let mut result: Option<TCType> = None;
+            let mut arm_types = Vec::new();
             for arm in shape.iter() {
                 let bindings = bind_pattern(&arm.pattern, &scrutinee_type, expr)?;
                 let frame = context.local_bindings.len();
@@ -333,11 +334,13 @@ fn check(
                 })(context);
                 context.local_bindings.truncate(frame);
                 let body_type = checked?;
+                arm_types.push(body_type.clone());
                 result = Some(match result {
                     None => body_type,
                     Some(previous) => join(&previous, &body_type),
                 });
             }
+            warn_if_heterogeneous(expr, &arm_types, expected, context);
             let Some(result) = result else {
                 return Err(error(
                     expr,
@@ -465,7 +468,12 @@ fn check(
             let yes_type = check(yes, expected, context)?;
             let no_type = check(no, expected, context)?;
             (
-                merge(&[(yes, yes_type), (no, no_type)], expected, context)?,
+                merge(
+                    Some(expr),
+                    &[(yes, yes_type), (no, no_type)],
+                    expected,
+                    context,
+                )?,
                 None,
             )
         }
@@ -507,7 +515,10 @@ fn check(
         Update(a, b) | Default(a, b) | Init(a, b) => {
             let a_type = check(a, expected, context)?;
             let b_type = check(b, expected, context)?;
-            (merge(&[(a, a_type), (b, b_type)], expected, context)?, None)
+            (
+                merge(Some(expr), &[(a, a_type), (b, b_type)], expected, context)?,
+                None,
+            )
         }
         Latch(value, trigger) => {
             let value = check(value, expected, context)?;
@@ -779,7 +790,10 @@ fn check(
         LConcat(a, b) => {
             let a_type = check(a, expected, context)?;
             let b_type = check(b, expected, context)?;
-            (merge(&[(a, a_type), (b, b_type)], expected, context)?, None)
+            (
+                merge(None, &[(a, a_type), (b, b_type)], expected, context)?,
+                None,
+            )
         }
         LHead(list) => match check(list, None, context)? {
             TCType::List(element) => (*element, None),
@@ -1196,7 +1210,7 @@ fn check_fields<'arena>(
     if checked.is_empty() {
         return Ok(expected.cloned().unwrap_or(TCType::Unknown));
     }
-    merge(&checked, expected, context)
+    merge(None, &checked, expected, context)
 }
 
 fn value_type(value: &SyntaxLiteral, expected: Option<&TCType>) -> Result<TCType, SemanticError> {
@@ -1388,6 +1402,63 @@ pub(super) fn join(a: &TCType, b: &TCType) -> TCType {
     }
 }
 
+/// Whether `typ` says what its values are: no `Any` or unresolved part.
+fn is_fully_known(typ: &TCType) -> bool {
+    match typ {
+        TCType::Any | TCType::Unknown | TCType::EmptyList | TCType::EmptyMap => false,
+        TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => is_fully_known(inner),
+        TCType::Tuple(items) => items.iter().all(is_fully_known),
+        TCType::Struct(fields, _) => fields.iter().all(|(_, field)| is_fully_known(field)),
+        _ => true,
+    }
+}
+
+/// Warn where branches that each say what they are, and differ, are merged
+/// into an `Any` nobody asked for. That is usually a mistake, while an
+/// annotation (an expectation) says it is meant, and an `Any` branch is
+/// already dynamic, so neither warns.
+fn warn_if_heterogeneous(
+    node: ExprRef<'_>,
+    branches: &[TCType],
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) {
+    if expected.is_some() || branches.len() < 2 || !branches.iter().all(is_fully_known) {
+        return;
+    }
+    let joined = branches
+        .iter()
+        .skip(1)
+        .fold(branches[0].clone(), |joined, typ| join(&joined, typ));
+    // Every branch is fully known, so any `Any` in the merge, at the top or
+    // inside a list or map, is one the merge introduced.
+    if is_fully_known(&joined) {
+        return;
+    }
+    let mut distinct: Vec<String> = Vec::new();
+    for typ in branches {
+        let typ = typ.to_string();
+        if !distinct.contains(&typ) {
+            distinct.push(typ);
+        }
+    }
+    if let Some(warnings) = context.warnings.as_deref_mut() {
+        warnings.emit(
+            node.id(),
+            SemanticWarning::new(
+                SemanticWarningKind::HeterogeneousBranches,
+                format!(
+                    "the branches have different types ({}), so the result is {joined}; \
+                     annotate the result as {joined} to say so",
+                    distinct.join(", ")
+                ),
+                Some(node.span()),
+            )
+            .located(node.origin()),
+        );
+    }
+}
+
 /// The type of an expression whose value is one of `branches`, each already
 /// checked against `expected`.
 ///
@@ -1397,6 +1468,7 @@ pub(super) fn join(a: &TCType, b: &TCType) -> TCType {
 /// then joined, and where an expectation exists the merge takes its type,
 /// which is what lets each `Any` branch be checked at that type.
 fn merge(
+    node: Option<ExprRef<'_>>,
     branches: &[(ExprRef<'_>, TCType)],
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
@@ -1415,6 +1487,9 @@ fn merge(
                 types[index] = check(*expr, Some(&resolved), context)?;
             }
         }
+    }
+    if let Some(node) = node {
+        warn_if_heterogeneous(node, &types, expected, context);
     }
     let joined = types
         .iter()
