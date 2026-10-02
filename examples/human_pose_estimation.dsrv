@@ -95,7 +95,7 @@ lFoot = if hasHumans then List.get(bodyParts, 22) else Map()
 // Forearm symmetry check
 forearmSymEps = 0.1
 rForearmHeight = if hasHumans then Map.get(rForearm, "p_2") else -1.0
-lForearmHeight = if hasHumans then Map.get(lForearm, "p_2") else -1
+lForearmHeight = if hasHumans then Map.get(lForearm, "p_2") else -1.0
 forearmSymmetry = if hasHumans then abs(rForearmHeight - lForearmHeight) < forearmSymEps else true
 
 // Smooth forearm height - averaged over 4 samples
