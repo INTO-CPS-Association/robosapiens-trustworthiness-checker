@@ -12,8 +12,8 @@ use super::typed_combinators as typed;
 use crate::VarName;
 use crate::core::Value;
 use crate::core::{
-    BinaryOperator, BinaryOperatorKind, LocalStream, PartialStreamValue, from_typed_partial_stream,
-    to_typed_partial_stream,
+    BinaryOperatorKind, BooleanOperator, LocalStream, NumericOperator, PartialStreamValue,
+    from_typed_partial_stream, to_typed_partial_stream,
 };
 #[cfg(test)]
 use crate::lang::dsrv::ast::Expr;
@@ -222,18 +222,24 @@ where
         Var(name) => {
             typed_variable::<AC, _>(&expression, name, context, evaluate_float_typed::<AC>)
         }
-        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Numeric => {
-            let left = evaluate_float_typed::<AC>(expression.scope(left), context);
-            let right = evaluate_float_typed::<AC>(expression.scope(right), context);
-            match operator {
-                BinaryOperator::Add => typed::add(left, right),
-                BinaryOperator::Subtract => typed::sub(left, right),
-                BinaryOperator::Multiply => typed::mul(left, right),
-                BinaryOperator::Divide => typed::div(left, right),
-                BinaryOperator::Modulo => typed::rem(left, right),
-                _ => unreachable!("numeric operator kind contains only numeric operators"),
+        BinOp(left, right, operator) => match operator.kind() {
+            BinaryOperatorKind::Numeric(operator) => {
+                let left = evaluate_float_typed::<AC>(expression.scope(left), context);
+                let right = evaluate_float_typed::<AC>(expression.scope(right), context);
+                match operator {
+                    NumericOperator::Add => typed::add(left, right),
+                    NumericOperator::Subtract => typed::sub(left, right),
+                    NumericOperator::Multiply => typed::mul(left, right),
+                    NumericOperator::Divide => typed::div(left, right),
+                    NumericOperator::Modulo => typed::rem(left, right),
+                    NumericOperator::Power => typed::pow_float(left, right),
+                }
             }
-        }
+            BinaryOperatorKind::Boolean(_)
+            | BinaryOperatorKind::String
+            | BinaryOperatorKind::Equality(_)
+            | BinaryOperatorKind::Ordering(_) => evaluate_typed::<f64, AC>(expression, context),
+        },
         Default(input, default) => typed::default(
             evaluate_float_typed::<AC>(expression.scope(input), context),
             evaluate_float_typed::<AC>(expression.scope(default), context),
@@ -276,18 +282,24 @@ where
     match node.view() {
         Val(SyntaxLiteral::Int(value)) => typed::val(*value),
         Var(name) => typed_variable::<AC, _>(&expression, name, context, evaluate_int_typed::<AC>),
-        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Numeric => {
-            let left = evaluate_int_typed::<AC>(expression.scope(left), context);
-            let right = evaluate_int_typed::<AC>(expression.scope(right), context);
-            match operator {
-                BinaryOperator::Add => typed::add(left, right),
-                BinaryOperator::Subtract => typed::sub(left, right),
-                BinaryOperator::Multiply => typed::mul(left, right),
-                BinaryOperator::Divide => typed::div(left, right),
-                BinaryOperator::Modulo => typed::rem(left, right),
-                _ => unreachable!("numeric operator kind contains only numeric operators"),
+        BinOp(left, right, operator) => match operator.kind() {
+            BinaryOperatorKind::Numeric(operator) => {
+                let left = evaluate_int_typed::<AC>(expression.scope(left), context);
+                let right = evaluate_int_typed::<AC>(expression.scope(right), context);
+                match operator {
+                    NumericOperator::Add => typed::add(left, right),
+                    NumericOperator::Subtract => typed::sub(left, right),
+                    NumericOperator::Multiply => typed::mul(left, right),
+                    NumericOperator::Divide => typed::div(left, right),
+                    NumericOperator::Modulo => typed::rem(left, right),
+                    NumericOperator::Power => typed::pow_int(left, right),
+                }
             }
-        }
+            BinaryOperatorKind::Boolean(_)
+            | BinaryOperatorKind::String
+            | BinaryOperatorKind::Equality(_)
+            | BinaryOperatorKind::Ordering(_) => evaluate_typed::<i64, AC>(expression, context),
+        },
         Default(input, default) => typed::default(
             evaluate_int_typed::<AC>(expression.scope(input), context),
             evaluate_int_typed::<AC>(expression.scope(default), context),
@@ -327,58 +339,46 @@ where
         Val(SyntaxLiteral::Bool(value)) => typed::val(*value),
         Var(name) => typed_variable::<AC, _>(&expression, name, context, evaluate_bool_typed::<AC>),
         Not(input) => typed::not(evaluate_bool_typed::<AC>(expression.scope(input), context)),
-        BinOp(left, right, operator) if operator.kind() == BinaryOperatorKind::Boolean => {
-            let left = evaluate_bool_typed::<AC>(expression.scope(left), context);
-            let right = evaluate_bool_typed::<AC>(expression.scope(right), context);
-            match operator {
-                BinaryOperator::And => typed::and(left, right),
-                BinaryOperator::Or => typed::or(left, right),
-                BinaryOperator::Implication => typed::implies(left, right),
-                _ => unreachable!("boolean operator kind contains only boolean operators"),
+        BinOp(left, right, operator) => match operator.kind() {
+            BinaryOperatorKind::Boolean(operator) => {
+                let left = evaluate_bool_typed::<AC>(expression.scope(left), context);
+                let right = evaluate_bool_typed::<AC>(expression.scope(right), context);
+                match operator {
+                    BooleanOperator::And => typed::and(left, right),
+                    BooleanOperator::Or => typed::or(left, right),
+                    BooleanOperator::Implication => typed::implies(left, right),
+                }
             }
-        }
-        BinOp(left, right, operator)
-            if matches!(
-                operator.kind(),
-                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
-            ) && matches!(expression.typ(left), Some(TCType::Int)) =>
-        {
-            let left = evaluate_int_typed::<AC>(expression.scope(left), context);
-            let right = evaluate_int_typed::<AC>(expression.scope(right), context);
-            match operator {
-                BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
-                BinaryOperator::LessEqual => {
-                    typed::compare(left, right, |left, right| left <= right)
-                }
-                BinaryOperator::Less => typed::compare(left, right, |left, right| left < right),
-                BinaryOperator::GreaterEqual => {
-                    typed::compare(left, right, |left, right| left >= right)
-                }
-                BinaryOperator::Greater => typed::compare(left, right, |left, right| left > right),
-                _ => unreachable!("comparison operator kind contains only comparison operators"),
+            BinaryOperatorKind::Equality(operator) => match expression.typ(left) {
+                Some(TCType::Int) => typed::equality(
+                    operator,
+                    evaluate_int_typed::<AC>(expression.scope(left), context),
+                    evaluate_int_typed::<AC>(expression.scope(right), context),
+                ),
+                Some(TCType::Float) => typed::equality(
+                    operator,
+                    evaluate_float_typed::<AC>(expression.scope(left), context),
+                    evaluate_float_typed::<AC>(expression.scope(right), context),
+                ),
+                _ => evaluate_typed::<bool, AC>(expression, context),
+            },
+            BinaryOperatorKind::Ordering(operator) => match expression.typ(left) {
+                Some(TCType::Int) => typed::ordering(
+                    operator,
+                    evaluate_int_typed::<AC>(expression.scope(left), context),
+                    evaluate_int_typed::<AC>(expression.scope(right), context),
+                ),
+                Some(TCType::Float) => typed::ordering(
+                    operator,
+                    evaluate_float_typed::<AC>(expression.scope(left), context),
+                    evaluate_float_typed::<AC>(expression.scope(right), context),
+                ),
+                _ => evaluate_typed::<bool, AC>(expression, context),
+            },
+            BinaryOperatorKind::Numeric(_) | BinaryOperatorKind::String => {
+                evaluate_typed::<bool, AC>(expression, context)
             }
-        }
-        BinOp(left, right, operator)
-            if matches!(
-                operator.kind(),
-                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
-            ) && matches!(expression.typ(left), Some(TCType::Float)) =>
-        {
-            let left = evaluate_float_typed::<AC>(expression.scope(left), context);
-            let right = evaluate_float_typed::<AC>(expression.scope(right), context);
-            match operator {
-                BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
-                BinaryOperator::LessEqual => {
-                    typed::compare(left, right, |left, right| left <= right)
-                }
-                BinaryOperator::Less => typed::compare(left, right, |left, right| left < right),
-                BinaryOperator::GreaterEqual => {
-                    typed::compare(left, right, |left, right| left >= right)
-                }
-                BinaryOperator::Greater => typed::compare(left, right, |left, right| left > right),
-                _ => unreachable!("comparison operator kind contains only comparison operators"),
-            }
-        }
+        },
         Default(input, default) => typed::default(
             evaluate_bool_typed::<AC>(expression.scope(input), context),
             evaluate_bool_typed::<AC>(expression.scope(default), context),

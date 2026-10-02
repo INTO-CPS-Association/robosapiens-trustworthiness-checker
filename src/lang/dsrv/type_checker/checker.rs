@@ -384,7 +384,7 @@ fn check(
             // produce `Bool` while comparing values of another type.
             let (lhs_type, rhs_type) = if matches!(
                 parsed.kind(),
-                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
+                BinaryOperatorKind::Equality(_) | BinaryOperatorKind::Ordering(_)
             ) {
                 check_comparison_operands(lhs, rhs, context)?
             } else {
@@ -1277,8 +1277,8 @@ fn resolve_binary(
     };
 
     Ok(match operator.kind() {
-        BinaryOperatorKind::Numeric => numeric_result().ok_or_else(invalid)?,
-        BinaryOperatorKind::Boolean
+        BinaryOperatorKind::Numeric(_) => numeric_result().ok_or_else(invalid)?,
+        BinaryOperatorKind::Boolean(_)
             if matches!(lhs, TCType::Bool | TCType::Any)
                 && matches!(rhs, TCType::Bool | TCType::Any) =>
         {
@@ -1290,15 +1290,15 @@ fn resolve_binary(
         {
             (TCType::Str, Some(()))
         }
-        BinaryOperatorKind::Equality if unify(lhs, rhs).is_some() => (TCType::Bool, Some(())),
-        BinaryOperatorKind::Ordering if numeric_result().is_some() => (TCType::Bool, Some(())),
-        BinaryOperatorKind::Ordering
+        BinaryOperatorKind::Equality(_) if unify(lhs, rhs).is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Ordering(_) if numeric_result().is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Ordering(_)
             if matches!(lhs, TCType::Bool | TCType::Any)
                 && matches!(rhs, TCType::Bool | TCType::Any) =>
         {
             (TCType::Bool, Some(()))
         }
-        BinaryOperatorKind::Ordering
+        BinaryOperatorKind::Ordering(_)
             if matches!(lhs, TCType::Str | TCType::Any)
                 && matches!(rhs, TCType::Str | TCType::Any) =>
         {

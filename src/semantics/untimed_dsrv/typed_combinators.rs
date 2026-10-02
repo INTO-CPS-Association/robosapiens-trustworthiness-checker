@@ -4,8 +4,10 @@ use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
 use futures::{StreamExt, stream};
 
+use crate::core::values::operations as value_operations;
 use crate::core::{
-    LocalStream, PartialMarker, PartialStreamValue, StreamData, propagated_special, retain_stream,
+    BinaryOperator, EqualityOperator, LocalStream, OrderingOperator, PartialMarker,
+    PartialStreamValue, StreamData, Value, propagated_special, retain_stream,
 };
 
 pub(super) fn lift_base<T: StreamData>(
@@ -86,6 +88,35 @@ binary!(mul, Mul, mul);
 binary!(div, Div, div);
 binary!(rem, Rem, rem);
 
+/// Integer exponentiation, which is the dynamic operation on `Int`s: a
+/// negative exponent or an overflow is an error there, and here, as for the
+/// other integer operators, a panic.
+pub(super) fn pow_int(
+    base: LocalStream<PartialStreamValue<i64>>,
+    exponent: LocalStream<PartialStreamValue<i64>>,
+) -> LocalStream<PartialStreamValue<i64>> {
+    lift2(
+        base,
+        exponent,
+        |base, exponent| match value_operations::binary(
+            BinaryOperator::Power,
+            Value::Int(base),
+            Value::Int(exponent),
+        ) {
+            Ok(Value::Int(power)) => power,
+            Ok(other) => unreachable!("`Int ** Int` produced {other:?}"),
+            Err(error) => panic!("{error}"),
+        },
+    )
+}
+
+pub(super) fn pow_float(
+    base: LocalStream<PartialStreamValue<f64>>,
+    exponent: LocalStream<PartialStreamValue<f64>>,
+) -> LocalStream<PartialStreamValue<f64>> {
+    lift2(base, exponent, f64::powf)
+}
+
 pub(super) fn neg<T>(
     input: LocalStream<PartialStreamValue<T>>,
 ) -> LocalStream<PartialStreamValue<T>>
@@ -146,7 +177,31 @@ pub(super) fn implies(
     lift2(left, right, |left, right| !left || right)
 }
 
-pub(super) fn compare<T: StreamData, F>(
+pub(super) fn equality<T: StreamData + PartialEq>(
+    operator: EqualityOperator,
+    left: LocalStream<PartialStreamValue<T>>,
+    right: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<bool>> {
+    match operator {
+        EqualityOperator::Equal => compare(left, right, |left, right| left == right),
+        EqualityOperator::NotEqual => compare(left, right, |left, right| left != right),
+    }
+}
+
+pub(super) fn ordering<T: StreamData + PartialOrd>(
+    operator: OrderingOperator,
+    left: LocalStream<PartialStreamValue<T>>,
+    right: LocalStream<PartialStreamValue<T>>,
+) -> LocalStream<PartialStreamValue<bool>> {
+    match operator {
+        OrderingOperator::Less => compare(left, right, |left, right| left < right),
+        OrderingOperator::LessEqual => compare(left, right, |left, right| left <= right),
+        OrderingOperator::Greater => compare(left, right, |left, right| left > right),
+        OrderingOperator::GreaterEqual => compare(left, right, |left, right| left >= right),
+    }
+}
+
+fn compare<T: StreamData, F>(
     left: LocalStream<PartialStreamValue<T>>,
     right: LocalStream<PartialStreamValue<T>>,
     comparison: F,

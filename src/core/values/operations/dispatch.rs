@@ -4,7 +4,10 @@ use ecow::EcoString;
 
 use super::{Value, numeric};
 use crate::core::values::union::check_value_conformance;
-use crate::core::{BinaryOperator, StreamType, UnaryOperator};
+use crate::core::{
+    BinaryOperator, BinaryOperatorKind, BooleanOperator, EqualityOperator, OrderingOperator,
+    StreamType, UnaryOperator,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValueOpError {
@@ -194,39 +197,37 @@ pub fn cast(value: Value, target: &StreamType) -> Result<Value, ValueOpError> {
 }
 
 pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Value, ValueOpError> {
-    use BinaryOperator as Op;
+    use BinaryOperatorKind as Kind;
 
-    match operation {
-        Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::Modulo | Op::Power => {
-            numeric::numeric_binary(operation, left, right)
-        }
-        Op::Or | Op::And | Op::Implication => match (left, right) {
-            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(match operation {
-                Op::Or => left || right,
-                Op::And => left && right,
-                Op::Implication => !left || right,
-                _ => unreachable!(),
+    match operation.kind() {
+        Kind::Numeric(operator) => numeric::numeric_binary(operator, left, right),
+        Kind::Boolean(operator) => match (left, right) {
+            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(match operator {
+                BooleanOperator::Or => left || right,
+                BooleanOperator::And => left && right,
+                BooleanOperator::Implication => !left || right,
             })),
             (left, right) => invalid_binary(operation, left, right),
         },
-        Op::Concatenate => match (left, right) {
+        Kind::String => match (left, right) {
             (Value::Str(mut left), Value::Str(right)) => {
                 left.push_str(right.as_str());
                 Ok(Value::Str(left))
             }
             (left, right) => invalid_binary(operation, left, right),
         },
-        Op::Equal => Ok(Value::Bool(left == right)),
-        Op::NotEqual => Ok(Value::Bool(left != right)),
-        Op::LessEqual | Op::Less | Op::GreaterEqual | Op::Greater => {
+        Kind::Equality(operator) => Ok(Value::Bool(match operator {
+            EqualityOperator::Equal => left == right,
+            EqualityOperator::NotEqual => left != right,
+        })),
+        Kind::Ordering(operator) => {
             let ordering = numeric::compare_ordering(operation, left, right)?;
             Ok(Value::Bool(ordering.is_some_and(
-                |ordering| match operation {
-                    Op::LessEqual => ordering.is_le(),
-                    Op::Less => ordering.is_lt(),
-                    Op::GreaterEqual => ordering.is_ge(),
-                    Op::Greater => ordering.is_gt(),
-                    _ => unreachable!(),
+                |ordering| match operator {
+                    OrderingOperator::Less => ordering.is_lt(),
+                    OrderingOperator::LessEqual => ordering.is_le(),
+                    OrderingOperator::Greater => ordering.is_gt(),
+                    OrderingOperator::GreaterEqual => ordering.is_ge(),
                 },
             )))
         }

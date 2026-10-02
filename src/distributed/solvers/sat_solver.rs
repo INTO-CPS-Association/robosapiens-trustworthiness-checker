@@ -453,7 +453,9 @@ fn collect_required_concrete_inputs(
 
     match &expression.kind {
         E::Not(value) => collect_required_concrete_inputs(value, plan, required),
-        E::Binary(left, right, operator) if operator.kind() == BinaryOperatorKind::Boolean => {
+        E::Binary(left, right, operator)
+            if matches!(operator.kind(), BinaryOperatorKind::Boolean(_)) =>
+        {
             collect_required_concrete_inputs(left, plan, required);
             collect_required_concrete_inputs(right, plan, required);
         }
@@ -495,7 +497,7 @@ fn is_symbolically_compilable(
         }
         E::Not(value) => is_symbolically_compilable(value, plan, visiting),
         E::Binary(left, right, operator)
-            if operator.kind() == BinaryOperatorKind::Boolean
+            if matches!(operator.kind(), BinaryOperatorKind::Boolean(_))
                 || matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) =>
         {
             is_symbolically_compilable(left, plan, visiting)

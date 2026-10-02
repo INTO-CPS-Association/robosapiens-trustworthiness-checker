@@ -2,14 +2,14 @@ use std::cmp::Ordering;
 
 use super::Value;
 use super::dispatch::{ValueOpError, invalid_binary};
-use crate::core::BinaryOperator;
+use crate::core::{BinaryOperator, NumericOperator};
 
 pub(super) fn numeric_binary(
-    operation: BinaryOperator,
+    operation: NumericOperator,
     left: Value,
     right: Value,
 ) -> Result<Value, ValueOpError> {
-    use BinaryOperator as Op;
+    use NumericOperator as Op;
 
     match (left, right) {
         (Value::Int(left), Value::Int(right)) => {
@@ -20,7 +20,7 @@ pub(super) fn numeric_binary(
                 Op::Divide => {
                     if right == 0 {
                         return Err(ValueOpError::IntegerDivisionByZero {
-                            operation: operation.name(),
+                            operation: BinaryOperator::from(operation).name(),
                         });
                     }
                     left.checked_div(right)
@@ -28,7 +28,7 @@ pub(super) fn numeric_binary(
                 Op::Modulo => {
                     if right == 0 {
                         return Err(ValueOpError::IntegerDivisionByZero {
-                            operation: operation.name(),
+                            operation: BinaryOperator::from(operation).name(),
                         });
                     }
                     left.checked_rem(right)
@@ -39,10 +39,9 @@ pub(super) fn numeric_binary(
                     }
                     checked_int_power(left, right)
                 }
-                _ => unreachable!(),
             };
             result.map(Value::Int).ok_or(ValueOpError::IntegerOverflow {
-                operation: operation.name(),
+                operation: BinaryOperator::from(operation).name(),
             })
         }
         (Value::Int(left), Value::Float(right)) => {
@@ -54,19 +53,18 @@ pub(super) fn numeric_binary(
         (Value::Float(left), Value::Float(right)) => {
             Ok(Value::Float(float_binary(operation, left, right)))
         }
-        (left, right) => invalid_binary(operation, left, right),
+        (left, right) => invalid_binary(BinaryOperator::from(operation), left, right),
     }
 }
 
-fn float_binary(operation: BinaryOperator, left: f64, right: f64) -> f64 {
+fn float_binary(operation: NumericOperator, left: f64, right: f64) -> f64 {
     match operation {
-        BinaryOperator::Add => left + right,
-        BinaryOperator::Subtract => left - right,
-        BinaryOperator::Multiply => left * right,
-        BinaryOperator::Divide => left / right,
-        BinaryOperator::Modulo => left % right,
-        BinaryOperator::Power => left.powf(right),
-        _ => unreachable!(),
+        NumericOperator::Add => left + right,
+        NumericOperator::Subtract => left - right,
+        NumericOperator::Multiply => left * right,
+        NumericOperator::Divide => left / right,
+        NumericOperator::Modulo => left % right,
+        NumericOperator::Power => left.powf(right),
     }
 }
 

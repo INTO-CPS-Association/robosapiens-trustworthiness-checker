@@ -1,6 +1,7 @@
 use approx::assert_abs_diff_eq;
 use futures::stream::StreamExt;
 use macro_rules_attribute::apply;
+use proptest::strategy::Strategy;
 use smol::LocalExecutor;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
@@ -633,6 +634,130 @@ async fn test_struct_equality_compares_whole_values_in_every_runtime(
         );
     }
     Ok(())
+}
+
+/// Runs `x <op> y` for each comparison operator over `rows` in every runtime
+/// and compares it with the `Ordering` the reference model gives each row.
+fn check_comparison_operators(
+    x_type: &str,
+    y_type: &str,
+    rows: &[(Value, Value, std::cmp::Ordering)],
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    const OPERATORS: [(&str, fn(std::cmp::Ordering) -> bool); 6] = [
+        ("==", |ordering| ordering == Equal),
+        ("!=", |ordering| ordering != Equal),
+        ("<", |ordering| ordering == Less),
+        ("<=", |ordering| ordering != Greater),
+        (">", |ordering| ordering == Greater),
+        (">=", |ordering| ordering != Less),
+    ];
+    let input = BTreeMap::from([
+        (
+            "x".into(),
+            rows.iter().map(|(x, _, _)| x.clone()).collect::<Vec<_>>(),
+        ),
+        (
+            "y".into(),
+            rows.iter().map(|(_, y, _)| y.clone()).collect::<Vec<_>>(),
+        ),
+    ]);
+    for (symbol, holds) in OPERATORS {
+        let spec =
+            format!("in x: {x_type}\nin y: {y_type}\nout result: Bool\nresult = x {symbol} y");
+        let expected: Vec<_> = rows
+            .iter()
+            .map(|&(_, _, ordering)| Value::Bool(holds(ordering)))
+            .collect();
+        for runtime in [
+            RuntimeSpec::Async,
+            RuntimeSpec::SemiSync,
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        ] {
+            let executor = Rc::new(LocalExecutor::new());
+            let outputs = smol::block_on(executor.run(run_typed_runtime_with_spec(
+                executor.clone(),
+                runtime,
+                &spec,
+                input.clone(),
+                "comparison outputs.collect()",
+            )))
+            .expect("comparison outputs are collected");
+            let actual: Vec<_> = outputs
+                .into_iter()
+                .map(|(_, row)| row[&VarName::new("result")].clone())
+                .collect();
+            proptest::prop_assert_eq!(
+                actual,
+                expected.clone(),
+                "unexpected `x {} y` on {} and {} for runtime {:?}",
+                symbol,
+                x_type,
+                y_type,
+                runtime,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Floats in halves from -3.0 to 3.0, so equal operands are common.
+fn small_float() -> impl proptest::strategy::Strategy<Value = f64> {
+    (-6i64..7).prop_map(|half| half as f64 / 2.0)
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+    /// Every comparison operator agrees with Rust's on each operand type, so
+    /// no operator is missing from a runtime's typed evaluation. The small
+    /// ranges make equal operands common, where `==` and `!=` differ.
+    #[test]
+    fn test_int_comparison_operators_in_every_runtime(
+        rows in proptest::collection::vec((-3i64..4, -3i64..4), 1..12),
+    ) {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(x, y)| (Value::Int(x), Value::Int(y), x.cmp(&y)))
+            .collect();
+        check_comparison_operators("Int", "Int", &rows)?;
+    }
+
+    #[test]
+    fn test_float_comparison_operators_in_every_runtime(
+        rows in proptest::collection::vec((small_float(), small_float()), 1..12),
+    ) {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(x, y)| (Value::Float(x), Value::Float(y), x.total_cmp(&y)))
+            .collect();
+        check_comparison_operators("Float", "Float", &rows)?;
+    }
+
+    #[test]
+    fn test_bool_comparison_operators_in_every_runtime(
+        rows in proptest::collection::vec((proptest::bool::ANY, proptest::bool::ANY), 1..12),
+    ) {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(x, y)| (Value::Bool(x), Value::Bool(y), x.cmp(&y)))
+            .collect();
+        check_comparison_operators("Bool", "Bool", &rows)?;
+    }
+
+    #[test]
+    fn test_string_comparison_operators_in_every_runtime(
+        rows in proptest::collection::vec(("[a-c]{0,2}", "[a-c]{0,2}"), 1..12),
+    ) {
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(x, y)| {
+                let ordering = x.cmp(&y);
+                (Value::Str(x.into()), Value::Str(y.into()), ordering)
+            })
+            .collect();
+        check_comparison_operators("Str", "Str", &rows)?;
+    }
 }
 
 #[apply(async_test)]

@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f757fc75a7210443b7e15e8d8712333aa1883c31fbb30dce726d5fd7786ffb36 # shrinks to rows = [(0, 0)]
+cc 0abd28647dbe76144548c6bbe36f2c8ce74b66510e5eb506abd017b8db4562d5 # shrinks to rows = [(0, 0)]
+cc 2da16de0452de0de3c8922e4ae678664f932df85c74d45a8c34b5b06d3b08ef5 # shrinks to (template, experimental, x_type, xs) = ("sin(x)", false, Int, [Int(0)])
+cc 7ea60ddce4ab90bdad13b84cb3781a2538e6be0c860af4f8ec5c6dd33c88ec1e # shrinks to (symbol, x_type, y_type, rows) = ("+", Int, Float, [(Int(0), Float(0.5))])
+cc 639edc00246bdec526cfde6abd0096e89f6df188cf81bd665f72a9d6141d4671 # shrinks to rows = [(0, 0, 0.0)]
