@@ -185,14 +185,17 @@ fn typed_monitor_activates_direct_jit_for_power_and_inequality() {
 
 #[cfg(feature = "jit")]
 #[test]
-fn eager_native_jit_preserves_variant_sensitive_mixed_numeric_inequality() {
+fn eager_native_jit_compares_a_cast_integer_with_a_float() {
+    // An `Int` and a `Float` no longer compare directly, so what is left to
+    // check is the comparison after the explicit cast: by value, not by variant.
     let specification = elaborated(
-        "in integer: Int\nin float: Float\nout different: Bool\ndifferent = integer != float",
+        "use experimental::casts\nin integer: Int\nin float: Float\nout different: Bool\n\
+         different = (integer as Float) != float",
     );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (bool,)>::compile_checked(specification).unwrap();
 
-    assert_eq!(monitor.evaluate(&(1, 1.0)), (true,));
+    assert_eq!(monitor.evaluate(&(1, 1.0)), (false,));
     assert_eq!(monitor.evaluate(&(1, 2.0)), (true,));
 }
 
@@ -214,7 +217,8 @@ fn typed_monitor_reports_a_non_concrete_output_rather_than_guessing() {
 #[test]
 fn jit_direct_uses_native_mixed_tuple_layout() {
     let specification = elaborated(
-        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = x * scale\nalert = result > 3.5",
+        "use experimental::casts\nin x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
+         result = (x as Float) * scale\nalert = result > 3.5",
     );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (f64, bool)>::compile_checked(specification).unwrap();
@@ -324,7 +328,8 @@ fn jit_direct_temporal_supports_dynamic_integer_remainder() {
 #[test]
 fn jit_direct_temporal_uses_native_mixed_layout_and_stream_ssa() {
     let specification = elaborated(
-        "in x: Int\nin scale: Float\nout result: Float\nout alert: Bool\nresult = default(x[1], 0) * scale\nalert = result > 3.5",
+        "use experimental::casts\nin x: Int\nin scale: Float\nout result: Float\nout alert: Bool\n\
+         result = (default(x[1], 0) as Float) * scale\nalert = result > 3.5",
     );
     let mut monitor =
         TypedJitMonitor::<(i64, f64), (f64, bool)>::compile_checked(specification).unwrap();

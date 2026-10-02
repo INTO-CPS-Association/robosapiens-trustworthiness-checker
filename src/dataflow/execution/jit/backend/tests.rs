@@ -384,7 +384,8 @@ fn floating_point_graph_runs_natively() {
 #[test]
 fn mixed_numeric_graph_converts_integers_natively() {
     assert_rows(
-        "in x: Int\nin y: Float\nout result: Float\nresult = x + y * 2.0",
+        "use experimental::casts\nin x: Int\nin y: Float\nout result: Float\n\
+         result = (x as Float) + y * 2.0",
         &[
             vec![Value::Int(2), Value::Float(4.25)],
             vec![Value::Int(-8), Value::Float(3.5)],
