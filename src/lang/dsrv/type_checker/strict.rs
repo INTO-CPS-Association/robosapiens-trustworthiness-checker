@@ -490,4 +490,24 @@ mod tests {
             .insert("z".into(), StreamType::Bool);
         type_check(contradictory).expect_err("a prior check must not cache away a new constraint");
     }
+
+    /// `Any` expects nothing of a struct's fields, so the constructor is
+    /// inferred as it is with no expectation, and the struct is accepted
+    /// where `Any` is.
+    #[test]
+    fn a_struct_constructor_checked_against_any_is_inferred() {
+        let z: VarName = "z".into();
+        let exprs = BTreeMap::from([(
+            z.clone(),
+            Expr::Struct(BTreeMap::from([("count".into(), Expr::Val(1).into())])).into(),
+        )]);
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z.clone()]),
+            exprs,
+            BTreeMap::from([(z, StreamType::Any)]),
+            BTreeSet::new(),
+        );
+        type_check(spec).expect("a struct constructor is accepted where Any is expected");
+    }
 }

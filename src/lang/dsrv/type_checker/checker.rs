@@ -981,19 +981,21 @@ fn check(
                     }
                     (expected.cloned().expect("matched expected Struct"), None)
                 }
+                // `Any` expects nothing of the fields, so they are inferred as
+                // they are with no expectation at all.
+                None | Some(TCType::Any) => {
+                    let mut inferred = EcoVec::new();
+                    for (name, value) in fields.iter() {
+                        inferred.push((name.clone(), check(value, None, context)?));
+                    }
+                    (TCType::Struct(inferred, false), None)
+                }
                 Some(_) => {
                     return Err(error(
                         expr,
                         TypeErrorKind::StructExpected,
                         "Struct constructor requires an expected Struct type",
                     ));
-                }
-                None => {
-                    let mut inferred = EcoVec::new();
-                    for (name, value) in fields.iter() {
-                        inferred.push((name.clone(), check(value, None, context)?));
-                    }
-                    (TCType::Struct(inferred, false), None)
                 }
             }
         }
