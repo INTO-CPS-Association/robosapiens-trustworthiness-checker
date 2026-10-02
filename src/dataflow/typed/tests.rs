@@ -5,12 +5,14 @@ use crate::dsrv_fixtures::elaborated;
 
 #[test]
 fn typed_monitor_mixed_rows_avoid_the_value_interface() {
-    let specification =
-        elaborated("in x: Int\nin scale: Float\nout result: Float\nresult = x * scale");
+    let specification = elaborated(
+        "in x: Int\nin scale: Float\nout shifted: Int\nout result: Float\n\
+         shifted = x + 1\nresult = scale * 2",
+    );
     let mut monitor =
-        TypedDataflowMonitor::<(i64, f64), (f64,)>::compile_checked(specification).unwrap();
-    assert_eq!(monitor.evaluate(&(4, 1.5)), (6.0,));
-    assert_eq!(monitor.evaluate(&(4, 0.5)), (2.0,));
+        TypedDataflowMonitor::<(i64, f64), (i64, f64)>::compile_checked(specification).unwrap();
+    assert_eq!(monitor.evaluate(&(4, 1.5)), (5, 3.0));
+    assert_eq!(monitor.evaluate(&(4, 0.5)), (5, 1.0));
 }
 
 // Checked typed execution preserves the canonical result type and
