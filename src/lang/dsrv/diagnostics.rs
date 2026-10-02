@@ -21,12 +21,8 @@ use crate::lang::dsrv::span::Span;
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeErrorKind {
     AnnotationTypeMismatch,
-    DefaultTypeMismatch,
-    IfBranchTypeMismatch,
-    ListElementTypeMismatch,
     ListOperationTypeMismatch,
     ListIndexTypeMismatch,
-    MapValueTypeMismatch,
     MapOperationTypeMismatch,
     OperatorTypeMismatch,
     NumericArgumentTypeMismatch,
@@ -50,7 +46,6 @@ pub enum TypeErrorKind {
     ConstructorPayloadTypeMismatch,
     PatternTypeMismatch,
     OrPatternBindings,
-    MatchArmTypeMismatch,
     MatchNotExhaustive,
     MatchWithoutArms,
 }

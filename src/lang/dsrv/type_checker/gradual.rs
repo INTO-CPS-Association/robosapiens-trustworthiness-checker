@@ -94,14 +94,9 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
 fn can_widen_gradual_error(error: &SemanticError) -> bool {
     match error {
         SemanticError::UndeclaredVariable(..) => true,
-        SemanticError::TypeError(type_error) => matches!(
-            type_error.kind(),
-            TypeErrorKind::IfBranchTypeMismatch
-                | TypeErrorKind::DefaultTypeMismatch
-                | TypeErrorKind::ListElementTypeMismatch
-                | TypeErrorKind::MapValueTypeMismatch
-                | TypeErrorKind::AnnotationTypeMismatch
-        ),
+        SemanticError::TypeError(type_error) => {
+            matches!(type_error.kind(), TypeErrorKind::AnnotationTypeMismatch)
+        }
         _ => false,
     }
 }
