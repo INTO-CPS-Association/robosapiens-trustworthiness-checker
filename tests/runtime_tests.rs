@@ -14,6 +14,7 @@ use trustworthiness_checker::core::{
 use trustworthiness_checker::io::channel::{open_output, output};
 use trustworthiness_checker::io::{file, map};
 use trustworthiness_checker::lang::dsrv::diagnostics::SemanticErrors;
+use trustworthiness_checker::lang::dsrv::type_checker::check_value_stream_type;
 use trustworthiness_checker::lang::untimed_input::untimed_input_file;
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
 use trustworthiness_checker::{
@@ -636,6 +637,78 @@ async fn test_struct_equality_compares_whole_values_in_every_runtime(
     Ok(())
 }
 
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+    /// An `Int` becomes a `Float` only by an explicit cast, which converts
+    /// the value as it is when the cast runs: `x / y` truncates before it
+    /// widens. An integer literal is flexible and is a `Float` where a
+    /// `Float` is expected, including in one branch of an `if`.
+    #[test]
+    fn test_explicit_int_to_float_conversion_in_every_runtime(
+        rows in proptest::collection::vec((-100i64..100, 1i64..100, small_float()), 1..12),
+    ) {
+        let spec = "\
+use experimental::casts
+in x: Int
+in y: Int
+in f: Float
+out ratio: Float
+out shifted: Float
+out scaled: Float
+ratio = if x > 0 then 0 else (x / y) as Float
+shifted = (x as Float) + 0.5
+scaled = f * 2";
+        let input = BTreeMap::from([
+            ("x".into(), rows.iter().map(|&(x, _, _)| Value::Int(x)).collect::<Vec<_>>()),
+            ("y".into(), rows.iter().map(|&(_, y, _)| Value::Int(y)).collect::<Vec<_>>()),
+            ("f".into(), rows.iter().map(|&(_, _, f)| Value::Float(f)).collect::<Vec<_>>()),
+        ]);
+        let expected: Vec<_> = rows
+            .iter()
+            .map(|&(x, y, f)| {
+                let ratio = if x > 0 { 0.0 } else { (x / y) as f64 };
+                (
+                    Value::Float(ratio),
+                    Value::Float(x as f64 + 0.5),
+                    Value::Float(f * 2.0),
+                )
+            })
+            .collect();
+        for runtime in [
+            RuntimeSpec::Async,
+            RuntimeSpec::SemiSync,
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        ] {
+            let executor = Rc::new(LocalExecutor::new());
+            let outputs = smol::block_on(executor.run(run_typed_runtime_with_spec(
+                executor.clone(),
+                runtime,
+                spec,
+                input.clone(),
+                "explicit conversion outputs.collect()",
+            )))
+            .expect("conversion outputs are collected");
+            let actual: Vec<_> = outputs
+                .into_iter()
+                .map(|(_, row)| {
+                    (
+                        row[&VarName::new("ratio")].clone(),
+                        row[&VarName::new("shifted")].clone(),
+                        row[&VarName::new("scaled")].clone(),
+                    )
+                })
+                .collect();
+            proptest::prop_assert_eq!(
+                actual,
+                expected.clone(),
+                "unexpected conversion for runtime {:?}",
+                runtime,
+            );
+        }
+    }
+}
+
 /// Runs `x <op> y` for each comparison operator over `rows` in every runtime
 /// and compares it with the `Ordering` the reference model gives each row.
 fn check_comparison_operators(
@@ -757,6 +830,495 @@ proptest::proptest! {
             })
             .collect();
         check_comparison_operators("Str", "Str", &rows)?;
+    }
+}
+
+/// There is no implicit conversion between `Int` and `Float` values: mixing
+/// them is a type error under both checking policies, whatever the operator,
+/// and the message points at the cast. (An integer literal is the exception,
+/// as it takes the type its context expects.)
+#[test]
+fn test_mixed_int_and_float_operands_need_an_explicit_cast() {
+    let symbols = [
+        "+", "-", "*", "/", "%", "**", "==", "!=", "<", "<=", ">", ">=",
+    ];
+    for symbol in symbols {
+        for (x_type, y_type) in [("Int", "Float"), ("Float", "Int")] {
+            let spec =
+                format!("in x: {x_type}\nin y: {y_type}\nout result: Any\nresult = x {symbol} y");
+            for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+                let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+                let (checked, _warnings) = parsed.check(options).into_parts();
+                let errors = checked
+                    .err()
+                    .unwrap_or_else(|| panic!("`x {symbol} y` on {x_type} and {y_type} checked"));
+                assert!(
+                    format!("{errors:?}").contains("as Float"),
+                    "`x {symbol} y` on {x_type} and {y_type} should point at the cast: {errors:?}"
+                );
+            }
+        }
+    }
+}
+
+/// An integer literal takes the type its context expects, in either operand
+/// position and in one branch of an `if`, but a variable never does.
+#[test]
+fn test_integer_literals_take_the_type_their_context_expects() {
+    for spec in [
+        "in f: Float\nout z: Float\nz = f * 2",
+        "in f: Float\nout z: Float\nz = 2 * f",
+        "in f: Float\nout z: Float\nz = -2 + f",
+        "in f: Float\nin c: Bool\nout z: Float\nz = if c then 0 else f",
+        "in f: Float\nin c: Bool\nout z: Float\nz = if c then f else 0",
+        "in f: Float\nout z: Float\nz = default(f[1], 0)",
+        "in f: Float\nout b: Bool\nb = f < 1",
+        "out z: Float\nz = 4 ** 0.5",
+    ] {
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        assert!(type_check(parsed).is_ok(), "{spec} should check");
+    }
+    for spec in [
+        "in n: Int\nout z: Float\nz = n * 2",
+        "in n: Int\nin f: Float\nout z: Float\nz = n + f",
+        "in n: Int\nout z: Float\nz = (n + 1) * 2.5",
+    ] {
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        assert!(type_check(parsed).is_err(), "{spec} should not check");
+    }
+}
+
+/// An integer literal that a `Float` cannot hold exactly is an error where it
+/// is used as a `Float`, not a silently rounded value.
+#[test]
+fn test_integer_literal_too_large_for_a_float_is_rejected() {
+    let exact = "in f: Float\nout z: Float\nz = f * 9007199254740992";
+    assert!(type_check(exact.parse().expect("spec parses")).is_ok());
+    // The largest `Int` rounds up to 2^63, which no `Int` is.
+    for literal in ["9007199254740993", "9223372036854775807"] {
+        let rounded = format!("in f: Float\nout z: Float\nz = f * {literal}");
+        let errors = type_check(rounded.parse().expect("spec parses"))
+            .err()
+            .expect("an integer literal a Float cannot hold exactly is rejected");
+        assert!(
+            format!("{errors:?}").contains("cannot be represented exactly"),
+            "{errors:?}"
+        );
+    }
+}
+
+/// Integer literals adopt `Float` through `+`, `-`, `*`, unary minus, `abs` and
+/// `if`, so a `Float` operand can meet arithmetic on literals, but not through
+/// division, which stays integer division.
+#[test]
+fn test_literal_arithmetic_adopts_float_in_every_runtime() {
+    let rows = [-2.5, 0.0, 1.5, 4.0];
+    let cases: [(&str, fn(f64) -> f64); 5] = [
+        ("x + 2 * 3", |x| x + 6.0),
+        ("x + (2 + 3)", |x| x + 5.0),
+        ("x + abs(-1)", |x| x + 1.0),
+        ("x * -2", |x| x * -2.0),
+        ("if x > 0 then x else (if x < -1 then 1 else 2)", |x| {
+            if x > 0.0 {
+                x
+            } else if x < -1.0 {
+                1.0
+            } else {
+                2.0
+            }
+        }),
+    ];
+    let input = BTreeMap::from([(
+        "x".into(),
+        rows.iter().map(|&x| Value::Float(x)).collect::<Vec<_>>(),
+    )]);
+    for (expression, model) in cases {
+        let spec = format!("in x: Float\nout z: Float\nz = {expression}");
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        if let Err(errors) = type_check(parsed) {
+            panic!("{spec} should check: {errors:?}");
+        }
+        for runtime in [
+            RuntimeSpec::Async,
+            RuntimeSpec::SemiSync,
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        ] {
+            let executor = Rc::new(LocalExecutor::new());
+            let outputs = smol::block_on(executor.run(run_typed_runtime_with_spec(
+                executor.clone(),
+                runtime,
+                &spec,
+                input.clone(),
+                "literal arithmetic outputs.collect()",
+            )))
+            .expect("outputs are collected");
+            let actual: Vec<_> = outputs
+                .into_iter()
+                .map(|(_, row)| row[&VarName::new("z")].clone())
+                .collect();
+            let expected: Vec<_> = rows.iter().map(|&x| Value::Float(model(x))).collect();
+            assert_eq!(actual, expected, "`{expression}` in runtime {runtime:?}");
+        }
+    }
+}
+
+/// An `if` between integer literals is flexible too, including when nothing
+/// expects a type of it.
+#[test]
+fn test_nested_literal_if_joins_float_without_warning() {
+    let spec =
+        "in x: Float\nout b: Bool\nb = (if x > 0 then x else (if x < -1 then 1 else 2)) < 0.5";
+    assert!(type_check(spec.parse().expect("spec parses")).is_ok());
+}
+
+/// A literal compared with a value it cannot become is reported by the
+/// operator, not by a second check of the literal.
+#[test]
+fn test_literal_compared_with_another_type_reports_the_operator() {
+    let spec = "out b: Bool\nb = 1 == \"a\"";
+    let errors = type_check(spec.parse().expect("spec parses"))
+        .err()
+        .expect("comparing an Int literal with a Str is rejected");
+    assert!(format!("{errors:?}").contains("operator"), "{errors:?}");
+}
+
+/// Division of integer literals is integer division, so it never adopts
+/// `Float`, and a literal that is not arithmetic on literals does not either.
+#[test]
+fn test_integer_division_of_literals_does_not_adopt_float() {
+    for spec in [
+        "in x: Float\nout z: Float\nz = x + 7 / 2",
+        "in x: Float\nout z: Float\nz = x + 7 % 2",
+        "in x: Float\nout z: Float\nz = x + 2 ** 3",
+        "in x: Float\nin n: Int\nout z: Float\nz = x + (n + 1)",
+        "in x: Float\nout b: Bool\nb = x < 7 / 2",
+    ] {
+        let parsed = spec.parse::<DsrvSpecification>().expect("spec parses");
+        let errors = type_check(parsed)
+            .err()
+            .unwrap_or_else(|| panic!("{spec} should not check"));
+        assert!(
+            format!("{errors:?}").contains("as Float"),
+            "{spec} should point at the cast: {errors:?}"
+        );
+    }
+}
+
+/// Runs `spec_str` under `semantics`, turning a panic or an error into `Err`
+/// so that a matrix of programs can report every failure at once.
+fn run_catching_panics(
+    runtime: RuntimeSpec,
+    semantics: Semantics,
+    spec_str: &str,
+    input: &BTreeMap<VarName, Vec<Value>>,
+    output: &str,
+) -> Result<Vec<Value>, String> {
+    let spec = spec_str
+        .parse::<DsrvSpecification>()
+        .expect("matrix specification should parse");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let executor = Rc::new(LocalExecutor::new());
+        smol::block_on(executor.run(async {
+            let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
+            let monitor = GeneralRuntimeBuilder::new()
+                .executor(executor.clone())
+                .model(
+                    // Admitted programs may warn, for example of a redundant cast.
+                    spec.clone()
+                        .check_and_elaborate(
+                            trustworthiness_checker::runtime::builder::type_check_options(
+                                semantics,
+                            ),
+                        )
+                        .into_parts()
+                        .0
+                        .map_err(|errors| format!("elaboration failed: {errors:?}"))?,
+                )
+                .input(map::input_stream(input.clone()))
+                .output_writer(output_writer)
+                .runtime(runtime)
+                .semantics(semantics)
+                .build()
+                .await
+                .map_err(|error| format!("build failed: {error}"))?;
+            // Keep the handle: awaiting a task that panicked resumes the
+            // panic here, where it is caught with its message, instead of
+            // surfacing as an output stream that ends early.
+            let task = executor.spawn(monitor.run());
+            let rows = with_timeout(outputs.enumerate().collect(), 5, "matrix outputs.collect()")
+                .await
+                .map_err(|error| format!("collect failed: {error}"))?;
+            let rows: Vec<(usize, BTreeMap<VarName, Value>)> = rows;
+            task.await.map_err(|error| format!("run failed: {error}"))?;
+            Ok::<_, String>(
+                rows.into_iter()
+                    .map(|(_, row)| row[&VarName::new(output)].clone())
+                    .collect(),
+            )
+        }))
+    }));
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => Err(format!(
+            "panicked: {}",
+            payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("<non-string payload>")
+        )),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ScalarType {
+    Int,
+    Float,
+    Bool,
+    Str,
+}
+
+impl ScalarType {
+    const ALL: [Self; 4] = [Self::Int, Self::Float, Self::Bool, Self::Str];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Int => "Int",
+            Self::Float => "Float",
+            Self::Bool => "Bool",
+            Self::Str => "Str",
+        }
+    }
+
+    /// Values for an operand. Only the leading operand may be zero or
+    /// negative: the others are positive, so there is no division by zero and
+    /// no negative exponent, which a well-typed program may still fail on at
+    /// run time. A failure on these values is then an unsupported operation.
+    fn values(self, leading: bool) -> proptest::strategy::BoxedStrategy<Value> {
+        let floor: i64 = if leading { -6 } else { 1 };
+        match self {
+            Self::Int => (floor..=5).prop_map(Value::Int).boxed(),
+            Self::Float => (floor..=6)
+                .prop_map(|halves| Value::Float(halves as f64 / 2.0))
+                .boxed(),
+            Self::Bool => proptest::bool::ANY.prop_map(Value::Bool).boxed(),
+            Self::Str => "[a-c]{0,2}"
+                .prop_map(|text| Value::Str(text.into()))
+                .boxed(),
+        }
+    }
+}
+
+/// A program over the operands `x`, `y`, ..., one `ScalarType` each, whose
+/// output `result` is annotated with the type the checker inferred for it.
+#[derive(Clone, Debug)]
+struct Program {
+    spec: String,
+    operands: Vec<ScalarType>,
+    output: StreamType,
+}
+
+const OPERAND_NAMES: [&str; 2] = ["x", "y"];
+
+/// The programs `result = <expression>` over every assignment of types to
+/// the first `arity` operands that the checker admits. The checker decides
+/// what must run, and the type it infers for `result` what it must produce;
+/// warnings do not make a program inadmissible.
+fn admitted_programs(expressions: Vec<String>, arity: usize, minimum: usize) -> Vec<Program> {
+    let assignments = (0..arity).fold(vec![vec![]], |prefixes, _| {
+        prefixes
+            .iter()
+            .flat_map(|prefix: &Vec<ScalarType>| {
+                ScalarType::ALL.map(|operand| [prefix.as_slice(), &[operand]].concat())
+            })
+            .collect()
+    });
+    let mut admitted = Vec::new();
+    for expression in &expressions {
+        for operands in &assignments {
+            let inputs: String = operands
+                .iter()
+                .zip(OPERAND_NAMES)
+                .map(|(operand, name)| format!("in {name}: {}\n", operand.name()))
+                .collect();
+            // The casts experiment gates rounding and `as`, and costs nothing
+            // for programs that do not use them.
+            let spec = |output: &str| {
+                format!(
+                    "use experimental::casts\n{inputs}out result{output}\nresult = {expression}"
+                )
+            };
+            let parse = |spec: &str| {
+                spec.parse::<DsrvSpecification>()
+                    .unwrap_or_else(|error| panic!("matrix spec {spec:?} parses: {error:?}"))
+            };
+            // Gradual checking infers the output type; strict checking then
+            // admits the program with that annotation, as a user would write.
+            let Ok(inferred) = parse(&spec(""))
+                .check(TypeCheckOptions::GRADUAL)
+                .into_parts()
+                .0
+            else {
+                continue;
+            };
+            let Some(output) = inferred.type_annotation(&VarName::new("result")).cloned() else {
+                continue;
+            };
+            let spec = spec(&format!(": {output}"));
+            if parse(&spec)
+                .check(TypeCheckOptions::STRICT)
+                .into_parts()
+                .0
+                .is_ok()
+            {
+                admitted.push(Program {
+                    spec,
+                    operands: operands.clone(),
+                    output,
+                });
+            }
+        }
+    }
+    assert!(
+        admitted.len() >= minimum,
+        "expected the checker to admit at least {minimum} programs, found {}",
+        admitted.len()
+    );
+    admitted
+}
+
+/// An admitted program, its output type, and several ticks of input for its
+/// operands.
+fn admitted_runs(
+    programs: Vec<Program>,
+) -> impl Strategy<Value = (String, StreamType, BTreeMap<VarName, Vec<Value>>)> {
+    const TICKS: usize = 5;
+    proptest::sample::select(programs).prop_flat_map(|program| {
+        let columns: Vec<_> = (program.operands.iter().enumerate())
+            .map(|(index, operand)| proptest::collection::vec(operand.values(index == 0), TICKS))
+            .collect();
+        columns.prop_map(move |columns| {
+            let input = (OPERAND_NAMES.into_iter().zip(columns))
+                .map(|(name, column)| (VarName::new(name), column))
+                .collect();
+            (program.spec.clone(), program.output.clone(), input)
+        })
+    })
+}
+
+/// Checks that `spec` runs on `input` in every configuration: it builds,
+/// runs without panicking or failing, and yields one value of the `output`
+/// type per tick. Reports every configuration that does not.
+fn assert_runs_in_every_configuration(
+    spec: &str,
+    output: &StreamType,
+    input: BTreeMap<VarName, Vec<Value>>,
+) -> Result<(), proptest::test_runner::TestCaseError> {
+    let ticks = input.values().next().map_or(0, Vec::len);
+    let configurations = [
+        (RuntimeSpec::Async, Semantics::TypedUntimed),
+        (RuntimeSpec::SemiSync, Semantics::TypedUntimed),
+        (
+            RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+            Semantics::TypedUntimed,
+        ),
+        (RuntimeSpec::Async, Semantics::Untimed),
+        (RuntimeSpec::SemiSync, Semantics::Untimed),
+        (RuntimeSpec::Async, Semantics::GradualTypedUntimed),
+        (RuntimeSpec::SemiSync, Semantics::GradualTypedUntimed),
+    ];
+    let failures: Vec<_> = configurations
+        .into_iter()
+        .filter_map(|(runtime, semantics)| {
+            let problem = match run_catching_panics(runtime, semantics, spec, &input, "result") {
+                Err(error) => error,
+                Ok(rows) if rows.len() != ticks => {
+                    format!("{} outputs for {ticks} inputs", rows.len())
+                }
+                Ok(rows) => match rows.iter().find_map(|value| {
+                    check_value_stream_type(output, value)
+                        .err()
+                        .map(|e| (value, e))
+                }) {
+                    Some((value, error)) => {
+                        format!("output {value:?} does not conform to {output}: {error}")
+                    }
+                    None => return None,
+                },
+            };
+            Some(format!("{runtime:?} with {semantics:?}: {problem}"))
+        })
+        .collect();
+    proptest::prop_assert!(
+        failures.is_empty(),
+        "the checker admits\n{spec}\nbut it does not run:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}
+
+fn binary_expressions() -> Vec<String> {
+    use trustworthiness_checker::core::BinaryOperator::{self, *};
+    // Adding an operator without a symbol here should fail to compile.
+    let _exhaustive = |operator: BinaryOperator| match operator {
+        Add | Subtract | Multiply | Divide | Modulo | Power | Or | And | Implication
+        | Concatenate | Equal | NotEqual | Less | LessEqual | Greater | GreaterEqual => (),
+    };
+    [
+        "+", "-", "*", "/", "%", "**", "||", "&&", "=>", "++", "==", "!=", "<", "<=", ">", ">=",
+    ]
+    .map(|symbol| format!("x {symbol} y"))
+    .to_vec()
+}
+
+fn unary_expressions() -> Vec<String> {
+    use trustworthiness_checker::core::UnaryOperator::{self, *};
+    // Adding an operator without an expression here should fail to compile.
+    let _exhaustive = |operator: UnaryOperator| match operator {
+        Not | Negate | Sin | Cos | Tan | Absolute | Truncate | Floor | Ceiling | Round
+        | CastFloat | CastStr => (),
+    };
+    [
+        "!x",
+        "-x",
+        "sin(x)",
+        "cos(x)",
+        "tan(x)",
+        "abs(x)",
+        "trunc(x)",
+        "floor(x)",
+        "ceil(x)",
+        "round(x)",
+        "x as Float",
+        "x as Str",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+    /// A binary operator on operand types the type checker admits runs in
+    /// every runtime. No reference semantics is involved.
+    #[test]
+    fn test_checker_admitted_binary_operators_run_in_every_runtime(
+        (spec, output, input) in admitted_runs(admitted_programs(binary_expressions(), 2, 30)),
+    ) {
+        assert_runs_in_every_configuration(&spec, &output, input)?;
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+    /// A unary operator, built-in function or cast on an operand type the
+    /// type checker admits runs in every runtime.
+    #[test]
+    fn test_checker_admitted_unary_operators_run_in_every_runtime(
+        (spec, output, input) in admitted_runs(admitted_programs(unary_expressions(), 1, 12)),
+    ) {
+        assert_runs_in_every_configuration(&spec, &output, input)?;
     }
 }
 

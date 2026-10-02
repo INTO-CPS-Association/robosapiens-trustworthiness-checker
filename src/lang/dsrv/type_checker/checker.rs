@@ -295,7 +295,22 @@ fn check(
             )
             .located(expr.origin()));
         }
-        Val(value) => (value_type(value, expected)?, None),
+        Val(value) => {
+            let typ = value_type(value, expected)?;
+            if let (SyntaxLiteral::Int(literal), TCType::Float) = (value, &typ)
+                && *literal as f64 as i128 != i128::from(*literal)
+            {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::OperatorTypeMismatch,
+                    format!(
+                        "integer literal {literal} cannot be represented exactly as a Float; \
+                         write it as a Float literal"
+                    ),
+                ));
+            }
+            (typ, None)
+        }
         Match(scrutinee, arms, shape) => {
             let scrutinee_type = check(scrutinee, None, context)?;
             let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
@@ -381,15 +396,17 @@ fn check(
         ),
         BinOp(lhs, rhs, parsed) => {
             // The result constraint is not an operand constraint: comparisons
-            // produce `Bool` while comparing values of another type.
-            let (lhs_type, rhs_type) = if matches!(
-                parsed.kind(),
-                BinaryOperatorKind::Equality(_) | BinaryOperatorKind::Ordering(_)
-            ) {
-                check_comparison_operands(lhs, rhs, context)?
-            } else {
-                (check(lhs, None, context)?, check(rhs, None, context)?)
+            // produce `Bool` while comparing values of another type. The
+            // operands of `+`, `-` and `*` are numbers of the result's type,
+            // so an `Int` or `Float` expectation passes down to them.
+            let operand_expected = match (parsed, expected) {
+                (
+                    BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
+                    Some(expected @ (TCType::Int | TCType::Float)),
+                ) => Some(expected),
+                _ => None,
             };
+            let (lhs_type, rhs_type) = check_operands(lhs, rhs, operand_expected, context)?;
             if parsed == BinaryOperator::Power
                 && lhs_type == TCType::Int
                 && rhs_type == TCType::Int
@@ -451,8 +468,20 @@ fn check(
                 &TCType::Bool,
                 expr,
             )?;
-            let yes = check(yes, expected, context)?;
-            let no = check(no, expected, context)?;
+            let (yes_expr, no_expr) = (yes, no);
+            let yes = check(yes_expr, expected, context)?;
+            let no = check(no_expr, expected, context)?;
+            // A flexible branch takes the type of its sibling.
+            let yes = if is_flexible(no_expr, &no) {
+                yes
+            } else {
+                adopt(yes_expr, Ok(yes), &no, context)?
+            };
+            let no = if is_flexible(yes_expr, &yes) {
+                no
+            } else {
+                adopt(no_expr, Ok(no), &yes, context)?
+            };
             (
                 unify(&yes, &no).ok_or_else(|| mismatch(expr, &yes, &no))?,
                 None,
@@ -1194,6 +1223,9 @@ fn check_fields<'arena>(
 
 fn value_type(value: &SyntaxLiteral, expected: Option<&TCType>) -> Result<TCType, SemanticError> {
     Ok(match value {
+        // An integer literal is flexible: where a `Float` is expected it is a
+        // `Float` literal, and elaboration rewrites it as one.
+        SyntaxLiteral::Int(_) if matches!(expected, Some(TCType::Float)) => TCType::Float,
         SyntaxLiteral::Int(_) => TCType::Int,
         SyntaxLiteral::Float(_) => TCType::Float,
         SyntaxLiteral::Str(_) => match expected {
@@ -1253,11 +1285,17 @@ fn resolve_binary(
     rhs: &TCType,
 ) -> Result<(TCType, Option<()>), SemanticError> {
     let invalid = || {
+        let hint = match (lhs, rhs) {
+            (TCType::Int, TCType::Float) | (TCType::Float, TCType::Int) => {
+                "; convert the Int explicitly with `as Float`"
+            }
+            _ => "",
+        };
         error(
             expr,
             TypeErrorKind::OperatorTypeMismatch,
             format!(
-                "{} operator `{}` cannot combine {lhs} and {rhs}",
+                "{} operator `{}` cannot combine {lhs} and {rhs}{hint}",
                 operator.name(),
                 operator.symbol()
             ),
@@ -1265,9 +1303,7 @@ fn resolve_binary(
     };
     let numeric_result = || match (lhs, rhs) {
         (TCType::Int, TCType::Int) => Some((TCType::Int, Some(()))),
-        (TCType::Float, TCType::Float)
-        | (TCType::Int, TCType::Float)
-        | (TCType::Float, TCType::Int) => Some((TCType::Float, Some(()))),
+        (TCType::Float, TCType::Float) => Some((TCType::Float, Some(()))),
         (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => Some((TCType::Int, Some(()))),
         (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => {
             Some((TCType::Float, Some(())))
@@ -1390,11 +1426,6 @@ fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
         TCType::Any | TCType::Unknown | TCType::EmptyList | TCType::EmptyMap
     ) {
         Some(a.clone())
-    } else if matches!(
-        (a, b),
-        (TCType::Int, TCType::Float) | (TCType::Float, TCType::Int)
-    ) {
-        Some(TCType::Float)
     } else {
         None
     }
@@ -1969,36 +2000,79 @@ fn check_generic_def_call(
     Ok((result, None))
 }
 
-/// A comparison's result is Bool, but either grounded operand can supply the
-/// other operand's context. Numeric promotion remains the operator's job.
-fn check_comparison_operands(
+/// Check the operands of a binary operator. Either grounded operand can supply
+/// the other operand's context: a flexible operand is checked again with the
+/// type of the other, unless that is flexible too. Whether the operator accepts
+/// the resulting pair remains the operator's job.
+fn check_operands(
     lhs: ExprRef<'_>,
     rhs: ExprRef<'_>,
+    expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<(TCType, TCType), SemanticError> {
-    let mut left = check_generic_argument(lhs, None, context);
-    let mut right = check_generic_argument(rhs, None, context);
-    if left.as_ref().map_or(true, contains_unresolved_type) {
-        if let Ok(hint) = &right {
-            if !contains_unresolved_type(hint) {
-                left = check_generic_argument(lhs, Some(hint), context);
-            }
-        }
+    let mut left = check_generic_argument(lhs, expected, context);
+    let mut right = check_generic_argument(rhs, expected, context);
+    if let Ok(hint) = &right
+        && !is_flexible(rhs, hint)
+    {
+        let hint = hint.clone();
+        left = adopt(lhs, left, &hint, context);
     }
-    if right.as_ref().map_or(true, contains_unresolved_type) {
-        if let Ok(hint) = &left {
-            if !contains_unresolved_type(hint) {
-                right = check_generic_argument(rhs, Some(hint), context);
-            }
-        }
+    if let Ok(hint) = &left
+        && !is_flexible(lhs, hint)
+    {
+        let hint = hint.clone();
+        right = adopt(rhs, right, &hint, context);
     }
     Ok((left?, right?))
+}
+
+/// Check a flexible operand again at the type of the other one. An operand
+/// that fails to check, or whose type cannot become `hint`, is left to the
+/// operator to report, except for an integer literal taken as a `Float`,
+/// whose own error (one that a `Float` cannot hold exactly) is the useful one.
+fn adopt(
+    operand: ExprRef<'_>,
+    current: Result<TCType, SemanticError>,
+    hint: &TCType,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    match &current {
+        Err(_) => check_generic_argument(operand, Some(hint), context),
+        Ok(typ) if is_flexible(operand, typ) && can_adopt(operand, typ, hint) => {
+            match check_attempt(operand, Some(hint), context) {
+                Err(error) if *typ == TCType::Int && *hint == TCType::Float => Err(error),
+                Err(_) => current,
+                adopted => adopted,
+            }
+        }
+        Ok(_) => current,
+    }
 }
 
 /// Delay a failed argument while siblings supply context. Successful checks
 /// already carry their authoritative annotations; failed attempts emit no
 /// warnings and cannot alter the caller's local bindings or parameter hints.
 fn check_generic_argument(
+    argument: ExprRef<'_>,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let result = check_attempt(argument, expected, context);
+    // A concrete argument owns its type even when a result-derived hint
+    // disagrees. Let the call's signature check report that mismatch at the
+    // call, retaining the embedded definition note.
+    if result.is_err() && expected.is_some() {
+        if let Ok(actual) = check_generic_argument(argument, None, context) {
+            return Ok(actual);
+        }
+    }
+    result
+}
+
+/// Check `argument` in a scratch context, keeping its warnings only if the
+/// check succeeds.
+fn check_attempt(
     argument: ExprRef<'_>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
@@ -2019,14 +2093,6 @@ fn check_generic_argument(
     if result.is_ok() {
         if let Some(collector) = context.warnings.as_deref_mut() {
             collector.absorb(warnings);
-        }
-    }
-    // A concrete argument owns its type even when a result-derived hint
-    // disagrees. Let the call's signature check report that mismatch at the
-    // call, retaining the embedded definition note.
-    if result.is_err() && expected.is_some() {
-        if let Ok(actual) = check_generic_argument(argument, None, context) {
-            return Ok(actual);
         }
     }
     result
@@ -2052,6 +2118,41 @@ fn generic_argument_hints(
                 .map(|ty| TCType::from_stream_type(&ty))
         })
         .collect()
+}
+
+/// Whether `expr`, checked to `typ`, can still take its type from context:
+/// a type that is not yet resolved (`Any`, an empty list or map, ...), or an
+/// `Int` made only of integer literals, which is a `Float` literal where a
+/// `Float` is expected. A variable or any other `Int` expression is not
+/// flexible, so `n + 1.5` stays an error.
+fn is_flexible(expr: ExprRef<'_>, typ: &TCType) -> bool {
+    contains_unresolved_type(typ) || (*typ == TCType::Int && is_integer_literal(expr))
+}
+
+/// Whether a flexible `expr` of type `typ` can be checked again at `target`.
+fn can_adopt(expr: ExprRef<'_>, typ: &TCType, target: &TCType) -> bool {
+    unify(typ, target).is_some()
+        || (*typ == TCType::Int && *target == TCType::Float && is_integer_literal(expr))
+}
+
+/// An integer literal, or arithmetic on integer literals that stays `Int` when
+/// checked again at `Float`: negation, `abs`, `+`, `-` and `*`, and an `if`
+/// between such expressions. Division, remainder and power are not included:
+/// `7 / 2` is integer division whatever its context.
+fn is_integer_literal(expr: ExprRef<'_>) -> bool {
+    match expr.view() {
+        ExprView::Val(SyntaxLiteral::Int(_)) => true,
+        ExprView::Neg(inner) | ExprView::Abs(inner) => is_integer_literal(inner),
+        ExprView::BinOp(lhs, rhs, operator) => {
+            matches!(
+                operator,
+                BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply
+            ) && is_integer_literal(lhs)
+                && is_integer_literal(rhs)
+        }
+        ExprView::If(_, yes, no) => is_integer_literal(yes) && is_integer_literal(no),
+        _ => false,
+    }
 }
 
 fn require(actual: TCType, expected: &TCType, expr: ExprRef<'_>) -> Result<(), SemanticError> {
@@ -2085,10 +2186,14 @@ fn contains_unresolved_type(typ: &TCType) -> bool {
 }
 
 fn mismatch(expr: ExprRef<'_>, expected: &TCType, actual: &TCType) -> SemanticError {
+    let hint = match (expected, actual) {
+        (TCType::Float, TCType::Int) => "; convert the Int explicitly with `as Float`",
+        _ => "",
+    };
     error(
         expr,
         TypeErrorKind::AnnotationTypeMismatch,
-        format!("expected {expected}, got {actual}"),
+        format!("expected {expected}, got {actual}{hint}"),
     )
 }
 

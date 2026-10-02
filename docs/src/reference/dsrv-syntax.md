@@ -197,10 +197,19 @@ is a runtime operation failure. `as`, `trunc`, `floor`, `ceil`, and `round`
 are reserved words in every DSRV file, including files that do not enable the
 experiment.
 
+`Int` and `Float` never convert implicitly: with `n: Int` and `f: Float`,
+`n + f` is a type error, and so is `n < f`. Write `(n as Float) + f` (the
+`casts` experiment).
+
+An integer literal takes the type its context needs, so `f * 2` is a `Float`,
+`n * 2` is an `Int`, and a literal with no context is an `Int`. Division is
+the one thing to watch: `7 / 2` is always the `Int` 3, so `f + 7 / 2` is an
+error.
+
 Integer power is checked: overflow terminates evaluation, and an integer
-exponent must be non-negative. Power promotes mixed `Int`/`Float` operands to
-`Float`, so `4 ** 0.5` is `2.0`. It is right-associative and binds above unary
-minus: `2 ** 3 ** 2` is 512, while `-2 ** 2` is -4.
+exponent must be non-negative. Power of two `Int`s is an `Int`, and of two
+`Float`s a `Float`. It is right-associative and binds above unary minus:
+`2 ** 3 ** 2` is 512, while `-2 ** 2` is -4.
 
 `==` and `!=` compare whole values, including structs:
 `{x: 1, label: "p"} == {label: "p", x: 1}` is `true`, since field order does

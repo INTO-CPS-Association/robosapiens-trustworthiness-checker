@@ -13,7 +13,7 @@ use std::fmt::{self, Display};
 
 use super::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification,
-    ExprBuilder, ExprForestMap, ExprId,
+    ExprBuilder, ExprForestMap, ExprId, ExprKind, ExprView, SyntaxLiteral,
 };
 use super::diagnostics::SemanticAnalysisReport;
 use super::parser::DsrvParseError;
@@ -135,7 +135,15 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
     let roots = builder
         .try_rewrite_forest(roots, |mut node| {
             let source = node.source();
-            let kind = node.source_node().rebuild(source.kind().clone());
+            // An integer literal that checking typed as `Float` is a `Float`
+            // literal from here on, so every runtime sees the value it has.
+            let kind = match (source.view(), source.typ()) {
+                (ExprView::Val(SyntaxLiteral::Int(literal)), TCType::Float) => {
+                    ExprKind::Val(SyntaxLiteral::Float(*literal as f64).into())
+                }
+                _ => source.kind().clone(),
+            };
+            let kind = node.source_node().rebuild(kind);
             let id = node.alloc(kind, source.expr().metadata().clone())?;
             types.push(source.typ().clone());
             Ok::<_, contiguous_tree::BuildError<ExprId>>(id)
