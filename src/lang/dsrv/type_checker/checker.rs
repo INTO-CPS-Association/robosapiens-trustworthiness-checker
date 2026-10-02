@@ -546,7 +546,7 @@ fn check(
         }
         Neg(value) => {
             let typ = check(value, expected, context)?;
-            if !matches!(typ, TCType::Int | TCType::Float) {
+            if !matches!(typ, TCType::Int | TCType::Float | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::OperatorTypeMismatch,
@@ -1169,7 +1169,7 @@ fn check(
         }
         Abs(value) => {
             let typ = check(value, expected, context)?;
-            if !matches!(typ, TCType::Int | TCType::Float) {
+            if !matches!(typ, TCType::Int | TCType::Float | TCType::Any) {
                 return Err(error(
                     expr,
                     TypeErrorKind::OperatorTypeMismatch,

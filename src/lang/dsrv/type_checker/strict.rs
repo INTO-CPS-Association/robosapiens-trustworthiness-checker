@@ -491,6 +491,18 @@ mod tests {
         type_check(contradictory).expect_err("a prior check must not cache away a new constraint");
     }
 
+    /// An `Any` operand is accepted by unary minus and `abs`, as it is by the
+    /// binary operators: it is checked when it runs.
+    #[test]
+    fn unary_minus_and_abs_accept_any() {
+        for source in [
+            "in x: Any\nout y: Any\ny = -x",
+            "in x: Any\nout y: Any\ny = abs(x)",
+        ] {
+            type_check(source.parse().unwrap()).expect("an Any operand should be accepted");
+        }
+    }
+
     /// `Any` expects nothing of a struct's fields, so the constructor is
     /// inferred as it is with no expectation, and the struct is accepted
     /// where `Any` is.
