@@ -54,6 +54,7 @@
   - Keep a container-specific `CARGO_TARGET_DIR` so the container toolchain does not invalidate the host build cache, and use `--userns=keep-id` so the container user can write to the mounted worktree.
   - The image fixes the ROS overlay in at build time, so rebuild it after changing `ros_interfaces/`; otherwise ROS builds fail with missing message types. With Podman, build it as `podman build --format docker -f docker/Dockerfile --target dev --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t trustworthiness-checker:dev .` — the default OCI format ignores the Dockerfile's `SHELL` directive, which breaks the `colcon build` layer.
   - If you are already inside a ROS devcontainer or a system with a functioning local ROS installation, do not launch additional nested ROS containers.
+- Keep `*.proptest-regressions` files and commit them with the test. They record the shrunk failing cases that proptest replays before generating new ones, so they are what keeps a fixed bug from returning. Delete one only when the test's strategy or spec changes, which makes its seeds meaningless, or when the test itself is deleted.
 - Finish with `cargo fmt --all -- --check` and `git diff --check`.
 
 # Documentation
