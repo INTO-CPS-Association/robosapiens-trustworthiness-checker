@@ -35,6 +35,12 @@ map key, indexing a list or calling it as a function is accepted, and gives
 whose type is known is still checked in advance, so `List.len` of an `Int`
 is a type error.
 
+When two values merge, in the branches of an `if`, the arms of a `match`, the
+sides of `default`, `update` and `init`, or the elements of a list or map, and
+their types differ, the result is `Any`: `if c then 1 else "a"` is `Any`, and
+`[1, "a"]` is `List<Any>`. Where a type is expected, each branch must have it,
+so `out z: Int` rejects the `"a"` branch.
+
 ## Type aliases
 
 `type State = Struct<speed: Int, stopped: Bool>` declares a structural alias.

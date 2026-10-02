@@ -1322,6 +1322,27 @@ proptest::proptest! {
     }
 }
 
+/// Two operands merged into one stream: with the same type the merge keeps it,
+/// and with different types it is `Any`.
+fn merge_expressions() -> Vec<String> {
+    ["default(x, y)", "[x, y]", "if true then x else y"]
+        .map(String::from)
+        .to_vec()
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+    /// A merge of operands of any two types the type checker admits runs in
+    /// every runtime, and yields values of the type it inferred for it.
+    #[test]
+    fn test_checker_admitted_merges_run_in_every_runtime(
+        (spec, output, input) in admitted_runs(admitted_programs(merge_expressions(), 2, 40)),
+    ) {
+        assert_runs_in_every_configuration(&spec, &output, input)?;
+    }
+}
+
 #[apply(async_test)]
 async fn test_gradual_typed_runtime_infers_unannotated_output(
     executor: Rc<LocalExecutor<'static>>,

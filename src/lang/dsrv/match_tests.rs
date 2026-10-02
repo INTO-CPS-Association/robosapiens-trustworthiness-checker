@@ -166,8 +166,8 @@ fn arms_are_checked_against_the_value_and_each_other() {
             TypeErrorKind::UnknownUnionTag,
         ),
         (
-            "in label: Str\nout y: Any\ny = match(state) { Moving(n) -> n, Stopped -> label, }\n",
-            TypeErrorKind::MatchArmTypeMismatch,
+            "in label: Str\nout y: Int\ny = match(state) { Moving(n) -> n, Stopped -> label, }\n",
+            TypeErrorKind::AnnotationTypeMismatch,
         ),
         (
             "out y: Int\ny = match(state) { Moving(n) if n -> n, Stopped -> 0, }\n",

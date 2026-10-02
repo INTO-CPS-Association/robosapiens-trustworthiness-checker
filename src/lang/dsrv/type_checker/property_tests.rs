@@ -324,6 +324,85 @@ fn sample_value(typ: &StreamType) -> Value {
     }
 }
 
+/// Two programs of different types combined by a merge: the result may be
+/// either of them, so its type is a join of theirs.
+#[derive(Clone, Debug)]
+struct MergeCase {
+    expr: Expr,
+    inputs: BTreeMap<VarName, StreamType>,
+    /// Inputs given no annotation, so that gradual checking types them `Any`.
+    unannotated: BTreeSet<VarName>,
+}
+
+fn arb_merge_case() -> impl Strategy<Value = MergeCase> {
+    let guard = || Box::new(Expr::Var(VarName::new("guard")));
+    (
+        arb_type_directed_case(),
+        arb_type_directed_case(),
+        any::<bool>(),
+        0..3u8,
+    )
+        .prop_map(move |(first, second, dynamic_second, shape)| {
+            let mut inputs = first.inputs.clone();
+            inputs.extend(second.inputs.clone());
+            inputs.insert(VarName::new("guard"), StreamType::Bool);
+            let mut unannotated = BTreeSet::new();
+            // An operand read from an input with no annotation.
+            let second_expr = if dynamic_second {
+                let dynamic = VarName::new("dynamic");
+                unannotated.insert(dynamic.clone());
+                Expr::Var(dynamic).into()
+            } else {
+                second.expr.clone()
+            };
+            let (left, right) = (Box::new(first.expr), Box::new(second_expr));
+            let expr = match shape {
+                0 => Expr::If(guard(), left, right).into(),
+                1 => Expr::Default(left, right).into(),
+                _ => Expr::If(guard(), right, left).into(),
+            };
+            MergeCase {
+                expr,
+                inputs,
+                unannotated,
+            }
+        })
+}
+
+fn merge_specification(case: &MergeCase) -> DsrvSpecification {
+    let output = VarName::new("result");
+    let mut inputs: BTreeSet<VarName> = case.inputs.keys().cloned().collect();
+    inputs.extend(case.unannotated.iter().cloned());
+    DsrvSpecification::new(
+        inputs,
+        BTreeSet::from([output.clone()]),
+        BTreeMap::from([(output, case.expr.clone())]),
+        case.inputs.clone(),
+        Vec::new(),
+    )
+}
+
+/// Scalars, `Any`, the placeholders, and lists and maps of them.
+fn arb_tc_type() -> impl Strategy<Value = TCType> {
+    prop_oneof![
+        Just(TCType::Int),
+        Just(TCType::Float),
+        Just(TCType::Bool),
+        Just(TCType::Str),
+        Just(TCType::Unit),
+        Just(TCType::Any),
+        Just(TCType::Unknown),
+        Just(TCType::EmptyList),
+        Just(TCType::EmptyMap),
+    ]
+    .prop_recursive(2, 6, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(TCType::list),
+            inner.prop_map(TCType::map),
+        ]
+    })
+}
+
 const TYPECHECK_PROPTEST_CASES: u32 = cfg_select! {
     feature = "extended-proptests" => 10_000,
     _ => 256,
@@ -331,6 +410,57 @@ const TYPECHECK_PROPTEST_CASES: u32 = cfg_select! {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(TYPECHECK_PROPTEST_CASES))]
+
+    #[test]
+    fn join_is_idempotent_and_commutative(a in arb_tc_type(), b in arb_tc_type()) {
+        prop_assert_eq!(super::checker::join(&a, &a), a.clone());
+        prop_assert_eq!(super::checker::join(&a, &b), super::checker::join(&b, &a));
+    }
+
+    #[test]
+    fn join_with_any_is_any(a in arb_tc_type()) {
+        prop_assert_eq!(super::checker::join(&a, &TCType::Any), TCType::Any);
+        prop_assert_eq!(super::checker::join(&TCType::Any, &a), TCType::Any);
+    }
+
+    /// Either side may be used where the join is expected, which is what
+    /// makes it a type for a stream that carries either.
+    #[test]
+    fn join_is_an_upper_bound_under_unify(a in arb_tc_type(), b in arb_tc_type()) {
+        let joined = super::checker::join(&a, &b);
+        prop_assert!(super::checker::unify(&a, &joined).is_some(), "{a} against {joined}");
+        prop_assert!(super::checker::unify(&b, &joined).is_some(), "{b} against {joined}");
+    }
+
+    /// Gradual checking is inference followed by strict checking: annotate
+    /// every variable with the type gradual checking inferred, and strict
+    /// checking must accept the result, giving the output the same type.
+    #[test]
+    fn gradual_acceptance_is_inference_followed_by_strict_checking(case in arb_merge_case()) {
+        let spec = merge_specification(&case);
+        let (gradual, _warnings) = super::gradual::type_check_gradual(spec.clone()).into_parts();
+        // Whether gradual checking accepts is not the property's concern.
+        let Ok(gradual) = gradual else {
+            return Ok(());
+        };
+        let mut annotated = spec;
+        annotated.type_annotations = gradual.type_annotations().clone();
+        let (strict, _warnings) = super::strict::type_check(annotated).into_parts();
+        let strict = match strict {
+            Ok(strict) => strict,
+            Err(errors) => {
+                return Err(TestCaseError::fail(format!(
+                    "gradual checking inferred {:?} but strict checking rejects it: {errors:?}",
+                    gradual.type_annotations()
+                )));
+            }
+        };
+        let output = VarName::new("result");
+        prop_assert_eq!(
+            strict.var_expr_ref(&output).unwrap().typ(),
+            gradual.var_expr_ref(&output).unwrap().typ(),
+        );
+    }
 
     #[test]
     fn strict_and_gradual_accept_type_directed_programs(case in arb_type_directed_case()) {

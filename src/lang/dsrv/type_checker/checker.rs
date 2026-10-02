@@ -335,13 +335,7 @@ fn check(
                 let body_type = checked?;
                 result = Some(match result {
                     None => body_type,
-                    Some(previous) => unify(&previous, &body_type).ok_or_else(|| {
-                        error(
-                            expr,
-                            TypeErrorKind::MatchArmTypeMismatch,
-                            format!("one arm has type {previous}, another {body_type}"),
-                        )
-                    })?,
+                    Some(previous) => join(&previous, &body_type),
                 });
             }
             let Some(result) = result else {
@@ -468,22 +462,10 @@ fn check(
                 &TCType::Bool,
                 expr,
             )?;
-            let (yes_expr, no_expr) = (yes, no);
-            let yes = check(yes_expr, expected, context)?;
-            let no = check(no_expr, expected, context)?;
-            // A flexible branch takes the type of its sibling.
-            let yes = if is_flexible(no_expr, &no) {
-                yes
-            } else {
-                adopt(yes_expr, Ok(yes), &no, context)?
-            };
-            let no = if is_flexible(yes_expr, &yes) {
-                no
-            } else {
-                adopt(no_expr, Ok(no), &yes, context)?
-            };
+            let yes_type = check(yes, expected, context)?;
+            let no_type = check(no, expected, context)?;
             (
-                unify(&yes, &no).ok_or_else(|| mismatch(expr, &yes, &no))?,
+                merge(&[(yes, yes_type), (no, no_type)], expected, context)?,
                 None,
             )
         }
@@ -523,9 +505,9 @@ fn check(
             (typ, None)
         }
         Update(a, b) | Default(a, b) | Init(a, b) => {
-            let a = check(a, expected, context)?;
-            let b = check(b, Some(&a), context)?;
-            (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
+            let a_type = check(a, expected, context)?;
+            let b_type = check(b, expected, context)?;
+            (merge(&[(a, a_type), (b, b_type)], expected, context)?, None)
         }
         Latch(value, trigger) => {
             let value = check(value, expected, context)?;
@@ -740,7 +722,7 @@ fn check(
         }
         List(items) => {
             let expected_element = expected.and_then(TCType::list_element_type);
-            let element = check_elements(expr, items, expected_element, context)?;
+            let element = check_elements(items, expected_element, context)?;
             (TCType::list(element), None)
         }
         Tuple(items) => {
@@ -795,9 +777,9 @@ fn check(
             }
         },
         LConcat(a, b) => {
-            let a = check(a, expected, context)?;
-            let b = check(b, Some(&a), context)?;
-            (unify(&a, &b).ok_or_else(|| mismatch(expr, &a, &b))?, None)
+            let a_type = check(a, expected, context)?;
+            let b_type = check(b, expected, context)?;
+            (merge(&[(a, a_type), (b, b_type)], expected, context)?, None)
         }
         LHead(list) => match check(list, None, context)? {
             TCType::List(element) => (*element, None),
@@ -932,7 +914,6 @@ fn check(
             reject_duplicate_fields(expr, &fields)?;
             let expected_value = expected.and_then(TCType::map_value_type);
             let value = check_fields(
-                expr,
                 fields.iter().map(|(_, value)| value),
                 expected_value,
                 context,
@@ -943,7 +924,6 @@ fn check(
             reject_duplicate_fields(expr, &fields)?;
             let expected_value = expected.and_then(TCType::map_value_type);
             let value = check_fields(
-                expr,
                 fields.iter().map(|(_, value)| value),
                 expected_value,
                 context,
@@ -1196,31 +1176,27 @@ fn check(
 }
 
 fn check_elements(
-    expr: ExprRef<'_>,
     items: ExprRefs<'_>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<TCType, SemanticError> {
-    check_fields(expr, items, expected, context)
+    check_fields(items, expected, context)
 }
 
 fn check_fields<'arena>(
-    expr: ExprRef<'arena>,
     items: impl IntoIterator<Item = ExprRef<'arena>>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<TCType, SemanticError> {
-    let mut result = expected.cloned();
+    let mut checked = Vec::new();
     for item in items {
-        let actual = check(item, result.as_ref(), context)?;
-        result = Some(match result {
-            Some(current) => {
-                unify(&current, &actual).ok_or_else(|| mismatch(expr, &current, &actual))?
-            }
-            None => actual,
-        });
+        let actual = check(item, expected, context)?;
+        checked.push((item, actual));
     }
-    Ok(result.unwrap_or(TCType::Unknown))
+    if checked.is_empty() {
+        return Ok(expected.cloned().unwrap_or(TCType::Unknown));
+    }
+    merge(&checked, expected, context)
 }
 
 fn value_type(value: &SyntaxLiteral, expected: Option<&TCType>) -> Result<TCType, SemanticError> {
@@ -1379,7 +1355,78 @@ fn validate_runtime_scope(
     Ok(())
 }
 
-fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
+/// The type of a stream that carries a value of either type, where two
+/// streams become one: the branches of an `if`, the arms of a `match`, the two
+/// sides of `default`, the elements of a list.
+///
+/// This is not `unify`. `unify` asks whether a value of one type may be used
+/// as another, and lets `Any` instantiate to the type it meets, because
+/// using an `Any` value as an `Int` is checked when it runs. A merged stream
+/// is one that may carry either, so an `Any` among them makes the merge `Any`,
+/// and so do two unrelated types: `join` always has an answer.
+pub(super) fn join(a: &TCType, b: &TCType) -> TCType {
+    match (a, b) {
+        _ if a == b => a.clone(),
+        (TCType::Any, _) | (_, TCType::Any) => TCType::Any,
+        // Placeholders stand for a type that is not known yet.
+        (TCType::Unknown, other) | (other, TCType::Unknown) => other.clone(),
+        (TCType::EmptyList, list @ TCType::List(_))
+        | (list @ TCType::List(_), TCType::EmptyList) => list.clone(),
+        (TCType::EmptyMap, map @ TCType::Map(_)) | (map @ TCType::Map(_), TCType::EmptyMap) => {
+            map.clone()
+        }
+        (TCType::EmptyList | TCType::EmptyMap, _) | (_, TCType::EmptyList | TCType::EmptyMap) => {
+            TCType::Any
+        }
+        // A merged list carries elements of either list, so the elements
+        // join rather than unify: `unify` lets an `Any` element take the
+        // other side's type, which would make the merge depend on order.
+        (TCType::List(a), TCType::List(b)) => TCType::list(join(a, b)),
+        (TCType::Map(a), TCType::Map(b)) => TCType::map(join(a, b)),
+        // Compatible structs and functions unify; anything else is unrelated.
+        _ => unify(a, b).unwrap_or(TCType::Any),
+    }
+}
+
+/// The type of an expression whose value is one of `branches`, each already
+/// checked against `expected`.
+///
+/// A flexible branch (see `is_flexible`) first takes what its siblings need:
+/// an integer literal among `Float` branches is a `Float` literal, and an
+/// empty list or map takes the element type of the others. The branches are
+/// then joined, and where an expectation exists the merge takes its type,
+/// which is what lets each `Any` branch be checked at that type.
+fn merge(
+    branches: &[(ExprRef<'_>, TCType)],
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let mut types: Vec<TCType> = branches.iter().map(|(_, typ)| typ.clone()).collect();
+    let resolved = branches
+        .iter()
+        .zip(&types)
+        .filter(|((expr, _), typ)| !is_flexible(*expr, typ))
+        .fold(None, |joined: Option<TCType>, (_, typ)| {
+            Some(joined.map_or_else(|| typ.clone(), |joined| join(&joined, typ)))
+        });
+    if let Some(resolved) = resolved {
+        for (index, (expr, _)) in branches.iter().enumerate() {
+            if is_flexible(*expr, &types[index]) && can_adopt(*expr, &types[index], &resolved) {
+                types[index] = check(*expr, Some(&resolved), context)?;
+            }
+        }
+    }
+    let joined = types
+        .iter()
+        .skip(1)
+        .fold(types[0].clone(), |joined, typ| join(&joined, typ));
+    Ok(match expected {
+        Some(expected) => unify(&joined, expected).unwrap_or(joined),
+        None => joined,
+    })
+}
+
+pub(super) fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
     if a == b {
         Some(a.clone())
     } else if let (TCType::Expr(a_inner), TCType::Expr(b_inner)) = (a, b) {

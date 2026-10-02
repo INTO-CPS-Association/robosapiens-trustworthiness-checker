@@ -607,9 +607,9 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_heterogeneous_list_falls_back_to_any() {
-        // Without a homogeneous type annotation, a concrete mixed list is a
-        // valid untyped value and may be handled by the gradual Any path.
+    fn test_gradual_heterogeneous_list_has_any_elements() {
+        // Without a homogeneous type annotation, the elements of a concrete
+        // mixed list join to Any.
         let xs: VarName = "gradual_heterogeneous_list_xs".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(
@@ -627,9 +627,16 @@ mod tests {
             BTreeSet::new(),
         );
 
-        let typed = type_check_gradual(spec).expect("heterogeneous list should widen to Any");
-        assert_eq!(typed.type_annotations().get(&xs), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr_ref(&xs).unwrap().typ(), &TCType::Any);
+        let typed =
+            type_check_gradual(spec).expect("heterogeneous list elements should join to Any");
+        assert_eq!(
+            typed.type_annotations().get(&xs),
+            Some(&StreamType::List(Box::new(StreamType::Any)))
+        );
+        assert_eq!(
+            typed.var_expr_ref(&xs).unwrap().typ(),
+            &TCType::list(TCType::Any)
+        );
     }
 
     #[test]
@@ -658,9 +665,9 @@ mod tests {
     }
 
     #[test]
-    fn test_gradual_heterogeneous_map_falls_back_to_any() {
-        // Without a homogeneous type annotation, a concrete mixed map is a
-        // valid untyped value and may be handled by the gradual Any path.
+    fn test_gradual_heterogeneous_map_has_any_values() {
+        // Without a homogeneous type annotation, the values of a concrete
+        // mixed map join to Any.
         let m: VarName = "gradual_heterogeneous_map_m".into();
         let mut exprs = BTreeMap::new();
         exprs.insert(
@@ -678,9 +685,15 @@ mod tests {
             BTreeSet::new(),
         );
 
-        let typed = type_check_gradual(spec).expect("heterogeneous map should widen to Any");
-        assert_eq!(typed.type_annotations().get(&m), Some(&StreamType::Any));
-        assert_eq!(typed.var_expr_ref(&m).unwrap().typ(), &TCType::Any);
+        let typed = type_check_gradual(spec).expect("heterogeneous map values should join to Any");
+        assert_eq!(
+            typed.type_annotations().get(&m),
+            Some(&StreamType::Map(Box::new(StreamType::Any)))
+        );
+        assert_eq!(
+            typed.var_expr_ref(&m).unwrap().typ(),
+            &TCType::map(TCType::Any)
+        );
     }
 
     #[test]
