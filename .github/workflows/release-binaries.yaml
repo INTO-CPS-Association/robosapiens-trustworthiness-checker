@@ -1,0 +1,99 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.vsix-target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-musl
+            vsix-target: linux-x64
+          - os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            vsix-target: win32-x64
+          - os: macos-latest
+            rust-target: aarch64-apple-darwin
+            vsix-target: darwin-arm64
+          - os: macos-latest
+            rust-target: x86_64-apple-darwin
+            vsix-target: darwin-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup toolchain install 1.95 --profile minimal
+          rustup target add ${{ matrix.rust-target }} --toolchain 1.95
+
+      - name: Cache the Cargo registry and build directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-${{ runner.os }}-${{ matrix.rust-target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-${{ runner.os }}-${{ matrix.rust-target }}-
+
+      - name: build
+        shell: bash
+        run: |
+          cargo +1.95 build --release --locked \
+            --package trustuworthiness_checker \
+            --target ${{ matrix.rust-target }}
+
+      - name: Name the asset after its VSIX target
+        shell: bash
+        run: |
+          src="target/${{ matrix.rust-target }}/release/trustworthiness_checker"
+          out="trustworthiness_checker-${{ matrix.vsix-target }}"
+          if [ "${{ runnes.os }}" = "Windows" ]; then
+            src="${src}.exe"
+            out="${out}.exe"
+          fi
+          mkdir -p dist
+          cp "$src" "dist/$out"
+          echo "ASSET=dist/$out" >> "$GITHUB_ENV"
+
+      - name: Confirm the Linux binary is self-contained
+        if: matrix.vsix-target == 'linux-x64'
+        shell: bash
+        run: |
+          if ldd "$ASSET" 2>&1 | grep -qE "statically linked|not a dynamic executable"; then
+            echo "statically linked"
+          else
+            echo "::error::the linux binary is dynamically linked"
+            ldd "$ASSET" || true
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trustworthiness_checker-${{ matrix.vsix-target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" --generate-notes || true
+          gh release upload "$GITHUB_REF_NAME" "$ASSET" --clobber
