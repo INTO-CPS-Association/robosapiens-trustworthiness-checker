@@ -62,7 +62,7 @@ jobs:
         run: |
           src="target/${{ matrix.rust-target }}/release/trustworthiness_checker"
           out="trustworthiness_checker-${{ matrix.vsix-target }}"
-          if [ "${{ runnes.os }}" = "Windows" ]; then
+          if [ "${{ runner.os }}" = "Windows" ]; then
             src="${src}.exe"
             out="${out}.exe"
           fi
