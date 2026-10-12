@@ -502,7 +502,7 @@ async fn open_stdout_with_target<V: JsonStreamValue>(
 }
 
 #[cfg(test)]
-async fn open_stdout_with_shared_writer<V: JsonStreamValue, W: Write + 'static>(
+pub(crate) async fn open_stdout_with_shared_writer<V: JsonStreamValue, W: Write + 'static>(
     interface: OutputInterface,
     writer: Rc<RefCell<W>>,
 ) -> Result<OutputWriter<V>, OutputError> {
@@ -545,8 +545,8 @@ fn write_stdout_ticks<V: JsonStreamValue>(
     row_number: &Cell<usize>,
 ) -> Result<(), OutputError> {
     for tick in batch.ticks() {
-        let number = row_number.get();
-        row_number.set(number.saturating_add(1));
+        let number = tick.index().unwrap_or_else(|| row_number.get());
+        row_number.set(row_number.get().saturating_add(1));
         for update in tick.updates() {
             if auxiliary.contains(update.variable) || update.value.is_no_val() {
                 continue;
@@ -689,6 +689,43 @@ mod tests {
             assert_eq!(
                 String::from_utf8(output.borrow().clone()).unwrap(),
                 "x[0] = 1\n"
+            );
+        });
+    }
+
+    #[test]
+    fn stdout_uses_producer_positions_across_hidden_updates() {
+        smol::block_on(async {
+            let output = Rc::new(RefCell::new(Vec::<u8>::new()));
+            let interface = OutputInterface::from_bindings([
+                crate::core::OutputBinding::output(var("x")),
+                crate::core::OutputBinding::output(var("y")),
+                crate::core::OutputBinding::auxiliary(var("debug")),
+            ])
+            .unwrap();
+            let mut writer = open_stdout_with_shared_writer(interface, Rc::clone(&output))
+                .await
+                .unwrap();
+            for (index, name, value) in [
+                (0, "x", Value::Int(10)),
+                (0, "debug", Value::Int(99)),
+                (0, "y", Value::Int(20)),
+                (1, "x", Value::NoVal),
+                (1, "y", Value::Int(21)),
+                (2, "x", Value::Int(12)),
+            ] {
+                writer
+                    .feed(
+                        OutputBatch::indexed_tick(index, vec![OutputUpdate::new(var(name), value)])
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            writer.close().await.unwrap();
+            assert_eq!(
+                String::from_utf8(output.borrow().clone()).unwrap(),
+                "x[0] = 10\ny[0] = 20\ny[1] = 21\nx[2] = 12\n"
             );
         });
     }

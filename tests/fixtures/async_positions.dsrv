@@ -1,0 +1,6 @@
+in x: Int
+in y: Int
+out z: Int
+out w: Int
+z = y
+w = x * 10

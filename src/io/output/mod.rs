@@ -56,6 +56,8 @@ pub use pipeline::{
     OutputDestination, OutputDestinationSelection, OutputDestinations, OutputPipeline,
     OutputPipelineSession, ResolvedDestination, ResolvedOutput,
 };
+#[cfg(test)]
+pub(crate) use sinks::open_stdout_with_shared_writer;
 pub use sinks::{AsyncFnSink, LocalBatchSink, local_batch_sink};
 pub(crate) use sinks::{InterfaceSink, open_limited_null, open_null, open_stdout};
 

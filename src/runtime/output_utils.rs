@@ -32,20 +32,21 @@ pub(crate) async fn submit_batch<V: 'static>(
 ///
 /// This is the native representation for asynchronous and distributed
 /// monitors: whichever producer yields next becomes one width-one tick. The
-/// sink remains the only output boundary.
+/// sink remains the only output boundary. Each update retains its position
+/// in its own producer stream, independently of submission order.
 pub(crate) async fn consume_singleton_streams<V: 'static>(
     streams: NamedOutputStreams<V>,
     writer: &mut OutputWriter<V>,
 ) -> anyhow::Result<()> {
-    let streams =
-        streams
-            .into_iter()
-            .map(|(variable, stream)| {
-                Box::pin(stream.map(move |value| {
-                    OutputBatch::from(OutputUpdate::new(variable.clone(), value))
-                })) as LocalStream<OutputBatch<V>>
-            })
-            .collect::<Vec<_>>();
+    let streams = streams
+        .into_iter()
+        .map(|(variable, stream)| {
+            Box::pin(stream.enumerate().map(move |(index, value)| {
+                OutputBatch::indexed_tick(index, vec![OutputUpdate::new(variable.clone(), value)])
+                    .expect("one update is a valid output tick")
+            })) as LocalStream<OutputBatch<V>>
+        })
+        .collect::<Vec<_>>();
     let mut streams = futures::stream::select_all(streams);
 
     while let Some(batch) = streams.next().await {
@@ -349,6 +350,38 @@ mod tests {
             VarName::new("x"),
             Box::pin(stream::iter(values)) as LocalStream<i32>,
         )])
+    }
+
+    #[test]
+    fn singleton_driver_labels_each_producer_independently() {
+        let (mut writer, batches, _, _) = recording_writer(None, None, None, None);
+        let streams = BTreeMap::from([
+            (
+                VarName::new("x"),
+                Box::pin(stream::iter([10, 11, 12])) as LocalStream<i32>,
+            ),
+            (
+                VarName::new("y"),
+                Box::pin(stream::iter([20, 21])) as LocalStream<i32>,
+            ),
+        ]);
+        smol::block_on(drive_singleton_streams(streams, &mut writer)).unwrap();
+        let mut observed = BTreeMap::<VarName, Vec<(usize, i32)>>::new();
+        for batch in batches.borrow().iter() {
+            for tick in batch.ticks() {
+                let index = tick
+                    .index()
+                    .expect("asynchronous output has a producer position");
+                for update in tick.updates() {
+                    observed
+                        .entry(update.variable.clone())
+                        .or_default()
+                        .push((index, *update.value));
+                }
+            }
+        }
+        assert_eq!(observed[&VarName::new("x")], [(0, 10), (1, 11), (2, 12)]);
+        assert_eq!(observed[&VarName::new("y")], [(0, 20), (1, 21)]);
     }
 
     #[test]
