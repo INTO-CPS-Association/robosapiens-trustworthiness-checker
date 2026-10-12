@@ -508,6 +508,22 @@ impl ScopedExpr {
         None
     }
 
+    fn has_lexical_binding(&self, name: &VarName) -> bool {
+        let mut frame = self.environment.as_deref();
+        while let Some(current) = frame {
+            if current
+                .bindings
+                .iter()
+                .rev()
+                .any(|(bound, _)| bound == name)
+            {
+                return true;
+            }
+            frame = current.parent.as_deref();
+        }
+        false
+    }
+
     fn bind_streams(
         self,
         bindings: impl IntoIterator<Item = (VarName, SharedOutput<Value>)>,
@@ -566,10 +582,29 @@ where
 {
     let mut names = Vec::new();
     let mut streams = Vec::new();
-    for name in expression.expr.as_ref().free_variables() {
+    let mut referenced_names = expression.expr.as_ref().free_variables();
+    referenced_names.extend(expression.expr.as_ref().postorder().filter_map(
+        |node| match node.view() {
+            ExprView::Var(name) if expression.has_lexical_binding(name) => Some(name.clone()),
+            _ => None,
+        },
+    ));
+    for name in referenced_names {
         // A name a pattern binds is not a stream; it comes from the match.
+        // Do not use `free_variables` here: the retained enclosing AST knows
+        // that function parameters are lexically bound, while this evaluator
+        // must still read their values from the call frame for this tick.
         let stream = expression
             .resolve_stream(&name)
+            .or_else(|| {
+                expression.resolve(&name).map(|bound| {
+                    if matches!(bound.as_ref().view(), ExprView::Lambda(..)) {
+                        eval_within_tick::<AC>(bound, ctx)
+                    } else {
+                        evaluate_scope::<AC>(bound, ctx)
+                    }
+                })
+            })
             .or_else(|| ctx.var(&name))
             .map(mc::stream_lift_base);
         if let Some(stream) = stream {
@@ -580,7 +615,7 @@ where
     let expr = expression.expr.clone();
     let evaluate = move |bound: &BTreeMap<VarName, Value>| {
         eval_atemporal(expr.as_ref(), bound)
-            .unwrap_or_else(|error| panic!("expression failed within its tick: {error}"))
+            .unwrap_or_else(|error| panic!("expression `{expr}` failed within its tick: {error}"))
     };
     // With nothing to read, the value is the same every tick.
     if streams.is_empty() {

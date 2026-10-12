@@ -1,0 +1,16 @@
+use experimental::{functions, generics, tagged_unions, pattern_matching}
+
+type Option<T> = Union<None, Some: T>
+
+def is_some_and<T>(option: Option<T>, predicate: (T -> Bool)) -> Bool = match(option) {
+  Some(value) -> predicate(value),
+  None -> false,
+}
+
+def positive(option: Option<Int>) -> Bool =
+  is_some_and(option, \value: Int -> value > 0)
+
+in x: Int
+aux option: Option<Int> = Some(x)
+out direct: Bool = match(option) { Some(value) -> value > 0, None -> false }
+out nested: Bool = positive(option)
