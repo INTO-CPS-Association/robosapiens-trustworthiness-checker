@@ -14,6 +14,10 @@ use super::sinks::InterfaceSink;
 
 type LocalRedisConnection = Rc<MultiplexedConnection>;
 
+/// How long a publish waits for Redis's reply. redis-rs's 500 ms default
+/// turned a brief stall of a loaded host's Redis into a fatal output error.
+const PUBLISH_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub(crate) async fn open<V: JsonStreamValue>(
     host: &str,
     port: Option<u16>,
@@ -59,7 +63,10 @@ async fn open_connection(
     let mut tracker = retry.tracker();
     loop {
         match client.get_multiplexed_async_connection().await {
-            Ok(connection) => return Ok(connection),
+            Ok(mut connection) => {
+                connection.set_response_timeout(PUBLISH_REPLY_TIMEOUT);
+                return Ok(connection);
+            }
             Err(error) if retryable_connection_error(&error) => {
                 let Some(delay) = tracker.record_failure() else {
                     return Err(OutputError::backend(format!(
