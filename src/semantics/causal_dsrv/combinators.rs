@@ -66,6 +66,25 @@ pub fn cast<D: CausalDomain>(
     }))
 }
 
+/// Brand each value as `newtype`, or read the representation of a value of
+/// exactly `newtype`, keeping each value's explanation.
+pub fn newtype<D: CausalDomain>(
+    input: LocalStream<CausalValue<D>>,
+    newtype: crate::core::NewtypeSchema<crate::core::StreamType>,
+    wrap: bool,
+) -> LocalStream<CausalValue<D>> {
+    Box::pin(lift_base(input).map(move |input| {
+        let value = match input.value {
+            Value::NoVal => Value::NoVal,
+            Value::Deferred => Value::Deferred,
+            value if wrap => operations::newtype_wrap(value, &newtype),
+            value => operations::newtype_unwrap(value, &newtype)
+                .unwrap_or_else(|error| panic!("{error}")),
+        };
+        marker(value, input.explanation)
+    }))
+}
+
 pub fn binary<D: CausalDomain>(
     operation: BinaryOperator,
     left: LocalStream<CausalValue<D>>,

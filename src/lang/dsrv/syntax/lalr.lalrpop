@@ -4,7 +4,7 @@ use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
 use crate::lang::dsrv::syntax::parsed::{SpanningBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset};
-use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, TypeName};
+use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, AliasKind, TypeName};
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree, ValuePath};
 use crate::core::{BinaryOperator, VarName};
 use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
@@ -851,6 +851,19 @@ AliasParameters: EcoVec<TypeName> = {
 AliasDecl: Declaration = {
    <l:@L> <internal:"internal"?> "type" <name:SourceName> <parameters:AliasParameters?> "=" <ty:StreamTyp> <r:@R> =>
        Declaration::Alias(AliasDeclaration {
+           name,
+           parameters: parameters.unwrap_or_else(EcoVec::new),
+           internal: internal.is_some(),
+           kind: AliasKind::Structural,
+           ty,
+           span: Span::new(l as u32, r as u32),
+       }),
+   // A nominal type over its representation. The declaration shares the
+   // alias namespace and visibility rules; what differs is that its name
+   // resolves to an identity rather than to the structure it wraps.
+   <l:@L> <internal:"internal"?> "newtype" <name:SourceName> <parameters:AliasParameters?> "=" <ty:StreamTyp> <r:@R> =>
+       Declaration::Alias(AliasDeclaration {
+           kind: AliasKind::Newtype { stem: name.as_str().into() },
            name,
            parameters: parameters.unwrap_or_else(EcoVec::new),
            internal: internal.is_some(),

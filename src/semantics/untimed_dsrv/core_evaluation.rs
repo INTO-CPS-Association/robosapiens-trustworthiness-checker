@@ -35,6 +35,8 @@ pub(crate) fn evaluate<'a>(
             }
         }
         Cast(value, target) | Ascribe(value, target) => mc::cast(evaluate(value), target.clone()),
+        Wrap(value, newtype) => mc::newtype_wrap(evaluate(value), newtype.clone()),
+        Unwrap(value, newtype) => mc::newtype_unwrap(evaluate(value), newtype.clone()),
         Not(value) => mc::not(evaluate(value)),
         Neg(value) => mc::neg(evaluate(value)),
         Update(current, update) => mc::update(evaluate(current), evaluate(update)),

@@ -96,6 +96,7 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::RecursiveConstant { .. }
             | DsrvExpandError::ConstantValue { .. }
             | DsrvExpandError::ConstantType { .. }
+            | DsrvExpandError::ConstantCheck { .. }
             | DsrvExpandError::ConstantOffset { .. }) => Self::Modules(other.to_string()),
         }
     }

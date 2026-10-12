@@ -191,6 +191,13 @@ pub enum UnionConformanceCause {
     ExtraField(EcoString),
     #[error("core conformance cannot establish executable type {0}")]
     UnsupportedSchema(StreamType),
+    /// A newtype is only ever its own brand: a value of another newtype, or
+    /// a bare representation, does not conform to it.
+    #[error("{} is not a value of newtype {expected}", actual.as_ref().map_or_else(|| "an unbranded value".to_owned(), |brand| format!("a value of newtype {brand}")))]
+    NewtypeBrand {
+        expected: EcoString,
+        actual: Option<EcoString>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -281,6 +288,20 @@ pub fn check_value_conformance(
         | (Value::Bool(_), T::Bool)
         | (Value::Unit, T::Unit) => Ok(()),
         (Value::Union(value), T::Union(schema)) => check_union(value, schema).map(|_| ()),
+        // Identity first, then the representation it holds.
+        (Value::Newtype(value), T::Newtype(schema)) => {
+            if value.brand() != schema.brand() {
+                return Err(UnionConformanceError::new(C::NewtypeBrand {
+                    expected: schema.brand().clone(),
+                    actual: Some(value.brand().clone()),
+                }));
+            }
+            check_value_conformance(value.value(), schema.repr()).map_err(|e| e.at(P::Payload))
+        }
+        (_, T::Newtype(schema)) => Err(UnionConformanceError::new(C::NewtypeBrand {
+            expected: schema.brand().clone(),
+            actual: None,
+        })),
         (Value::List(values), T::List(inner)) => {
             for (i, value) in values.iter().enumerate() {
                 check_value_conformance(value, inner).map_err(|e| e.at(P::Index(i)))?;
@@ -336,6 +357,12 @@ pub fn check_value_conformance(
                     if let Some(payload) = value.payload() {
                         check_value_conformance(payload, &T::Any).map_err(|e| e.at(P::Payload))?;
                     }
+                }
+                // `Any` keeps a newtype's identity; it only rejects markers
+                // inside it.
+                Value::Newtype(value) => {
+                    check_value_conformance(value.value(), &T::Any)
+                        .map_err(|e| e.at(P::Payload))?;
                 }
                 _ => {}
             }

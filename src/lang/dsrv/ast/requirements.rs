@@ -21,6 +21,8 @@ pub(super) fn requirement(node: ExprRef<'_>) -> Option<(RuntimeCapability, &'sta
         ExprKind::Constructor(..) => Some((RuntimeCapability::TaggedUnions, "a union constructor")),
         ExprKind::Match(..) => Some((RuntimeCapability::PatternMatching, "`match`")),
         ExprKind::Matches(..) => Some((RuntimeCapability::PatternMatching, "`matches`")),
+        // Every runtime evaluates the elaborated wrap and unwrap operations.
+        ExprKind::Newtype(..) | ExprKind::Wrap(..) | ExprKind::Unwrap(..) => None,
         ExprKind::If(..)
         | ExprKind::SIndex(..)
         | ExprKind::Val(..)

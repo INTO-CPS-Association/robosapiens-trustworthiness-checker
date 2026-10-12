@@ -179,7 +179,7 @@ pub(crate) fn inline_functions(
         && imported.qualified.is_empty()
         && imported
             .constants
-            .is_none_or(super::constants::Constants::is_empty);
+            .is_none_or(|constants| constants.is_empty());
     if names_nothing {
         return Ok(parsed);
     }
@@ -287,7 +287,7 @@ pub(crate) struct Scope<'a> {
     /// What a bare or qualified name stands for, where it names a constant
     /// rather than a stream. A constant is a value, not a tree, so it is
     /// written in as a literal rather than grafted.
-    pub(crate) constants: Option<&'a super::constants::Constants>,
+    pub(crate) constants: Option<&'a dyn super::constants::ConstantNames>,
     pub(crate) bare: BTreeMap<VarName, Def<'a>>,
     pub(crate) qualified: BTreeMap<(Vec<ModuleName>, VarName), Def<'a>>,
 }

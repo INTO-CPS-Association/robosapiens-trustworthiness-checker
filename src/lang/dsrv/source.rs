@@ -1,7 +1,13 @@
 //! Source-level type names and immutable, expanded alias namespaces.
 //!
-//! Source types remain private to the DSRV frontend. Consumers receive only
-//! structural [`StreamType`]s; names never become nominal type identities.
+//! Source types remain private to the DSRV frontend. Consumers receive
+//! [`StreamType`]s. An alias's name never becomes a type identity: a
+//! `type` declaration is structural. A `newtype` declaration is the one
+//! exception, and its identity is not its name as written but its brand,
+//! the canonical path of the module that declared it with the declaration's
+//! name and resolved arguments ([`crate::core::NewtypeSchema`]). However a
+//! newtype is reached, by alias, import or re-import, it resolves to the
+//! same brand.
 
 use super::ast::AstShared as Rc;
 use std::{
@@ -11,7 +17,9 @@ use std::{
 
 use ecow::{EcoString, EcoVec};
 
-use crate::core::{ClosedUnion, StreamType, UnionAlternative, UnionPayload, UnionSchemaError};
+use crate::core::{
+    ClosedUnion, NewtypeSchema, StreamType, UnionAlternative, UnionPayload, UnionSchemaError,
+};
 use crate::lang::dsrv::path::TypePath;
 
 use super::expand::language::{Dialect, LanguageConfig};
@@ -150,6 +158,27 @@ pub enum SourceResolveError {
     Union { cause: UnionSchemaError, span: Span },
     #[error("cyclic type aliases {path:?} at {span:?}")]
     AliasCycle { path: Vec<TypePath>, span: Span },
+    #[error(
+        "`{name}` at {span:?} is not an operation of a newtype: a newtype has `new` and `value`"
+    )]
+    UnknownNewtypeOperation { name: EcoString, span: Span },
+    #[error("`{operation}` at {span:?} takes exactly one argument")]
+    NewtypeOperationArity { operation: EcoString, span: Span },
+    #[error(
+        "`{operation}` at {span:?} is written in {writer}, but only {owner}, which declares the \
+         newtype, may build or read its representation; call a function it exports instead"
+    )]
+    NewtypeRepresentation {
+        operation: EcoString,
+        owner: EcoString,
+        writer: EcoString,
+        span: Span,
+    },
+    #[error(
+        "`{operation}` at {span:?} is in text supplied at run time, which may not build or read \
+         a newtype's representation; call a function its declaring module exports instead"
+    )]
+    NewtypeRuntimeText { operation: EcoString, span: Span },
 }
 
 /// Collision-free structural namespace fingerprint.
@@ -268,6 +297,22 @@ fn clear_type_spans(ty: &mut SourceType) {
                     clear_type_spans(payload);
                 }
             }
+        }
+        SourceTypeKind::Newtype(schema) => {
+            *schema = schema.map(|ty| {
+                let mut ty = ty.clone();
+                clear_type_spans(&mut ty);
+                ty
+            });
+        }
+        SourceTypeKind::NewtypeInstance(instance) => {
+            let instance = instance.as_mut();
+            instance
+                .arguments
+                .make_mut()
+                .iter_mut()
+                .for_each(clear_type_spans);
+            clear_type_spans(&mut instance.repr);
         }
         SourceTypeKind::Int
         | SourceTypeKind::Float
@@ -422,6 +467,7 @@ impl SourceContextBuilder {
             name,
             parameters: EcoVec::new(),
             internal: false,
+            kind: AliasKind::Structural,
             ty: SourceType::from(ty),
             span: Span::default(),
         })
@@ -503,8 +549,80 @@ pub(crate) struct AliasDeclaration {
     /// An internal alias may be used inside the module that declares it and
     /// is never reachable from another one (S12).
     pub internal: bool,
+    /// A structural `type`, or a nominal `newtype`.
+    pub kind: AliasKind,
     pub ty: SourceType,
     pub span: Span,
+}
+
+/// What a declaration's name stands for once it resolves.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub(crate) enum AliasKind {
+    /// `type`: the structure it expands to, interchangeable with any other
+    /// spelling of that structure.
+    #[default]
+    Structural,
+    /// `newtype`: a nominal type over the body, its representation.
+    ///
+    /// `stem` is the declaration's canonical path, the module that
+    /// declared it and its name, which every brand it makes begins with.
+    /// Parsing records the bare name; the module graph qualifies it when the
+    /// declaration is placed in its module, and imports carry it unchanged.
+    Newtype { stem: EcoString },
+}
+
+impl AliasKind {
+    pub(crate) fn newtype_stem(&self) -> Option<&EcoString> {
+        match self {
+            Self::Structural => None,
+            Self::Newtype { stem } => Some(stem),
+        }
+    }
+}
+
+impl AliasDeclaration {
+    /// This declaration placed in `module`, spelled as a brand spells a
+    /// module path (empty for the root).
+    pub(crate) fn placed_in(mut self, module: &str) -> Self {
+        if let AliasKind::Newtype { stem } = &mut self.kind
+            && !module.is_empty()
+        {
+            *stem = format!("{module}::{}", self.name).into();
+        }
+        self
+    }
+}
+
+/// A generic newtype applied to arguments that may still name the
+/// parameters of an enclosing generic declaration, carrying its own
+/// representation so it resolves wherever it is imported.
+///
+/// This is what an exported generic declaration's body holds where it
+/// applies a generic newtype: the newtype cannot be inlined structurally,
+/// as a generic alias is, without losing its identity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub(crate) struct NewtypeInstance {
+    pub stem: EcoString,
+    pub parameters: EcoVec<TypeName>,
+    pub arguments: EcoVec<SourceType>,
+    /// The declaration's body, resolved where it was declared except for
+    /// its own `parameters`.
+    pub repr: SourceType,
+}
+
+/// The brand of `stem` applied to `arguments`.
+pub(crate) fn brand_of(stem: &str, arguments: &[StreamType]) -> EcoString {
+    crate::core::canonical_brand(stem, arguments)
+}
+
+/// The newtype instance `stem` makes from resolved `arguments` and the
+/// representation its body resolved to.
+fn newtype_instance(stem: &str, arguments: EcoVec<StreamType>, repr: StreamType) -> StreamType {
+    StreamType::Newtype(NewtypeSchema::new(
+        brand_of(stem, &arguments),
+        arguments,
+        repr,
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -531,6 +649,12 @@ pub(crate) enum SourceTypeKind {
     Struct(EcoVec<(EcoString, SourceType)>, bool),
     Function(EcoVec<SourceType>, Box<SourceType>),
     Union(EcoVec<SourceAlternative>),
+    /// A newtype instance that has already resolved. No source spells one;
+    /// it is how a resolved newtype travels through an import.
+    Newtype(NewtypeSchema<SourceType>),
+    /// A generic newtype applied inside an exported generic declaration.
+    /// No source spells one either.
+    NewtypeInstance(Box<NewtypeInstance>),
 }
 
 /// One alternative of a source-level union type, before its payload resolves.
@@ -581,6 +705,9 @@ impl From<StreamType> for SourceType {
                     })
                     .collect(),
             ),
+            StreamType::Newtype(schema) => {
+                SourceTypeKind::Newtype(schema.map(|ty| ty.clone().into()))
+            }
         };
         Self {
             kind,
@@ -628,7 +755,10 @@ impl AliasResolver<'_> {
             self.resolve(name, arguments, span)
         });
         self.active.pop();
-        let ty = result?;
+        let ty = match definition.kind.newtype_stem() {
+            Some(stem) => newtype_instance(stem, EcoVec::new(), result?),
+            None => result?,
+        };
         self.expanded.insert(name.clone(), ty.clone());
         Ok(ty)
     }
@@ -678,7 +808,10 @@ impl AliasResolver<'_> {
             self.resolve(name, arguments, span)
         });
         self.active.pop();
-        result
+        match declaration.kind.newtype_stem() {
+            Some(stem) => Ok(newtype_instance(stem, arguments, result?)),
+            None => result,
+        }
     }
 }
 
@@ -749,7 +882,10 @@ fn instantiate(
         instantiate(context, name, arguments, span, active, false)
     });
     active.pop();
-    result
+    match declaration.kind.newtype_stem() {
+        Some(stem) => Ok(newtype_instance(stem, arguments, result?)),
+        None => result,
+    }
 }
 
 /// A generic alias's body with its parameters replaced by the arguments it
@@ -831,6 +967,18 @@ pub(crate) fn substitute_source(
                 })
                 .collect(),
         ),
+        // Only the arguments can name an enclosing parameter: the
+        // representation is closed over the newtype's own.
+        SourceTypeKind::NewtypeInstance(instance) => {
+            SourceTypeKind::NewtypeInstance(Box::new(NewtypeInstance {
+                arguments: instance
+                    .arguments
+                    .iter()
+                    .map(|ty| substitute_source(ty, bound))
+                    .collect(),
+                ..(**instance).clone()
+            }))
+        }
         kind => kind.clone(),
     };
     SourceType {
@@ -853,7 +1001,7 @@ pub(crate) fn match_source_type(
         actual: &StreamType,
         parameters: &BTreeSet<TypeName>,
         bound: &mut BTreeMap<TypeName, StreamType>,
-        active: &mut Vec<TypePath>,
+        active: &mut Vec<(TypePath, *const StreamType)>,
     ) -> bool {
         use SourceTypeKind::*;
         if let Named(path, arguments) = &pattern.kind {
@@ -882,12 +1030,31 @@ pub(crate) fn match_source_type(
                 })?
             });
             if let Some(alias) = alias {
-                if alias.parameters.len() != arguments.len() || active.contains(path) {
+                // An alias expanding back to itself at the same position of
+                // `actual` would never consume it. The same alias nested
+                // deeper, as in `Option<Struct<x: Option<T>>>`, is matched.
+                let position = (path.clone(), std::ptr::from_ref(actual));
+                if alias.parameters.len() != arguments.len() || active.contains(&position) {
                     return false;
+                }
+                // A newtype is matched by identity, and its arguments
+                // against the instance's, which is how a phantom argument
+                // its representation never mentions is still inferred.
+                if let Some(stem) = alias.kind.newtype_stem() {
+                    return match actual {
+                        StreamType::Newtype(schema) if schema.stem() == stem.as_str() => arguments
+                            .iter()
+                            .zip(schema.arguments())
+                            .all(|(pattern, actual)| {
+                                matches(context, pattern, actual, parameters, bound, active)
+                            }),
+                        StreamType::Any => true,
+                        _ => false,
+                    };
                 }
                 let substitutions = alias.parameters.iter().zip(arguments).collect();
                 let expanded = substitute_source(&alias.ty, &substitutions);
-                active.push(path.clone());
+                active.push(position);
                 let result = matches(context, &expanded, actual, parameters, bound, active);
                 active.pop();
                 return result;
@@ -959,6 +1126,18 @@ pub(crate) fn match_source_type(
                         active,
                     )
             }
+            (Newtype(pattern), StreamType::Newtype(actual)) => pattern.brand() == actual.brand(),
+            (NewtypeInstance(pattern), StreamType::Newtype(actual)) => {
+                actual.stem() == pattern.stem.as_str()
+                    && pattern.arguments.len() == actual.arguments().len()
+                    && pattern
+                        .arguments
+                        .iter()
+                        .zip(actual.arguments())
+                        .all(|(pattern, actual)| {
+                            matches(context, pattern, actual, parameters, bound, active)
+                        })
+            }
             (Union(patterns), StreamType::Union(actual)) => {
                 patterns.len() == actual.alternatives().len()
                     && patterns.iter().all(|pattern| {
@@ -1025,6 +1204,16 @@ fn substituted(source: &SourceType, bound: &BTreeMap<&TypeName, &StreamType>) ->
                 })
                 .collect(),
         ),
+        SourceTypeKind::NewtypeInstance(instance) => {
+            SourceTypeKind::NewtypeInstance(Box::new(NewtypeInstance {
+                arguments: instance
+                    .arguments
+                    .iter()
+                    .map(|ty| substituted(ty, bound))
+                    .collect(),
+                ..(**instance).clone()
+            }))
+        }
         kind => kind.clone(),
     };
     SourceType {
@@ -1092,6 +1281,28 @@ fn resolve_type(
                 }
             })?)
         }
+        SourceTypeKind::Newtype(schema) => {
+            StreamType::Newtype(schema.try_map(|ty| resolve_type(ty, lookup))?)
+        }
+        SourceTypeKind::NewtypeInstance(instance) => {
+            let arguments = instance
+                .arguments
+                .iter()
+                .map(|ty| resolve_type(ty, lookup))
+                .collect::<Result<EcoVec<_>, _>>()?;
+            if arguments.len() != instance.parameters.len() {
+                return Err(SourceResolveError::AliasArity {
+                    name: TypePath::local(TypeName(instance.stem.clone())),
+                    expected: instance.parameters.len(),
+                    found: arguments.len(),
+                    span: source.span,
+                });
+            }
+            let bound: BTreeMap<&TypeName, &StreamType> =
+                instance.parameters.iter().zip(&arguments).collect();
+            let repr = resolve_type(&substituted(&instance.repr, &bound), lookup)?;
+            newtype_instance(&instance.stem, arguments, repr)
+        }
     })
 }
 
@@ -1137,6 +1348,7 @@ mod tests {
             name: name(s),
             parameters: EcoVec::new(),
             internal: false,
+            kind: AliasKind::Structural,
             span: ty.span,
             ty,
         }

@@ -250,6 +250,11 @@ fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {
         (TCType::Map(value_type), Value::Map(values)) => values
             .values()
             .try_for_each(|val| check_value_type_ref(value_type, val)),
+        // A newtype value has its instance's type when it carries that
+        // instance's brand and holds its representation.
+        (TCType::Newtype(schema), Value::Newtype(value)) if schema.brand() == value.brand() => {
+            check_value_type_ref(schema.repr(), value.value())
+        }
         (TCType::Struct(struct_types, _), Value::Map(values)) => {
             struct_types.iter().try_for_each(|(k, v)| {
                 let k: &str = k.as_str();
@@ -280,6 +285,9 @@ pub fn extract_value_type(value: Value) -> TCType {
         // A runtime union carries no schema, so its type is not recoverable
         // from the value alone; elaboration is what gives a constructor one.
         Value::Union(_) => TCType::Unknown,
+        // Likewise a newtype value names its brand but not the
+        // representation type the declaration gave it.
+        Value::Newtype(_) => TCType::Unknown,
         Value::List(values) => {
             if values.is_empty() {
                 TCType::EmptyList

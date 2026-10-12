@@ -32,6 +32,8 @@ mod match_tests;
 #[cfg(test)]
 mod module_tests;
 #[cfg(test)]
+mod newtype_tests;
+#[cfg(test)]
 mod std_option_tests;
 #[cfg(test)]
 mod tagged_union_tests;

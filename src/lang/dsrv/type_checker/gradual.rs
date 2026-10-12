@@ -80,6 +80,10 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
                         }
                 })
         }
+        // A newtype is consistent only with itself: its brand decides.
+        (StreamType::Newtype(expected), TCType::Newtype(actual)) => {
+            expected.brand() == actual.brand()
+        }
         (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
             ef.len() == af.len()
                 && ef

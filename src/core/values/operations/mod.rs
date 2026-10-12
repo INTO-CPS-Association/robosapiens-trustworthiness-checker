@@ -13,7 +13,7 @@ pub use collections::{
     list_append, list_concat, list_head, list_index, list_len, list_tail, map_get, map_has_key,
     map_insert, map_remove, tuple_get,
 };
-pub use dispatch::{ValueOpError, binary, cast, unary};
+pub use dispatch::{ValueOpError, binary, cast, newtype_unwrap, newtype_wrap, unary};
 
 #[cfg(test)]
 mod tests;

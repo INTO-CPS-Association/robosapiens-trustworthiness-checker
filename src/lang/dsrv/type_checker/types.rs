@@ -4,7 +4,7 @@ use ecow::{EcoString, EcoVec};
 use itertools::Itertools;
 
 use crate::VarName;
-use crate::core::{ClosedUnion, StreamType};
+use crate::core::{ClosedUnion, NewtypeSchema, StreamType};
 use std::collections::BTreeMap;
 
 /// Global environment mapping stream variables to their declared or inferred types.
@@ -36,6 +36,9 @@ pub enum TCType {
     Unknown,
     /// A closed tagged union.
     Union(ClosedUnion<TCType>),
+    /// A nominal newtype instance. It unifies only with itself (and with
+    /// the gradual types), never with its representation.
+    Newtype(NewtypeSchema<TCType>),
 }
 
 impl TCType {
@@ -88,6 +91,7 @@ impl TCType {
             ),
             StreamType::Any => TCType::Any,
             StreamType::Union(schema) => TCType::Union(schema.map(TCType::from_stream_type)),
+            StreamType::Newtype(schema) => TCType::Newtype(schema.map(TCType::from_stream_type)),
         }
     }
 
@@ -137,8 +141,37 @@ impl TCType {
                 .try_map(|ty| ty.to_stream_type().ok_or(()))
                 .ok()
                 .map(StreamType::Union),
+            TCType::Newtype(schema) => schema
+                .try_map(|ty| ty.to_stream_type().ok_or(()))
+                .ok()
+                .map(StreamType::Newtype),
             TCType::EmptyList | TCType::EmptyMap | TCType::Unknown => None,
         }
+    }
+}
+
+/// Whether `typ` has a newtype anywhere in it.
+pub(crate) fn mentions_newtype(typ: &TCType) -> bool {
+    match typ {
+        TCType::Newtype(_) => true,
+        TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => mentions_newtype(inner),
+        TCType::Tuple(items) => items.iter().any(mentions_newtype),
+        TCType::Struct(fields, _) => fields.iter().any(|(_, typ)| mentions_newtype(typ)),
+        TCType::Function(arguments, result) => {
+            arguments.iter().any(mentions_newtype) || mentions_newtype(result)
+        }
+        TCType::Union(schema) => schema.alternatives().iter().any(|alternative| {
+            matches!(alternative.payload(), crate::core::UnionPayload::Of(payload) if mentions_newtype(payload))
+        }),
+        TCType::Int
+        | TCType::Float
+        | TCType::Str
+        | TCType::Bool
+        | TCType::Unit
+        | TCType::EmptyList
+        | TCType::EmptyMap
+        | TCType::Any
+        | TCType::Unknown => false,
     }
 }
 
@@ -151,6 +184,7 @@ impl std::fmt::Display for TCType {
             TCType::Bool => write!(f, "Bool"),
             TCType::Unit => write!(f, "Unit"),
             TCType::Union(schema) => write!(f, "{schema}"),
+            TCType::Newtype(schema) => write!(f, "{schema}"),
             TCType::List(typ) => write!(f, "List<{}>", typ),
             TCType::Tuple(inner) => {
                 let len = inner.len();

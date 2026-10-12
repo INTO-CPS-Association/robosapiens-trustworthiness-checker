@@ -579,6 +579,17 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, input, layout);
             descriptor.push(')');
         }
+        StreamOp::Newtype { input, operation } => {
+            let (name, newtype) = match operation {
+                NewtypeOp::Wrap(newtype) => ("wrap:", newtype),
+                NewtypeOp::Unwrap(newtype) => ("unwrap:", newtype),
+            };
+            descriptor.push_str(name);
+            append_newtype_descriptor(descriptor, newtype, append_stream_type);
+            descriptor.push('(');
+            append_ref_descriptor(descriptor, input, layout);
+            descriptor.push(')');
+        }
         StreamOp::Binary { op, lhs, rhs } => {
             descriptor.push_str("binary:");
             descriptor.push_str(op.name());
@@ -919,6 +930,13 @@ fn append_value_descriptor(descriptor: &mut String, value: &Value) {
             }
             descriptor.push(']');
         }
+        Value::Newtype(value) => {
+            descriptor.push_str("newtype[");
+            append_identifier(descriptor, value.brand());
+            descriptor.push(':');
+            append_value_descriptor(descriptor, value.value());
+            descriptor.push(']');
+        }
         Value::Int(value) => {
             let _ = write!(descriptor, "int:{value}");
         }
@@ -1023,6 +1041,7 @@ fn append_tc_type(descriptor: &mut String, type_: &crate::lang::dsrv::type_check
         TCType::EmptyMap => descriptor.push_str("empty-map"),
         TCType::Any => descriptor.push_str("any"),
         TCType::Union(schema) => append_union_descriptor(descriptor, schema, append_tc_type),
+        TCType::Newtype(schema) => append_newtype_descriptor(descriptor, schema, append_tc_type),
         TCType::Unknown => descriptor.push_str("unknown"),
     }
 }
@@ -1101,7 +1120,24 @@ fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
         StreamType::Union(schema) => {
             append_union_descriptor(descriptor, schema, append_stream_type)
         }
+        StreamType::Newtype(schema) => {
+            append_newtype_descriptor(descriptor, schema, append_stream_type)
+        }
     }
+}
+
+/// A newtype is its brand; the representation follows from it, but is
+/// written too so the descriptor never depends on that.
+fn append_newtype_descriptor<T: Clone>(
+    descriptor: &mut String,
+    schema: &crate::core::NewtypeSchema<T>,
+    mut append_type: impl FnMut(&mut String, &T),
+) {
+    descriptor.push_str("newtype<");
+    append_identifier(descriptor, schema.brand());
+    descriptor.push_str(":of:");
+    append_type(descriptor, schema.repr());
+    descriptor.push('>');
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1121,6 +1157,13 @@ pub(super) struct ReconfigurableExpressionSpec<E> {
     pub(super) specialise: bool,
 }
 
+/// Which newtype operation a [`StreamOp::Newtype`] node performs.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum NewtypeOp {
+    Wrap(crate::core::NewtypeSchema<StreamType>),
+    Unwrap(crate::core::NewtypeSchema<StreamType>),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum StreamOp<E: GraphReference> {
     Unary {
@@ -1130,6 +1173,12 @@ pub(super) enum StreamOp<E: GraphReference> {
     Ascribe {
         input: DataRef<E>,
         target: StreamType,
+    },
+    /// An elaborated newtype operation: brand the input as one instance, or
+    /// take the representation of a value of exactly that instance.
+    Newtype {
+        input: DataRef<E>,
+        operation: NewtypeOp,
     },
     Binary {
         op: BinaryOperator,
@@ -1280,7 +1329,7 @@ impl<E: GraphReference> StreamOp<E> {
     pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
         match self {
             StreamOp::Unary { arg, .. } => visit(arg),
-            StreamOp::Ascribe { input, .. } => visit(input),
+            StreamOp::Ascribe { input, .. } | StreamOp::Newtype { input, .. } => visit(input),
             StreamOp::Binary { lhs, rhs, .. }
             | StreamOp::Default {
                 input: lhs,

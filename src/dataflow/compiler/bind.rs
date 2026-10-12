@@ -349,6 +349,10 @@ fn bind_op(
             input: r!(input),
             target,
         },
+        UnboundOp::Newtype { input, operation } => BoundOp::Newtype {
+            input: r!(input),
+            operation,
+        },
         UnboundOp::Binary { op, lhs, rhs } => BoundOp::Binary {
             op,
             lhs: r!(lhs),

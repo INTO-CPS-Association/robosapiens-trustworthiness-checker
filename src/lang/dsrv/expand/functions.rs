@@ -6,7 +6,11 @@
 //! imports gave it, and copied into each caller from there.
 //!
 //! Entries are built in the same dependency order the namespaces are, since
-//! function imports follow the same `use` edges as type imports.
+//! function imports follow the same `use` edges as type imports. A module's
+//! constants are folded in the same pass ([`build_tables`]): after the defs
+//! of every module it imports are in the table, since a constant may call
+//! one, and before its own defs are added, since a def's body has the
+//! constants it names written in.
 //!
 //! A body keeps the lexical environment of the module that wrote it: that
 //! module's namespace and settings, the constants it may name and the
@@ -26,7 +30,7 @@ use crate::VarName;
 use crate::lang::dsrv::ast::AstShared;
 use crate::lang::dsrv::modules::{ImportItems, ModulePath, ModuleSources, imports_of, show_path};
 use crate::lang::dsrv::source::{SourceContext, SourceType, TypeName};
-use crate::lang::dsrv::source_map::{ArchiveToken, SourceId};
+use crate::lang::dsrv::source_map::{ArchiveToken, SourceArchive, SourceId};
 use crate::lang::dsrv::syntax::parsed::{ParsedExpr, ParsedExprRef, origin_of};
 use crate::lang::dsrv::syntax::{ParsedDeclaration, ParsedSpecification};
 
@@ -135,19 +139,23 @@ impl FunctionTable {
 
 use crate::lang::dsrv::path::ModuleName;
 
-/// Build every module's defs, importers after what they import, each in
-/// the namespace `graph` gives its module and admitted as `dialect`, the
-/// program's.
-pub(crate) fn build_function_table(
+/// Build every module's constants and defs, importers after what they
+/// import, each in the namespace `graph` gives its module and admitted as
+/// `dialect`, the program's.
+///
+/// A module's constants are folded once the defs of every module it imports
+/// are in the table, and before its own defs are added, since a def's body
+/// has the constants it names written in.
+pub(crate) fn build_tables(
     sources: &ModuleSources,
     graph: &ModuleGraph,
-    constants: &AstShared<ConstantTable>,
     dialect: Dialect,
-) -> Result<FunctionTable, DsrvExpandError> {
-    let mut table = FunctionTable {
+) -> Result<AstShared<FunctionTable>, DsrvExpandError> {
+    let mut table = AstShared::new(FunctionTable {
         archive: Some(sources.archive().token()),
         ..FunctionTable::default()
-    };
+    });
+    let mut constants = ConstantTable::default();
     for path in graph::dependency_order(sources)? {
         let parsed = sources
             .get(&path)
@@ -160,133 +168,203 @@ pub(crate) fn build_function_table(
         } else {
             AstShared::new(context.admitted_as(dialect))
         };
-        add_module(&mut table, &path, parsed, context, constants)?;
+        let label = super::constants::label_of(sources, &path);
+        add_module(
+            &mut table,
+            &mut constants,
+            &path,
+            parsed,
+            context,
+            Some(sources.archive()),
+            &label,
+        )?;
     }
     Ok(table)
 }
 
-/// The defs of a program that is one file, which is every program until it
-/// takes on modules. The file is its own root module.
+/// The constants and defs of a program that is one file, which is every
+/// program until it takes on modules. The file is its own root module, and
+/// `archive` the archive it is in, if it is located.
 pub(crate) fn single_file_table(
     parsed: &ParsedSpecification,
-    archive: Option<ArchiveToken>,
+    archive: Option<&SourceArchive>,
     context: AstShared<SourceContext>,
-    constants: &AstShared<ConstantTable>,
-) -> Result<FunctionTable, DsrvExpandError> {
-    let mut table = FunctionTable {
-        archive,
+) -> Result<AstShared<FunctionTable>, DsrvExpandError> {
+    let mut table = AstShared::new(FunctionTable {
+        archive: archive.map(SourceArchive::token),
         ..FunctionTable::default()
-    };
-    add_module(&mut table, &ModulePath::new(), parsed, context, constants)?;
+    });
+    add_module(
+        &mut table,
+        &mut ConstantTable::default(),
+        &ModulePath::new(),
+        parsed,
+        context,
+        archive,
+        "<string>",
+    )?;
     Ok(table)
 }
 
-/// Add one module's environment and defs to `table`, inlining each body
-/// against what the module imported and against the module's own defs and
-/// constants.
+/// The table, to add to. Folding a constant shares the table with the
+/// trees it expands and checks, and none of them outlives the fold, so no
+/// other reference to the table remains between modules.
+fn unshared(table: &mut AstShared<FunctionTable>) -> &mut FunctionTable {
+    AstShared::get_mut(table).expect("no view of the function table outlives a module's build")
+}
+
+/// Add one module's environment, constants and defs to the tables, folding
+/// each constant and inlining each body against what the module imported
+/// and against the module's own defs and constants.
 ///
-/// Every module this one imports must already be in `table`, which is what
-/// the dependency order gives.
+/// Every module this one imports must already be in both tables, which is
+/// what the dependency order gives.
 fn add_module(
-    table: &mut FunctionTable,
+    table: &mut AstShared<FunctionTable>,
+    constants: &mut ConstantTable,
     path: &ModulePath,
     parsed: &ParsedSpecification,
     context: AstShared<SourceContext>,
-    constants: &AstShared<ConstantTable>,
+    archive: Option<&SourceArchive>,
+    label: &str,
 ) -> Result<(), DsrvExpandError> {
     let declarations = parsed.declarations();
     let held = parsed.roots();
     let trees: Vec<ParsedExprRef<'_>> = held.iter().map(|tree| tree.as_ref()).collect();
-    let own_constants = Constants::new(AstShared::clone(constants), path, declarations)?;
-    let lexical = Lexical {
-        module: path.clone(),
-        context,
-        runtime_constants: own_constants.for_runtime_text(),
-        constants: own_constants,
-        imported: imported_modules(path, declarations)?,
-    };
+    // The module's environment is in the table while its constants are
+    // folded, since a call they make is expanded in it; the constants it
+    // may name are settled once they are.
     let id = LexicalId::from_index(table.lexicals.len());
+    let lexical = |constants: &ConstantTable| -> Result<Lexical, DsrvExpandError> {
+        let own_constants = Constants::new(AstShared::new(constants.clone()), path, declarations)?;
+        Ok(Lexical {
+            module: path.clone(),
+            context: AstShared::clone(&context),
+            runtime_constants: own_constants.for_runtime_text(),
+            constants: own_constants,
+            imported: imported_modules(path, declarations)?,
+        })
+    };
+    unshared(table).lexicals.push(lexical(constants)?);
+    super::constants::add_module(
+        constants,
+        path,
+        parsed,
+        &super::constants::Folding {
+            functions: table,
+            context: &context,
+            archive,
+            label,
+        },
+    )?;
+    unshared(table).lexicals[id.index()] = lexical(constants)?;
 
-    // What this module's own bodies may call: its imports, then its own
-    // defs, so a local name wins as it does for types (S11). A constant
-    // they name is this module's, folded here rather than at a caller that
-    // may name something else by it.
-    let mut scope = scope_of(&lexical.imported, table);
-    scope.constants = Some(&lexical.constants);
-    let mut local: Vec<(
+    let built = {
+        let table: &FunctionTable = table;
+        let lexical = table
+            .lexical(id)
+            .expect("the module's environment was just added");
+        // What this module's own bodies may call: its imports, then its own
+        // defs, so a local name wins as it does for types (S11). A constant
+        // they name is this module's, folded here rather than at a caller
+        // that may name something else by it.
+        let mut scope = scope_of(&lexical.imported, table);
+        scope.constants = Some(&lexical.constants);
+        let mut local: Vec<(
+            VarName,
+            usize,
+            EcoVec<(VarName, SourceType)>,
+            EcoVec<TypeName>,
+            SourceType,
+            bool,
+        )> = Vec::new();
+        let mut root = 0usize;
+        for declaration in declarations {
+            match declaration {
+                ParsedDeclaration::Def { .. } => {
+                    local_def(declaration, &mut local, root);
+                    root += 1;
+                }
+                ParsedDeclaration::Equation(..)
+                | ParsedDeclaration::Const { .. }
+                | ParsedDeclaration::Output(_, _, Some(_), _)
+                | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
+                _ => {}
+            }
+        }
+        for (name, index, parameters, type_parameters, result, _) in &local {
+            scope.bare.insert(
+                name.clone(),
+                Def {
+                    parameters: parameters.clone(),
+                    type_parameters: type_parameters.clone(),
+                    result: result.clone(),
+                    body: trees[*index],
+                    foreign: false,
+                    source: parsed.source(),
+                    lexical: None,
+                },
+            );
+        }
+        let mut built = Vec::with_capacity(local.len());
+        for (name, index, parameters, type_parameters, result, internal) in local {
+            let body = standalone(
+                trees[index],
+                &scope,
+                parameters.iter().map(|(name, _)| name.clone()),
+            )?;
+            built.push((
+                (path.clone(), name),
+                Entry {
+                    parameters,
+                    type_parameters,
+                    result,
+                    internal,
+                    body,
+                    source: parsed.source(),
+                    lexical: id,
+                },
+            ));
+        }
+        built
+    };
+    let table = unshared(table);
+    table.entries.extend(built);
+    Ok(())
+}
+
+/// Record a def of this module, whose body is root `root`.
+#[allow(clippy::type_complexity)]
+fn local_def(
+    declaration: &ParsedDeclaration,
+    local: &mut Vec<(
         VarName,
         usize,
         EcoVec<(VarName, SourceType)>,
         EcoVec<TypeName>,
         SourceType,
         bool,
-    )> = Vec::new();
-    let mut root = 0usize;
-    for declaration in declarations {
-        match declaration {
-            ParsedDeclaration::Def {
-                name,
-                type_parameters,
-                parameters,
-                result,
-                internal,
-                ..
-            } => {
-                local.push((
-                    name.clone(),
-                    root,
-                    parameters.clone(),
-                    type_parameters.clone(),
-                    result.clone(),
-                    *internal,
-                ));
-                root += 1;
-            }
-            ParsedDeclaration::Equation(..)
-            | ParsedDeclaration::Const { .. }
-            | ParsedDeclaration::Output(_, _, Some(_), _)
-            | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
-            _ => {}
-        }
-    }
-    for (name, index, parameters, type_parameters, result, _) in &local {
-        scope.bare.insert(
+    )>,
+    root: usize,
+) {
+    if let ParsedDeclaration::Def {
+        name,
+        type_parameters,
+        parameters,
+        result,
+        internal,
+        ..
+    } = declaration
+    {
+        local.push((
             name.clone(),
-            Def {
-                parameters: parameters.clone(),
-                type_parameters: type_parameters.clone(),
-                result: result.clone(),
-                body: trees[*index],
-                foreign: false,
-                source: parsed.source(),
-                lexical: None,
-            },
-        );
-    }
-    let mut built = Vec::with_capacity(local.len());
-    for (name, index, parameters, type_parameters, result, internal) in local {
-        let body = standalone(
-            trees[index],
-            &scope,
-            parameters.iter().map(|(name, _)| name.clone()),
-        )?;
-        built.push((
-            (path.clone(), name),
-            Entry {
-                parameters,
-                type_parameters,
-                result,
-                internal,
-                body,
-                source: parsed.source(),
-                lexical: id,
-            },
+            root,
+            parameters.clone(),
+            type_parameters.clone(),
+            result.clone(),
+            *internal,
         ));
     }
-    drop(scope);
-    table.entries.extend(built);
-    table.lexicals.push(lexical);
-    Ok(())
 }
 
 /// The functions one module may call, in a form that can be stored.
@@ -381,6 +459,16 @@ impl Callable {
     /// Whether `id` names this callable's own environment.
     pub(crate) fn is_own(&self, id: LexicalId) -> bool {
         self.own == id
+    }
+
+    /// The module whose environment `id` names in this callable's table.
+    pub(crate) fn module_of(&self, id: LexicalId) -> Option<&ModulePath> {
+        self.table.lexical(id).map(|lexical| &lexical.module)
+    }
+
+    /// The module whose text this callable's own environment is.
+    pub(crate) fn own_module(&self) -> Option<&ModulePath> {
+        self.module_of(self.own)
     }
 
     fn at(&self, own: LexicalId) -> Self {
@@ -633,6 +721,13 @@ pub(super) fn imported_modules(
 }
 
 /// The defs those modules export, as a scope borrowing `table`.
+pub(super) fn imported_scope<'a>(
+    imported: &BTreeMap<ModulePath, bool>,
+    table: &'a FunctionTable,
+) -> Scope<'a> {
+    scope_of(imported, table)
+}
+
 fn scope_of<'a>(imported: &BTreeMap<ModulePath, bool>, table: &'a FunctionTable) -> Scope<'a> {
     let mut scope = Scope::default();
     for (module, bare) in imported {

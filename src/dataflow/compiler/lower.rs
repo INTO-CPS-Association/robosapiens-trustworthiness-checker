@@ -135,6 +135,23 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
                 target: target.clone(),
             })
         }
+        Wrap(value, newtype) => {
+            let input = lower_expression(value, builder);
+            builder.push(UnboundOp::Newtype {
+                input,
+                operation: NewtypeOp::Wrap(newtype.clone()),
+            })
+        }
+        Unwrap(value, newtype) => {
+            let input = lower_expression(value, builder);
+            builder.push(UnboundOp::Newtype {
+                input,
+                operation: NewtypeOp::Unwrap(newtype.clone()),
+            })
+        }
+        Newtype(_, operation) => {
+            unreachable!("`{operation}` reached the dataflow compiler before elaboration")
+        }
         Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
         Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg, result_kind),
         Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg, result_kind),

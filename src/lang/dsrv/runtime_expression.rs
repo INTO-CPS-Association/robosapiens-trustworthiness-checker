@@ -12,6 +12,13 @@
 //! environment elaboration gave that node. For a node inlined from a library's def, that is the
 //! library's context and defs, not its caller's.
 //!
+//! Text is never the module that wrote its node, so it may not write a
+//! newtype's `new` or `value`, even where it is read in that module's
+//! namespace; it calls the functions the module exports. Checked text whose
+//! types mention a newtype is elaborated before it runs, as a specification
+//! is, so a factory's `new` reaches a runtime as a wrap. Unchecked text
+//! cannot be elaborated, and is refused if it reaches one.
+//!
 //! Warnings proved while checking such text are discarded: runtime expression source has
 //! no channel to present them on, so a runtime sees only whether the text
 //! checked.
@@ -113,6 +120,8 @@ pub(crate) enum RuntimeExpressionError {
         text: String,
         errors: SemanticErrors,
     },
+    #[error("runtime expression {text:?} reaches `{operation}`, which only checked text can run")]
+    UncheckedNewtype { text: String, operation: String },
     #[error("runtime expression {text:?} is unsupported: {error}")]
     Unsupported {
         text: String,
@@ -243,6 +252,22 @@ impl RuntimeExpressionSite {
         text: &str,
     ) -> Result<UntypedExpr, RuntimeExpressionError> {
         let (expr, sources) = self.parse_located(text)?;
+        // A newtype operation settles its instance only by checking, which
+        // unchecked text never has. Text itself may not write one, but a
+        // def it calls may; that text must take the checked path.
+        if let Some(operation) = expr
+            .as_ref()
+            .postorder()
+            .find_map(|node| match node.kind() {
+                ExprKind::Newtype(_, operation) => Some(operation.to_string()),
+                _ => None,
+            })
+        {
+            return Err(RuntimeExpressionError::UncheckedNewtype {
+                text: text.to_owned(),
+                operation,
+            });
+        }
         let sites = prepare_site_table(
             expr.sparse_annotations_builder(),
             expr.as_ref().postorder(),
@@ -285,8 +310,20 @@ impl RuntimeExpressionSite {
         text: &str,
     ) -> Result<CheckedExpr, RuntimeExpressionError> {
         let (expr, sources) = self.parse_located(text)?;
-        self.check(text, expr, sources.as_ref())
-            .map(|checked| checked.prepare_sites_with(sources.as_ref()))
+        self.check(text, expr, sources.as_ref()).map(|checked| {
+            // Only text that reaches a newtype has anything to elaborate;
+            // other text runs exactly as it was checked.
+            let nominal = checked
+                .as_ref()
+                .postorder()
+                .any(|node| crate::lang::dsrv::type_checker::mentions_newtype(node.typ()));
+            let checked = if nominal {
+                checked.elaborate()
+            } else {
+                checked
+            };
+            checked.prepare_sites_with(sources.as_ref())
+        })
     }
 
     pub(crate) fn parse_and_check_for(

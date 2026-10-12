@@ -469,6 +469,97 @@ fn evaluate_else_if_chain() -> anyhow::Result<()> {
 }
 // ANCHOR_END: dsrv_else_if_chain
 
+// ANCHOR: dsrv_newtypes
+fn evaluate_phantom_newtypes() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
+
+    let declarations = "use experimental::{newtypes, generics, functions}\n\
+        newtype Journal = Unit\n\
+        newtype Producer = Unit\n\
+        newtype Instant<D> = Float\n\
+        def at<D>(x: Float) -> Instant<D> = Instant::new(x)\n\
+        def later<D>(a: Instant<D>, b: Instant<D>) -> Bool =\n\
+          Instant::value(b) > Instant::value(a)\n\
+        in x: Float\n";
+    let source = format!(
+        "{declarations}aux start: Instant<Journal> = at(0.0)\n\
+         aux now: Instant<Journal> = at(x)\n\
+         out moved: Bool = later(start, now)"
+    );
+    let (spec, _) =
+        ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::STRICT)?.into_parts();
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
+    let mut row = vec![Value::NoVal];
+    monitor.evaluate(&[Value::Float(1.5)], &mut row)?;
+    assert_eq!(row[0], Value::Bool(true));
+
+    // Instants of two domains do not mix, and nothing converts one into
+    // the other: both are refused when the specification is checked.
+    for mixed in [
+        "aux start: Instant<Producer> = at(0.0)\n\
+         aux now: Instant<Journal> = at(x)\n\
+         out moved: Bool = later(start, now)",
+        "aux now: Instant<Journal> = at(x)\nout raw: Float = now",
+    ] {
+        let (checked, _) = ElaboratedDsrvSpecification::parse_with(
+            &format!("{declarations}{mixed}"),
+            TypeCheckOptions::STRICT,
+        )?
+        .into_parts();
+        assert!(checked.is_err(), "{mixed} must not check");
+    }
+    Ok(())
+}
+// ANCHOR_END: dsrv_newtypes
+
+// ANCHOR: dsrv_newtype_constants
+fn evaluate_newtype_constant() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
+
+    let declarations = "use experimental::{newtypes, generics, functions, constants}\n\
+        newtype Journal = Unit\n\
+        newtype Producer = Unit\n\
+        newtype Duration<D> = Float\n\
+        def seconds<D>(x: Float) -> Duration<D> =\n\
+          if x >= 0.0 then Duration::new(x) else Duration::new(0.0)\n\
+        def longer<D>(a: Duration<D>, b: Duration<D>) -> Bool =\n\
+          Duration::value(a) > Duration::value(b)\n\
+        const budget: Duration<Journal> = seconds(0.2)\n\
+        in x: Float\n";
+    let source = format!(
+        "{declarations}aux elapsed: Duration<Journal> = seconds(x)\n\
+         out over: Bool = longer(elapsed, budget)"
+    );
+    let (spec, _) =
+        ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::STRICT)?.into_parts();
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
+    let mut row = vec![Value::NoVal];
+    for (x, over) in [(0.1, false), (0.5, true)] {
+        monitor.evaluate(&[Value::Float(x)], &mut row)?;
+        assert_eq!(row[0], Value::Bool(over));
+    }
+
+    // The constant is a `Duration<Journal>` wherever it is named, so it is
+    // neither a `Float` nor a duration in another domain.
+    for misuse in [
+        "out raw: Float = budget",
+        "out other: Duration<Producer> = budget",
+    ] {
+        let (checked, _) = ElaboratedDsrvSpecification::parse_with(
+            &format!("{declarations}{misuse}"),
+            TypeCheckOptions::STRICT,
+        )?
+        .into_parts();
+        assert!(checked.is_err(), "{misuse} must not check");
+    }
+    Ok(())
+}
+// ANCHOR_END: dsrv_newtype_constants
+
 #[test]
 fn dataflow_monitor_evaluates_rows() {
     evaluate_two_ticks().expect("documented monitor example should run");
@@ -543,4 +634,14 @@ fn trailing_comma_reference_example_runs() {
 #[test]
 fn else_if_reference_example_runs() {
     evaluate_else_if_chain().expect("documented conditional example should run");
+}
+
+#[test]
+fn newtype_reference_example_runs() {
+    evaluate_phantom_newtypes().expect("documented newtype example should run");
+}
+
+#[test]
+fn newtype_constant_reference_example_runs() {
+    evaluate_newtype_constant().expect("documented newtype constant example should run");
 }

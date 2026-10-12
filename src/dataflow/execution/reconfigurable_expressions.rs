@@ -357,8 +357,9 @@ fn compile_dynamic_expression(
                     message: error.to_string(),
                 }
             }
-            RuntimeExpressionError::Unsupported { .. } => {
-                unreachable!("dataflow parses runtime source before runtime admission")
+            RuntimeExpressionError::Unsupported { .. }
+            | RuntimeExpressionError::UncheckedNewtype { .. } => {
+                unreachable!("dataflow checks runtime source before runtime admission")
             }
         })?;
     let mut graph = if spec.specialise {

@@ -131,6 +131,12 @@ impl Serialize for ReportValue<'_> {
                 }
                 map.end()
             }
+            Value::Newtype(value) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry(crate::core::NEWTYPE_MARKER, value.brand())?;
+                map.serialize_entry(crate::core::NEWTYPE_VALUE, &ReportValue(value.value()))?;
+                map.end()
+            }
             Value::Deferred => serialize_runtime_state(serializer, "deferred"),
             Value::NoVal => serialize_runtime_state(serializer, "no_val"),
         }

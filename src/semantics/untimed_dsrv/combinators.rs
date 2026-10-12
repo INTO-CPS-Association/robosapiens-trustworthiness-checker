@@ -51,6 +51,31 @@ pub fn cast(input: LocalStream<Value>, target: crate::core::StreamType) -> Local
     )
 }
 
+/// Brand each value of `input` as `newtype`, which is what `Name::new`
+/// elaborates to. Absence passes through unbranded.
+pub fn newtype_wrap(
+    input: LocalStream<Value>,
+    newtype: crate::core::NewtypeSchema<crate::core::StreamType>,
+) -> LocalStream<Value> {
+    stream_lift1(
+        move |value| value_operations::newtype_wrap(value, &newtype),
+        input,
+    )
+}
+
+/// The representation each value of `input` holds as `newtype`, which is
+/// what `Name::value` elaborates to. A value of another newtype, or a bare
+/// representation, is a type error.
+pub fn newtype_unwrap(
+    input: LocalStream<Value>,
+    newtype: crate::core::NewtypeSchema<crate::core::StreamType>,
+) -> LocalStream<Value> {
+    stream_lift1(
+        move |value| unwrap_value(value_operations::newtype_unwrap(value, &newtype)),
+        input,
+    )
+}
+
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 

@@ -3,22 +3,43 @@
 //! Elaboration rewrites every equation of a checked specification with the
 //! contiguous-tree rewrite support, one destination subtree per checked node.
 //! Each node it emits keeps the span and source context of the node it came
-//! from and carries a type. For now the rewrite is the identity on node
-//! kinds, so every node's type is the one checking gave it; lowerings and
-//! type-directed rewrites extend it without any runtime seeing a node that
-//! exists only before elaboration.
+//! from and carries a type. The rewrite is the identity on every node kind
+//! but the newtype ones, so every other node's type is the one checking gave
+//! it and a specification without newtypes elaborates to the tree it was.
+//!
+//! Newtypes are what elaboration lowers, because checking is what settles
+//! which instance each operation names:
+//!
+//! - `Name::new(x)` becomes `Wrap`, which only brands its operand. Where
+//!   checking did not prove the operand to be exactly the representation (it
+//!   was `Any`, or an `Int` promoted to a `Float`), the operand is first
+//!   ascribed the representation, so a malformed operand fails before any
+//!   value is taken for one of the newtype.
+//! - `Name::value(x)` becomes `Unwrap`, which refuses a value of any other
+//!   brand.
+//! - A cast whose target contains a newtype becomes a checked ascription:
+//!   casting only validates an identity a value already carries.
+//! - Where a value whose type is only known at run time meets a position
+//!   typed with a newtype (an equation's declared type, a function argument,
+//!   a branch, a field or an element), the value is ascribed exactly the
+//!   nominal part of that type, so the identity is checked where the
+//!   gradual type was accepted rather than wherever it is next used.
+//!
+//! No frontend-only newtype node survives, so no runtime sees one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 
+use contiguous_tree::TreeCursorExt;
+
 use super::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, CheckedExprRef, DsrvSpecification,
-    ExprBuilder, ExprForestMap, ExprId,
+    ExprBuilder, ExprForestMap, ExprId, ExprKind, ExprView, NewtypeOperationKind, NewtypeTarget,
 };
 use super::diagnostics::SemanticAnalysisReport;
 use super::parser::DsrvParseError;
 use super::pipeline::{TypeCheckMode, TypeCheckOptions};
-use super::type_checker::TCType;
+use super::type_checker::{TCType, mentions_newtype};
 use crate::core::{
     RuntimeCapabilities, RuntimeCapabilityRequirement, Specification, StreamType, VarName,
 };
@@ -120,6 +141,326 @@ impl DsrvSpecification {
     }
 }
 
+impl CheckedExpr {
+    /// Elaborate a standalone checked expression, as text supplied at run
+    /// time to `dynamic` and `defer` is before it runs. Its sites are not
+    /// prepared.
+    pub(crate) fn elaborate(self) -> CheckedExpr {
+        let root = self.as_ref();
+        let boundaries = nominal_boundaries([(root, None)]);
+        let mut builder = ExprBuilder::with_capacity(root.postorder().count());
+        let mut types = Vec::new();
+        let root = builder
+            .try_rewrite_forest([root], |node| elaborate_node(node, &boundaries, &mut types))
+            .expect("elaboration keeps every node's children")[0];
+        let expr = builder
+            .finish(root)
+            .expect("elaboration emits one complete tree");
+        let mut expr_types = expr.annotations_builder();
+        assert_eq!(types.len(), expr.as_ref().postorder().count());
+        for (node, typ) in expr.as_ref().postorder().zip(types) {
+            expr_types
+                .insert(node, typ)
+                .expect("an emitted node belongs to the elaborated tree");
+        }
+        let expr_types = expr_types
+            .finish()
+            .expect("elaboration types every node it emits");
+        CheckedExpr::new(expr, expr_types, AstShared::clone(self.environment()))
+    }
+}
+
+/// Where a value whose type checking left gradual flows into a position
+/// typed with a newtype, by the node that flows, with the part of that type
+/// to check it against at run time.
+type Boundaries = BTreeMap<ExprId, StreamType>;
+
+/// Rewrite one checked node into its elaborated subtree, pushing the type of
+/// each node it emits in allocation order.
+fn elaborate_node(
+    mut node: super::ast::ExprRewriteNode<'_, '_, CheckedExprRef<'_>>,
+    boundaries: &Boundaries,
+    types: &mut Vec<TCType>,
+) -> Result<ExprId, contiguous_tree::BuildError<ExprId>> {
+    let source = node.source();
+    let metadata = source.expr().metadata().clone();
+    let id = match source.view() {
+        ExprView::Newtype(value, operation) => {
+            let operand = node.child(value.expr().id());
+            match operation.kind {
+                NewtypeOperationKind::New => {
+                    let TCType::Newtype(schema) = source.typ() else {
+                        unreachable!("checking types `{operation}` as its newtype")
+                    };
+                    let schema = to_stream_newtype(schema);
+                    let operand = if exactly(value.typ(), schema.repr()) {
+                        operand
+                    } else {
+                        let ascribed = node.alloc(
+                            ExprKind::Ascribe(operand, schema.repr().clone()),
+                            metadata.clone(),
+                        )?;
+                        types.push(TCType::from_stream_type(schema.repr()));
+                        ascribed
+                    };
+                    node.alloc(ExprKind::Wrap(operand, schema), metadata.clone())?
+                }
+                NewtypeOperationKind::Value => {
+                    let schema = match (value.typ(), &operation.target) {
+                        (TCType::Newtype(schema), _) => to_stream_newtype(schema),
+                        (_, NewtypeTarget::Instance(schema)) => schema.clone(),
+                        (other, NewtypeTarget::Generic { .. }) => unreachable!(
+                            "checking refuses `{operation}` of an unsettled instance, got {other}"
+                        ),
+                    };
+                    node.alloc(ExprKind::Unwrap(operand, schema), metadata.clone())?
+                }
+            }
+        }
+        // A cast into a newtype validates the identity the value carries,
+        // which every runtime does for an ascription.
+        ExprView::Cast(value, target) if contains_newtype(target) => {
+            let operand = node.child(value.expr().id());
+            node.alloc(ExprKind::Ascribe(operand, target.clone()), metadata.clone())?
+        }
+        _ => {
+            let kind = node.source_node().rebuild(source.kind().clone());
+            node.alloc(kind, metadata.clone())?
+        }
+    };
+    types.push(source.typ().clone());
+    match boundaries.get(&source.expr().id()) {
+        Some(target) => {
+            let checked = node.alloc(ExprKind::Ascribe(id, target.clone()), metadata)?;
+            types.push(source.typ().clone());
+            Ok(checked)
+        }
+        None => Ok(id),
+    }
+}
+
+fn to_stream_newtype(
+    schema: &crate::core::NewtypeSchema<TCType>,
+) -> crate::core::NewtypeSchema<StreamType> {
+    schema
+        .try_map(|ty| ty.to_stream_type().ok_or(()))
+        .expect("a checked newtype instance has a concrete representation")
+}
+
+/// Whether checking proved a value of type `actual` to already be exactly
+/// `repr`, so branding it needs no check.
+fn exactly(actual: &TCType, repr: &StreamType) -> bool {
+    actual.to_stream_type().as_ref() == Some(repr) && !contains_gradual(actual)
+}
+
+fn contains_gradual(typ: &TCType) -> bool {
+    match typ {
+        TCType::Any | TCType::Unknown | TCType::EmptyList | TCType::EmptyMap => true,
+        TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => contains_gradual(inner),
+        TCType::Tuple(items) => items.iter().any(contains_gradual),
+        TCType::Struct(fields, _) => fields.iter().any(|(_, typ)| contains_gradual(typ)),
+        TCType::Function(arguments, result) => {
+            arguments.iter().any(contains_gradual) || contains_gradual(result)
+        }
+        TCType::Union(schema) => schema.alternatives().iter().any(|alternative| {
+            matches!(alternative.payload(), crate::core::UnionPayload::Of(payload) if contains_gradual(payload))
+        }),
+        TCType::Newtype(schema) => contains_gradual(schema.repr()),
+        TCType::Int | TCType::Float | TCType::Str | TCType::Bool | TCType::Unit => false,
+    }
+}
+
+fn contains_newtype(typ: &StreamType) -> bool {
+    typ.mentions_newtype()
+}
+
+/// The part of `expected` a value of static type `actual` must be checked
+/// against at run time: each newtype `actual` left gradual, inside the
+/// containers that hold it, and nothing else. `None` where checking already
+/// proved every newtype `expected` holds.
+///
+/// Only the nominal part is checked, so an ascription never judges what the
+/// gradual type system already admits (an `Int` where a `Float` is expected,
+/// say). A union or function type is not looked inside: a newtype there is
+/// checked where it is next used, as N8 has every unchecked input be.
+fn nominal_check(expected: &TCType, actual: &TCType) -> Option<StreamType> {
+    let gradual = matches!(actual, TCType::Any);
+    match expected {
+        TCType::Newtype(_) if gradual => expected.to_stream_type(),
+        TCType::List(inner) => {
+            let actual = match actual {
+                TCType::List(actual) => actual.as_ref(),
+                _ if gradual => &TCType::Any,
+                _ => return None,
+            };
+            nominal_check(inner, actual).map(|inner| StreamType::List(Box::new(inner)))
+        }
+        TCType::Map(inner) => {
+            let actual = match actual {
+                TCType::Map(actual) => actual.as_ref(),
+                _ if gradual => &TCType::Any,
+                _ => return None,
+            };
+            nominal_check(inner, actual).map(|inner| StreamType::Map(Box::new(inner)))
+        }
+        TCType::Tuple(items) => {
+            let actuals: Vec<&TCType> = match actual {
+                TCType::Tuple(actuals) if actuals.len() == items.len() => actuals.iter().collect(),
+                _ if gradual => vec![&TCType::Any; items.len()],
+                _ => return None,
+            };
+            let checks: Vec<_> = items
+                .iter()
+                .zip(actuals)
+                .map(|(item, actual)| nominal_check(item, actual))
+                .collect();
+            checks.iter().any(Option::is_some).then(|| {
+                StreamType::Tuple(
+                    checks
+                        .into_iter()
+                        .map(|check| check.unwrap_or(StreamType::Any))
+                        .collect(),
+                )
+            })
+        }
+        TCType::Struct(fields, _) => {
+            let checked: ecow::EcoVec<_> = fields
+                .iter()
+                .filter_map(|(name, field)| {
+                    let actual = match actual {
+                        TCType::Struct(actuals, _) => actuals
+                            .iter()
+                            .find(|(actual, _)| actual == name)
+                            .map(|(_, typ)| typ)?,
+                        _ if gradual => &TCType::Any,
+                        _ => return None,
+                    };
+                    nominal_check(field, actual).map(|check| (name.clone(), check))
+                })
+                .collect();
+            // The other fields are left to what checking proved of them.
+            (!checked.is_empty()).then(|| StreamType::Struct(checked, true))
+        }
+        _ => None,
+    }
+}
+
+/// The type checking required of each child of `node` that stands where a
+/// value of that type is used.
+fn expected_children<'a>(node: CheckedExprRef<'a>) -> Vec<(CheckedExprRef<'a>, TCType)> {
+    use ExprView::*;
+    let typ = node.typ();
+    let same = |children: &[CheckedExprRef<'a>]| {
+        children
+            .iter()
+            .map(|child| (*child, typ.clone()))
+            .collect::<Vec<_>>()
+    };
+    match node.view() {
+        If(_, then_value, else_value) => same(&[then_value, else_value]),
+        Default(a, b) | Update(a, b) | Init(a, b) | LConcat(a, b) => same(&[a, b]),
+        Latch(value, _) | SIndex(value, _) => same(&[value]),
+        Ascribe(value, target) => vec![(value, TCType::from_stream_type(target))],
+        List(items) => match typ {
+            TCType::List(element) => items
+                .into_iter()
+                .map(|item| (item, (**element).clone()))
+                .collect(),
+            _ => Vec::new(),
+        },
+        LAppend(list, value) => {
+            let mut children = same(&[list]);
+            if let TCType::List(element) = typ {
+                children.push((value, (**element).clone()));
+            }
+            children
+        }
+        Tuple(items) => match typ {
+            TCType::Tuple(types) => items.into_iter().zip(types.iter().cloned()).collect(),
+            _ => Vec::new(),
+        },
+        Struct(fields) | ObjectLiteral(fields) | Map(fields) => fields
+            .iter()
+            .filter_map(|(name, value)| {
+                let expected = match typ {
+                    TCType::Struct(types, _) => types
+                        .iter()
+                        .find(|(field, _)| field == name)
+                        .map(|(_, typ)| typ.clone())?,
+                    TCType::Map(value) => (**value).clone(),
+                    _ => return None,
+                };
+                Some((value, expected))
+            })
+            .collect(),
+        MInsert(_, key, value) => match typ {
+            TCType::Map(element) => vec![(value, (**element).clone())],
+            TCType::Struct(fields, _) => fields
+                .iter()
+                .find(|(field, _)| field == key)
+                .map(|(_, field)| vec![(value, field.clone())])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        },
+        Apply(function, arguments) => match function.typ() {
+            TCType::Function(parameters, _) => arguments
+                .into_iter()
+                .zip(parameters.iter().cloned())
+                .collect(),
+            _ => Vec::new(),
+        },
+        Constructor(payload, tag, _) => match (payload.into_iter().next(), typ) {
+            (Some(payload), TCType::Union(schema)) => schema
+                .alternative(tag)
+                .and_then(|(_, alternative)| match alternative.payload() {
+                    crate::core::UnionPayload::Of(payload_type) => {
+                        Some(vec![(payload, payload_type.clone())])
+                    }
+                    crate::core::UnionPayload::Nullary => None,
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        },
+        Match(_, arms, shape) => {
+            let children: Vec<_> = arms.into_iter().collect();
+            let mut place = 0;
+            let mut bodies = Vec::new();
+            for arm in shape.iter() {
+                if arm.guarded {
+                    place += 1;
+                }
+                bodies.push((children[place], typ.clone()));
+                place += 1;
+            }
+            bodies
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Every boundary among the trees rooted at `roots`, each root with the type
+/// its stream was declared to have, if any.
+fn nominal_boundaries<'a>(
+    roots: impl IntoIterator<Item = (CheckedExprRef<'a>, Option<TCType>)>,
+) -> Boundaries {
+    let mut boundaries = Boundaries::new();
+    for (root, declared) in roots {
+        if let Some(declared) = declared
+            && let Some(target) = nominal_check(&declared, root.typ())
+        {
+            boundaries.insert(root.expr().id(), target);
+        }
+        for node in root.postorder() {
+            for (child, expected) in expected_children(node) {
+                if let Some(target) = nominal_check(&expected, child.typ()) {
+                    boundaries.insert(child.expr().id(), target);
+                }
+            }
+        }
+    }
+    boundaries
+}
+
 /// Rewrite every equation of `checked` into fresh storage, recording the type
 /// of each emitted node in allocation order.
 fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecification {
@@ -127,20 +468,37 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
     let node_count = spec.exprs.nodes().len();
     let mut builder = ExprBuilder::with_capacities(node_count, spec.exprs.len());
     let mut types: Vec<TCType> = Vec::with_capacity(node_count);
-    let roots = spec.exprs.keys().map(|name| {
-        checked
-            .var_expr_ref(name)
-            .expect("every equation of a checked specification is typed")
-    });
-    let roots = builder
-        .try_rewrite_forest(roots, |mut node| {
-            let source = node.source();
-            let kind = node.source_node().rebuild(source.kind().clone());
-            let id = node.alloc(kind, source.expr().metadata().clone())?;
-            types.push(source.typ().clone());
-            Ok::<_, contiguous_tree::BuildError<ExprId>>(id)
+    let roots = || {
+        spec.exprs.keys().map(|name| {
+            checked
+                .var_expr_ref(name)
+                .expect("every equation of a checked specification is typed")
         })
-        .expect("the identity rewrite keeps every node's children");
+    };
+    // Only a specification that mentions a newtype has boundaries to find;
+    // any other is rewritten as the identity without looking for them.
+    let nominal = spec
+        .type_annotations
+        .values()
+        .any(StreamType::mentions_newtype)
+        || roots().any(|root| root.postorder().any(|node| mentions_newtype(node.typ())));
+    let boundaries = if nominal {
+        nominal_boundaries(spec.exprs.keys().zip(roots()).map(|(name, root)| {
+            (
+                root,
+                spec.type_annotations
+                    .get(name)
+                    .map(TCType::from_stream_type),
+            )
+        }))
+    } else {
+        Boundaries::new()
+    };
+    let roots = builder
+        .try_rewrite_forest(roots(), |node| {
+            elaborate_node(node, &boundaries, &mut types)
+        })
+        .expect("elaboration keeps every node's children");
     let forest = builder
         .finish_forest(roots)
         .expect("elaboration emits one complete tree per equation");

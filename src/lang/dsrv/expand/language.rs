@@ -15,7 +15,7 @@ use ecow::EcoString;
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{Declaration, DsrvSpecification, ExprKind, ExprRef};
 use crate::lang::dsrv::path::{ImportKind, PathSegment, UseTree};
-use crate::lang::dsrv::source::{AliasDeclaration, SourceType, SourceTypeKind};
+use crate::lang::dsrv::source::{AliasDeclaration, AliasKind, SourceType, SourceTypeKind};
 use crate::lang::dsrv::span::Span;
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
@@ -81,6 +81,7 @@ pub enum Feature {
     Constants,
     Casts,
     LazyIf,
+    Newtypes,
 }
 
 impl Feature {
@@ -94,6 +95,7 @@ impl Feature {
         Self::Constants,
         Self::Casts,
         Self::LazyIf,
+        Self::Newtypes,
     ];
 
     pub fn name(self) -> &'static str {
@@ -106,6 +108,7 @@ impl Feature {
             Self::Constants => "constants",
             Self::Casts => "casts",
             Self::LazyIf => "lazy_if",
+            Self::Newtypes => "newtypes",
         }
     }
 
@@ -140,7 +143,8 @@ impl Feature {
                 | Self::Functions
                 | Self::Constants
                 | Self::Casts
-                | Self::LazyIf => true,
+                | Self::LazyIf
+                | Self::Newtypes => true,
             },
         }
     }
@@ -205,7 +209,7 @@ impl MetaFeature {
 ///
 /// Revision 3: `lazy_if` joins the experiments, and with it
 /// `high_level_dsrv`.
-pub const EXPERIMENTAL_REVISION: u32 = 3;
+pub const EXPERIMENTAL_REVISION: u32 = 5;
 
 /// How an `if` chooses between its branches.
 ///
@@ -641,6 +645,7 @@ pub(crate) fn check_experiment_node(
         ExprKind::Constructor(..) => ("a union constructor", Feature::TaggedUnions),
         ExprKind::Match(..) => ("`match`", Feature::PatternMatching),
         ExprKind::Matches(..) => ("`matches`", Feature::PatternMatching),
+        ExprKind::Newtype(..) => ("a newtype operation", Feature::Newtypes),
         ExprKind::Cast(..)
         | ExprKind::Trunc(..)
         | ExprKind::Floor(..)
@@ -671,6 +676,13 @@ pub(crate) fn check_alias(
         return Err(LanguageError::NeedsExperiment {
             construct: "an internal type alias",
             feature: Feature::Modules.name(),
+            span: alias.span,
+        });
+    }
+    if matches!(alias.kind, AliasKind::Newtype { .. }) && !language.has(Feature::Newtypes) {
+        return Err(LanguageError::NeedsExperiment {
+            construct: "a newtype",
+            feature: Feature::Newtypes.name(),
             span: alias.span,
         });
     }
@@ -751,7 +763,10 @@ pub(crate) fn check_experiment_type(
         | SourceTypeKind::Str
         | SourceTypeKind::Bool
         | SourceTypeKind::Unit
-        | SourceTypeKind::Any => {}
+        | SourceTypeKind::Any
+        // Only resolution makes these, never a writer.
+        | SourceTypeKind::Newtype(_)
+        | SourceTypeKind::NewtypeInstance(_) => {}
     }
     Ok(())
 }
@@ -788,6 +803,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
             SyntaxLiteral::Tuple(_) => Some("a tuple literal"),
             SyntaxLiteral::Map(_) => Some("a map literal"),
             SyntaxLiteral::Struct(_) => Some("a struct literal"),
+            SyntaxLiteral::Newtype(..) => Some("a newtype value"),
         },
         ExprKind::If(..)
         | ExprKind::SIndex(..)
@@ -810,6 +826,9 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::Ceil(..)
         | ExprKind::Round(..) => None,
         ExprKind::Constructor(..) => Some("a union constructor"),
+        ExprKind::Newtype(..) | ExprKind::Wrap(..) | ExprKind::Unwrap(..) => {
+            Some("a newtype operation")
+        }
         ExprKind::Match(..) => Some("`match`"),
         ExprKind::Matches(..) => Some("`matches`"),
         ExprKind::Lambda(..) => Some("a lambda"),
@@ -867,6 +886,7 @@ pub(crate) fn check_core_type(ty: &StreamType, span: Span) -> Result<(), Languag
         StreamType::Struct(..) => "a struct type",
         StreamType::Function(..) => "a function type",
         StreamType::Union(..) => "a tagged union type",
+        StreamType::Newtype(..) => "a newtype",
     };
     Err(LanguageError::NotCore { construct, span })
 }
@@ -1019,7 +1039,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if, newtypes"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item
@@ -1290,8 +1310,9 @@ mod tests {
                     Feature::Constants,
                     Feature::Casts,
                     Feature::LazyIf,
+                    Feature::Newtypes,
                 ],
-                3,
+                5,
             )
         );
         assert_eq!(

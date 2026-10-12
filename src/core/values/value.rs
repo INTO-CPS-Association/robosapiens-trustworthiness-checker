@@ -9,7 +9,9 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 
-use super::{ClosedUnion, UnionValue, ValueMap};
+use super::{
+    ClosedUnion, NEWTYPE_MARKER, NEWTYPE_VALUE, NewtypeSchema, NewtypeValue, UnionValue, ValueMap,
+};
 use std::fmt;
 
 use crate::core::{JsonStreamValue, LocalStream};
@@ -197,7 +199,8 @@ impl PartialEq for RuntimeFunction {
 
 // Anything inside a stream should be clonable in O(1) time in order for the
 // runtimes to be efficiently implemented. This is why we use EcoString,
-// EcoVec and ValueMap instead of String, Vec and BTreeMap, and Rc for unions. These types are essentially references which allow mutation
+// EcoVec and ValueMap instead of String, Vec and BTreeMap, and Rc for unions
+// and newtypes. These types are essentially references which allow mutation
 // in place if there is only one reference to the data or copy-on-write if
 // there is more than one reference.
 #[derive(Debug, Clone)]
@@ -210,6 +213,10 @@ pub enum Value {
     /// A tagged union value. Schema-free at run time: the schema lives in the
     /// elaborated tree, which is what resolves a constructor.
     Union(Rc<UnionValue>),
+    /// A value of a nominal newtype: its brand and its representation.
+    /// Schema-free at run time, as a union value is; the brand is its
+    /// whole identity.
+    Newtype(Rc<NewtypeValue>),
     List(EcoVec<Value>),
     Tuple(EcoVec<Value>),
     Map(ValueMap),
@@ -230,6 +237,7 @@ impl PartialEq for Value {
             (Self::Map(a), Self::Map(b)) => a == b,
             // Not `Rc` identity: a shared payload holding NaN is not equal to itself.
             (Self::Union(a), Self::Union(b)) => a.as_ref() == b.as_ref(),
+            (Self::Newtype(a), Self::Newtype(b)) => a.as_ref() == b.as_ref(),
             (Self::Unit, Self::Unit)
             | (Self::Deferred, Self::Deferred)
             | (Self::NoVal, Self::NoVal) => true,
@@ -253,6 +261,7 @@ impl Value {
             }
             Value::Map(values) => values.values().any(Value::requires_json5_encoding),
             Value::Union(value) => value.payload().is_some_and(Value::requires_json5_encoding),
+            Value::Newtype(value) => value.value().requires_json5_encoding(),
             _ => false,
         }
     }
@@ -419,6 +428,21 @@ impl TryFrom<JValue> for Value {
                 .map(|v| v.clone().try_into())
                 .collect::<Result<EcoVec<Value>, Self::Error>>()
                 .map(Value::List),
+            JValue::Object(mut vals) if vals.contains_key(NEWTYPE_MARKER) => {
+                let brand = vals
+                    .remove(NEWTYPE_MARKER)
+                    .expect("newtype object contains its marker");
+                let JValue::String(brand) = brand else {
+                    return Err(anyhow!("newtype {NEWTYPE_MARKER} must be a string"));
+                };
+                let value = vals
+                    .remove(NEWTYPE_VALUE)
+                    .ok_or_else(|| anyhow!("newtype object has no {NEWTYPE_VALUE}"))?;
+                if !vals.is_empty() {
+                    return Err(anyhow!("newtype object contains extra fields"));
+                }
+                Ok(NewtypeValue::new(brand, Value::try_from(value)?).into())
+            }
             JValue::Object(mut vals) if vals.contains_key("$tag") => {
                 let tag = vals.remove("$tag").expect("union object contains $tag");
                 let JValue::String(tag) = tag else {
@@ -537,6 +561,15 @@ impl Value {
                     None => Ok(()),
                 }
             }
+            // A newtype value has no source form outside the module that
+            // declares it, whose `new` alone may build one, so it is written
+            // as its brand and representation: readable, and never mistaken
+            // for an expression that builds it elsewhere.
+            Value::Newtype(value) => {
+                write!(out, "{}::new(", value.brand())?;
+                value.value().write_dsrv_source(out)?;
+                out.write_char(')')
+            }
             Value::List(values) => {
                 out.write_char('[')?;
                 write_dsrv_sequence(out, values)?;
@@ -635,6 +668,7 @@ impl Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::Newtype(value) => write!(f, "{}::new({})", value.brand(), value.value()),
             Value::NoVal => write!(f, "no_val"),
             Value::Unit => write!(f, "()"),
         }
@@ -692,6 +726,35 @@ pub enum StreamType {
     /// cast to a stricter type.
     Any,
     Union(ClosedUnion<StreamType>),
+    /// A nominal newtype instance, which only a value carrying its brand
+    /// conforms to.
+    Newtype(NewtypeSchema<StreamType>),
+}
+
+impl StreamType {
+    /// Whether a newtype appears anywhere in this type.
+    pub fn mentions_newtype(&self) -> bool {
+        match self {
+            StreamType::Newtype(_) => true,
+            StreamType::List(inner) | StreamType::Map(inner) | StreamType::Expr(inner) => {
+                inner.mentions_newtype()
+            }
+            StreamType::Tuple(items) => items.iter().any(StreamType::mentions_newtype),
+            StreamType::Struct(fields, _) => fields.iter().any(|(_, typ)| typ.mentions_newtype()),
+            StreamType::Function(arguments, result) => {
+                arguments.iter().any(StreamType::mentions_newtype) || result.mentions_newtype()
+            }
+            StreamType::Union(schema) => schema.alternatives().iter().any(|alternative| {
+                matches!(alternative.payload(), super::UnionPayload::Of(payload) if payload.mentions_newtype())
+            }),
+            StreamType::Int
+            | StreamType::Float
+            | StreamType::Str
+            | StreamType::Bool
+            | StreamType::Unit
+            | StreamType::Any => false,
+        }
+    }
 }
 
 impl Display for StreamType {
@@ -738,6 +801,7 @@ impl Display for StreamType {
             }
             StreamType::Any => write!(f, "Any"),
             StreamType::Union(schema) => write!(f, "{schema}"),
+            StreamType::Newtype(schema) => write!(f, "{schema}"),
         }
     }
 }
@@ -833,6 +897,11 @@ impl Serialize for Value {
                         "Value::Map contains reserved union key $tag",
                     ));
                 }
+                if map.contains_key(NEWTYPE_MARKER) {
+                    return Err(serde::ser::Error::custom(
+                        "Value::Map contains reserved newtype key $newtype",
+                    ));
+                }
                 let mut m = serializer.serialize_map(Some(map.len()))?;
                 for (k, v) in map.iter() {
                     m.serialize_entry(k, v)?;
@@ -850,6 +919,15 @@ impl Serialize for Value {
                 if let Some(payload) = value.payload() {
                     map.serialize_entry("payload", payload)?;
                 }
+                map.end()
+            }
+
+            // Its own marker, never a union's `$tag`: a newtype is not a
+            // union, and a union tag may be any string.
+            Value::Newtype(value) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry(NEWTYPE_MARKER, value.brand())?;
+                map.serialize_entry(NEWTYPE_VALUE, value.value())?;
                 map.end()
             }
         }
@@ -938,18 +1016,36 @@ impl<'de> Deserialize<'de> for Value {
                 let mut out = BTreeMap::new();
                 let mut duplicate = false;
                 let mut tag = None;
+                let mut brand = None;
                 while let Some(key) = map.next_key::<EcoString>()? {
                     if key == "$tag" {
                         if tag.is_some() {
                             duplicate = true;
                         }
                         tag = Some(map.next_value::<EcoString>()?);
+                    } else if key == NEWTYPE_MARKER {
+                        if brand.is_some() {
+                            duplicate = true;
+                        }
+                        brand = Some(map.next_value::<EcoString>()?);
                     } else {
                         let value = map.next_value::<Value>()?;
                         if out.insert(key, value).is_some() {
                             duplicate = true;
                         }
                     }
+                }
+                if let Some(brand) = brand {
+                    if duplicate || tag.is_some() {
+                        return Err(de::Error::custom("duplicate member in newtype object"));
+                    }
+                    let value = out
+                        .remove(NEWTYPE_VALUE)
+                        .ok_or_else(|| de::Error::custom("newtype object has no value"))?;
+                    if !out.is_empty() {
+                        return Err(de::Error::custom("newtype object contains extra fields"));
+                    }
+                    return Ok(NewtypeValue::new(brand, value).into());
                 }
                 if let Some(tag) = tag {
                     if duplicate {

@@ -185,6 +185,8 @@ where
         Cast(value, target) | Ascribe(value, target) => {
             combinators::cast(child(value), target.clone())
         }
+        Wrap(value, newtype) => combinators::newtype(child(value), newtype.clone(), true),
+        Unwrap(value, newtype) => combinators::newtype(child(value), newtype.clone(), false),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -286,6 +288,8 @@ where
         Cast(value, target) | Ascribe(value, target) => {
             combinators::cast(child(value), target.clone())
         }
+        Wrap(value, newtype) => combinators::newtype(child(value), newtype.clone(), true),
+        Unwrap(value, newtype) => combinators::newtype(child(value), newtype.clone(), false),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);

@@ -200,6 +200,15 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         Cast(value, target) | Ascribe(value, target) => lift1(child(value)?, |value| {
             operation(value_operations::cast(value, target))
         }),
+        Wrap(value, newtype) => lift1(child(value)?, |value| {
+            Ok(value_operations::newtype_wrap(value, newtype))
+        }),
+        Unwrap(value, newtype) => lift1(child(value)?, |value| {
+            operation(value_operations::newtype_unwrap(value, newtype))
+        }),
+        Newtype(_, operation) => Err(AtemporalError::Operation(format!(
+            "`{operation}` was not elaborated before evaluation"
+        ))),
         Not(value) => lift1(child(value)?, |value| {
             operation(value_operations::unary(UnaryOperator::Not, value))
         }),
@@ -518,8 +527,8 @@ mod tests {
     use smol::LocalExecutor;
 
     use super::*;
-    use crate::core::RuntimeFunction;
     use crate::async_test;
+    use crate::core::RuntimeFunction;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::parser::{parse_expr_with_context, parse_str};
     use crate::runtime::asynchronous::Context;

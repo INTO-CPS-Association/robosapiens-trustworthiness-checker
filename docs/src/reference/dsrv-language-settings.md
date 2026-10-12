@@ -80,9 +80,10 @@ still use a construct that has a narrower runtime requirement.
 | `generics` | Adds parameters to type aliases and arguments to alias uses. | Used with `modules` by generic library types such as `std::option::Option<T>`. | all |
 | `modules` | Adds filesystem and embedded-module declarations and imports. | Each module's own header governs syntax written in that module; imports do not transfer the caller's experiments into it. | all |
 | `functions` | Adds named `def` functions. | Functions imported through `modules` are expanded under the defining module's language settings. | all |
-| `constants` | Adds `const` declarations and named stream offsets. | A constant declared inside a module also requires `modules`. | all |
+| `constants` | Adds `const` declarations, worked out once when the specification is read, and named stream offsets. | A constant declared inside a module also requires `modules`. A constant may call a `def` and hold a newtype value; see [DSRV syntax](dsrv-syntax.md#constants). | all |
 | `casts` | Adds `as`, `trunc`, `floor`, `ceil`, and `round`. | Float-to-integer conversion uses an explicit rounding function; see [DSRV syntax](dsrv-syntax.md#operators). | all |
 | `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
+| `newtypes` | Adds `newtype` declarations of nominal types, with `Name::new` and `Name::value`, which only the declaring module may write. | Generic newtypes need `generics`; using another module's newtype needs `modules`. A cast into a newtype, under `casts`, only checks an identity a value already carries. See [DSRV syntax](dsrv-syntax.md#newtypes). | all |
 <!-- dsrv-experiments:end -->
 
 `use experimental::high_level_dsrv` selects a prototype for an extended

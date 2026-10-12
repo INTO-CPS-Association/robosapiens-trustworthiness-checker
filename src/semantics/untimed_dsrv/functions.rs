@@ -828,11 +828,36 @@ where
     // pointwise because only argument values cross that boundary.
     let func_expr = func_expr.resolve_head();
     if let ExprView::Lambda(params, body) = func_expr.as_ref().view() {
+        // An argument elaboration checks against a newtype is checked on
+        // every application tick whether or not the body uses it, as the
+        // dataflow graph, which evaluates every node, does: a callee that
+        // ignores its argument does not bypass the check.
+        let checks = args
+            .iter()
+            .filter(|arg| {
+                matches!(arg.as_ref().view(), ExprView::Ascribe(_, target) if target.mentions_newtype())
+            })
+            .map(|arg| evaluate_scope::<AC>(arg.clone(), ctx))
+            .collect::<Vec<_>>();
         let body = func_expr
             .scope(body)
             .bind(params, args)
             .expect("Function application failed");
-        return evaluate_scope::<AC>(body, ctx);
+        let result = evaluate_scope::<AC>(body, ctx);
+        if checks.is_empty() {
+            return result;
+        }
+        return Box::pin(stream! {
+            let mut result = result;
+            let mut checks = checks;
+            while let Some(value) = result.next().await {
+                for check in &mut checks {
+                    // Its value is the body's to use; only its failure matters.
+                    let _ = check.next().await;
+                }
+                yield value;
+            }
+        });
     }
 
     let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);

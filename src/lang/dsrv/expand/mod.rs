@@ -26,6 +26,8 @@
 //!    module's context instead, so its syntax is judged by that module's
 //!    header and its names resolve where it was written; only the dialect,
 //!    which decides admission, is the program's ([`functions::Lexical`]).
+//!    A `newtype` declaration joins the same namespace, placed under the
+//!    canonical path of its module, which is what its brand is made from.
 //! 3. **Declarations and equations** ([`expand_declarations`]). Each
 //!    top-level form becomes a [`Declaration`] with its types resolved, in
 //!    source order. The header produces none: it lives on in the context. The
@@ -35,6 +37,11 @@
 //! 5. **Dialect.** The distribution primitives are rejected outside Distributed
 //!    DSRV, and a Core specification must be Core throughout
 //!    ([`language::CoreDsrvSpecification::check`]).
+//!
+//! A qualified constructor whose qualifier names a newtype is that newtype's
+//! `new` or `value` operation. Expansion is where it is decided who wrote a
+//! node, so it is also where such an operation is refused unless the module
+//! that declared the newtype wrote it (text supplied at run time never did).
 //!
 //! [`expand_expression`] expands one runtime expression (the source of a
 //! `dynamic` or `defer`) against an existing namespace, with the same
@@ -164,6 +171,14 @@ pub enum DsrvExpandError {
         location: String,
         expected: crate::core::StreamType,
         message: String,
+        span: Span,
+    },
+
+    #[error("constant `{name}` in {location} does not type-check at {span:?}: {errors:?}")]
+    ConstantCheck {
+        name: String,
+        location: String,
+        errors: crate::lang::dsrv::diagnostics::SemanticErrors,
         span: Span,
     },
 
@@ -319,14 +334,12 @@ pub(crate) fn expand_declarations_in(
         Some(callable) if !callable.is_empty() => Some(callable),
         Some(_) => None,
         None if declares_a_def_or_constant(parsed.declarations()) => {
-            let constants = Rc::new(constants::single_file_constants(&parsed, &context)?);
             let table = functions::single_file_table(
                 &parsed,
-                parsed.source().map(|_| archive.token()),
+                parsed.source().map(|_| archive),
                 Rc::clone(&context),
-                &constants,
             )?;
-            Some(Rc::new(Callable::new(Rc::new(table), &ModulePath::new())))
+            Some(Rc::new(Callable::new(table, &ModulePath::new())))
         }
         None => None,
     };
@@ -379,6 +392,7 @@ pub(crate) fn expand_declarations_in(
                     &context,
                     callable.as_ref(),
                     source,
+                    false,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -398,6 +412,7 @@ pub(crate) fn expand_declarations_in(
                     &context,
                     callable.as_ref(),
                     source,
+                    false,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -409,6 +424,7 @@ pub(crate) fn expand_declarations_in(
                     &context,
                     callable.as_ref(),
                     source,
+                    false,
                 )?);
                 Declaration::Equation { name, span }
             }
@@ -495,6 +511,26 @@ struct Environments<'a> {
     context: &'a Rc<SourceContext>,
     callable: Option<&'a Rc<Callable>>,
     inlined: BTreeMap<LexicalId, (Rc<SourceContext>, Option<Rc<Callable>>)>,
+    /// Whether the tree's own text was supplied at run time to a `dynamic`
+    /// or `defer` node. Such text is never the module that wrote the node,
+    /// even where it is read in that module's namespace.
+    runtime_text: bool,
+}
+
+/// Who wrote a node, which decides whether it may use a newtype's
+/// representation.
+enum Writer {
+    /// Text of the module with this path, spelled as a brand spells it.
+    Module(String),
+    /// Text supplied at run time.
+    RuntimeText,
+}
+
+fn spelled_module(path: &[crate::lang::dsrv::path::ModuleName]) -> String {
+    path.iter()
+        .map(|segment| segment.as_str())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 impl<'a> Environments<'a> {
@@ -502,6 +538,7 @@ impl<'a> Environments<'a> {
         expression: ParsedExprRef<'_>,
         context: &'a Rc<SourceContext>,
         callable: Option<&'a Rc<Callable>>,
+        runtime_text: bool,
     ) -> Self {
         use contiguous_tree::TreeCursorExt;
         let mut inlined = BTreeMap::new();
@@ -520,6 +557,48 @@ impl<'a> Environments<'a> {
             context,
             callable,
             inlined,
+            runtime_text,
+        }
+    }
+
+    /// Who wrote `node`: the module whose def it was inlined from, or else
+    /// the text the tree is, which is the module this tree belongs to or
+    /// text supplied at run time. A def of the module that wrote a
+    /// `dynamic` node, called from its text, was still written by that
+    /// module.
+    fn writer(&self, node: ParsedExprRef<'_>) -> Writer {
+        let module = match parsed::origin_of(node).lexical {
+            Some(id) => self.callable.and_then(|callable| callable.module_of(id)),
+            None if self.runtime_text => return Writer::RuntimeText,
+            None => self.callable.and_then(|callable| callable.own_module()),
+        };
+        Writer::Module(spelled_module(
+            module.map_or(&[][..], |path| path.as_slice()),
+        ))
+    }
+
+    /// Refuse `operation` at `node` unless the module that declared its
+    /// newtype wrote it (N4). Aliases and imports do not change who
+    /// declared a newtype, so they grant nothing.
+    fn permit_newtype_operation(
+        &self,
+        node: ParsedExprRef<'_>,
+        operation: &crate::lang::dsrv::ast::NewtypeOperation,
+    ) -> Result<(), SourceResolveError> {
+        let owner = crate::core::stem_module(operation.target.stem());
+        let span = parsed::span_of(node);
+        match self.writer(node) {
+            Writer::Module(module) if module == owner => Ok(()),
+            Writer::Module(module) => Err(SourceResolveError::NewtypeRepresentation {
+                operation: operation.to_string().into(),
+                owner: describe_module(owner).into(),
+                writer: describe_module(&module).into(),
+                span,
+            }),
+            Writer::RuntimeText => Err(SourceResolveError::NewtypeRuntimeText {
+                operation: operation.to_string().into(),
+                span,
+            }),
         }
     }
 
@@ -534,6 +613,31 @@ impl<'a> Environments<'a> {
             None => (self.context, self.callable),
         }
     }
+}
+
+fn describe_module(module: &str) -> String {
+    if module.is_empty() {
+        "the root module".to_owned()
+    } else {
+        format!("module {module}")
+    }
+}
+
+/// The newtype a constructor's qualifier names, if it names one.
+pub(super) fn newtype_target(
+    context: &SourceContext,
+    qualifier: &crate::lang::dsrv::path::TypePath,
+) -> Option<crate::lang::dsrv::ast::NewtypeTarget> {
+    use crate::lang::dsrv::ast::NewtypeTarget;
+    if let Some(StreamType::Newtype(schema)) = context.get(qualifier) {
+        return Some(NewtypeTarget::Instance(schema.clone()));
+    }
+    let declaration = context.generic().get(qualifier)?;
+    let stem = declaration.kind.newtype_stem()?;
+    Some(NewtypeTarget::Generic {
+        stem: stem.clone(),
+        arity: declaration.parameters.len(),
+    })
 }
 
 /// The types written inside an expression — a lambda parameter's, and the
@@ -613,15 +717,9 @@ pub(crate) fn expand_program(
         .get(&root_path)
         .expect("the root has a namespace")
         .clone();
-    // Def bodies fold the constants of the module that wrote them, so the
-    // constants come first.
-    let folded = Rc::new(constants::build_constant_table(&sources, &graph)?);
-    let table = Rc::new(functions::build_function_table(
-        &sources,
-        &graph,
-        &folded,
-        context.language().dialect(),
-    )?);
+    // Def bodies fold the constants of the module that wrote them, and a
+    // constant may call a def, so the two are built together.
+    let table = functions::build_tables(&sources, &graph, context.language().dialect())?;
     let callable = Callable::new(table, &root_path);
     let archive = Rc::clone(sources.archive());
     let root = sources.into_root();
@@ -704,6 +802,10 @@ pub(crate) fn expand_expression(
         context,
         onwards.as_ref(),
         located.map(|(_, source)| source),
+        // Whether the text was supplied at run time is the callable's view
+        // (N4-int): the same view that hides the owning module's internals
+        // also denies it the owner's newtype operations.
+        callable.is_runtime_text(),
     )?;
     let expr = builder.finish(root).map_err(DsrvAstError::from)?;
     if let Some(key) = expr.as_ref().duplicate_field() {
@@ -794,8 +896,9 @@ pub(crate) fn expand_tree(
     context: &Rc<SourceContext>,
     callable: Option<&Rc<Callable>>,
     source: Option<SourceId>,
+    runtime_text: bool,
 ) -> Result<ExprId, DsrvExpandError> {
-    let environments = Environments::new(expression, context, callable);
+    let environments = Environments::new(expression, context, callable, runtime_text);
     check_expression_types(expression, &environments)?;
     builder
         .try_transcode(expression, |node| {
@@ -864,6 +967,33 @@ pub(crate) fn expand_tree(
                     guard.iter().map(|id| *node.child(*id)).collect(),
                     pattern.clone(),
                 ),
+                // `Name::new(x)` and `Name::value(x)` are spelled as a
+                // qualified constructor; the qualifier naming a newtype is
+                // what makes them newtype operations.
+                Constructor(payload, tag, Some(qualifier))
+                    if let Some(target) = newtype_target(context, qualifier) =>
+                {
+                    use crate::lang::dsrv::ast::{NewtypeOperation, NewtypeOperationKind};
+                    let Some(kind) = NewtypeOperationKind::from_name(tag) else {
+                        return Err(SourceResolveError::UnknownNewtypeOperation {
+                            name: format!("{qualifier}::{tag}").into(),
+                            span: metadata.span,
+                        });
+                    };
+                    let operation = NewtypeOperation {
+                        kind,
+                        written: qualifier.clone(),
+                        target,
+                    };
+                    let [value] = payload.as_slice() else {
+                        return Err(SourceResolveError::NewtypeOperationArity {
+                            operation: operation.to_string().into(),
+                            span: metadata.span,
+                        });
+                    };
+                    environments.permit_newtype_operation(node.cursor(), &operation)?;
+                    ExprKind::Newtype(*node.child(*value), operation)
+                }
                 Constructor(payload, tag, qualifier) => ExprKind::Constructor(
                     payload.iter().map(|id| *node.child(*id)).collect(),
                     tag.clone(),

@@ -4,6 +4,7 @@ use ecow::EcoString;
 
 use super::{Value, numeric};
 use crate::core::values::union::check_value_conformance;
+use crate::core::values::{NewtypeSchema, NewtypeValue};
 use crate::core::{BinaryOperator, StreamType, UnaryOperator};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +51,19 @@ pub enum ValueOpError {
         value: Value,
         target: StreamType,
     },
+    /// `Name::value` of a value that is not of that newtype: another
+    /// newtype's, or a bare representation that never became one.
+    NewtypeMismatch {
+        expected: EcoString,
+        value: Value,
+    },
+    /// `==` or `!=` between a newtype value and a value of another newtype,
+    /// or one that is not a newtype value at all: an identity mismatch, not
+    /// a difference.
+    NewtypeComparison {
+        left: Value,
+        right: Value,
+    },
 }
 
 impl fmt::Display for ValueOpError {
@@ -93,7 +107,35 @@ impl fmt::Display for ValueOpError {
                 write!(f, "{operation} of {value} is not an Int")
             }
             Self::InvalidCast { value, target } => {
-                write!(f, "cannot cast {value} to {target}")
+                write!(f, "cannot cast {value} to {target}")?;
+                if let Err(reason) = check_value_conformance(value, target) {
+                    write!(f, ": {reason}")?;
+                }
+                Ok(())
+            }
+            Self::NewtypeComparison { left, right } => {
+                let describe = |value: &Value| match value {
+                    Value::Newtype(value) => format!("a value of newtype {}", value.brand()),
+                    _ => "not a newtype value".to_owned(),
+                };
+                write!(
+                    f,
+                    "cannot compare {left} with {right}: {} and {} are different types",
+                    describe(left),
+                    describe(right)
+                )
+            }
+            Self::NewtypeMismatch { expected, value } => {
+                write!(
+                    f,
+                    "cannot take the value of {value} as newtype {expected}: "
+                )?;
+                match value {
+                    Value::Newtype(value) => {
+                        write!(f, "it is a value of newtype {}", value.brand())
+                    }
+                    _ => write!(f, "it is not a newtype value"),
+                }
             }
         }
     }
@@ -193,6 +235,30 @@ pub fn cast(value: Value, target: &StreamType) -> Result<Value, ValueOpError> {
     }
 }
 
+/// Build a value of `newtype` around `value`, which is what `Name::new`
+/// elaborates to. Elaboration has already checked the representation, so
+/// this only brands it.
+pub fn newtype_wrap(value: Value, newtype: &NewtypeSchema<StreamType>) -> Value {
+    NewtypeValue::new(newtype.brand().clone(), value).into()
+}
+
+/// The representation a value of `newtype` holds, which is what
+/// `Name::value` elaborates to. A value of any other newtype, or one that
+/// never was a newtype, is refused: this is the first use at which an
+/// unchecked input's identity is established.
+pub fn newtype_unwrap(
+    value: Value,
+    newtype: &NewtypeSchema<StreamType>,
+) -> Result<Value, ValueOpError> {
+    match value {
+        Value::Newtype(held) if held.brand() == newtype.brand() => Ok(held.value().clone()),
+        value => Err(ValueOpError::NewtypeMismatch {
+            expected: newtype.brand().clone(),
+            value,
+        }),
+    }
+}
+
 pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Value, ValueOpError> {
     use BinaryOperator as Op;
 
@@ -216,8 +282,14 @@ pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Va
             }
             (left, right) => invalid_binary(operation, left, right),
         },
-        Op::Equal => Ok(Value::Bool(left == right)),
-        Op::NotEqual => Ok(Value::Bool(left != right)),
+        Op::Equal => match nominal_eq(&left, &right) {
+            Some(equal) => Ok(Value::Bool(equal)),
+            None => Err(ValueOpError::NewtypeComparison { left, right }),
+        },
+        Op::NotEqual => match nominal_eq(&left, &right) {
+            Some(equal) => Ok(Value::Bool(!equal)),
+            None => Err(ValueOpError::NewtypeComparison { left, right }),
+        },
         Op::LessEqual | Op::Less | Op::GreaterEqual | Op::Greater => {
             let ordering = numeric::compare_ordering(operation, left, right)?;
             Ok(Value::Bool(ordering.is_some_and(
@@ -230,6 +302,49 @@ pub fn binary(operation: BinaryOperator, left: Value, right: Value) -> Result<Va
                 },
             )))
         }
+    }
+}
+
+/// Equality that refuses to compare a newtype value with anything but a
+/// value of the same newtype, wherever the two meet: `None` for such a
+/// mismatch, otherwise what `==` says. Values holding no newtype compare
+/// exactly as `==` compares them.
+fn nominal_eq(left: &Value, right: &Value) -> Option<bool> {
+    match (left, right) {
+        (Value::Newtype(left), Value::Newtype(right)) => {
+            if left.brand() != right.brand() {
+                return None;
+            }
+            nominal_eq(left.value(), right.value())
+        }
+        (Value::Newtype(_), _) | (_, Value::Newtype(_)) => None,
+        (Value::List(left), Value::List(right)) | (Value::Tuple(left), Value::Tuple(right)) => {
+            if left.len() != right.len() {
+                return Some(false);
+            }
+            let mut equal = true;
+            for (left, right) in left.iter().zip(right.iter()) {
+                equal &= nominal_eq(left, right)?;
+            }
+            Some(equal)
+        }
+        (Value::Map(left), Value::Map(right)) => {
+            if left.len() != right.len() || !left.keys().eq(right.keys()) {
+                return Some(false);
+            }
+            let mut equal = true;
+            for (left, right) in left.values().zip(right.values()) {
+                equal &= nominal_eq(left, right)?;
+            }
+            Some(equal)
+        }
+        (Value::Union(left), Value::Union(right)) => match (left.payload(), right.payload()) {
+            (Some(left_payload), Some(right_payload)) if left.tag() == right.tag() => {
+                nominal_eq(left_payload, right_payload)
+            }
+            _ => Some(left == right),
+        },
+        _ => Some(left == right),
     }
 }
 

@@ -19,8 +19,9 @@ use contiguous_tree::TreeCursorExt;
 use ecow::{EcoString, EcoVec};
 
 use super::CheckedExprRef;
+use super::NewtypeOperation;
 use super::checked::CheckedExpressionContext;
-use crate::core::{BinaryOperator, StreamType, Value};
+use crate::core::{BinaryOperator, NewtypeSchema, StreamType, Value};
 use crate::core::{StreamTypeAscription, VarName};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::lang::dsrv::expand::functions::Callable;
@@ -47,6 +48,14 @@ pub enum SyntaxLiteral {
     Map(BTreeMap<EcoString, SyntaxLiteral>),
     Struct(BTreeMap<EcoString, SyntaxLiteral>),
     Unit,
+    /// A value of a newtype instance, holding its representation.
+    ///
+    /// No source spells one: only constant folding writes one in, for a
+    /// `const` whose checked body built the value through the owning
+    /// module's `new`. The literal carries the whole instance, so it types
+    /// as that newtype wherever the constant is named and keeps its brand
+    /// across imports.
+    Newtype(NewtypeSchema<StreamType>, Box<SyntaxLiteral>),
     /// Retained for AST construction tests and runtime absence propagation.
     /// Source type checking rejects it as a source literal.
     NoVal,
@@ -60,6 +69,8 @@ pub enum SyntaxLiteralError {
     Deferred,
     #[error("runtime unions must be represented by a typed source constructor")]
     RuntimeUnion,
+    #[error("newtype values must be built by their declaring module's `new`")]
+    RuntimeNewtype,
 }
 
 impl SyntaxLiteral {
@@ -83,6 +94,10 @@ impl SyntaxLiteral {
                     .collect(),
             ),
             Self::Unit => Value::Unit,
+            Self::Newtype(schema, value) => {
+                crate::core::NewtypeValue::new(schema.brand().clone(), value.into_runtime_value())
+                    .into()
+            }
             Self::NoVal => Value::NoVal,
         }
     }
@@ -100,6 +115,7 @@ impl TryFrom<Value> for SyntaxLiteral {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Union(_) => Err(SyntaxLiteralError::RuntimeUnion),
+            Value::Newtype(_) => Err(SyntaxLiteralError::RuntimeNewtype),
             Value::Int(value) => Ok(Self::Int(value)),
             Value::Float(value) => Ok(Self::Float(value)),
             Value::Str(value) => Ok(Self::Str(value)),
@@ -230,6 +246,8 @@ impl Display for SyntaxLiteral {
                 write!(f, "Struct({values})")
             }
             Self::Unit => write!(f, "()"),
+            // As standard output writes a newtype value.
+            Self::Newtype(schema, value) => write!(f, "{}::new({value})", schema.brand()),
             Self::NoVal => write!(f, "no_val"),
         }
     }
@@ -315,6 +333,16 @@ contiguous_tree::tree_schema! {
         // `matches(e, p)`, which is `match` over one pattern reported as a
         // Bool, kept as itself so a specification prints back as written.
         Matches(scrutinee: child, guard: children, pattern: data(MatchPattern)),
+        // `Name::new(x)` or `Name::value(x)` before elaboration: the
+        // operation, and the newtype its qualifier names, whose arguments
+        // checking settles. No node after elaboration is one of these.
+        Newtype(value: child, operation: data(NewtypeOperation)),
+        // What elaboration lowers `Name::new` to: brand a representation
+        // already known to be the instance's.
+        Wrap(value: child, newtype: data(NewtypeSchema<StreamType>)),
+        // What elaboration lowers `Name::value` to: the representation of a
+        // value of exactly this instance, and a type error for any other.
+        Unwrap(value: child, newtype: data(NewtypeSchema<StreamType>)),
 
         Dynamic(
             source: child,

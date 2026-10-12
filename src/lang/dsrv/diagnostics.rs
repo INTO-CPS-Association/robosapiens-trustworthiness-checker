@@ -53,6 +53,9 @@ pub enum TypeErrorKind {
     MatchArmTypeMismatch,
     MatchNotExhaustive,
     MatchWithoutArms,
+    /// `Name::new` or `Name::value` given, or expected to give, a value of
+    /// another type.
+    NewtypeMismatch,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,6 +116,9 @@ pub enum UnresolvedTypeKind {
     ListHeadElementType,
     VariableType,
     ConstructorUnion,
+    /// A generic newtype's arguments could not be inferred where one of its
+    /// operations is used.
+    NewtypeArguments,
 }
 
 #[derive(Debug, PartialEq, Eq)]

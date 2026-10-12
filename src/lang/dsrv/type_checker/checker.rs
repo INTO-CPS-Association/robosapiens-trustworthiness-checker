@@ -17,8 +17,8 @@ use crate::core::{
 };
 use crate::lang::dsrv::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
-    ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
-    SyntaxLiteral,
+    ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, NewtypeOperation,
+    NewtypeOperationKind, NewtypeTarget, ReconfigurableExprScope, SyntaxLiteral,
 };
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticError, SemanticResult, SemanticWarning, SemanticWarningKind,
@@ -365,6 +365,14 @@ fn check(
             )?,
             None,
         ),
+        Newtype(value, operation) => (
+            check_newtype_operation(expr, value, operation, expected, context)?,
+            None,
+        ),
+        // Only elaboration builds these, from operations already checked;
+        // they are typed again when an elaborated tree is.
+        Wrap(value, newtype) => (check_wrap(expr, value, newtype, true, context)?, None),
+        Unwrap(value, newtype) => (check_wrap(expr, value, newtype, false, context)?, None),
         Var(var) => (
             context
                 .get(var)
@@ -419,7 +427,15 @@ fn check(
                     .located(expr.origin()),
                 );
             }
+            // A newtype crosses `Any` in either direction, keeping its
+            // identity: casting back validates that identity at run time
+            // rather than creating one.
+            let nominal = matches!(
+                (&source, &target_type),
+                (TCType::Any, TCType::Newtype(_)) | (TCType::Newtype(_), TCType::Any)
+            );
             let valid = source == target_type
+                || nominal
                 || source == TCType::Int && target_type == TCType::Float
                 || matches!(
                     source,
@@ -531,7 +547,15 @@ fn check(
         }
         Lambda(params, body) => {
             // A parameter's type is its annotation, else the type the
-            // context expects for that argument.
+            // context expects for that argument. The expected function result
+            // likewise supplies context inside the body. Generic defs depend
+            // on this after their signature has been instantiated at a call:
+            // an otherwise-unqualified union constructor in the body must see
+            // the concrete result union.
+            let result_hint = match expected {
+                Some(TCType::Function(_, result)) => Some(result.as_ref()),
+                _ => None,
+            };
             let hints = context
                 .parameter_hints
                 .take()
@@ -567,7 +591,7 @@ fn check(
             }
             let frame_start = context.local_bindings.len();
             context.local_bindings.extend(parameters.iter().cloned());
-            let result = check(body, None, context);
+            let result = check(body, result_hint, context);
             context.local_bindings.truncate(frame_start);
             (
                 TCType::Function(
@@ -597,7 +621,22 @@ fn check(
                 .map(|arg| check(arg, None, context))
                 .collect::<Result<EcoVec<_>, _>>()?;
             context.parameter_hints = Some(arguments.clone());
-            let checked = check(function, None, context);
+            let checked = match check(function, None, context) {
+                Err(SemanticError::UnresolvedType(error))
+                    if matches!(
+                        error.kind(),
+                        UnresolvedTypeKind::ConstructorUnion | UnresolvedTypeKind::NewtypeArguments
+                    ) && expected.is_some() =>
+                {
+                    context.parameter_hints = Some(arguments.clone());
+                    let hint = TCType::Function(
+                        arguments.clone(),
+                        Box::new(expected.expect("guarded above").clone()),
+                    );
+                    check(function, Some(&hint), context)
+                }
+                checked => checked,
+            };
             context.parameter_hints = None;
             let TCType::Function(params, result) = checked? else {
                 unreachable!("a lambda checks to a function type");
@@ -615,7 +654,25 @@ fn check(
             (*result, None)
         }
         Apply(function, args) => 'apply: {
-            let function = check(function, None, context)?;
+            let function = match check(function, None, context) {
+                Err(SemanticError::UnresolvedType(error))
+                    if matches!(
+                        error.kind(),
+                        UnresolvedTypeKind::ConstructorUnion | UnresolvedTypeKind::NewtypeArguments
+                    ) && expected.is_some()
+                        && matches!(function.view(), Lambda(..)) =>
+                {
+                    let Lambda(params, _) = function.view() else {
+                        unreachable!()
+                    };
+                    let hint = TCType::Function(
+                        vec![TCType::Unknown; params.len()].into(),
+                        Box::new(expected.expect("guarded above").clone()),
+                    );
+                    check(function, Some(&hint), context)?
+                }
+                checked => checked?,
+            };
             if function == TCType::Any {
                 // A dynamic function is applied at runtime.
                 for arg in args {
@@ -1211,6 +1268,10 @@ fn value_type(value: &SyntaxLiteral, expected: Option<&TCType>) -> Result<TCType
         },
         SyntaxLiteral::Bool(_) => TCType::Bool,
         SyntaxLiteral::Unit => TCType::Unit,
+        // A folded constant's value carries the instance its body built.
+        SyntaxLiteral::Newtype(schema, _) => {
+            TCType::from_stream_type(&StreamType::Newtype(schema.clone()))
+        }
         SyntaxLiteral::List(values) => {
             let inner = expected
                 .and_then(TCType::list_element_type)
@@ -1877,7 +1938,8 @@ fn check_generic_def_call(
         return Err(error(
             call,
             TypeErrorKind::AnnotationTypeMismatch,
-            "generic function signature has an ungrounded type parameter",
+            "generic function signature has an ungrounded type parameter; annotate the type \
+             the call is expected to have",
         ));
     }
     let hint_bound: BTreeMap<&TypeName, SourceType> = bound
@@ -1922,6 +1984,111 @@ fn check_generic_def_call(
         require(actual, expected, call)?;
     }
     Ok((result, None))
+}
+
+/// An elaborated `Wrap` (`wrap`) or `Unwrap` of one newtype instance.
+///
+/// Kept out of line, as [`check_newtype_operation`] is: `check` recurses
+/// once per nesting level, so every local its arms hold enlarges each frame
+/// of a deep ordinary expression, and newtype logic must not cost programs
+/// without newtypes their stack.
+#[inline(never)]
+fn check_wrap(
+    expr: ExprRef<'_>,
+    value: ExprRef<'_>,
+    newtype: &crate::core::NewtypeSchema<StreamType>,
+    wrap: bool,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let branded = TCType::from_stream_type(&StreamType::Newtype(newtype.clone()));
+    let repr = TCType::from_stream_type(newtype.repr());
+    let (operand, result) = if wrap {
+        (repr, branded)
+    } else {
+        (branded, repr)
+    };
+    require(check(value, Some(&operand), context)?, &operand, expr)?;
+    Ok(result)
+}
+
+/// `Name::new(x)` or `Name::value(x)`.
+///
+/// `new` takes the instance it builds from the type it is expected to have,
+/// where that is an instance of the named newtype; otherwise the qualifier
+/// must name one instance, since a generic newtype's arguments, which need
+/// not appear in its representation, cannot be read off the argument.
+/// `value` takes the instance from its argument's type.
+#[inline(never)]
+fn check_newtype_operation(
+    expr: ExprRef<'_>,
+    value: ExprRef<'_>,
+    operation: &NewtypeOperation,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let unresolved = |message: String| {
+        SemanticError::unresolved_type_at(
+            UnresolvedTypeKind::NewtypeArguments,
+            message,
+            expr.span(),
+        )
+        .located(expr.origin())
+    };
+    let declared = |target: &NewtypeTarget| match target {
+        NewtypeTarget::Instance(instance) => Some(instance.map(TCType::from_stream_type)),
+        NewtypeTarget::Generic { .. } => None,
+    };
+    match operation.kind {
+        NewtypeOperationKind::New => {
+            let schema = match expected {
+                Some(TCType::Newtype(expected)) if operation.target.admits(expected) => {
+                    expected.clone()
+                }
+                _ => declared(&operation.target).ok_or_else(|| {
+                    unresolved(format!(
+                        "cannot infer the type arguments of `{operation}`: annotate the type \
+                         it is expected to have, as in `out d: {}<…> = …`",
+                        operation.written
+                    ))
+                })?,
+            };
+            let repr = schema.repr().clone();
+            let actual = check(value, Some(&repr), context)?;
+            if unify(&actual, &repr).is_none() {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::NewtypeMismatch,
+                    format!("`{operation}` takes its representation {repr}, got {actual}"),
+                ));
+            }
+            Ok(TCType::Newtype(schema))
+        }
+        NewtypeOperationKind::Value => {
+            let hint = declared(&operation.target).map(TCType::Newtype);
+            let actual = check(value, hint.as_ref(), context)?;
+            match (&actual, hint) {
+                (TCType::Newtype(schema), _) if operation.target.admits(schema) => {
+                    Ok(schema.repr().clone())
+                }
+                // A value whose type is only known at run time is unwrapped
+                // there, where its brand is checked.
+                (TCType::Any, Some(TCType::Newtype(schema))) => Ok(schema.repr().clone()),
+                (TCType::Any, _) => Err(unresolved(format!(
+                    "cannot tell which instance of `{}` `{operation}` reads from a value of \
+                     type Any: annotate its argument",
+                    operation.written
+                ))),
+                (actual, _) => Err(error(
+                    expr,
+                    TypeErrorKind::NewtypeMismatch,
+                    format!(
+                        "`{operation}` reads a value of newtype {}, got {actual}",
+                        operation.written
+                    ),
+                )),
+            }
+        }
+    }
 }
 
 fn require(actual: TCType, expected: &TCType, expr: ExprRef<'_>) -> Result<(), SemanticError> {

@@ -16,7 +16,8 @@ use crate::lang::dsrv::modules::{
 };
 use crate::lang::dsrv::path::TypePath;
 use crate::lang::dsrv::source::{
-    AliasDeclaration, SourceAlternative, SourceContext, SourceType, TypeName, substitute_source,
+    AliasDeclaration, AliasKind, NewtypeInstance, SourceAlternative, SourceContext, SourceType,
+    TypeName, substitute_source,
 };
 use crate::lang::dsrv::syntax::ParsedDeclaration;
 
@@ -148,6 +149,9 @@ fn contributed(
                     name: key.name().clone(),
                     parameters: EcoVec::new(),
                     internal: false,
+                    // A resolved newtype travels as its instance, which
+                    // carries its brand.
+                    kind: AliasKind::Structural,
                     ty: SourceType::from(ty.clone()),
                     span: import.span,
                 },
@@ -168,6 +172,9 @@ fn contributed(
                     name: key.name().clone(),
                     parameters: generic_alias.parameters.clone(),
                     internal: false,
+                    // A generic newtype keeps the stem it was declared
+                    // with, so every importer makes the same brands.
+                    kind: generic_alias.kind.clone(),
                     ty: body,
                     span: import.span,
                 },
@@ -279,10 +286,15 @@ fn build_module(
     for (key, declared) in explicit {
         builder.insert_keyed(key, declared)?;
     }
+    let module = path
+        .iter()
+        .map(|segment| segment.as_str())
+        .collect::<Vec<_>>()
+        .join("::");
     for declaration in declarations {
         if let ParsedDeclaration::Alias(alias) = declaration {
             language::check_alias(alias, &config)?;
-            builder.insert_source(alias.clone())?;
+            builder.insert_source(alias.clone().placed_in(&module))?;
         }
     }
     builder.language(config);
@@ -846,6 +858,27 @@ fn resolve_generic_alias(
                     ),
                 });
             }
+            // A generic newtype is not inlined: its instance keeps its
+            // identity, and resolves once the arguments are known.
+            if let Some(stem) = declaration.kind.newtype_stem() {
+                active.push(path.clone());
+                let repr = resolve_generic_alias(
+                    &declaration.ty,
+                    &declaration.parameters,
+                    exporter,
+                    active,
+                )?;
+                active.pop();
+                return Ok(SourceType {
+                    kind: Kind::NewtypeInstance(Box::new(NewtypeInstance {
+                        stem: stem.clone(),
+                        parameters: declaration.parameters.clone(),
+                        arguments: arguments.into_iter().collect(),
+                        repr,
+                    })),
+                    span: ty.span,
+                });
+            }
             let bound: BTreeMap<&TypeName, &SourceType> = declaration
                 .parameters
                 .iter()
@@ -908,7 +941,7 @@ fn resolve_generic_alias(
 mod function_tests {
     use super::*;
 
-    use crate::lang::dsrv::expand::functions::build_function_table;
+    use crate::lang::dsrv::expand::functions::build_tables;
     use crate::lang::dsrv::modules::ModuleCollector;
     use crate::lang::dsrv::path::ModuleName;
     use test_log::test;
@@ -928,10 +961,7 @@ mod function_tests {
         }
         let sources = collector.finish().expect("collected");
         let graph = build_graph(&sources, None)?;
-        let constants = Rc::new(crate::lang::dsrv::expand::constants::build_constant_table(
-            &sources, &graph,
-        )?);
-        build_function_table(&sources, &graph, &constants, Default::default()).map(|_| ())
+        build_tables(&sources, &graph, Default::default()).map(|_| ())
     }
 
     #[test]

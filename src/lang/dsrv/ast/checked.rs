@@ -156,6 +156,11 @@ impl CheckedExpr {
         self.checked.type_of(self.expr.as_ref())
     }
 
+    /// The stream environment this expression was checked in.
+    pub(crate) fn environment(&self) -> &AstShared<StreamTypeEnvironment> {
+        &self.checked.environment
+    }
+
     pub fn as_ref(&self) -> CheckedExprRef<'_> {
         self.expr.as_ref().with_checked_types(&self.checked)
     }

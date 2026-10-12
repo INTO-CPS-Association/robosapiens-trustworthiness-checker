@@ -86,6 +86,11 @@ impl Display for ExprRef<'_> {
                     write!(f, "({} {} {})", lhs, operator.symbol(), rhs)
                 }
             }
+            Newtype(value, operation) => write!(f, "{operation}({value})"),
+            // The elaborated forms name the instance by brand, which only a
+            // diagnostic shows: printing a specification prints its source.
+            Wrap(value, newtype) => write!(f, "{newtype}::new({value})"),
+            Unwrap(value, newtype) => write!(f, "{newtype}::value({value})"),
             Cast(value, target) => write!(f, "({value} as {target})"),
             Ascribe(value, target) => write!(f, "({value}: {target})"),
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
@@ -274,7 +279,14 @@ fn fmt_specification<'a>(
                     .source_context
                     .get(&TypePath::local(name.clone()))
                     .ok_or(Error)?;
-                writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
+                match ty {
+                    // A root module's newtype is branded with its own name,
+                    // which is how it prints back as the declaration.
+                    StreamType::Newtype(schema) if schema.brand().as_str() == name.as_str() => {
+                        writeln!(f, "newtype {name} = {}", SourceTypeDisplay(schema.repr()))?
+                    }
+                    ty => writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?,
+                }
             }
         }
     }

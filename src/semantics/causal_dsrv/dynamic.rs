@@ -224,7 +224,8 @@ where
                     RuntimeExpressionError::TypeCheck { errors, .. } => {
                         panic!("Dynamic expression failed type checking: {errors:?}")
                     }
-                    RuntimeExpressionError::Unsupported { .. } => {
+                    RuntimeExpressionError::Unsupported { .. }
+                    | RuntimeExpressionError::UncheckedNewtype { .. } => {
                         panic!("Dynamic expression is unsupported: {error}")
                     }
                 });

@@ -11,6 +11,8 @@ pub(crate) type AstWeak<T> = std::rc::Weak<T>;
 
 // Core nodes and expression handles.
 mod expression;
+// The newtype operations a specification writes.
+mod newtype;
 // Type-checking decorates the shared expression representation.
 mod checked;
 
@@ -27,6 +29,7 @@ mod display;
 pub(crate) use analysis::DependencyKind;
 pub use checked::{CheckedExpr, CheckedExprRef};
 pub(crate) use checked::{ExprTypes, ExprTypesBuilder};
+pub use newtype::{NewtypeOperation, NewtypeOperationKind, NewtypeTarget};
 
 pub use expression::{
     Expr, ExprId, ExprRef, ExprView, ReconfigurableExprScope, SyntaxLiteral, SyntaxLiteralError,

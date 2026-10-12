@@ -50,6 +50,20 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 expect_value(value_operations::cast(value, target))
             })
         }
+        StreamOp::Newtype { input, operation } => {
+            let input = context.read_value(state, input);
+            let NodeState::UnaryLift { last_input } = &mut state.node_states[node_id.index()]
+            else {
+                unreachable!("newtype node has incompatible runtime state")
+            };
+            let value = retain_last_value(input, last_input);
+            lift_one(value, |value| match operation {
+                NewtypeOp::Wrap(newtype) => value_operations::newtype_wrap(value, newtype),
+                NewtypeOp::Unwrap(newtype) => {
+                    expect_value(value_operations::newtype_unwrap(value, newtype))
+                }
+            })
+        }
         StreamOp::Binary { op, lhs, rhs } => {
             let lhs = context.read_value(state, lhs);
             let rhs = context.read_value(state, rhs);
