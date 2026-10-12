@@ -695,9 +695,22 @@ pub struct GeneralRuntimeBuilder<M, V: StreamData> {
     pub mstlo_synchronization_strategy: SynchronizationStrategy,
     pub mstlo_variables: Variables,
     replacement_preparation: Option<ReplacementPreparation<ElaboratedDsrvSpecification>>,
+    /// Run diagnostics; honoured by the dataflow runtimes.
+    #[cfg(feature = "diagnostics")]
+    pub diagnostics: Option<crate::diagnostics::DiagnosticsHub>,
 }
 
 impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
+    /// Record diagnostics into `hub` when the selected runtime is a dataflow runtime. Other
+    /// runtimes ignore it.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostics(self, hub: crate::diagnostics::DiagnosticsHub) -> Self {
+        Self {
+            diagnostics: Some(hub),
+            ..self
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_defaults(RuntimeSpec::Dataflow(ExecutionPolicy::Buffered))
     }
@@ -726,6 +739,8 @@ impl<M, V: StreamData> GeneralRuntimeBuilder<M, V> {
             mstlo_synchronization_strategy: SynchronizationStrategy::default(),
             mstlo_variables: Variables::new(),
             replacement_preparation: None,
+            #[cfg(feature = "diagnostics")]
+            diagnostics: None,
         }
     }
 
@@ -1006,6 +1021,8 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
                     mstlo_variables: self.mstlo_variables,
                     replacement_preparation: self.replacement_preparation,
+                    #[cfg(feature = "diagnostics")]
+                    diagnostics: self.diagnostics,
                 }
                 .build()
                 .await
@@ -1042,6 +1059,8 @@ impl GeneralRuntimeBuilder<LangSpecification, Value> {
                     mstlo_synchronization_strategy: self.mstlo_synchronization_strategy,
                     mstlo_variables: self.mstlo_variables,
                     replacement_preparation: None,
+                    #[cfg(feature = "diagnostics")]
+                    diagnostics: None,
                 }
                 .build()
                 .await
@@ -1147,6 +1166,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
         acknowledgements: Option<ReconfigurationAckSink>,
         direct_input_supplied: bool,
         replacement_preparation: Option<ReplacementPreparation<ElaboratedDsrvSpecification>>,
+        #[cfg(feature = "diagnostics")] diagnostics: Option<crate::diagnostics::DiagnosticsHub>,
     ) -> anyhow::Result<Box<dyn RuntimeBuilderDyn<ElaboratedDsrvSpecification, Value>>> {
         debug!(
             "Creating common builder with distribution mode: {:?}",
@@ -1178,9 +1198,15 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                     Box::new(AsyncRuntimeBuilder::<ValueConfig, CheckedUntimedDsrvSemantics>::new())
                 }
                 (RuntimeSpec::Dataflow(policy), semantics) if dsrv_semantics => {
-                    Box::new(DataflowRuntimeBuilder::new()
-                            .execution_policy(policy)
-                            .semantics(semantics))
+                    let builder = DataflowRuntimeBuilder::new()
+                        .execution_policy(policy)
+                        .semantics(semantics);
+                    #[cfg(feature = "diagnostics")]
+                    let builder = match diagnostics {
+                        Some(hub) => builder.diagnostics(hub),
+                        None => builder,
+                    };
+                    Box::new(builder)
                 }
                 (RuntimeSpec::ReconfDataflow(policy), semantics) if dsrv_semantics => {
                     let transfer_policy = if use_context_transfer {
@@ -1200,6 +1226,11 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                         acknowledgements,
                         direct_input_supplied,
                     );
+                    #[cfg(feature = "diagnostics")]
+                    let builder = match diagnostics {
+                        Some(hub) => builder.diagnostics(hub),
+                        None => builder,
+                    };
                     Box::new(builder)
                 }
                 (runtime @ RuntimeSpec::ReconfDataflow(_), semantics) => {
@@ -1535,6 +1566,8 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                 self.acknowledgements,
                 direct_input_supplied,
                 self.replacement_preparation,
+                #[cfg(feature = "diagnostics")]
+                self.diagnostics,
             )?;
         // Construct the complete output pipeline before the runtime starts.
         // Runtimes receive one writer and retain their native logical tick shape.

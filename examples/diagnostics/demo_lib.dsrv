@@ -1,0 +1,4 @@
+use experimental::{functions}
+
+def clamp(x: Int, lo: Int, hi: Int) -> Int = if x < lo then lo else if x > hi then hi else x
+def weighted_sum(xs: List<Int>, k: Int) -> Int = List.fold(\acc: Int, x: Int -> acc + x * k, 0, xs)

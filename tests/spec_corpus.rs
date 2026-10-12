@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use trustworthiness_checker::lang::dsrv::parser::parse_str;
+use trustworthiness_checker::lang::dsrv::program::load_program_file;
 use trustworthiness_checker::lang::dsrv::{Dialect, TypeCheckOptions};
 
 fn specifications_under(root: &Path, found: &mut Vec<PathBuf>) {
@@ -58,9 +59,32 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
         "tests/fixtures/invalid_typed_model.dsrv",
     ];
 
+    // Roots whose glob import of a sibling module parses from a string but whose imported names
+    // only resolve when the module is loaded from disk. They are checked through the file loader
+    // instead, which is what the CLI uses.
+    const FILE_LOADED: [&str; 1] = ["examples/diagnostics/profile_demo.dsrv"];
+
     let mut unexpected = Vec::new();
     for path in &paths {
         let name = path.to_string_lossy().replace('\\', "/");
+        if FILE_LOADED.contains(&name.as_str()) {
+            match smol::block_on(load_program_file(&name, Default::default())) {
+                Ok(program) => {
+                    let checks = program
+                        .specification
+                        .check_and_elaborate(TypeCheckOptions::GRADUAL)
+                        .result()
+                        .is_ok();
+                    if !checks {
+                        unexpected.push(format!("{name} fails gradual checking from its file"));
+                    }
+                }
+                Err(error) => {
+                    unexpected.push(format!("{name} does not load from its file: {error}"))
+                }
+            }
+            continue;
+        }
         let source = fs::read_to_string(path).expect("a readable specification");
         let parsed = parse_str(&source);
         if let Ok(specification) = &parsed {

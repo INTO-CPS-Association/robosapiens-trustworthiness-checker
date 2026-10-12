@@ -39,6 +39,8 @@ struct DataflowProgramPayload {
     history_requirements: HistoryRequirements,
     environment_size: usize,
     definition_key: DefinitionKey,
+    /// The source archive, for diagnostics attribution only. Not part of the definition key.
+    debug_sources: super::diagnostics::DebugSources,
 }
 
 impl DataflowProgram {
@@ -121,6 +123,29 @@ impl DataflowProgram {
         &self.payload.history_requirements
     }
 
+    /// Attach the source archive the program was compiled from. Diagnostics-only: it changes no
+    /// semantic identity, and without the `diagnostics` feature nothing is retained.
+    pub(in crate::dataflow) fn with_debug_sources(
+        mut self,
+        sources: super::diagnostics::DebugSources,
+    ) -> Self {
+        match Rc::get_mut(&mut self.payload) {
+            Some(payload) => payload.debug_sources = sources,
+            None => debug_assert!(
+                false,
+                "debug sources are attached before the program is shared"
+            ),
+        }
+        self
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub(in crate::dataflow) fn debug_sources(
+        &self,
+    ) -> Option<&crate::lang::dsrv::source_map::SourceArchive> {
+        self.payload.debug_sources.archive()
+    }
+
     pub(in crate::dataflow) fn from_parts(
         input_vars: Vec<VarName>,
         output_vars: Vec<VarName>,
@@ -176,6 +201,7 @@ impl DataflowProgram {
                 history_requirements,
                 environment_size,
                 definition_key,
+                debug_sources: Default::default(),
             }),
         }
     }

@@ -125,7 +125,7 @@ impl SharedReconfigurableExpressionCacheEntry {
 }
 
 impl SharedReconfigurableExpressionCache {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "diagnostics"))]
     pub(in crate::dataflow) fn entry_count(&self) -> usize {
         self.entries.len()
     }

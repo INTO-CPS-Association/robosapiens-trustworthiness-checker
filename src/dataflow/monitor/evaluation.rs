@@ -65,15 +65,19 @@ impl DataflowMonitor {
             });
         }
 
-        if self
+        let stamp = self.diag_tick_begin();
+        let result = if self
             .program
             .monitor_plan()
             .reconfigurable_expressions
             .is_empty()
         {
-            return self.evaluate_stable_static(input, output);
-        }
-        self.evaluate_reconfigurable(input, output)
+            self.evaluate_stable_static(input, output)
+        } else {
+            self.evaluate_reconfigurable(input, output)
+        };
+        self.diag_tick_end(stamp, &result);
+        result
     }
 
     /// Evaluate input rows in iterator order and append one complete output row per successful tick.
@@ -116,7 +120,10 @@ impl DataflowMonitor {
             return self.fail_tick(error);
         }
         self.write_outputs(output);
+        self.diag_record_values();
+        let stamp = self.diag_stamp();
         self.commit_histories();
+        self.diag_history_commit(stamp);
         Ok(())
     }
 
@@ -129,7 +136,10 @@ impl DataflowMonitor {
             return self.fail_tick(error);
         }
         self.write_outputs(output);
+        self.diag_record_values();
+        let stamp = self.diag_stamp();
         self.commit_histories();
+        self.diag_history_commit(stamp);
         Ok(())
     }
 
@@ -168,11 +178,13 @@ impl DataflowMonitor {
         if resolution.semantic_reconfiguration {
             self.recompute_history_requirements();
         }
+        let stamp = self.diag_stamp();
         let schedule_changed = self.scheduler.update_schedule(
             &self.program.monitor_plan().dependencies,
             self.reconfiguration_state.source_streams(),
             self.program.stream_vars(),
         )?;
+        self.diag_schedule_update(stamp, schedule_changed);
         if schedule_changed {
             self.select_execution_schedule();
         }
@@ -181,6 +193,14 @@ impl DataflowMonitor {
                 .revision
                 .checked_next()
                 .ok_or(DataflowEvaluationError::RevisionOverflow)?;
+            #[cfg(feature = "diagnostics")]
+            {
+                let revision = self.revision.0;
+                self.diag_event(
+                    "revision_changed",
+                    || serde_json::json!({ "revision": revision, "cause": "dynamic" }),
+                );
+            }
         }
         self.evaluate_scheduled_streams()?;
         self.apply_defer_sealing();
@@ -223,6 +243,8 @@ impl DataflowMonitor {
         if !self.reconfiguration_state.apply_pending_releases() {
             return;
         }
+        #[cfg(feature = "diagnostics")]
+        self.diag_event("defer_sealed", || serde_json::json!({}));
         self.scheduler
             .refresh_main_execution_schedule(self.reconfiguration_state.source_streams());
         self.select_execution_schedule();

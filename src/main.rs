@@ -201,6 +201,28 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         Some(InputSource::<Value>::redis_knowledge),
         &cli,
     )?;
+    #[cfg(feature = "diagnostics")]
+    let diagnostics = cli
+        .diagnostics
+        .config(cli.model.as_str())
+        .map(trustworthiness_checker::diagnostics::DiagnosticsHub::new);
+    #[cfg(feature = "diagnostics")]
+    if diagnostics.is_some()
+        && !matches!(
+            runtime,
+            RuntimeSpec::Dataflow(_) | RuntimeSpec::ReconfDataflow(_)
+        )
+    {
+        warn!("diagnostics are recorded only by the dataflow runtimes; {runtime:?} ignores them");
+    }
+    #[cfg(feature = "diagnostics")]
+    let (input_pipeline, builder) = match &diagnostics {
+        Some(hub) => (
+            input_pipeline.diagnostics(hub.clone()),
+            builder.diagnostics(hub.clone()),
+        ),
+        None => (input_pipeline, builder),
+    };
     let builder = if matches!(
         runtime,
         RuntimeSpec::ReconfSemiSync | RuntimeSpec::ReconfDataflow(_)

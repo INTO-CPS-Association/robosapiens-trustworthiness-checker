@@ -130,6 +130,9 @@ sat = ["dep:sat-solver", "jemalloc"]
 ros = ["dep:r2r", "tc-testutils/ros"]
 testcontainers = ["redis", "tc-testutils/testcontainers"]
 span-tracing = []
+# Opt-in profiling, execution tracing and structured memory estimates for the
+# dataflow runtime. Without it every hook compiles to nothing.
+diagnostics = []
 extended-proptests = []
 test-support = []
 jit = [

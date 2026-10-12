@@ -7,6 +7,7 @@
 //! outputs are published explicitly across source, graph, and region boundaries. Tier and schedule
 //! transitions materialize the authoritative state before replacing its executor.
 
+mod diagnostics;
 mod plan;
 mod reconfiguration;
 #[cfg(test)]
@@ -14,6 +15,7 @@ mod tests;
 mod tick;
 mod tiers;
 
+use super::super::diagnostics::ExecutionProbe;
 use super::super::history::HistoryId;
 use super::super::ir::{NodeId, StreamProgram};
 use super::super::stream_id::{StreamId, StreamSlots};
@@ -110,6 +112,8 @@ pub(in crate::dataflow) struct MonitorExecution {
     authoritative_tier: AuthoritativeTier,
     tick_in_progress: bool,
     shared_reconfigurable_expression_cache: SharedReconfigurableExpressionCache,
+    /// Diagnostics hooks; zero-sized without the `diagnostics` feature.
+    diagnostics: ExecutionProbe,
 }
 
 /// The single tier-selection and plan-cache boundary for a monitor.
@@ -203,6 +207,7 @@ impl MonitorExecution {
             authoritative_tier,
             tick_in_progress: false,
             shared_reconfigurable_expression_cache: SharedReconfigurableExpressionCache::default(),
+            diagnostics: ExecutionProbe::disabled(),
         }
     }
 }

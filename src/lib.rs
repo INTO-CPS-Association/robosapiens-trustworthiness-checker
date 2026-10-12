@@ -12,6 +12,8 @@ pub use core::{
 };
 pub mod cli;
 pub mod dataflow;
+#[cfg(feature = "diagnostics")]
+pub mod diagnostics;
 pub mod io;
 pub use io::file::parse_file;
 pub mod lang;

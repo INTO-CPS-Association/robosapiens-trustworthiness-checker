@@ -127,6 +127,8 @@ use futures::future::LocalBoxFuture;
 use smol::LocalExecutor;
 use tracing::info;
 
+use crate::runtime::diagnostics::{PipelinePhase, RuntimeProbe};
+
 const DATAFLOW_RUNTIME_BATCH_SIZE: usize = 256;
 
 /// Acknowledgement published after a root reconfiguration has reached its new
@@ -241,6 +243,8 @@ pub struct DataflowRuntime {
     execution_policy: ExecutionPolicy,
     reconfiguration: Option<RuntimeReconfigurationContext>,
     startup_error: Option<anyhow::Error>,
+    /// Pipeline diagnostics; zero-sized without the `diagnostics` feature.
+    diagnostics: RuntimeProbe,
 }
 
 /// Configures the model, input stream, output writer, and flush policy for a
@@ -254,9 +258,21 @@ pub struct DataflowRuntimeBuilder {
     quickening: bool,
     #[cfg(feature = "jit")]
     jit_config: Option<JitConfig>,
+    #[cfg(feature = "diagnostics")]
+    diagnostics: Option<crate::diagnostics::DiagnosticsHub>,
 }
 
 impl DataflowRuntimeBuilder {
+    /// Record pipeline phases, monitor execution and memory estimates into `hub`, and write the
+    /// run's artifacts when the hub's configuration names an output directory.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostics(self, hub: crate::diagnostics::DiagnosticsHub) -> Self {
+        Self {
+            diagnostics: Some(hub),
+            ..self
+        }
+    }
+
     /// Select the evaluation strategy; see [`DataflowMonitor::compile_with_semantics`].
     pub fn semantics(self, semantics: Semantics) -> Self {
         Self { semantics, ..self }
@@ -327,6 +343,8 @@ pub struct ReconfigurableDataflowRuntimeBuilder {
     setup_error: Option<String>,
     #[cfg(feature = "jit")]
     jit_config: Option<JitConfig>,
+    #[cfg(feature = "diagnostics")]
+    diagnostics: Option<crate::diagnostics::DiagnosticsHub>,
 }
 
 impl ReconfigurableDataflowRuntimeBuilder {
@@ -392,6 +410,14 @@ impl ReconfigurableDataflowRuntimeBuilder {
         self.jit_config = Some(config);
         self
     }
+
+    /// Record diagnostics into `hub`; see [`DataflowRuntimeBuilder::diagnostics`]. The recorder
+    /// follows the monitor across reconfigurations, each of which starts a definition version.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostics(mut self, hub: crate::diagnostics::DiagnosticsHub) -> Self {
+        self.diagnostics = Some(hub);
+        self
+    }
 }
 
 impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDataflowRuntimeBuilder {
@@ -413,6 +439,8 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             setup_error: None,
             #[cfg(feature = "jit")]
             jit_config: None,
+            #[cfg(feature = "diagnostics")]
+            diagnostics: None,
         }
     }
 
@@ -504,10 +532,16 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             if let Err(error) = ensure_no_stream_function_instances(&model, "reconf-dataflow") {
                 return failed_dataflow_runtime(policy, error.into());
             }
+            #[cfg(feature = "diagnostics")]
+            let mut diagnostics = RuntimeProbe::new(self.diagnostics.clone());
+            #[cfg(not(feature = "diagnostics"))]
+            let mut diagnostics = RuntimeProbe::default();
+            let compile = diagnostics.stamp();
             let compiled = match compile_model(model, semantics) {
                 Ok(compiled) => compiled,
                 Err(error) => return failed_dataflow_runtime(policy, error.into()),
             };
+            diagnostics.phase(compile, PipelinePhase::Compile);
             let execution_configuration = ExecutionConfiguration {
                 quickening: self.quickening,
                 #[cfg(feature = "jit")]
@@ -520,6 +554,10 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
                 monitor.enable_jit(config);
             }
             monitor.set_reconfiguration_transfer_policy(self.transfer_policy);
+            #[cfg(feature = "diagnostics")]
+            if let Some(hub) = &self.diagnostics {
+                monitor.enable_diagnostics(hub.config());
+            }
 
             let input_session = match input.open_session(resolved_input.clone()).await {
                 Ok(session) => session,
@@ -559,6 +597,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
                     acknowledgements: self.acknowledgements,
                 }),
                 startup_error: None,
+                diagnostics,
             }
         })
     }
@@ -577,6 +616,8 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
             quickening: true,
             #[cfg(feature = "jit")]
             jit_config: None,
+            #[cfg(feature = "diagnostics")]
+            diagnostics: None,
         }
     }
 
@@ -606,6 +647,11 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
         Box::pin(async move {
             let execution_policy = self.execution_policy;
             let mut startup_error = None;
+            #[cfg(feature = "diagnostics")]
+            let mut diagnostics = RuntimeProbe::new(self.diagnostics.clone());
+            #[cfg(not(feature = "diagnostics"))]
+            let mut diagnostics = RuntimeProbe::default();
+            let compile = diagnostics.stamp();
             let mut monitor = match self.model {
                 Some(model) => ensure_check_mode(self.semantics, &model).and_then(|()| {
                     DataflowMonitor::compile_with_semantics(model, self.semantics)
@@ -613,6 +659,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
                 }),
                 None => Err(anyhow::anyhow!("dataflow runtime model is not configured")),
             };
+            diagnostics.phase(compile, PipelinePhase::Compile);
             if let Ok(monitor) = &mut monitor {
                 monitor.set_quickening(self.quickening);
             }
@@ -621,6 +668,14 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
                 let mut monitor = monitor;
                 if let (Some(config), Ok(monitor)) = (self.jit_config, &mut monitor) {
                     monitor.enable_jit(config);
+                }
+                monitor
+            };
+            #[cfg(feature = "diagnostics")]
+            let monitor = {
+                let mut monitor = monitor;
+                if let (Some(hub), Ok(monitor)) = (&self.diagnostics, &mut monitor) {
+                    monitor.enable_diagnostics(hub.config());
                 }
                 monitor
             };
@@ -649,6 +704,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for DataflowRuntimeBuild
                 execution_policy,
                 reconfiguration: None,
                 startup_error,
+                diagnostics,
             }
         })
     }
@@ -665,6 +721,7 @@ impl Runtime for DataflowRuntime {
             execution_policy,
             reconfiguration,
             startup_error,
+            diagnostics,
         } = *self;
 
         if let Some(error) = startup_error {
@@ -703,8 +760,15 @@ impl Runtime for DataflowRuntime {
                         .await;
                     }
                 };
-                run_reconfigurable_dataflow(input, monitor, output_session, execution_policy, state)
-                    .await
+                run_reconfigurable_dataflow(
+                    input,
+                    monitor,
+                    output_session,
+                    execution_policy,
+                    state,
+                    diagnostics,
+                )
+                .await
             }
             None => {
                 let Some(mut output_writer) = output_writer else {
@@ -746,7 +810,14 @@ impl Runtime for DataflowRuntime {
                     )
                     .await;
                 };
-                run_direct_dataflow_engine(input, monitor, output_writer, execution_policy).await
+                run_direct_dataflow_engine(
+                    input,
+                    monitor,
+                    output_writer,
+                    execution_policy,
+                    diagnostics,
+                )
+                .await
             }
         }
     }
@@ -803,11 +874,19 @@ async fn run_direct_dataflow_engine(
     monitor: DataflowMonitor,
     output_writer: OutputWriter<Value>,
     execution_policy: ExecutionPolicy,
+    diagnostics: RuntimeProbe,
 ) -> anyhow::Result<()> {
-    let mut engine = DirectDataflowEngine::new(monitor, output_writer);
+    let mut engine =
+        DirectDataflowEngine::new(monitor, output_writer).with_diagnostics(diagnostics);
     let mut error: Option<anyhow::Error> = None;
 
-    'input: while let Some(batch) = input_stream.next().await {
+    'input: loop {
+        let wait = engine.diagnostics.stamp();
+        let Some(batch) = input_stream.next().await else {
+            break;
+        };
+        engine.diagnostics.phase(wait, PipelinePhase::InputWait);
+        engine.diagnostics.count("input_batches", 1);
         let batch = match batch {
             Ok(batch) => batch,
             Err(input_error) => {
@@ -863,6 +942,7 @@ async fn run_direct_dataflow_engine(
     }
 
     let deadline = engine.output.shutdown_deadline();
+    let drain_stamp = engine.diagnostics.stamp();
     let mut drain = input_stream.into_drain_with_deadline(deadline);
     while let Some(item) = drain.next().await {
         if let Err(cleanup) = item {
@@ -873,6 +953,9 @@ async fn run_direct_dataflow_engine(
             });
         }
     }
+    engine
+        .diagnostics
+        .phase(drain_stamp, PipelinePhase::InputDrain);
 
     // Do not send rows accumulated before a monitor or input error. In
     // particular, a failed evaluation must never turn its incomplete row into
@@ -884,15 +967,21 @@ async fn run_direct_dataflow_engine(
         }
     }
 
+    let finish = engine.diagnostics.stamp();
     let cleanup =
         crate::runtime::output_utils::finish_writer_with_deadline(&mut engine.output, deadline)
             .await
             .map_err(anyhow::Error::from);
-    match (error, cleanup) {
+    engine
+        .diagnostics
+        .phase(finish, PipelinePhase::OutputFinish);
+    let result = match (error, cleanup) {
         (Some(primary), Err(cleanup)) => Err(combine_errors(primary, cleanup)),
         (Some(primary), Ok(())) => Err(primary),
         (None, cleanup) => cleanup,
-    }
+    };
+    engine.diagnostics.finish(&mut engine.monitor, &result);
+    result
 }
 
 async fn finish_dataflow_output<O: DataflowOutput>(output: &mut O) -> anyhow::Result<()> {
@@ -946,6 +1035,7 @@ fn failed_dataflow_runtime(
         execution_policy,
         reconfiguration: None,
         startup_error: Some(error),
+        diagnostics: RuntimeProbe::default(),
     }
 }
 
@@ -1073,7 +1163,9 @@ async fn finish_reconfigurable_engine(
             None => cleanup,
         });
     }
-    error.map_or(Ok(()), Err)
+    let result = error.map_or(Ok(()), Err);
+    engine.diagnostics.finish(&mut engine.monitor, &result);
+    result
 }
 
 async fn finish_reconfigurable_active(
@@ -1130,7 +1222,12 @@ async fn reconfiguration_failure(
     {
         error = combine_errors(error, cleanup);
     }
-    error
+    let result = Err(error);
+    engine.diagnostics.finish(&mut engine.monitor, &result);
+    match result {
+        Err(error) => error,
+        Ok(()) => unreachable!("a reconfiguration failure is an error"),
+    }
 }
 
 async fn run_reconfigurable_dataflow(
@@ -1139,16 +1236,22 @@ async fn run_reconfigurable_dataflow(
     output_session: OutputPipelineSession<Value>,
     execution_policy: ExecutionPolicy,
     context: RuntimeReconfigurationContext,
+    diagnostics: RuntimeProbe,
 ) -> anyhow::Result<()> {
     let mut active = ActiveRuntime {
-        engine: DirectDataflowEngine::new(monitor, output_session),
+        engine: DirectDataflowEngine::new(monitor, output_session).with_diagnostics(diagnostics),
         input,
     };
 
     loop {
+        let wait = active.engine.diagnostics.stamp();
         let Some(item) = active.input.next().await else {
             return finish_reconfigurable_active(active, None).await;
         };
+        active
+            .engine
+            .diagnostics
+            .phase(wait, PipelinePhase::InputWait);
         let item = match item {
             Ok(item) => item,
             Err(error) => {
@@ -1166,6 +1269,8 @@ async fn run_reconfigurable_dataflow(
                 }
             }
             ReconfigurableInputItem::Reconfigure(request) => {
+                let reconfiguration = active.engine.diagnostics.stamp();
+                active.engine.diagnostics.count("reconfigurations", 1);
                 let plan = match plan_runtime_reconfiguration(&active, &context, request) {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -1174,6 +1279,10 @@ async fn run_reconfigurable_dataflow(
                 };
                 active =
                     apply_runtime_reconfiguration(active, &context, plan, execution_policy).await?;
+                active
+                    .engine
+                    .diagnostics
+                    .phase(reconfiguration, PipelinePhase::Reconfiguration);
             }
             ReconfigurableInputItem::Boundary(_) => {
                 return finish_reconfigurable_active(
@@ -1306,9 +1415,15 @@ struct DirectDataflowEngine<O> {
     input_ids: BTreeMap<crate::VarName, usize>,
     cached_layout_vars: Vec<crate::VarName>,
     cached_layout_slots: Vec<usize>,
+    diagnostics: RuntimeProbe,
 }
 
 impl<O: DataflowOutput> DirectDataflowEngine<O> {
+    fn with_diagnostics(mut self, diagnostics: RuntimeProbe) -> Self {
+        self.diagnostics = diagnostics;
+        self
+    }
+
     fn new(monitor: DataflowMonitor, output: O) -> Self {
         let output_layout: Arc<[crate::VarName]> = monitor.output_vars().to_vec().into();
         let output_value_capacity = DATAFLOW_RUNTIME_BATCH_SIZE.saturating_mul(output_layout.len());
@@ -1333,6 +1448,7 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
             cached_layout_vars: Vec::with_capacity(input_ids.len()),
             cached_layout_slots: Vec::with_capacity(input_ids.len()),
             input_ids,
+            diagnostics: RuntimeProbe::default(),
         }
     }
 
@@ -1364,6 +1480,7 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
     }
 
     fn evaluate_tick(&mut self, tick: &crate::core::InputTick<'_, Value>) -> anyhow::Result<()> {
+        let preparation = self.diagnostics.stamp();
         let layout_matches = tick.len() == self.cached_layout_vars.len()
             && tick
                 .iter()
@@ -1387,13 +1504,32 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
         for (event, &slot) in tick.iter().zip(&self.cached_layout_slots) {
             self.input_row[slot] = event.value.clone();
         }
+        self.diagnostics
+            .phase(preparation, PipelinePhase::RowPreparation);
 
+        self.evaluate_prepared_row()
+    }
+
+    /// Evaluate the prepared input row, reset its supplied slots and append the output row.
+    #[inline]
+    fn evaluate_prepared_row(&mut self) -> anyhow::Result<()> {
+        let evaluation = self.diagnostics.stamp();
         let result = self.monitor.evaluate(&self.input_row, &mut self.output_row);
+        self.diagnostics
+            .phase(evaluation, PipelinePhase::MonitorEvaluation);
         for &slot in &self.cached_layout_slots {
             self.input_row[slot] = Value::NoVal;
         }
-        result?;
+        if let Err(error) = result {
+            self.diagnostics.tick();
+            return Err(error.into());
+        }
+        let packing = self.diagnostics.stamp();
         self.push_output_row();
+        self.diagnostics
+            .phase(packing, PipelinePhase::OutputPacking);
+        // Pipeline spans carry the zero-based index of the tick they serve, as monitor spans do.
+        self.diagnostics.tick();
         Ok(())
     }
 
@@ -1418,17 +1554,13 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
     #[inline]
     fn evaluate_packed_row(&mut self, values: &[Value]) -> anyhow::Result<()> {
         debug_assert_eq!(values.len(), self.cached_layout_slots.len());
+        let preparation = self.diagnostics.stamp();
         for (value, &slot) in values.iter().zip(&self.cached_layout_slots) {
             self.input_row[slot] = value.clone();
         }
-
-        let result = self.monitor.evaluate(&self.input_row, &mut self.output_row);
-        for &slot in &self.cached_layout_slots {
-            self.input_row[slot] = Value::NoVal;
-        }
-        result?;
-        self.push_output_row();
-        Ok(())
+        self.diagnostics
+            .phase(preparation, PipelinePhase::RowPreparation);
+        self.evaluate_prepared_row()
     }
 
     fn push_output_row(&mut self) {
@@ -1446,6 +1578,12 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
             return Ok(());
         }
 
+        let packing = self.diagnostics.stamp();
+        self.diagnostics.count("output_batches", 1);
+        self.diagnostics
+            .count("output_rows", self.pending_rows as u64);
+        self.diagnostics
+            .max("max_rows_per_output_batch", self.pending_rows as u64);
         let values = std::mem::take(&mut self.output_values);
         let rows = match OutputBatch::packed_rows(Arc::clone(&self.output_layout), values) {
             Ok(rows) => rows,
@@ -1455,7 +1593,12 @@ impl<O: DataflowOutput> DirectDataflowEngine<O> {
                 return Err(error);
             }
         };
-        match self.output.send_output(rows).await {
+        self.diagnostics
+            .phase(packing, PipelinePhase::OutputPacking);
+        let send = self.diagnostics.stamp();
+        let sent = self.output.send_output(rows).await;
+        self.diagnostics.phase(send, PipelinePhase::OutputSend);
+        match sent {
             Ok(()) => {
                 self.output_values = Vec::with_capacity(self.output_value_capacity);
                 self.pending_rows = 0;

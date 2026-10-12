@@ -9,6 +9,7 @@
 //! [`super::evaluator::lifecycle`], and the tick barrier they stage writes for lives in
 //! [`super::temporal_commit`].
 
+use super::super::diagnostics::collections;
 use crate::core::UnionValue;
 use crate::lang::dsrv::patterns::{ArmSelection, Bindings, GuardOutcome, MatchPattern, select_arm};
 
@@ -338,7 +339,12 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             lift_two(
                 values.next().unwrap(),
                 values.next().unwrap(),
-                |list, value| expect_value(value_operations::list_append(list, value)),
+                |list, value| {
+                    let before = collections::list_identity(&list);
+                    let result = expect_value(value_operations::list_append(list, value));
+                    collections::list_append(before, &result);
+                    result
+                },
             )
         }
         StreamOp::LConcat { lhs, rhs } => {
@@ -350,7 +356,13 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             lift_two(
                 values.next().unwrap(),
                 values.next().unwrap(),
-                |lhs, rhs| expect_value(value_operations::list_concat(lhs, rhs)),
+                |lhs, rhs| {
+                    let before = collections::list_identity(&lhs);
+                    let rhs_len = collections::list_operand_len(&rhs);
+                    let result = expect_value(value_operations::list_concat(lhs, rhs));
+                    collections::list_concat(before, rhs_len, &result);
+                    result
+                },
             )
         }
         StreamOp::LHead { list } => {
@@ -385,7 +397,11 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             let values = vec![context.read_value(state, map)];
             lift_one(
                 lift_value_operands(node_id, state, values).remove(0),
-                |map| expect_value(value_operations::map_remove(map, key)),
+                |map| {
+                    let result = expect_value(value_operations::map_remove(map, key));
+                    collections::map_update(&result);
+                    result
+                },
             )
         }
         StreamOp::MInsert { map, key, value } => {
@@ -397,7 +413,11 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
             lift_two(
                 values.next().unwrap(),
                 values.next().unwrap(),
-                |map, value| expect_value(value_operations::map_insert(map, key, value)),
+                |map, value| {
+                    let result = expect_value(value_operations::map_insert(map, key, value));
+                    collections::map_update(&result);
+                    result
+                },
             )
         }
         StreamOp::MHasKey { map, key } => {
@@ -535,7 +555,9 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            evaluate_list_map(values.next().unwrap(), values.next().unwrap())?
+            let (func, list) = (values.next().unwrap(), values.next().unwrap());
+            collections::list_scan(&list);
+            evaluate_list_map(func, list)?
         }
         StreamOp::ListFilter { func, list } => {
             let values = vec![
@@ -543,7 +565,9 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            evaluate_list_filter(values.next().unwrap(), values.next().unwrap())?
+            let (func, list) = (values.next().unwrap(), values.next().unwrap());
+            collections::list_scan(&list);
+            evaluate_list_filter(func, list)?
         }
         StreamOp::ListFold { func, init, list } => {
             let values = vec![
@@ -552,11 +576,13 @@ pub(in crate::dataflow) fn evaluate_node_with_history(
                 context.read_value(state, list),
             ];
             let mut values = lift_value_operands(node_id, state, values).into_iter();
-            evaluate_list_fold(
+            let (func, init, list) = (
                 values.next().unwrap(),
                 values.next().unwrap(),
                 values.next().unwrap(),
-            )?
+            );
+            collections::list_scan(&list);
+            evaluate_list_fold(func, init, list)?
         }
 
         // Runtime-compiled expressions use the dynamic traversal.

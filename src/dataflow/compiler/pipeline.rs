@@ -1,3 +1,4 @@
+use super::super::diagnostics::DebugSources;
 use super::super::ir::*;
 use super::super::monitor::DataflowMonitor;
 use super::super::monitor_plan::MonitorPlan;
@@ -17,7 +18,9 @@ impl DataflowProgram {
     ) -> Result<Self, DataflowCompilationError> {
         #[cfg(test)]
         DataflowProgram::record_root_compile(true);
+        let sources = DebugSources::of(&specification);
         Self::compile_specification(specification, build_checked_expression_graph)
+            .map(|program| program.with_debug_sources(sources))
     }
 
     /// Compile an elaborated specification with the evaluation strategy of
@@ -31,7 +34,9 @@ impl DataflowProgram {
             Semantics::Untimed => {
                 #[cfg(test)]
                 DataflowProgram::record_root_compile(false);
+                let sources = DebugSources::of(&specification);
                 Self::compile_specification(specification, build_unspecialised_expression_graph)
+                    .map(|program| program.with_debug_sources(sources))
             }
             _ => Self::compile_checked(specification),
         }

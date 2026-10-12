@@ -14,6 +14,7 @@ use super::typed::TypedIoLayout;
 use crate::VarName;
 use crate::core::Value;
 
+mod diagnostics;
 mod evaluation;
 mod history;
 mod reconfiguration;
@@ -162,12 +163,17 @@ impl DataflowMonitor {
     /// active root, clears a terminal evaluation failure, and returns both revisions to their
     /// initial values. It does not parse or compile the original dataflow definition again.
     pub fn reset(&mut self) {
+        let probe = self.execution.take_probe();
         let fresh = Self::from_configured_program(
             self.original_program.clone(),
             self.original_program.clone(),
             self.configuration,
         );
         *self = fresh;
+        // Diagnostics observe the monitor across its sessions; a reset starts a new definition
+        // version so plan identities of the fresh execution never merge with the old ones.
+        self.execution.adopt_probe(probe);
+        self.diag_definition_installed("reset");
     }
 
     /// Return the immutable compiled definition backing this monitor.

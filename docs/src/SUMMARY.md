@@ -62,6 +62,7 @@
     - [The scalar IR](./architecture/dataflow/scalar-ir.md)
     - [Execution tiers](./architecture/dataflow/execution-tiers.md)
     - [Typed monitors](./architecture/dataflow/typed-monitors.md)
+    - [Diagnostics and observation](./architecture/dataflow/diagnostics.md)
   - [External ownership]()
     - [Runtime adapter](./architecture/dataflow/runtime-adapter.md)
     - [Input and output sessions](./architecture/dataflow/runtime-io.md)
@@ -75,3 +76,4 @@
 # Developer tools
 
 - [Inspect expanded DSRV with `tc-expand`](./developer-tools/tc-expand.md)
+- [Profile and trace dataflow runs](./developer-tools/diagnostics.md)

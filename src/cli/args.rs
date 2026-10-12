@@ -562,6 +562,80 @@ pub struct Cli {
         default_value = "/dist_graph"
     )]
     pub ros_dist_graph_topic: String,
+
+    #[cfg(feature = "diagnostics")]
+    #[command(flatten)]
+    pub diagnostics: DiagnosticsArgs,
+}
+
+/// Opt-in profiling, tracing and memory estimates for the dataflow runtimes.
+#[cfg(feature = "diagnostics")]
+#[derive(clap::Args, Debug, Clone)]
+pub struct DiagnosticsArgs {
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Record diagnostics and write summary.json and trace.json (Perfetto) into DIR"
+    )]
+    pub diagnostics_dir: Option<std::path::PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "RANGE",
+        default_value = "0..256",
+        help = "Ticks receiving tick/step spans and value summaries: START..END, START.., all or none"
+    )]
+    pub diagnostics_trace_ticks: crate::diagnostics::TickRange,
+
+    #[arg(
+        long,
+        value_name = "STREAM",
+        value_delimiter = ',',
+        help = "Streams whose values are summarized for traced ticks"
+    )]
+    pub diagnostics_trace_streams: Vec<String>,
+
+    #[arg(
+        long,
+        value_name = "EVENTS",
+        default_value_t = 100_000,
+        help = "Maximum retained timeline entries per recorder; later entries are counted as dropped"
+    )]
+    pub diagnostics_trace_capacity: usize,
+
+    #[arg(
+        long,
+        value_name = "TICKS",
+        help = "Take a structured memory snapshot every TICKS successful ticks; final, pre-reconfiguration and explicit snapshots replace a periodic one at the retention cap"
+    )]
+    pub diagnostics_memory_every: Option<u64>,
+
+    #[arg(long, help = "Do not time individual execution steps")]
+    pub diagnostics_no_step_timing: bool,
+
+    #[arg(long, value_name = "TEXT", help = "Label recorded in the run identity")]
+    pub diagnostics_label: Option<String>,
+}
+
+#[cfg(feature = "diagnostics")]
+impl DiagnosticsArgs {
+    /// The session configuration, or `None` when diagnostics were not requested.
+    pub fn config(&self, model: &str) -> Option<crate::diagnostics::DiagnosticsConfig> {
+        let output_dir = self.diagnostics_dir.clone()?;
+        let mut config = crate::diagnostics::DiagnosticsConfig::with_output_dir(output_dir);
+        config.step_timing = !self.diagnostics_no_step_timing;
+        config.trace.ticks = self.diagnostics_trace_ticks;
+        config.trace.streams = self.diagnostics_trace_streams.clone();
+        config.trace.capacity = self.diagnostics_trace_capacity;
+        config.memory.every_ticks = self.diagnostics_memory_every;
+        config.label = self.diagnostics_label.clone();
+        config.metadata.insert("model".into(), model.to_owned());
+        config.metadata.insert(
+            "command_line".into(),
+            std::env::args().collect::<Vec<_>>().join(" "),
+        );
+        Some(config)
+    }
 }
 
 impl Cli {

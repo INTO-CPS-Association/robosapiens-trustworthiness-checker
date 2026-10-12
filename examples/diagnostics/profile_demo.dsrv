@@ -1,0 +1,23 @@
+// Diagnostics demo: list and map state that grows with the trace, defs inlined from another
+// module, a recursive accumulator and a runtime-supplied dynamic expression.
+use experimental::{modules, functions}
+mod demo_lib
+use demo_lib::*
+
+in samples: List<Int>
+in gain: Int
+in rule: Str
+
+out level: Int
+out total: Int
+out recent: List<Int>
+out summary: Map<Int>
+out custom: Int
+aux score: Int
+
+score = weighted_sum(samples, gain)
+level = clamp(score, 0, 100)
+total = default(total[1], 0) + level
+recent = List.append(default(recent[1], []), level)
+summary = Map.insert(Map.insert(default(summary[1], Map("ticks": 0)), "total", total), "level", level)
+custom = dynamic(rule: Int, {score, total, level})

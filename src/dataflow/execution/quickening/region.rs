@@ -83,6 +83,15 @@ pub(in crate::dataflow) struct QuickenedRegionState {
     instruction_states: Box<[QuickenedInstructionState]>,
 }
 
+#[cfg(feature = "diagnostics")]
+impl QuickenedRegionState {
+    /// Bytes of register and instruction-state storage, for diagnostics.
+    pub(in crate::dataflow) fn diagnostic_bytes(&self) -> usize {
+        self.registers.len() * std::mem::size_of::<ScalarValue>()
+            + self.instruction_states.len() * std::mem::size_of::<QuickenedInstructionState>()
+    }
+}
+
 /// One region member: the instructions of a single [`ScalarProgram`] plus its publication.
 #[derive(Clone, Debug, PartialEq)]
 struct RegionMember {

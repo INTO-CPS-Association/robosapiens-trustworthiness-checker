@@ -443,6 +443,20 @@ impl<T: DeferrableStreamData> DelayState<T> {
     }
 }
 
+impl<T> DelayState<T> {
+    /// Ring capacity and every value the delay retains, for diagnostics. Read-only.
+    #[cfg(feature = "diagnostics")]
+    pub(in crate::dataflow) fn retained(&self) -> (usize, impl Iterator<Item = &T>) {
+        (
+            self.values.capacity(),
+            self.values
+                .iter()
+                .chain(self.last_output.iter())
+                .chain(self.staged_recursive_value.iter()),
+        )
+    }
+}
+
 impl DelayState<Value> {
     pub(in crate::dataflow) fn to_scalar(&self) -> Option<ScalarDelayState> {
         let optional_scalar = |value: &Option<Value>| match value {

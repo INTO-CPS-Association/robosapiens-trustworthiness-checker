@@ -425,13 +425,24 @@ impl DataflowMonitor {
                 }
 
                 let expression_id = expression.id();
-                let (activation, _) = execution.reconfigure_expression(
+                let stamp = execution.probe().stamp();
+                let activation = execution.reconfigure_expression(
                     expression_id,
                     expression.stream,
                     expression.node,
                     source_value,
                     transfer,
-                )?;
+                );
+                super::diagnostics::record_dynamic_activation(
+                    execution,
+                    program,
+                    stamp,
+                    expression_id.index(),
+                    expression.node.index(),
+                    expression.stream,
+                    activation.as_ref().ok().map(|(activation, _)| *activation),
+                );
+                let (activation, _) = activation?;
 
                 resolution.semantic_reconfiguration |=
                     !matches!(activation, ReconfigurableExpressionActivation::Unchanged);
@@ -477,6 +488,39 @@ impl DataflowMonitor {
     }
 
     pub(crate) fn apply_reconfiguration_plan<F>(
+        &mut self,
+        plan: MonitorReconfigurationPlan,
+        io_interface_changed: bool,
+        configure: F,
+    ) -> Result<ReconfigurationReport, DataflowStateError>
+    where
+        F: FnOnce(&mut super::MonitorConfiguration),
+    {
+        #[cfg(feature = "diagnostics")]
+        let _ = self
+            .record_snapshot(crate::dataflow::diagnostics::SnapshotPoint::BeforeReconfiguration);
+        // The candidate monitor replaces this one wholesale; the recorder moves across so a run's
+        // diagnostics span every definition it executed.
+        let probe = self.execution.take_probe();
+        let result = self.apply_reconfiguration_plan_inner(plan, io_interface_changed, configure);
+        self.execution.adopt_probe(probe);
+        match &result {
+            Ok(_) => self.diag_definition_installed("reconfigured"),
+            Err(_error) => {
+                #[cfg(feature = "diagnostics")]
+                {
+                    let message = _error.to_string();
+                    self.diag_event(
+                        "reconfiguration_rejected",
+                        || serde_json::json!({ "error": message }),
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    fn apply_reconfiguration_plan_inner<F>(
         &mut self,
         plan: MonitorReconfigurationPlan,
         io_interface_changed: bool,

@@ -727,6 +727,7 @@ use ecow::{EcoString, EcoVec};
 use self::environment::{EnvironmentLayout, EnvironmentSlot};
 
 mod compiler;
+mod diagnostics;
 mod environment;
 mod error;
 mod execution;
@@ -773,6 +774,8 @@ pub use error::{
 #[cfg(feature = "jit")]
 pub use typed::TypedJitMonitor;
 
+#[cfg(feature = "diagnostics")]
+pub use diagnostics::DataflowDiagnosticsReport;
 #[cfg(all(test, feature = "jit"))]
 pub(crate) use execution::jit::{compile_count as jit_compile_count, reset_compile_count};
 #[cfg(feature = "jit")]

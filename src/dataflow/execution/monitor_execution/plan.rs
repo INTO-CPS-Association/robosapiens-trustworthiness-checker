@@ -223,12 +223,14 @@ impl MonitorExecution {
         if matches(&self.engine.active_plan) {
             return;
         }
+        let stamp = self.diagnostics.stamp();
         self.materialize_authoritative_state();
-        if let Some(cached) = self.engine.cached_plans.iter().position(matches) {
+        let outcome = if let Some(cached) = self.engine.cached_plans.iter().position(matches) {
             std::mem::swap(
                 &mut self.engine.active_plan,
                 &mut self.engine.cached_plans[cached],
             );
+            "cached"
         } else {
             let semantic = ScheduledExecutionPlan::from_metadata(
                 PlanId(self.engine.next_plan_id),
@@ -251,11 +253,13 @@ impl MonitorExecution {
                 self.engine.cached_plans.remove(0);
             }
             self.engine.cached_plans.push(previous);
-        }
+            "built"
+        };
         self.engine.jit.schedule_changed(
             &self.engine.active_plan.semantic,
             &self.engine.active_plan.regions,
         );
         self.configure_active_region_states();
+        self.diag_plan_switch(stamp, outcome);
     }
 }

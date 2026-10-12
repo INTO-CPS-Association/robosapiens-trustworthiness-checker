@@ -15,6 +15,8 @@ use crate::lang::dsrv::type_checker::TCType;
 struct EvaluationGraphBuilder {
     nodes: Vec<UnboundOp>,
     scalar_signatures: Vec<Option<ScalarSignature>>,
+    /// Diagnostics-only source attribution, index-aligned with `nodes`.
+    sites: super::super::diagnostics::NodeSites,
     /// Whether the graph consults the elaborated types to specialise scalar
     /// operations. An unspecialised graph still carries each `dynamic` and
     /// `defer` node's prepared site, typing included, so source arriving
@@ -27,6 +29,7 @@ impl EvaluationGraphBuilder {
         Self {
             nodes: Vec::new(),
             scalar_signatures: Vec::new(),
+            sites: Default::default(),
             specialise,
         }
     }
@@ -48,11 +51,13 @@ impl EvaluationGraphBuilder {
         let id = self.nodes.len();
         self.nodes.push(op);
         self.scalar_signatures.push(scalar_signature);
+        self.sites.push_unassigned();
         UnboundRef::Node(NodeId::new(id))
     }
 
     fn finish(self, output: UnboundRef) -> UnboundEvaluationGraph {
         UnboundEvaluationGraph::new(self.nodes, self.scalar_signatures, output)
+            .with_sites(self.sites)
     }
 }
 
@@ -104,6 +109,16 @@ fn build_graph_from_cursor(expr: CheckedExprRef<'_>, specialise: bool) -> Unboun
 }
 
 fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuilder) -> UnboundRef {
+    let start = builder.nodes.len();
+    let lowered = lower_expression_nodes(expr, builder);
+    builder.sites.assign_from(start, expr);
+    lowered
+}
+
+fn lower_expression_nodes(
+    expr: CheckedExprRef<'_>,
+    builder: &mut EvaluationGraphBuilder,
+) -> UnboundRef {
     use ExprView::*;
 
     let result_kind = scalar_kind(builder.scalar_typ(expr));

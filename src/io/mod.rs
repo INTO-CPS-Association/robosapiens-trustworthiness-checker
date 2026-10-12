@@ -35,6 +35,7 @@ mod aggregation;
 #[cfg(feature = "redis")]
 pub mod redis;
 mod redis_config;
+pub mod source_diagnostics;
 
 pub(crate) mod reconfigurable_input;
 mod step_controlled;

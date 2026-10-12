@@ -159,6 +159,9 @@ pub(super) struct EvaluationGraph<E: GraphReference> {
     /// `if` nodes whose branches, at any depth, hold recursive delays of the
     /// same stream. Their delays are staged with this graph's output.
     pub(super) recursive_branches: Vec<NodeId>,
+    /// Source attribution per node. Diagnostics-only sidecar that always compares equal and is
+    /// absent from canonical descriptors; zero-sized without the `diagnostics` feature.
+    pub(super) sites: super::diagnostics::NodeSites,
 }
 
 impl<E: GraphReference> EvaluationGraph<E> {
@@ -174,7 +177,13 @@ impl<E: GraphReference> EvaluationGraph<E> {
             output,
             recursive_delays: Vec::new(),
             recursive_branches: Vec::new(),
+            sites: Default::default(),
         }
+    }
+
+    pub(super) fn with_sites(mut self, sites: super::diagnostics::NodeSites) -> Self {
+        self.sites = sites;
+        self
     }
 
     /// Whether completing this graph stages any recursive delay.

@@ -210,6 +210,14 @@ pub struct InputSource<V = Value> {
     reconfiguration_route: Option<Box<str>>,
 }
 
+#[cfg(feature = "diagnostics")]
+impl<V> InputSource<V> {
+    /// Attach a source recorder from `hub` to sources that record their own phases.
+    fn with_diagnostics(self, _hub: &crate::diagnostics::DiagnosticsHub) -> Self {
+        self
+    }
+}
+
 impl InputSource<Value> {
     /// Construct a selected-key Redis knowledge source. Redis knowledge
     /// produces the ordinary project [`Value`] domain; it is intentionally not
@@ -1723,6 +1731,8 @@ pub struct InputPipeline<V = Value> {
     policy: Option<InputPolicy>,
     executor: Option<Rc<LocalExecutor<'static>>>,
     generation: PipelineGeneration,
+    #[cfg(feature = "diagnostics")]
+    diagnostics: Option<crate::diagnostics::DiagnosticsHub>,
 }
 
 impl<V> InputPipeline<V> {
@@ -1732,6 +1742,8 @@ impl<V> InputPipeline<V> {
             policy: None,
             executor: None,
             generation: PipelineGeneration::new(),
+            #[cfg(feature = "diagnostics")]
+            diagnostics: None,
         }
     }
 
@@ -1741,6 +1753,8 @@ impl<V> InputPipeline<V> {
             policy: None,
             executor: None,
             generation: PipelineGeneration::new(),
+            #[cfg(feature = "diagnostics")]
+            diagnostics: None,
         }
     }
 
@@ -1751,6 +1765,14 @@ impl<V> InputPipeline<V> {
     /// Attach the local executor used only by live source ingress relays.
     pub fn with_executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Attach a diagnostics hub. Sources that record their own phases (currently RPIO journal
+    /// replay and live input) register a recorder with it when they open; others are unchanged.
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostics(mut self, hub: crate::diagnostics::DiagnosticsHub) -> Self {
+        self.diagnostics = Some(hub);
         self
     }
 
@@ -1951,6 +1973,11 @@ impl<V> InputPipeline<V> {
                     "live input source `{description}` requires InputPipeline::with_executor"
                 ))?)
                 };
+            #[cfg(feature = "diagnostics")]
+            let source = &match &self.diagnostics {
+                Some(hub) => source.clone().with_diagnostics(hub),
+                None => source.clone(),
+            };
             let (source_stream, control) = match source
                 .clone()
                 .open_owned(bindings, variables)

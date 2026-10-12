@@ -10,6 +10,7 @@
 
 use std::ops::Range;
 
+use super::super::super::diagnostics::{ExecutionProbe, StepPath, StepPhase};
 use super::super::super::environment::EnvironmentSlot;
 use super::super::super::history::{HistoryAccess, HistoryId};
 use super::super::super::ir::StreamProgram;
@@ -45,6 +46,7 @@ impl MonitorExecution {
             return;
         }
 
+        let stamp = self.diagnostics.stamp();
         // Activation replaces region executors, so materialize their current authority first.
         self.materialize_authoritative_state();
         #[cfg(feature = "jit")]
@@ -53,6 +55,7 @@ impl MonitorExecution {
             &self.engine.active_plan.regions,
         );
         self.configure_active_region_states();
+        self.diag_tier_activation(stamp);
     }
 
     /// Materialize whichever tier most recently changed semantic state.
@@ -103,6 +106,7 @@ impl MonitorExecution {
         retained_environment_values: Option<&mut [Value]>,
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<(), DataflowEvaluationError> {
+        self.observe_active_plan();
         let usage = self.evaluators.evaluate_steps::<true>(
             &mut self.engine.jit,
             self.engine.active_plan.identity,
@@ -112,6 +116,8 @@ impl MonitorExecution {
             environment_values,
             retained_environment_values,
             history_access,
+            StepPhase::Source,
+            &mut self.diagnostics,
         )?;
         self.record_execution_usage(usage);
         Ok(())
@@ -124,6 +130,7 @@ impl MonitorExecution {
         retained_environment_values: Option<&mut [Value]>,
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<(), DataflowEvaluationError> {
+        self.observe_active_plan();
         let usage = self.evaluators.evaluate_steps::<true>(
             &mut self.engine.jit,
             self.engine.active_plan.identity,
@@ -133,6 +140,8 @@ impl MonitorExecution {
             environment_values,
             retained_environment_values,
             history_access,
+            StepPhase::Main,
+            &mut self.diagnostics,
         )?;
         self.record_execution_usage(usage);
         Ok(())
@@ -144,6 +153,8 @@ impl MonitorExecution {
         history_access: Option<HistoryAccess<'_>>,
     ) -> Result<(), DataflowEvaluationError> {
         debug_assert!(!self.engine.active_plan.semantic.has_source_barrier());
+        self.observe_active_plan();
+        let stamp = self.diagnostics.step_stamp();
         match self.engine.jit.evaluate_whole(
             &mut self.evaluators.evaluators,
             environment_values,
@@ -151,6 +162,8 @@ impl MonitorExecution {
             history_access,
         ) {
             WholeTickOutcome::Completed | WholeTickOutcome::CompletedAndCommitted => {
+                self.diagnostics
+                    .record_step(stamp, StepPhase::Whole, 0, StepPath::WholeNative);
                 self.authoritative_tier = AuthoritativeTier::WholeNative;
                 return Ok(());
             }
@@ -163,6 +176,12 @@ impl MonitorExecution {
                 }
                 self.evaluators
                     .evaluate_canonical_run(&self.engine.active_plan.semantic, environment_values);
+                self.diagnostics.record_step(
+                    stamp,
+                    StepPhase::Whole,
+                    0,
+                    StepPath::WholeNativeFallback,
+                );
                 self.authoritative_tier = AuthoritativeTier::Canonical;
                 self.commit_active_plan(environment_values, None, None);
                 return Ok(());
@@ -178,6 +197,8 @@ impl MonitorExecution {
             environment_values,
             None,
             history_access,
+            StepPhase::Main,
+            &mut self.diagnostics,
         );
         match result {
             Ok(usage) => {
@@ -201,6 +222,11 @@ impl MonitorExecution {
         if self.engine.quickening == enabled {
             return;
         }
+        #[cfg(feature = "diagnostics")]
+        self.diag_event(
+            "quickening_changed",
+            serde_json::json!({ "enabled": enabled }),
+        );
         self.materialize_authoritative_state();
         self.engine.quickening = enabled;
         let generation = self.engine.next_plan_generation;
@@ -435,7 +461,7 @@ impl EvaluatorArena {
         region: usize,
         plan: &QuickenedRegionPlan,
         environment_values: &mut [Value],
-    ) -> Option<()> {
+    ) -> Option<StepPath> {
         if !plan.prepare_inputs(environment_values, &self.published_scalars) {
             return None;
         }
@@ -454,7 +480,7 @@ impl EvaluatorArena {
         match outcome {
             NativeRegionOutcome::Completed => {
                 owner.authority[region] = RegionAuthority::Native;
-                Some(())
+                Some(StepPath::RegionNative)
             }
             NativeRegionOutcome::Deoptimized | NativeRegionOutcome::Unavailable
                 if quickening && owner.enter_quickened(region, plan, evaluators) =>
@@ -466,7 +492,7 @@ impl EvaluatorArena {
                     &mut CanonicalArena::empty(),
                 );
                 debug_assert!(executed, "a stream region has no canonical boundary inputs");
-                Some(())
+                Some(StepPath::RegionQuickened)
             }
             NativeRegionOutcome::Deoptimized | NativeRegionOutcome::Unavailable => None,
         }
@@ -524,7 +550,7 @@ impl EvaluatorArena {
         nodes: Range<usize>,
         environment_values: &mut [Value],
         history_access: Option<HistoryAccess<'_>>,
-    ) {
+    ) -> bool {
         let Self {
             evaluators,
             published_scalars,
@@ -536,7 +562,7 @@ impl EvaluatorArena {
             .expect("active scalar region state is missing");
         if !owner.enter_quickened(region, plan, evaluators) {
             evaluators[stream].evaluate_canonical_nodes(nodes, environment_values, history_access);
-            return;
+            return false;
         }
         let executed = {
             let EvaluatorState {
@@ -557,7 +583,7 @@ impl EvaluatorArena {
             )
         };
         if executed {
-            return;
+            return true;
         }
         plan.materialize_member(
             member,
@@ -575,6 +601,7 @@ impl EvaluatorArena {
             // tick retry the whole handoff.
             owner.authority[region] = RegionAuthority::Canonical;
         }
+        false
     }
 
     #[cfg(test)]
@@ -595,35 +622,39 @@ impl EvaluatorArena {
         environment_values: &mut [Value],
         mut retained_environment_values: Option<&mut [Value]>,
         history_access: Option<HistoryAccess<'_>>,
+        phase: StepPhase,
+        probe: &mut ExecutionProbe,
     ) -> Result<ExecutionUsage, DataflowEvaluationError> {
         let mut usage = ExecutionUsage::default();
         // Published sources only name streams earlier in the combined two-range order. Availability
         // intentionally carries across the source barrier, while scalar regions cannot cross it.
-        for step in steps {
-            match step {
+        for (index, step) in steps.iter().enumerate() {
+            let stamp = probe.step_stamp();
+            let path = match step {
                 ExecutionStep::ScalarRegion(region) => {
                     usage.regions = true;
                     let plan = &quickened_regions[*region];
-                    if self
-                        .evaluate_region(
-                            jit,
-                            identity,
-                            quickening,
-                            *region,
-                            plan,
-                            environment_values,
-                        )
-                        .is_none()
-                    {
-                        self.evaluate_region_canonical(
-                            jit,
-                            identity,
-                            *region,
-                            plan,
-                            environment_values,
-                            history_access,
-                        );
-                    }
+                    let path = match self.evaluate_region(
+                        jit,
+                        identity,
+                        quickening,
+                        *region,
+                        plan,
+                        environment_values,
+                    ) {
+                        Some(path) => path,
+                        None => {
+                            self.evaluate_region_canonical(
+                                jit,
+                                identity,
+                                *region,
+                                plan,
+                                environment_values,
+                                history_access,
+                            );
+                            StepPath::RegionCanonical
+                        }
+                    };
                     for (stream, slot, _) in plan.outputs() {
                         let value = &environment_values[slot.index()];
                         self.published_scalars[stream.index()] =
@@ -635,20 +666,26 @@ impl EvaluatorArena {
                             retained[slot.index()] = value.clone();
                         }
                     }
+                    path
                 }
-                ExecutionStep::Graph(step) => {
-                    self.evaluate_graph::<RETAIN_VALUES>(
-                        identity,
-                        quickening,
-                        quickened_regions,
-                        step,
-                        environment_values,
-                        retained_environment_values.as_deref_mut(),
-                        history_access,
-                        &mut usage,
-                    )?;
-                }
-            }
+                ExecutionStep::Graph(step) => match self.evaluate_graph::<RETAIN_VALUES>(
+                    identity,
+                    quickening,
+                    quickened_regions,
+                    step,
+                    environment_values,
+                    retained_environment_values.as_deref_mut(),
+                    history_access,
+                    &mut usage,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        probe.record_step_failed(stamp, phase, index);
+                        return Err(error);
+                    }
+                },
+            };
+            probe.record_step(stamp, phase, index, path);
         }
         Ok(usage)
     }
@@ -665,12 +702,14 @@ impl EvaluatorArena {
         retained_environment_values: Option<&mut [Value]>,
         history_access: Option<HistoryAccess<'_>>,
         usage: &mut ExecutionUsage,
-    ) -> Result<(), DataflowEvaluationError> {
+    ) -> Result<StepPath, DataflowEvaluationError> {
         let index = step.stream.index();
+        let mut path = StepPath::Canonical;
         let value = if let Some(region) = step.region {
             // Islands are only planned while quickening is enabled, and toggling it rebuilds the plan.
             debug_assert!(quickening);
             usage.regions = true;
+            path = StepPath::Islands;
             for segment in step.segments.iter() {
                 match segment {
                     ExecutableSegment::Canonical(nodes) => {
@@ -685,16 +724,20 @@ impl EvaluatorArena {
                     // So each member checks its own boundary and may decline this row alone —
                     // `nodes` is the canonical range that then runs in its place, after which the
                     // member is synchronized back so later members still read live registers.
-                    ExecutableSegment::Island { member, nodes } => self.evaluate_member(
-                        identity,
-                        region,
-                        *member,
-                        &quickened_regions[region],
-                        index,
-                        nodes.clone(),
-                        environment_values,
-                        history_access,
-                    ),
+                    ExecutableSegment::Island { member, nodes } => {
+                        if !self.evaluate_member(
+                            identity,
+                            region,
+                            *member,
+                            &quickened_regions[region],
+                            index,
+                            nodes.clone(),
+                            environment_values,
+                            history_access,
+                        ) {
+                            path = StepPath::IslandsDeclined;
+                        }
+                    }
                 }
             }
             self.evaluators[index].finish_static_graph(environment_values)
@@ -727,7 +770,7 @@ impl EvaluatorArena {
             step.slot,
             value,
         );
-        Ok(())
+        Ok(path)
     }
 
     fn publish_environment_value<const RETAIN_VALUES: bool>(

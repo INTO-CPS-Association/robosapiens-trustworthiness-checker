@@ -116,7 +116,9 @@ impl MonitorExecution {
         retained_environment_values: Option<&[Value]>,
         history_access: Option<HistoryAccess<'_>>,
     ) {
-        for index in 0..self.engine.active_plan.semantic.commit_streams.len() {
+        let stamp = self.diagnostics.stamp();
+        let streams = self.engine.active_plan.semantic.commit_streams.len();
+        for index in 0..streams {
             let stream = self.engine.active_plan.semantic.commit_streams[index];
             self.commit_temporal_state(
                 stream,
@@ -125,6 +127,7 @@ impl MonitorExecution {
                 history_access,
             );
         }
+        self.diagnostics.record_commit(stamp, streams);
     }
 
     #[cfg(test)]

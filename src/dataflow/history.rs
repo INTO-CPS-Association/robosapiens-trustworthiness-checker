@@ -227,6 +227,21 @@ impl ValueHistory {
     }
 }
 
+#[cfg(feature = "diagnostics")]
+impl ValueHistory {
+    /// Retained slots, live or not, for diagnostics. Read-only.
+    pub(in crate::dataflow) fn diagnostic_slots(&self) -> (&[Value], usize, bool) {
+        (&self.slots, self.required_depth, self.live)
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl HistoryStore {
+    pub(in crate::dataflow) fn diagnostic_histories(&self) -> &[ValueHistory] {
+        &self.histories
+    }
+}
+
 #[derive(Debug, Default)]
 pub(in crate::dataflow) struct HistoryStore {
     histories: Vec<ValueHistory>,
