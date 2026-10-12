@@ -1,7 +1,8 @@
 //! Parsing DSRV source text into the private parsed tree.
 //!
 //! This stage resolves no names and builds no semantic nodes: type names and
-//! declarations are kept exactly as written, for [`super::expand`] to resolve.
+//! declarations are kept for [`super::expand`] to resolve. Duration literal
+//! sugar additionally records the implicit import of its owning library.
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -37,7 +38,19 @@ pub(crate) fn parse_specification(input: &str) -> Result<ParsedSpecification, Ds
     let declarations = DECLARATIONS_PARSER
         .parse(&mut builder, &mut user_error_location, input)
         .map_err(|error| syntax_error(input, user_error_location, error))?;
-    ParsedSpecification::new(builder.into_inner(), declarations)
+    let parsed = ParsedSpecification::new(builder.into_inner(), declarations)?;
+    // A literal denotes the library's Duration, so its factory must be loaded
+    // even when no explicit import names std::time.
+    if parsed.roots().iter().any(|root| {
+        use contiguous_tree::TreeCursorExt;
+        root.as_ref()
+            .postorder()
+            .any(|node| matches!(node.kind(), parsed::ParsedExprKind::DurationLiteral(_)))
+    }) {
+        Ok(parsed.with_duration_import())
+    } else {
+        Ok(parsed)
+    }
 }
 
 /// Parse a whole specification that is a program of its own, archiving its
@@ -105,4 +118,66 @@ fn syntax_error(
     DsrvSyntaxError::Syntax(anyhow::anyhow!(err_fixed.to_string()).context(format!(
         "Failed to parse input {input}{location}: {err_fixed}"
     )))
+}
+
+/// Convert a decimal unit suffix to seconds with one final f64 rounding.
+/// Equal decimal durations therefore retain identical strict thresholds.
+fn duration_seconds(source: &str) -> Result<f64, &'static str> {
+    let units = [
+        ("ns", -9, 1),
+        ("us", -6, 1),
+        ("µs", -6, 1),
+        ("μs", -6, 1),
+        ("ms", -3, 1),
+        ("min", 0, 60),
+        ("h", 0, 3600),
+        ("d", 0, 86400),
+        ("s", 0, 1),
+    ];
+    for (unit, shift, multiplier) in units {
+        let Some(amount) = source.strip_suffix(unit) else {
+            continue;
+        };
+        let amount = amount.trim_end();
+        let (mantissa, exponent) = match amount.split_once(['e', 'E']) {
+            Some((mantissa, exponent)) => (
+                mantissa,
+                exponent
+                    .parse::<i64>()
+                    .map_err(|_| "duration literal is out of range")?,
+            ),
+            None => (amount, 0),
+        };
+        let fractional_digits = mantissa
+            .split_once('.')
+            .map_or(0, |(_, fraction)| fraction.len());
+        // Scale the decimal digits before conversion. Mathematically equal
+        // decimal durations therefore undergo the same single f64 rounding.
+        let mut carry = 0u32;
+        let mut digits = Vec::with_capacity(mantissa.len() + 5);
+        for digit in mantissa.bytes().rev().filter(|byte| *byte != b'.') {
+            carry += u32::from(digit - b'0') * multiplier;
+            digits.push(b'0' + (carry % 10) as u8);
+            carry /= 10;
+        }
+        while carry != 0 {
+            digits.push(b'0' + (carry % 10) as u8);
+            carry /= 10;
+        }
+        digits.reverse();
+        let exponent = exponent
+            .checked_add(shift)
+            .and_then(|value| value.checked_sub(fractional_digits as i64))
+            .ok_or("duration literal is out of range")?;
+        let digits = String::from_utf8(digits).expect("decimal digits");
+        let seconds: f64 = format!("{digits}e{exponent}")
+            .parse()
+            .map_err(|_| "invalid duration literal")?;
+        return if seconds.is_finite() {
+            Ok(seconds)
+        } else {
+            Err("duration literal is out of range")
+        };
+    }
+    Err("unknown duration unit")
 }

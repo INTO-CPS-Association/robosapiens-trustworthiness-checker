@@ -5,6 +5,17 @@ the [DSRV tutorial](../tutorials/write-dsrv-monitor.md) if you are writing your
 first monitor. For `language` and `use experimental` declarations,
 see [DSRV dialects and experiments](dsrv-language-settings.md).
 
+## Naming conventions
+
+Functions, streams, constants and modules use `snake_case`.
+Types and union variants use `PascalCase`. External payload fields retain the
+spellings defined by their contract.
+
+Stream function calls with fixed arguments write `::<...>` after the function name,
+for example `rpio::journal::knowledge::last_access::<Role::Plan, Access::Read, masks>(observation)`.
+Calls without fixed arguments use ordinary parentheses, such as
+`rpio::maplek::loop(observation)`. Def declarations and type arguments retain their `<...>` spelling.
+
 ## Declarations and equations
 
 A specification is a sequence of declarations. `in x`, `out y` and `aux a`
@@ -158,6 +169,69 @@ duration of one domain is a type error where another domain is expected.
   a forward interval, so neither holds for a backwards or an absent one.
 - `TimedValue<T, D>` and `ClockSample<D>` pair a value or a clock reading with
   its instant.
+
+### Duration literals
+
+`use experimental::duration_literals` enables unit suffixes; the
+`high_level_dsrv` bundle includes them from experimental revision 8. Each
+literal has type `std::time::Duration<D>`. The spec must ground `D` through a
+declared result type, a constant annotation or another argument of the same
+generic call:
+
+```dsrv
+use experimental::high_level_dsrv
+use std::time::{Duration, TimeInterval}
+use std::option::Option
+newtype JournalTime = Unit
+const budget: Duration<JournalTime> = 100 ms
+in reassessment_interval: Option<TimeInterval<JournalTime>>
+out reassessment_late: Bool = std::time::exceeds(reassessment_interval, 0.1 s)
+```
+
+| Suffix | Seconds |
+|---|---:|
+| `ns` | 0.000000001 |
+| `us`, `µs`, `μs` | 0.000001 |
+| `ms` | 0.001 |
+| `s` | 1 |
+| `min` | 60 |
+| `h` | 3600 |
+| `d` | 86400 |
+
+A day is a fixed duration of 86400 seconds. Decimal and scientific notation
+are accepted, with optional spaces or tabs between the number and suffix:
+`100ms`, `0.1 s` and `1e-1 s` denote the same value. Newlines and comments
+cannot separate the number and suffix. The suffixes remain available as
+ordinary stream names. Negative literals, such as `-100 ms`, retain the
+existing signed-duration meaning.
+
+Units normalise in decimal before a single conversion to the existing Float
+seconds representation. Thus equivalent decimal spellings share the exact
+same threshold, including `0.03 ms` and `0.00003 s`. Float precision and
+underflow still apply; a non-finite result is rejected. Duration arithmetic
+continues to use library functions; literals add no implicit newtype
+arithmetic or clock conversions.
+
+Literals load `std::time` automatically and lower through its public
+`seconds` factory. Printed literal expressions use canonical seconds, such as `0.1 s`, which
+reparse under the same imports and expected type. Expanded whole-spec printing
+retains the existing limitations of imported types and folded newtype
+constants: a folded duration constant may print private `Duration::new(...)`
+syntax, so expanded output is an inspection form rather than portable source.
+Runtime expression text can use literals when the site's own language settings
+enable them and its existing imports make `std::time` available; runtime text
+cannot load a new module. An explicit `use std::time` at the site supplies it.
+
+Contextual generic inference also applies without `duration_literals`:
+`std::time::exceeds(reassessment_interval, std::time::seconds(0.1))` infers the
+duration's domain from the interval. Grounded sibling arguments supply context
+in either argument order, including through nested generic calls. Either
+operand of a comparison can also supply the other operand's type context. Missing
+clock context and mixed clock domains remain errors.
+
+`std::time::exceeds_seconds(reassessment_interval, 100 ms)` is a type error:
+that helper takes Float seconds. Use `std::time::exceeds` for typed literals,
+or pass a raw Float to `exceeds_seconds`.
 
 ### Timing property patterns
 
@@ -340,7 +414,7 @@ not appear in the representation:
 ```dsrv
 use experimental::{newtypes, generics, functions}
 
-newtype Journal = Unit
+newtype JournalTime = Unit
 newtype Producer = Unit
 newtype Instant<D> = Float
 
@@ -349,12 +423,12 @@ def later<D>(a: Instant<D>, b: Instant<D>) -> Bool =
   Instant::value(b) > Instant::value(a)
 
 in x: Float
-aux start: Instant<Journal> = at(0.0)
-aux now: Instant<Journal> = at(x)
+aux start: Instant<JournalTime> = at(0.0)
+aux now: Instant<JournalTime> = at(x)
 out moved: Bool = later(start, now)
 ```
 
-`Instant<Journal>` and `Instant<Producer>` are different types, so a call that
+`Instant<JournalTime>` and `Instant<Producer>` are different types, so a call that
 mixes them is a type error. A parameter is inferred from the arguments or from
 the type the expression is expected to have; where nothing says which it is,
 as in `later(at(x), at(x))`, checking asks for an annotation. Parameters that
@@ -369,10 +443,10 @@ specifications that checking refuses:
 ```
 
 A newtype's identity is its *brand*: the path of the module that declared it,
-its name, and its arguments, as in `time::Instant<app::Journal>`. An
+its name, and its arguments, as in `time::Instant<app::JournalTime>`. An
 argument is spelled as the structure its aliases resolve to, and an argument
 that is itself a newtype as that newtype's brand, as in
-`time::Duration<time::Instant<app::Journal>>`. A newtype
+`time::Duration<time::Instant<app::JournalTime>>`. A newtype
 declared in the root module has no module prefix. However a newtype is
 reached, through an alias, a glob import or another module's alias, it has
 the same brand, and two modules that each declare a `Meters` declare two
@@ -641,7 +715,7 @@ A constant can hold a [newtype](#newtypes) value:
 ```dsrv
 use experimental::{newtypes, generics, functions, constants}
 
-newtype Journal = Unit
+newtype JournalTime = Unit
 newtype Producer = Unit
 newtype Duration<D> = Float
 
@@ -650,15 +724,15 @@ def seconds<D>(x: Float) -> Duration<D> =
 def longer<D>(a: Duration<D>, b: Duration<D>) -> Bool =
   Duration::value(a) > Duration::value(b)
 
-const budget: Duration<Journal> = seconds(0.2)
+const budget: Duration<JournalTime> = seconds(0.2)
 
 in x: Float
-aux elapsed: Duration<Journal> = seconds(x)
+aux elapsed: Duration<JournalTime> = seconds(x)
 out over: Bool = longer(elapsed, budget)
 ```
 
 Here `seconds` mentions `D` only in its result, so the declared type
-`Duration<Journal>` is what gives `budget` its domain. The value keeps its
+`Duration<JournalTime>` is what gives `budget` its domain. The value keeps its
 brand wherever the constant is named, including in another module that
 imports it: `budget` is not a `Float`, and is not a `Duration<Producer>`, and
 using it as either is a type error when the specification is checked. A

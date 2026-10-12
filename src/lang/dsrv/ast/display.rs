@@ -37,6 +37,11 @@ impl Display for ExprRef<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use super::ExprView::*;
 
+        if matches!(self.view(), Apply(..)) {
+            if let Some(seconds) = self.duration_literal_seconds() {
+                return write!(f, "{seconds} s");
+            }
+        }
         match self.view() {
             Val(value) => write!(f, "{value}"),
             Var(var) => write!(f, "{var}"),

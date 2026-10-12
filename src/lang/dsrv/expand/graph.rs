@@ -234,6 +234,9 @@ fn build_module(
         .expect("every path in the graph was collected");
     let declarations = parsed.declarations();
     let config = language::resolve_language(declarations, requested_dialect)?;
+    for root in parsed.roots() {
+        language::check_duration_literals(root.as_ref(), &config)?;
+    }
 
     // Three tiers, merged by precedence: a local declaration shadows a glob
     // silently, and an explicit clash is an error (S15).

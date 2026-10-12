@@ -24,6 +24,8 @@ mod cast_tests;
 #[cfg(test)]
 mod constant_tests;
 #[cfg(test)]
+mod duration_literal_tests;
+#[cfg(test)]
 mod equation_where_tests;
 #[cfg(test)]
 mod generic_tests;

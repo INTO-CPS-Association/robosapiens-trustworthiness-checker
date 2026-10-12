@@ -307,6 +307,9 @@ pub(crate) fn expand_declarations_in(
     );
     let language = language::resolve_language(parsed.declarations(), requested_dialect)?;
     let parsed = equation_where::lower(parsed, &language)?;
+    for root in parsed.roots() {
+        language::check_duration_literals(root.as_ref(), &language)?;
+    }
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     // What a file may write is settled before anything is inlined, so a
@@ -994,6 +997,7 @@ pub(crate) fn expand_expression(
     located: Option<(&SourceArchive, SourceId)>,
 ) -> Result<Expr, DsrvExpandError> {
     check_provenance(callable, located.map(|(archive, _)| archive))?;
+    language::check_duration_literals(parsed.as_ref(), context.language())?;
     // Runtime expression source may call a def, so it is inlined first, exactly as a
     // file's own expressions are.
     let scope = callable.scope();
@@ -1121,6 +1125,7 @@ pub(crate) fn expand_tree(
                 context: Some(context.clone()),
                 callable: callable.cloned(),
                 generic_def: origin.generic_def,
+                duration_seconds: origin.duration_seconds,
             };
             let kind = match node.cursor().kind() {
                 If(a, b, c) => ExprKind::If(*node.child(*a), *node.child(*b), *node.child(*c)),
@@ -1138,6 +1143,9 @@ pub(crate) fn expand_tree(
                     }
                 },
                 Val(value) => ExprKind::Val(value.clone()),
+                DurationLiteral(_) => {
+                    unreachable!("duration literals lower through their library factory")
+                }
                 BinOp(a, b, op) => ExprKind::BinOp(*node.child(*a), *node.child(*b), *op),
                 Cast(value, target) => {
                     ExprKind::Cast(*node.child(*value), context.resolve_type(target)?)

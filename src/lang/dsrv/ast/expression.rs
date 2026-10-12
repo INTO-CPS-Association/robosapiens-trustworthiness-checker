@@ -274,6 +274,8 @@ pub(crate) struct ExprMetadata {
     pub callable: Option<super::AstShared<Callable>>,
     /// Source-only generic `def` contract on its generated lambda.
     pub(crate) generic_def: Option<super::AstShared<GenericFunctionSignature>>,
+    /// Canonical unit syntax retained on the factory application for printing.
+    pub(crate) duration_seconds: Option<f64>,
 }
 
 impl PartialEq for ExprMetadata {
@@ -493,6 +495,11 @@ impl<'arena> ExprRef<'arena> {
     /// Where this node came from, in its specification's archive.
     pub(crate) fn origin(self) -> NodeOrigin {
         self.node().source.origin
+    }
+
+    /// The normalised literal syntax retained on its factory application.
+    pub(crate) fn duration_literal_seconds(self) -> Option<f64> {
+        self.node().source.duration_seconds
     }
 
     /// The namespace this node was expanded in, which is where a

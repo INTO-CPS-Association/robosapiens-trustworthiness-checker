@@ -36,6 +36,7 @@ contiguous_tree::tree_schema! {
         If(condition: child, then_expr: child, else_expr: child),
         SIndex(input: child, offset: data(SourceOffset)),
         Val(value: into_data(SyntaxLiteral)),
+        DurationLiteral(seconds: copy(f64)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(SourceType)),
         // Frontend-generated type ascription; unlike a source cast, this does

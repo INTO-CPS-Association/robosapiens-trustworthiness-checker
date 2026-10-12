@@ -492,6 +492,41 @@ fn graft(
             Stamp::place(stamp, cursor),
         ));
     }
+    let duration = match cursor.kind() {
+        ParsedExprKind::DurationLiteral(seconds) => Some(*seconds),
+        ParsedExprKind::Neg(value) => match cursor.child(*value).kind() {
+            ParsedExprKind::DurationLiteral(seconds) => Some(-*seconds),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(seconds) = duration {
+        // Use the ordinary factory path: the owning module alone may wrap
+        // Duration, and the type checker must still ground its clock domain.
+        let mut literal = ParsedExprBuilder::with_capacity(3);
+        let origin = parsed::origin_of(cursor);
+        let factory = literal.alloc(
+            ParsedExprKind::ModuleItem(ValuePath::new(
+                [
+                    ModuleName::new("std").unwrap(),
+                    ModuleName::new("time").unwrap(),
+                ]
+                .into(),
+                VarName::from("seconds"),
+            )),
+            origin.clone(),
+        );
+        let argument = literal.alloc(ParsedExprKind::Val(seconds.into()), origin.clone());
+        let root = literal.alloc(
+            ParsedExprKind::Apply(factory, [argument].into()),
+            ParsedOrigin {
+                duration_seconds: Some(seconds),
+                ..origin
+            },
+        );
+        let literal = literal.finish(root).expect("duration factory tree");
+        return graft(literal.as_ref(), scope, builder, active, bound, stamp);
+    }
     // Stream calls retain their named identity before pure def inlining.
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind() {
         let path = match cursor.child(*function).kind() {

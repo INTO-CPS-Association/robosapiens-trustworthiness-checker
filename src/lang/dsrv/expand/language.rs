@@ -83,6 +83,7 @@ pub enum Feature {
     LazyIf,
     LocalStreams,
     Newtypes,
+    DurationLiterals,
 }
 
 impl Feature {
@@ -98,6 +99,7 @@ impl Feature {
         Self::LazyIf,
         Self::LocalStreams,
         Self::Newtypes,
+        Self::DurationLiterals,
     ];
 
     pub fn name(self) -> &'static str {
@@ -112,6 +114,7 @@ impl Feature {
             Self::LazyIf => "lazy_if",
             Self::LocalStreams => "local_streams",
             Self::Newtypes => "newtypes",
+            Self::DurationLiterals => "duration_literals",
         }
     }
 
@@ -148,7 +151,8 @@ impl Feature {
                 | Self::Casts
                 | Self::LazyIf
                 | Self::LocalStreams
-                | Self::Newtypes => true,
+                | Self::Newtypes
+                | Self::DurationLiterals => true,
             },
         }
     }
@@ -213,7 +217,24 @@ impl MetaFeature {
 ///
 /// Revision 3: `lazy_if` joins the experiments, and with it
 /// `high_level_dsrv`.
-pub const EXPERIMENTAL_REVISION: u32 = 10;
+///
+/// Revision 4: stream templates join `high_level_dsrv`.
+///
+/// Revision 5: `newtypes` joins the experiments (outside
+/// `high_level_dsrv`), and the `newtype` keyword is reserved.
+///
+/// Revision 6: `newtypes` joins `high_level_dsrv`.
+///
+/// Revision 7: template names are lowercase, and fixed arguments use `::<…>`.
+///
+/// Revision 8: typed duration literals join `high_level_dsrv`.
+///
+/// Revision 9: `local_streams` joins `high_level_dsrv`.
+///
+/// Revision 10: local stream functions replace the retired templates experiment.
+/// Revision 11: local_streams also admits private where equations on aux/out.
+/// Revision 12: typed where locals no longer require the aux keyword.
+pub const EXPERIMENTAL_REVISION: u32 = 12;
 
 /// How an `if` chooses between its branches.
 ///
@@ -669,6 +690,28 @@ pub(crate) fn check_experiment_node(
     })
 }
 
+/// Check literal syntax before inlining replaces it with a library call.
+pub(crate) fn check_duration_literals(
+    root: super::super::syntax::parsed::ParsedExprRef<'_>,
+    language: &LanguageConfig,
+) -> Result<(), LanguageError> {
+    use contiguous_tree::TreeCursorExt;
+    for node in root.postorder() {
+        if matches!(
+            node.kind(),
+            super::super::syntax::parsed::ParsedExprKind::DurationLiteral(_)
+        ) && !language.has(Feature::DurationLiterals)
+        {
+            return Err(LanguageError::NeedsExperiment {
+                construct: "a duration literal",
+                feature: Feature::DurationLiterals.name(),
+                span: super::super::syntax::parsed::span_of(node),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A source type may name a construct an experiment gates. Alias definitions
 /// and annotations are both checked before they resolve, so the gate reports
 /// the spelling the writer used, at its own span.
@@ -1046,7 +1089,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if, local_streams, newtypes"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if, local_streams, newtypes, duration_literals"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item
@@ -1294,6 +1337,8 @@ mod tests {
         (Feature::Functions, "def f(v: Int) -> Int = v\nin x: Int\n"),
         (Feature::Constants, "const limit: Int = 3\nin x: Int\n"),
         (Feature::Casts, "in x: Int\nout y: Float\ny = x as Float\n"),
+        (Feature::Newtypes, "newtype Meters = Float\nin x: Meters\n"),
+        (Feature::DurationLiterals, "out x = 1 s\n"),
     ];
 
     // The resolved set is pinned together with the revision: an experiment
@@ -1319,8 +1364,9 @@ mod tests {
                     Feature::LazyIf,
                     Feature::LocalStreams,
                     Feature::Newtypes,
+                    Feature::DurationLiterals,
                 ],
-                10,
+                12,
             )
         );
         assert_eq!(
@@ -1330,8 +1376,7 @@ mod tests {
                 &MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>()
             )
         );
-        // Every experiment is placed in or out of every meta-feature; for now
-        // every one is a Full DSRV preview.
+        // Every implemented experiment is in the Full DSRV preview.
         assert!(
             Feature::ALL
                 .iter()
@@ -1439,7 +1484,12 @@ mod tests {
                     if *needed == feature.name()),
                 "{body}: {error}"
             );
-            parse_str(&format!("use experimental::{}\n{body}", feature.name()))
+            let enabled = if *feature == Feature::DurationLiterals {
+                format!("{}, modules", feature.name())
+            } else {
+                feature.name().to_owned()
+            };
+            parse_str(&format!("use experimental::{{{enabled}}}\n{body}"))
                 .unwrap_or_else(|error| panic!("{body}: {error}"));
             parse_str(&format!("{HIGH_LEVEL}{body}"))
                 .unwrap_or_else(|error| panic!("{body}: {error}"));
@@ -1448,7 +1498,10 @@ mod tests {
         // `lazy_if` gates no syntax; it changes how every `if` runs.
         let lazy = parse_str(&format!("{HIGH_LEVEL}{BODY}")).unwrap();
         assert_eq!(lazy.source_context().language().if_policy(), IfPolicy::Lazy);
+        parse_str("use experimental::{functions, local_streams}\ndef id(x: Int) -> Int = x where {}\nout y: Int = id(1)").unwrap();
+        covered.push(Feature::LocalStreams);
         covered.push(Feature::LazyIf);
+        covered.sort_by_key(|feature| Feature::ALL.iter().position(|known| known == feature));
         assert_eq!(
             covered,
             MetaFeature::HighLevelDsrv.experiments().collect::<Vec<_>>()

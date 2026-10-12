@@ -85,6 +85,7 @@ still use a construct that has a narrower runtime requirement.
 | `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; what each branch computes has a separate local timeline, but `x[n]` of a named stream still reads that stream's history (see [Lazy `if`](#lazy-if)). A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
 | `local_streams` | Adds a `where` block of private `aux` equations to a `def` or an `aux`/`out` equation; each written call or equation block has its own streams and history. Calls occupy a whole `aux`/`out` right-hand side or a stream function's whole result. | Defs require `functions`; type parameters need `generics`, and imported calls need `modules`. Fixed arguments use `::<…>`. See [local stream functions](dsrv-syntax.md#local-stream-functions). | all for equation locals; `dataflow`, `semi-sync` for stream function instances |
 | `newtypes` | Adds `newtype` declarations of nominal types, with `Name::new` and `Name::value`, which only the declaring module may write. | Generic newtypes need `generics`; using another module's newtype needs `modules`. A cast into a newtype, under `casts`, only checks an identity a value already carries. See [DSRV syntax](dsrv-syntax.md#newtypes). | all |
+| `duration_literals` | Adds typed duration literals such as `100 ms` and `0.1 s`, with clock domains inferred from context. | Uses the embedded `std::time` factory, loaded automatically; its import requires `modules`. Domain annotations need `generics` and domain declarations need `newtypes`. See [DSRV syntax](dsrv-syntax.md#duration-literals). | all |
 <!-- dsrv-experiments:end -->
 
 ### Lazy `if`
@@ -119,7 +120,7 @@ its two refusals are under
 
 `use experimental::high_level_dsrv` selects a prototype for an extended
 Trustworthiness Checker language. It currently includes every experiment in
-the table. `use experimental::*` currently selects the same set.
+the table, as does `use experimental::*`.
 
 ## Command line
 

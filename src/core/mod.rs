@@ -25,8 +25,7 @@ pub mod values;
 pub use values::*;
 pub mod stream_casting;
 pub use stream_casting::*;
+pub mod time;
 
 pub const MQTT_HOSTNAME: &str = "localhost";
 pub const REDIS_HOSTNAME: &str = "localhost";
-
-pub mod time;
