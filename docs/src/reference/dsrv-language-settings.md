@@ -82,10 +82,40 @@ still use a construct that has a narrower runtime requirement.
 | `functions` | Adds named `def` functions. | Functions imported through `modules` are expanded under the defining module's language settings. | all |
 | `constants` | Adds `const` declarations, worked out once when the specification is read, and named stream offsets. | A constant declared inside a module also requires `modules`. A constant may call a `def` and hold a newtype value; see [DSRV syntax](dsrv-syntax.md#constants). | all |
 | `casts` | Adds `as`, `trunc`, `floor`, `ceil`, and `round`. | Float-to-integer conversion uses an explicit rounding function; see [DSRV syntax](dsrv-syntax.md#operators). | all |
-| `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; each branch has a separate local timeline. A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
+| `lazy_if` | Makes `if` evaluate only its selected branch. | Changes behavior; what each branch computes has a separate local timeline, but `x[n]` of a named stream still reads that stream's history (see [Lazy `if`](#lazy-if)). A `match` arm is independently selected-only. | `dataflow`, `reconf-dataflow` |
 | `local_streams` | Adds a `where` block of private `aux` equations to a `def` or an `aux`/`out` equation; each written call or equation block has its own streams and history. Calls occupy a whole `aux`/`out` right-hand side or a stream function's whole result. | Defs require `functions`; type parameters need `generics`, and imported calls need `modules`. Fixed arguments use `::<…>`. See [local stream functions](dsrv-syntax.md#local-stream-functions). | all for equation locals; `dataflow`, `semi-sync` for stream function instances |
 | `newtypes` | Adds `newtype` declarations of nominal types, with `Name::new` and `Name::value`, which only the declaring module may write. | Generic newtypes need `generics`; using another module's newtype needs `modules`. A cast into a newtype, under `casts`, only checks an identity a value already carries. See [DSRV syntax](dsrv-syntax.md#newtypes). | all |
 <!-- dsrv-experiments:end -->
+
+### Lazy `if`
+
+Under `lazy_if`, an `if` runs only the branch its condition selects. An
+unselected branch does no work, so it cannot fail and its missing values do
+not reach the result. Whatever a branch computes over time, such as the
+retained value of a `default` or the history of a computed expression like
+`(x + 1)[1]`, advances only on the ticks that select that branch.
+
+A previous value of a named stream is not part of that local timeline:
+`x[n]` inside a branch is `x` as it was `n` ticks ago, exactly as it is outside
+the `if`. This includes the equation's own stream, so a counter can read its
+previous value in the branch that updates it:
+
+```dsrv
+use experimental::lazy_if
+
+in reset: Bool
+in hit: Bool
+out streak: Int
+streak = if reset then 0
+  else if hit then default(streak[1], 0) + 1
+  else default(streak[1], 0)
+```
+
+After a tick that took the `reset` branch, the next `hit` tick reads the `0`
+that tick produced, not the streak from the last time the `hit` branch ran.
+A `match` arm behaves the same way, with or without `lazy_if`; the rule and
+its two refusals are under
+[history access](dsrv-syntax.md#history-and-collection-access).
 
 `use experimental::high_level_dsrv` selects a prototype for an extended
 Trustworthiness Checker language. It currently includes every experiment in

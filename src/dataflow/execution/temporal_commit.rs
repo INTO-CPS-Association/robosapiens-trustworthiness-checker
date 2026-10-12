@@ -172,6 +172,17 @@ pub(in crate::dataflow) fn commit_staged_temporal_state_with_history(
                     evaluator.commit_temporal_state(environment_values);
                 }
             }
+            // An arm's guard and body each stage writes in their own evaluator,
+            // and only those that ran this tick have any.
+            StreamOp::Match { .. } => {
+                let NodeState::Match(arms) = &mut state.node_states[index] else {
+                    unreachable!("match node has incompatible runtime state")
+                };
+                for call in arms.iter_mut().flat_map(MatchArmState::calls) {
+                    call.evaluator
+                        .commit_temporal_state(&call.environment_values);
+                }
+            }
             StreamOp::Reconfigurable(_) => {
                 let NodeState::Reconfigurable(expression) = &mut state.node_states[index] else {
                     unreachable!("reconfigurable node has incompatible runtime state")
@@ -248,6 +259,14 @@ pub(in crate::dataflow) fn discard_staged_temporal_state(
                     unreachable!("direct application node has incompatible runtime state")
                 };
                 evaluator.discard_staged_temporal_state();
+            }
+            StreamOp::Match { .. } => {
+                let NodeState::Match(arms) = &mut state.node_states[index] else {
+                    unreachable!("match node has incompatible runtime state")
+                };
+                for call in arms.iter_mut().flat_map(MatchArmState::calls) {
+                    call.evaluator.discard_staged_temporal_state();
+                }
             }
             StreamOp::Reconfigurable(_) => {
                 let NodeState::Reconfigurable(expression) = &mut state.node_states[index] else {

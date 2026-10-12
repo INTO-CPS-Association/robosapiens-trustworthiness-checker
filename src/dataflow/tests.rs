@@ -4460,6 +4460,8 @@ enum InvalidDynamicProgramSignature {
     UnguardedRecursiveOutput,
     UnknownVariable(VarName),
     TemporalFunctionBody(&'static str),
+    PreviousValueInRuntimeText(VarName, u64),
+    PreviousValueOfBoundName(VarName, u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -4553,6 +4555,15 @@ fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSi
                 }
                 StreamProgramError::TemporalFunctionBody { operator } => {
                     InvalidDynamicProgramSignature::TemporalFunctionBody(operator)
+                }
+                StreamProgramError::PreviousValueInRuntimeText { stream, offset } => {
+                    InvalidDynamicProgramSignature::PreviousValueInRuntimeText(
+                        stream.clone(),
+                        *offset,
+                    )
+                }
+                StreamProgramError::PreviousValueOfBoundName { name, offset } => {
+                    InvalidDynamicProgramSignature::PreviousValueOfBoundName(name.clone(), *offset)
                 }
             };
             LifecycleErrorSignature::InvalidDynamicProgram(error)

@@ -208,6 +208,10 @@ moving = matches(state, Moving(n) if n > 0)
 A scrutinee that has no value gives the `match` no value either, rather than
 falling through to a later arm, and so does a guard without one.
 
+An arm runs only on the ticks that select it, but a stream's previous value
+read in it, such as `default(x[1], 0)`, is still that stream's (see
+[history access](#history-and-collection-access)).
+
 ## Newtypes
 
 Under `use experimental::{newtypes}`, `newtype` declares a type that is
@@ -590,3 +594,23 @@ internal one.
 Square brackets on an expression are stream-history access: `x[1]` reads one
 earlier logical tick. They are not general collection indexing. Use
 `List.get(values, index)` for a dynamic list lookup.
+
+Some code runs only on some ticks: a `match` arm runs on the ticks that
+select it and a guard on the ticks that try it, and under the `lazy_if`
+experiment so does an `if` branch (see
+[Lazy `if`](dsrv-language-settings.md#lazy-if)). Inside such code, and inside
+a lambda written there, `x[n]` of a named stream still reads that stream as
+it was `n` ticks ago, exactly as outside. The history of a computed
+expression, such as `(x + 1)[1]`, is kept only on the ticks that run it.
+
+Two reads are refused, because they would silently see only some ticks. A
+lambda parameter or a name a pattern binds is not a stream, so its previous
+value cannot be read there:
+
+```text
+invalid stream program: `v[1]` in a lazy `if` branch or a `match` arm or guard would read only the ticks that run it, and `v`, bound by a lambda parameter or pattern, is not a stream whose previous value can be read instead; read the previous value of the stream it comes from
+```
+
+Text supplied at run time to `dynamic` or `defer` has no equation of its own,
+so a stream's previous value inside such code there is refused too. Read the
+value in an equation, and name that stream in the text.

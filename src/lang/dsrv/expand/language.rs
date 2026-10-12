@@ -229,10 +229,12 @@ pub enum IfPolicy {
     /// behaviour without `lazy_if`.
     #[default]
     Eager,
-    /// Only the selected branch runs. Each branch has its own timeline,
-    /// which advances only on the ticks that select it, so an unselected
-    /// branch neither executes, advances or commits temporal state, nor
-    /// reports errors or sparse values.
+    /// Only the selected branch runs. What a branch computes has its own
+    /// timeline, which advances only on the ticks that select it, so an
+    /// unselected branch neither executes, advances or commits temporal
+    /// state, nor reports errors or sparse values. A previous value of a
+    /// named stream, `x[n]`, still reads that stream's history, as it does
+    /// outside the `if`.
     Lazy,
 }
 

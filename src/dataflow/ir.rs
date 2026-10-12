@@ -218,6 +218,12 @@ impl<E: GraphReference> EvaluationGraph<E> {
                     StreamOp::DirectApply { func, .. } | StreamOp::RecursiveApply { func, .. } => {
                         E::function_has_temporal_state(func)
                     }
+                    StreamOp::Match { arms, .. } => arms.iter().any(|arm| {
+                        arm.guard
+                            .iter()
+                            .chain(std::iter::once(&arm.body))
+                            .any(E::function_has_temporal_state)
+                    }),
                     _ => false,
                 }
         })
@@ -440,6 +446,13 @@ fn graph_requires_temporal_commit(graph: &BoundEvaluationGraph) -> bool {
         // A directly applied lambda, such as an inlined `def`, stages
         // temporal writes only when its own body does.
         BoundOp::DirectApply { func, .. } => func.program.requires_temporal_commit(),
+        // Each arm's guard and body is a call whose evaluator stages its own writes.
+        BoundOp::Match { arms, .. } => arms.iter().any(|arm| {
+            arm.guard
+                .iter()
+                .chain(std::iter::once(&arm.body))
+                .any(|call| call.program.requires_temporal_commit())
+        }),
         BoundOp::If {
             then_branch,
             else_branch,

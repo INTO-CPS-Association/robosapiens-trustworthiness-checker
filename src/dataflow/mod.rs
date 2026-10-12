@@ -401,6 +401,7 @@
 //! | Direct top-level delay of an external environment variable | A binding into the monitor's bounded `HistoryStore`; runtime-defined, internal, and recursive delays keep local rings. |
 //! | Ordinary `if` | Independent boxed `EvaluatorState` values for both branches. |
 //! | Persistent function call site | A nested `Evaluator`, including delay rings in the function body. |
+//! | `match` arm guard or body | A nested `Evaluator` per call, which stages writes only on the ticks it runs; the post-row commit commits every arm's. |
 //! | Recursive function call | Resettable frames used for the active recursive evaluation. |
 //! | `dynamic` or `defer` | Source/result lifting state, an outer-environment shadow, and an optional active `Evaluator`. |
 //! | Other lifted operations | Their required last operands, values, or control flags. |
@@ -464,6 +465,21 @@
 //! history bindings, and its delays keep private rings for the same reason. Scalar extraction
 //! accepts only eager conditionals, so a stream with a lazy `if` stays on the canonical tier and
 //! the JIT produces no artifact for it.
+//!
+//! A previous value of a named stream is the exception, because `x[n]` must mean the same inside a
+//! branch as outside it. When `compiler::lower` lowers an equation, it lifts every positive delay
+//! of a stream (`x[n]`, `y[n]` of the equation's own stream, or a lifted read such as `(x[1])[1]`)
+//! out of each lazy branch into a stream of its own named `x[n]`, and the branch reads that stream.
+//! A `match` arm or guard, which runs only when selected or tried, and a lambda written in any of
+//! these lift in the same way; a lambda's lifted read is one of its captures. The lifted stream is
+//! an ordinary monitor stream: it is scheduled before its readers, evaluated on every tick, and as
+//! a direct top-level delay it reads `HistoryStore`. Equal reads share one lifted stream, and a
+//! lifted stream takes the type of the stream it delays. Only the delay moves, so the rest of the
+//! branch stays lazy, and a delay of a computed expression such as `(x + 1)[1]` keeps a private
+//! ring on the branch's timeline. A delay of a name a lambda parameter or pattern binds cannot be
+//! lifted, so compilation refuses it there with `StreamProgramError::PreviousValueOfBoundName`.
+//! Runtime-compiled text has no equation to lift into, so it refuses a stream's previous value
+//! there with `StreamProgramError::PreviousValueInRuntimeText`.
 //!
 //! Reconfigurable expressions are not supported inside lazy branches: compilation rejects an `if`
 //! branch containing `dynamic` or `defer`. Supported branch evaluation therefore uses the static

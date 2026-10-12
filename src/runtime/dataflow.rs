@@ -529,6 +529,8 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             if let Err(error) = ensure_check_mode(semantics, &model) {
                 return failed_dataflow_runtime(policy, error);
             }
+            // A model this runtime may replace instantiates no stream function: see
+            // `RuntimeCapability::StreamFunctions`.
             if let Err(error) = ensure_no_stream_function_instances(&model, "reconf-dataflow") {
                 return failed_dataflow_runtime(policy, error.into());
             }
@@ -2006,6 +2008,69 @@ mod tests {
             .await
             .expect("no-op reconfiguration runtime should terminate")
             .expect("no-op reconfiguration runtime should succeed");
+    }
+
+    #[apply(async_test)]
+    async fn reconfigurable_dataflow_rejects_stream_function_syntax_before_switching(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let model = elaborated("in x: Int\nout z: Int\nz = x");
+        let (x_sender, x_fanout) = Fanout::<Value>::new();
+        let (control_sender, control_fanout) = Fanout::<Value>::new();
+        let input_source = input_source_with_control(
+            BTreeMap::from([(VarName::new("x"), x_fanout)]),
+            control_fanout,
+        )
+        .with_reconfiguration_route("control")
+        .unwrap();
+        let (ack_sender, mut acknowledgements) =
+            bounded::channel::<ReconfigurationAck>(1).into_split();
+
+        let runtime = ReconfigurableDataflowRuntimeBuilder::new()
+            .semantics(Semantics::Untimed)
+            .prepare_replacement(crate::dsrv_fixtures::replacement_preparation(
+                crate::TypeCheckOptions::GRADUAL,
+            ))
+            .executor(executor.clone())
+            .model(model)
+            .input_pipeline(InputPipeline::new(input_source))
+            .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::null()))
+            .reconf_topic("control")
+            .acknowledgements(ack_sender)
+            .build()
+            .await;
+        let task = executor.spawn(runtime.run());
+
+        let replacement = r#"use experimental::{functions, local_streams, tagged_unions}
+def id(value: Int) -> Int = value
+where { }
+in x: Int
+out z: Int = id(x)"#;
+        control_sender
+            .send(Value::Str(
+                serde_json::json!({"specification": replacement})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        drop(x_sender);
+        drop(control_sender);
+
+        let error =
+            tc_testutils::streams::with_timeout(task, 5, "stream function replacement refusal")
+                .await
+                .expect("the runtime should terminate")
+                .expect_err("the stream function replacement must be refused");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("cannot run on the reconf-dataflow runtime"),
+            "{message}"
+        );
+        assert!(message.contains("stream function instances"), "{message}");
+        assert!(
+            acknowledgements.recv().await.is_none(),
+            "a refused replacement must not be acknowledged"
+        );
     }
 
     #[apply(async_test)]

@@ -9,6 +9,19 @@ pub enum StreamProgramError {
     UnknownVariable(VarName),
     #[error("temporal operator `{operator}` is not supported inside a function graph")]
     TemporalFunctionBody { operator: &'static str },
+    #[error(
+        "`{stream}[{offset}]` in a lazy `if` branch or a `match` arm or guard of runtime text \
+         would read only the ticks that run it; read it in an equation outside and name that \
+         stream in the text"
+    )]
+    PreviousValueInRuntimeText { stream: VarName, offset: u64 },
+    #[error(
+        "`{name}[{offset}]` in a lazy `if` branch or a `match` arm or guard would read only the \
+         ticks that run it, and `{name}`, bound by a lambda parameter or pattern, is not a stream \
+         whose previous value can be read instead; read the previous value of the stream it \
+         comes from"
+    )]
+    PreviousValueOfBoundName { name: VarName, offset: u64 },
 }
 
 #[derive(Debug, thiserror::Error)]

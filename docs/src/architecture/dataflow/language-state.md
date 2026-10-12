@@ -14,6 +14,8 @@ Ordinary operators lift over `NoVal` and `Deferred` according to their semantics
 
 This difference is part of language semantics, not an optimization. Branch-local delays and calls therefore have timelines determined by the applicable conditional form.
 
+Under `lazy_if`, ordinary stream evaluation also advances only the selected branch, and what the branch computes keeps that branch's timeline. A `match` arm or guard always runs only when selected or tried. A previous value of a named stream is lifted out of all of these, and out of a lambda written in them: lowering an equation turns each such `x[n]` into a read of a separate stream named `x[n]`, evaluated on every tick, so the read means what it means outside. A previous value of a lambda parameter or pattern-bound name there cannot be lifted and is refused at compile time, as is any such read in runtime text.
+
 For `if condition then x + 1 else y + 2`, both sums advance even when only one is selected. After retention, an uninitialized `NoVal` branch makes the result `NoVal`; an unselected `Deferred` branch does not make the selected concrete result deferred. Recursive conditionals retain their lazy canonical execution policy. These rules are distinct from strict binary propagation, where `NoVal` takes precedence over `Deferred` after retaining each operand.
 
 ## Function binding

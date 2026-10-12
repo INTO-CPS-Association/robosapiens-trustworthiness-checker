@@ -2716,22 +2716,37 @@ fn lifecycle_trace_is_append_only_and_empty_calls_do_not_check_poison() {
 
 #[test]
 fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
+    // VarName ordering follows intern indices. Pre-intern one unique output
+    // before the others to exercise construction from a set in a different
+    // order from the literal fixture below, even when this test runs alone.
+    let _waiting = VarName::new("trace_row_waiting");
     let source = VarName::new("source");
     let names = [
-        "integer", "boolean", "string", "list", "tuple", "map", "unit", "absent", "waiting",
+        "trace_row_integer",
+        "trace_row_boolean",
+        "trace_row_string",
+        "trace_row_list",
+        "trace_row_tuple",
+        "trace_row_map",
+        "trace_row_unit",
+        "trace_row_absent",
+        "trace_row_waiting",
     ];
     let expressions = BTreeMap::from([
-        (VarName::new("integer"), Expr::Val(SyntaxLiteral::Int(7))),
         (
-            VarName::new("boolean"),
+            VarName::new("trace_row_integer"),
+            Expr::Val(SyntaxLiteral::Int(7)),
+        ),
+        (
+            VarName::new("trace_row_boolean"),
             Expr::Val(SyntaxLiteral::Bool(true)),
         ),
         (
-            VarName::new("string"),
+            VarName::new("trace_row_string"),
             Expr::Val(SyntaxLiteral::Str("a".into())),
         ),
         (
-            VarName::new("list"),
+            VarName::new("trace_row_list"),
             Expr::List(
                 vec![
                     Expr::Val(SyntaxLiteral::Int(1)),
@@ -2741,7 +2756,7 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
             ),
         ),
         (
-            VarName::new("tuple"),
+            VarName::new("trace_row_tuple"),
             Expr::Tuple(
                 vec![
                     Expr::Val(SyntaxLiteral::Int(1)),
@@ -2751,16 +2766,19 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
             ),
         ),
         (
-            VarName::new("map"),
+            VarName::new("trace_row_map"),
             Expr::Map(BTreeMap::from([(
                 "k".into(),
                 Expr::Val(SyntaxLiteral::Int(3)),
             )])),
         ),
-        (VarName::new("unit"), Expr::Val(SyntaxLiteral::Unit)),
-        (VarName::new("absent"), Expr::Var(source.clone())),
         (
-            VarName::new("waiting"),
+            VarName::new("trace_row_unit"),
+            Expr::Val(SyntaxLiteral::Unit),
+        ),
+        (VarName::new("trace_row_absent"), Expr::Var(source.clone())),
+        (
+            VarName::new("trace_row_waiting"),
             Expr::SIndex(Box::new(Expr::Var(source.clone())), 1),
         ),
     ]);
@@ -2770,37 +2788,42 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         expressions,
         BTreeMap::from([(VarName::new("source"), crate::core::StreamType::Int)]),
         [],
-    )
-    .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
-    .without_warnings()
-    .expect("complete-value spec should check");
+    );
+    let output_order = specification.output_vars_in_order();
+    assert_ne!(
+        output_order,
+        names
+            .iter()
+            .map(|name| VarName::new(*name))
+            .collect::<Vec<_>>()
+    );
+    let specification = specification
+        .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
+        .without_warnings()
+        .expect("complete-value spec should check");
     let mut monitor = DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed)
         .expect("complete-value spec should compile");
     let mut output = Vec::new();
     monitor
         .evaluate_trace([[Value::NoVal]], &mut output)
         .unwrap();
-    assert_eq!(
-        monitor.output_vars(),
-        &names
-            .iter()
-            .map(|name| VarName::new(*name))
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(
-        output,
-        vec![vec![
-            Value::Int(7),
-            Value::Bool(true),
-            Value::Str("a".into()),
-            Value::List(vec![Value::Int(1), Value::Int(2)].into()),
-            Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
-            Value::Map(ValueMap::from([("k".into(), Value::Int(3))])),
-            Value::Unit,
-            Value::NoVal,
-            Value::Deferred,
-        ]]
-    );
+    assert_eq!(monitor.output_vars(), output_order);
+    let expected_values = BTreeMap::from_iter(names.iter().map(|name| VarName::new(*name)).zip([
+        Value::Int(7),
+        Value::Bool(true),
+        Value::Str("a".into()),
+        Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+        Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
+        Value::Map(ValueMap::from([("k".into(), Value::Int(3))])),
+        Value::Unit,
+        Value::NoVal,
+        Value::Deferred,
+    ]));
+    let expected_row = output_order
+        .iter()
+        .map(|name| expected_values[name].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(output, vec![expected_row]);
 }
 
 #[test]

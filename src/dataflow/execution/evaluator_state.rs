@@ -128,6 +128,16 @@ pub(in crate::dataflow) struct ArmCall {
     pub(in crate::dataflow) environment_values: Vec<Value>,
 }
 
+impl MatchArmState {
+    /// The arm's guard, when it has one, and its body.
+    pub(in crate::dataflow) fn calls(&mut self) -> impl Iterator<Item = &mut ArmCall> {
+        self.guard
+            .as_deref_mut()
+            .into_iter()
+            .chain(std::iter::once(self.body.as_mut()))
+    }
+}
+
 impl ArmCall {
     fn of(function: &StreamFunction) -> Box<Self> {
         Box::new(Self {
@@ -1138,10 +1148,7 @@ impl NodeState {
             // Nothing an arm's invocation left behind survives a reset,
             // which is what a fresh run of the specification means.
             Self::Match(arms) => {
-                for call in arms
-                    .iter_mut()
-                    .flat_map(|arm| arm.guard.iter_mut().chain(std::iter::once(&mut arm.body)))
-                {
+                for call in arms.iter_mut().flat_map(MatchArmState::calls) {
                     call.evaluator.reset();
                     call.environment_values.fill(Value::NoVal);
                 }

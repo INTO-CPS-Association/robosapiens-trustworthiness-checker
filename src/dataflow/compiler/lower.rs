@@ -3,6 +3,28 @@
 //! Lowering walks a prepared checked expression. A graph that does not
 //! specialise on types ignores them, but still takes each `dynamic` and
 //! `defer` occurrence's prepared site.
+//!
+//! # Previous values where only some ticks run
+//!
+//! A lazy `if` branch runs only on the ticks that select it, and a `match`
+//! arm or guard only on the ticks that select or try it, so a delay inside
+//! one would see only those ticks. A previous value of a named stream,
+//! `x[n]` with `n > 0`, must instead mean what it means outside them.
+//! Lowering an equation therefore lifts each such read out of every lazy
+//! branch, arm and guard, including a lambda written inside one, into a
+//! stream of its own named `x[n]`, whose program is the delay alone, and the
+//! code reads that stream. The lifted stream is evaluated on every tick like
+//! any other, which is exactly what an author gets by writing `aux p = x[n]`
+//! outside. Only the read moves: whatever the code computes from it,
+//! including the history of a computed expression such as `(x + 1)[1]`,
+//! stays on the timeline of the ticks that run it.
+//!
+//! A name a lambda parameter or a pattern binds is not a stream, so the
+//! previous value of one inside such code cannot be lifted, and lowering
+//! refuses it rather than give it the local timeline. Runtime text has no
+//! equation to lift into, so it refuses a stream's previous value there too
+//! ([`PreviousValues::refusing`]). Code that runs on every tick, a lambda
+//! body outside these included, lifts and refuses nothing.
 
 use super::super::ir::*;
 use super::super::*;
@@ -12,7 +34,93 @@ use crate::lang::dsrv::patterns::{MatchArm, MatchPattern, PatternKind};
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 use crate::lang::dsrv::type_checker::TCType;
 
-struct EvaluationGraphBuilder {
+/// What lowering does with a stream's previous value read in code that runs
+/// only on some ticks (see the [module documentation](self)): an equation
+/// lifts it into a stream of its own, and runtime text refuses it.
+pub(in crate::dataflow) struct PreviousValues {
+    refuse: bool,
+    /// The lifted streams in the order they were first read, so a lifted read
+    /// of a lifted stream (`(x[1])[1]`) follows the stream it reads.
+    streams: Vec<LiftedPreviousValue>,
+    /// The first read that could not be lifted.
+    refusal: Option<StreamProgramError>,
+}
+
+/// One lifted read: the stream `name` (`x[n]`) delays `source` (`x`).
+pub(in crate::dataflow) struct LiftedPreviousValue {
+    pub(in crate::dataflow) name: VarName,
+    pub(in crate::dataflow) source: VarName,
+    pub(in crate::dataflow) graph: UnboundEvaluationGraph,
+}
+
+impl PreviousValues {
+    /// Lift previous values into streams, as an equation does.
+    pub(in crate::dataflow) fn lifting() -> Self {
+        Self {
+            refuse: false,
+            streams: Vec::new(),
+            refusal: None,
+        }
+    }
+
+    /// Refuse every previous value that would need lifting, as runtime text does.
+    pub(in crate::dataflow) fn refusing() -> Self {
+        Self {
+            refuse: true,
+            ..Self::lifting()
+        }
+    }
+
+    /// Whether everything lowered so far could be lowered.
+    pub(in crate::dataflow) fn check(&mut self) -> Result<(), StreamProgramError> {
+        self.refusal.take().map_or(Ok(()), Err)
+    }
+
+    pub(in crate::dataflow) fn into_streams(self) -> Vec<LiftedPreviousValue> {
+        self.streams
+    }
+
+    fn refuse(&mut self, error: StreamProgramError) {
+        self.refusal.get_or_insert(error);
+    }
+
+    /// The stream holding `source[offset]`, lifting it on its first read, or
+    /// `None` where it is refused. Every read of the same previous value
+    /// shares one stream, since a delay evaluated on every tick depends on
+    /// nothing but the stream it delays.
+    fn read(
+        &mut self,
+        source: &VarName,
+        offset: u64,
+        expr: CheckedExprRef<'_>,
+        specialise: bool,
+    ) -> Option<UnboundRef> {
+        if self.refuse {
+            self.refuse(StreamProgramError::PreviousValueInRuntimeText {
+                stream: source.clone(),
+                offset,
+            });
+            return None;
+        }
+        let name = VarName::new(&format!("{source}[{offset}]"));
+        if !self.streams.iter().any(|stream| stream.name == name) {
+            let mut builder = EvaluationGraphBuilder::new(specialise, None);
+            let output = builder.push(UnboundOp::Delay {
+                input: UnboundRef::External(source.clone()),
+                offset,
+            });
+            builder.sites.assign_from(0, expr);
+            self.streams.push(LiftedPreviousValue {
+                name: name.clone(),
+                source: source.clone(),
+                graph: builder.finish(output),
+            });
+        }
+        Some(UnboundRef::External(name))
+    }
+}
+
+struct EvaluationGraphBuilder<'p> {
     nodes: Vec<UnboundOp>,
     scalar_signatures: Vec<Option<ScalarSignature>>,
     /// Diagnostics-only source attribution, index-aligned with `nodes`.
@@ -22,16 +130,73 @@ struct EvaluationGraphBuilder {
     /// `defer` node's prepared site, typing included, so source arriving
     /// there is checked as it is everywhere else.
     specialise: bool,
+    /// What becomes of a previous value read where only some ticks run.
+    previous: Option<&'p mut PreviousValues>,
+    /// Whether this graph runs only on some ticks: it is, or is inside, a
+    /// lazy `if` branch or a `match` arm or guard.
+    selective: bool,
+    /// The names lambda parameters and patterns bind around this graph.
+    bound: Vec<VarName>,
 }
 
-impl EvaluationGraphBuilder {
-    fn new(specialise: bool) -> Self {
+impl<'p> EvaluationGraphBuilder<'p> {
+    fn new(specialise: bool, previous: Option<&'p mut PreviousValues>) -> Self {
         Self {
             nodes: Vec::new(),
             scalar_signatures: Vec::new(),
             sites: Default::default(),
             specialise,
+            previous,
+            selective: false,
+            bound: Vec::new(),
         }
+    }
+
+    /// The builder of a graph nested in this one: an `if` branch, an arm, or a
+    /// function body binding `binds`.
+    fn nested(
+        &mut self,
+        selective: bool,
+        binds: impl IntoIterator<Item = VarName>,
+    ) -> EvaluationGraphBuilder<'_> {
+        let mut bound = self.bound.clone();
+        bound.extend(binds);
+        EvaluationGraphBuilder {
+            selective,
+            bound,
+            ..EvaluationGraphBuilder::new(self.specialise, self.previous.as_deref_mut())
+        }
+    }
+
+    /// One nested graph, lowered from `expr`.
+    fn lower_nested(
+        &mut self,
+        expr: CheckedExprRef<'_>,
+        selective: bool,
+        binds: impl IntoIterator<Item = VarName>,
+    ) -> UnboundEvaluationGraph {
+        let mut builder = self.nested(selective, binds);
+        let output = lower_expression(expr, &mut builder);
+        builder.finish(output)
+    }
+
+    /// `name[offset]` read where only some ticks run, as a lifted stream, or
+    /// `None` where it stays a delay because lowering refused it.
+    fn lift_previous_value(
+        &mut self,
+        name: &VarName,
+        offset: u64,
+        expr: CheckedExprRef<'_>,
+    ) -> Option<UnboundRef> {
+        let previous = self.previous.as_deref_mut()?;
+        if self.bound.contains(name) {
+            previous.refuse(StreamProgramError::PreviousValueOfBoundName {
+                name: name.clone(),
+                offset,
+            });
+            return None;
+        }
+        previous.read(name, offset, expr, self.specialise)
     }
 
     /// The elaborated type of `expr`, where this graph specialises on types.
@@ -62,17 +227,22 @@ impl EvaluationGraphBuilder {
 }
 
 /// One arm's guard or body, as a program of the names its pattern binds.
-fn lower_arm(arm: &MatchArm, expr: CheckedExprRef<'_>, specialise: bool) -> UnboundFunction {
+fn lower_arm(
+    arm: &MatchArm,
+    expr: CheckedExprRef<'_>,
+    builder: &mut EvaluationGraphBuilder,
+) -> UnboundFunction {
+    let parameters: EcoVec<VarName> = arm.pattern.bound_names().into_iter().collect();
     UnboundFunction::new(
-        arm.pattern.bound_names().into_iter().collect(),
-        lower_branch(expr, specialise),
+        parameters.clone(),
+        builder.lower_nested(expr, true, parameters),
         format!("{} -> …", arm.pattern).into(),
     )
 }
 
 /// An arm whose body is a constant, which is what `matches` reports.
 fn constant_arm(arm: &MatchArm, value: Value, specialise: bool) -> UnboundFunction {
-    let builder = EvaluationGraphBuilder::new(specialise);
+    let builder = EvaluationGraphBuilder::new(specialise, None);
     let output = UnboundRef::Const(value.clone());
     UnboundFunction::new(
         arm.pattern.bound_names().into_iter().collect(),
@@ -81,30 +251,28 @@ fn constant_arm(arm: &MatchArm, value: Value, specialise: bool) -> UnboundFuncti
     )
 }
 
-fn lower_branch(expr: CheckedExprRef<'_>, specialise: bool) -> UnboundEvaluationGraph {
-    let mut builder = EvaluationGraphBuilder::new(specialise);
-    let output = lower_expression(expr, &mut builder);
-    builder.finish(output)
-}
-
-pub(in crate::dataflow) fn build_checked_expression_graph(
+/// Lower runtime text, specialising on its types or not, as its occurrence
+/// does. It refuses a previous value it would need to lift.
+pub(in crate::dataflow) fn build_runtime_text_graph(
     expr: CheckedExpr,
-) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(expr.as_ref(), true)
+    specialise: bool,
+) -> Result<UnboundEvaluationGraph, StreamProgramError> {
+    let mut previous = PreviousValues::refusing();
+    let graph = build_equation_graph(expr, specialise, &mut previous);
+    previous.check().map(|()| graph)
 }
 
-/// Lower an elaborated expression without specialising on its types, as
-/// `untimed` evaluation does. The types stay available to the `dynamic` and
-/// `defer` nodes, which check the text they are given.
-pub(in crate::dataflow) fn build_unspecialised_expression_graph(
+/// Lower an equation's expression, lifting into `previous` the previous
+/// values it reads where only some ticks run (see the
+/// [module documentation](self)). A graph that does not specialise on types
+/// is what `untimed` evaluation runs.
+pub(in crate::dataflow) fn build_equation_graph(
     expr: CheckedExpr,
+    specialise: bool,
+    previous: &mut PreviousValues,
 ) -> UnboundEvaluationGraph {
-    build_graph_from_cursor(expr.as_ref(), false)
-}
-
-fn build_graph_from_cursor(expr: CheckedExprRef<'_>, specialise: bool) -> UnboundEvaluationGraph {
-    let mut builder = EvaluationGraphBuilder::new(specialise);
-    let output = lower_expression(expr, &mut builder);
+    let mut builder = EvaluationGraphBuilder::new(specialise, Some(previous));
+    let output = lower_expression(expr.as_ref(), &mut builder);
     builder.finish(output)
 }
 
@@ -178,11 +346,13 @@ fn lower_expression_nodes(
         Ceil(arg) => lower_unary(builder, UnaryOperator::Ceiling, arg, result_kind),
         Round(arg) => lower_unary(builder, UnaryOperator::Round, arg, result_kind),
         If(cond, then_value, else_value) => {
+            let policy = expr.expr().if_policy();
             let cond = lower_expression(cond, builder);
-            let then_branch = lower_branch(then_value, builder.specialise);
-            let else_branch = lower_branch(else_value, builder.specialise);
+            let selective = builder.selective || policy == IfPolicy::Lazy;
+            let then_branch = builder.lower_nested(then_value, selective, []);
+            let else_branch = builder.lower_nested(else_value, selective, []);
             builder.push(UnboundOp::If {
-                policy: expr.expr().if_policy(),
+                policy,
                 cond,
                 then_branch,
                 else_branch,
@@ -190,6 +360,13 @@ fn lower_expression_nodes(
         }
         SIndex(input, offset) => {
             let input = lower_expression(input, builder);
+            if let UnboundRef::External(name) = &input
+                && builder.selective
+                && offset > 0
+                && let Some(lifted) = builder.lift_previous_value(name, offset, expr)
+            {
+                return lifted;
+            }
             builder.push(UnboundOp::Delay { input, offset })
         }
         Default(input, fallback) => {
@@ -347,7 +524,7 @@ fn lower_expression_nodes(
             expr.runtime_expression().clone(),
         ),
         Lambda(params, body) => {
-            let func = lower_function(params.clone(), body, builder.specialise);
+            let func = lower_function(params.clone(), body, builder);
             builder.push(UnboundOp::Function { func })
         }
         Apply(func, args) => {
@@ -355,7 +532,7 @@ fn lower_expression_nodes(
                 return value;
             }
             if let Lambda(params, body) = func.view() {
-                let function = lower_function(params.clone(), body, builder.specialise);
+                let function = lower_function(params.clone(), body, builder);
                 let args = lower_expressions(args, builder);
                 return builder.push(UnboundOp::DirectApply {
                     func: function,
@@ -408,11 +585,11 @@ fn lower_expression_nodes(
                 .iter()
                 .map(|arm| {
                     let guard = arm.guarded.then(|| {
-                        let guard = lower_arm(arm, children[place], builder.specialise);
+                        let guard = lower_arm(arm, children[place], builder);
                         place += 1;
                         guard
                     });
-                    let body = lower_arm(arm, children[place], builder.specialise);
+                    let body = lower_arm(arm, children[place], builder);
                     place += 1;
                     MatchArmProgram {
                         pattern: arm.pattern.clone(),
@@ -433,7 +610,7 @@ fn lower_expression_nodes(
                 pattern: pattern.clone(),
                 guarded: guard_expr.is_some(),
             };
-            let guard = guard_expr.map(|guard| lower_arm(&arm, guard, builder.specialise));
+            let guard = guard_expr.map(|guard| lower_arm(&arm, guard, builder));
             let arms = vec![
                 MatchArmProgram {
                     pattern: pattern.clone(),
@@ -536,7 +713,7 @@ fn lower_reconfigurable_expression(
 fn lower_function(
     params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: CheckedExprRef<'_>,
-    specialise: bool,
+    builder: &mut EvaluationGraphBuilder,
 ) -> UnboundFunction {
     let params_display = params
         .iter()
@@ -544,8 +721,10 @@ fn lower_function(
         .collect::<Vec<_>>()
         .join(", ");
     let display = format!("\\{} -> {}", params_display, body.expr()).into();
-    let params = params.into_iter().map(|(name, _)| name).collect();
-    let body = build_graph_from_cursor(body, specialise);
+    let params: EcoVec<VarName> = params.into_iter().map(|(name, _)| name).collect();
+    // A body runs when it is called, which is on the ticks its caller runs.
+    let selective = builder.selective;
+    let body = builder.lower_nested(body, selective, params.iter().cloned());
     UnboundFunction::new(params, body, display)
 }
 
@@ -569,7 +748,9 @@ fn try_lower_recursive_apply<'arena>(
         .skip(1)
         .map(|(name, _)| name.clone())
         .collect();
-    let mut body = build_graph_from_cursor(body, builder.specialise);
+    let selective = builder.selective;
+    let binds = params.iter().map(|(name, _)| name.clone());
+    let mut body = builder.lower_nested(body, selective, binds);
     specialize_recursive_self_calls(&mut body, self_name);
     let args = lower_expressions(args, builder);
     Some(lower_recursive_apply(

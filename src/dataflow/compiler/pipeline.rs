@@ -19,8 +19,10 @@ impl DataflowProgram {
         #[cfg(test)]
         DataflowProgram::record_root_compile(true);
         let sources = DebugSources::of(&specification);
-        Self::compile_specification(specification, build_checked_expression_graph)
-            .map(|program| program.with_debug_sources(sources))
+        Self::compile_specification(specification, |expr, lifted| {
+            build_equation_graph(expr, true, lifted)
+        })
+        .map(|program| program.with_debug_sources(sources))
     }
 
     /// Compile an elaborated specification with the evaluation strategy of
@@ -35,8 +37,10 @@ impl DataflowProgram {
                 #[cfg(test)]
                 DataflowProgram::record_root_compile(false);
                 let sources = DebugSources::of(&specification);
-                Self::compile_specification(specification, build_unspecialised_expression_graph)
-                    .map(|program| program.with_debug_sources(sources))
+                Self::compile_specification(specification, |expr, lifted| {
+                    build_equation_graph(expr, false, lifted)
+                })
+                .map(|program| program.with_debug_sources(sources))
             }
             _ => Self::compile_checked(specification),
         }
@@ -44,7 +48,7 @@ impl DataflowProgram {
 
     fn compile_specification<S>(
         specification: S,
-        build_graph: impl Fn(S::Expr) -> UnboundEvaluationGraph,
+        build_graph: impl Fn(S::Expr, &mut PreviousValues) -> UnboundEvaluationGraph,
     ) -> Result<Self, DataflowCompilationError>
     where
         S: Specification,
@@ -58,9 +62,12 @@ impl DataflowProgram {
         let output_variables = specification.output_vars_in_order();
         let stream_variables = specification.stream_vars_in_order();
         let type_annotations = specification.type_annotations();
-        let dataflow = LoweredDataflow::build(&input_variables, &stream_variables, |variable| {
-            specification.var_expr(variable).map(&build_graph)
-        })?;
+        let dataflow =
+            LoweredDataflow::build(&input_variables, &stream_variables, |variable, lifted| {
+                specification
+                    .var_expr(variable)
+                    .map(|expr| build_graph(expr, lifted))
+            })?;
         dataflow.into_program(input_variables, output_variables, type_annotations)
     }
 }
@@ -102,6 +109,8 @@ struct LoweredDataflow {
     graphs: BTreeMap<VarName, UnboundEvaluationGraph>,
     static_dependencies: NamedDependencies,
     stream_order: Vec<VarName>,
+    /// Each stream lifted out of a lazy branch, with the stream it delays.
+    lifted_sources: Vec<(VarName, VarName)>,
 }
 
 struct OrderedDataflow {
@@ -118,24 +127,40 @@ impl LoweredDataflow {
     fn build(
         input_variables: &[VarName],
         stream_variables: &[VarName],
-        mut build_graph: impl FnMut(&VarName) -> Option<UnboundEvaluationGraph>,
+        mut build_graph: impl FnMut(&VarName, &mut PreviousValues) -> Option<UnboundEvaluationGraph>,
     ) -> Result<Self, DataflowCompilationError> {
         let stream_variable_set = stream_variables.iter().cloned().collect::<BTreeSet<_>>();
-        let available_variables = input_variables
-            .iter()
-            .chain(stream_variables.iter())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let mut graphs = BTreeMap::new();
-        let mut static_dependencies = NamedDependencies::new();
+        let mut lifted = PreviousValues::lifting();
+        let mut lowered = Vec::with_capacity(stream_variables.len());
         for variable in stream_variables {
-            let mut graph = build_graph(variable)
+            let mut graph = build_graph(variable, &mut lifted)
                 .ok_or_else(|| DataflowCompilationError::MissingExpression(variable.clone()))?;
+            lifted.check()?;
             graph.resolve_automatic_reconfigurable_scopes(
                 variable,
                 input_variables,
                 &stream_variable_set,
             );
+            lowered.push((variable.clone(), graph));
+        }
+        // Previous values lifted out of lazy branches follow the declared
+        // streams, as ordinary streams that the branches read.
+        let mut stream_order = stream_variables.to_vec();
+        let mut lifted_sources = Vec::new();
+        for stream in lifted.into_streams() {
+            stream_order.push(stream.name.clone());
+            lifted_sources.push((stream.name.clone(), stream.source));
+            lowered.push((stream.name, stream.graph));
+        }
+        let available_variables = input_variables
+            .iter()
+            .chain(stream_order.iter())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut graphs = BTreeMap::new();
+        let mut static_dependencies = NamedDependencies::new();
+        for (variable, graph) in lowered {
+            let variable = &variable;
             let unavailable_variables = graph
                 .free_vars(Some(variable))
                 .into_iter()
@@ -153,7 +178,8 @@ impl LoweredDataflow {
         Ok(Self {
             graphs,
             static_dependencies,
-            stream_order: stream_variables.to_vec(),
+            stream_order,
+            lifted_sources,
         })
     }
 
@@ -162,6 +188,7 @@ impl LoweredDataflow {
             graphs,
             static_dependencies,
             stream_order,
+            lifted_sources: _,
         } = self;
         let stream_variables = stream_order.iter().cloned().collect::<BTreeSet<_>>();
         let ordered_names = NamedDependencyGraph::from_dependencies(static_dependencies.clone())
@@ -189,8 +216,14 @@ impl LoweredDataflow {
         self,
         input_variables: Vec<VarName>,
         output_variables: Vec<VarName>,
-        type_annotations: BTreeMap<VarName, StreamType>,
+        mut type_annotations: BTreeMap<VarName, StreamType>,
     ) -> Result<DataflowProgram, DataflowCompilationError> {
+        // A lifted `x[n]` has the type of `x`; sources precede their lifts.
+        for (lifted, source) in &self.lifted_sources {
+            if let Some(typ) = type_annotations.get(source).cloned() {
+                type_annotations.insert(lifted.clone(), typ);
+            }
+        }
         let OrderedDataflow {
             streams,
             static_dependencies,

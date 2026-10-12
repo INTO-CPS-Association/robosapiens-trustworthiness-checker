@@ -362,11 +362,8 @@ fn compile_dynamic_expression(
                 unreachable!("dataflow checks runtime source before runtime admission")
             }
         })?;
-    let mut graph = if spec.specialise {
-        build_checked_expression_graph(checked)
-    } else {
-        build_unspecialised_expression_graph(checked)
-    };
+    let mut graph = build_runtime_text_graph(checked, spec.specialise)
+        .map_err(DataflowEvaluationError::InvalidDynamicProgram)?;
     let allowed_vars = spec.scope.allowed_variables();
     graph.restrict_reconfigurable_scopes(allowed_vars);
     let free_vars = graph.free_vars(None);

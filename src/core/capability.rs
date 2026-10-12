@@ -22,8 +22,9 @@ pub enum RuntimeCapability {
     TaggedUnions,
     /// Selecting a `match` arm and binding what its pattern matched.
     PatternMatching,
-    /// An `if` under `lazy_if`, which runs only its selected branch, on a
-    /// timeline of its own.
+    /// An `if` under `lazy_if`, which runs only its selected branch. What a
+    /// branch computes has a timeline of its own; a previous value of a
+    /// named stream read inside it is still that stream's.
     LazyIf,
     /// A stream function instance. Its generated streams are ordinary, but a
     /// runtime admits instances only where their behaviour has been checked
