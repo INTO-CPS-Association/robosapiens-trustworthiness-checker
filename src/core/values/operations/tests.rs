@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, eco_vec};
 
 use super::*;
-use crate::core::{BinaryOperator, StreamType, UnaryOperator};
+use crate::core::{BinaryOperator, StreamType, UnaryOperator, ValueMap};
 use crate::lang::dsrv::test_support::arb_int_power_case;
 use proptest::prelude::*;
 
@@ -304,7 +304,7 @@ fn inequality_complements_equality_for_special_and_nested_values() {
         Value::Unit,
         Value::List(eco_vec![Value::Int(1), Value::Bool(false)]),
         Value::Tuple(eco_vec![Value::Str("x".into()), Value::Unit]),
-        Value::Map(map),
+        Value::Map(map.into()),
         Value::NoVal,
         Value::Deferred,
     ];
@@ -345,7 +345,7 @@ fn arb_supported_value() -> BoxedStrategy<Value> {
             ("[a-z]{1,3}", inner.clone()).prop_map(|(key, value)| {
                 let mut map = BTreeMap::new();
                 map.insert(key.into(), value);
-                Value::Map(map)
+                Value::Map(map.into())
             }),
         ]
     })
@@ -482,12 +482,12 @@ fn list_failures_are_structured() {
 #[test]
 fn map_operations_are_copy_on_write_and_report_missing_keys() {
     let key = EcoString::from("key");
-    let map = Value::Map(BTreeMap::new());
+    let map = Value::Map(ValueMap::new());
     let inserted = map_insert(map, &key, Value::Int(3)).unwrap();
     assert_eq!(map_get(inserted.clone(), &key), Ok(Value::Int(3)));
     assert_eq!(map_has_key(inserted, &key), Ok(Value::Bool(true)));
     assert_eq!(
-        map_get(Value::Map(BTreeMap::new()), &key),
+        map_get(Value::Map(ValueMap::new()), &key),
         Err(ValueOpError::MissingMapKey(key))
     );
 }

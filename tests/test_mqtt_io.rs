@@ -25,6 +25,7 @@ mod integration_tests {
         TickSender, expect_events_serially, tick_stream, with_timeout, with_timeout_res,
     };
     use tracing::info;
+    use trustworthiness_checker::ValueMap;
     use trustworthiness_checker::async_test;
     use trustworthiness_checker::core::{RuntimeSpec, Semantics, Specification};
     use trustworthiness_checker::dsrv_fixtures::spec_simple_add_monitor;
@@ -696,12 +697,12 @@ mod integration_tests {
         executor.spawn(monitor.run()).detach();
 
         let payloads = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("extra".into(), Value::Int(99)),
                 ("x".into(), Value::Int(10)),
                 ("y".into(), Value::Int(20)),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("extra".into(), Value::Int(100)),
                 ("x".into(), Value::Int(30)),
                 ("y".into(), Value::Int(40)),
@@ -758,12 +759,12 @@ mod integration_tests {
         assert_eq!(
             echoed,
             vec![
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("extra".into(), Value::Int(99)),
                     ("x".into(), Value::Int(10)),
                     ("y".into(), Value::Int(20)),
                 ])),
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("extra".into(), Value::Int(100)),
                     ("x".into(), Value::Int(30)),
                     ("y".into(), Value::Int(40)),

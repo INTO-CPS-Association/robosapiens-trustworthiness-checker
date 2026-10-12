@@ -106,8 +106,8 @@ pub fn val_or_container(s: &mut &str) -> Result<Value> {
         alt((
             val,
             value_list.map(Value::List),
-            value_map.map(Value::Map),
-            value_object_literal.map(Value::Map),
+            value_map.map(Value::from),
+            value_object_literal.map(Value::from),
         )),
         whitespace,
     )

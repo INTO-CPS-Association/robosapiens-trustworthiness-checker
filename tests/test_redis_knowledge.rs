@@ -25,7 +25,7 @@ use trustworthiness_checker::io::{
 };
 
 use trustworthiness_checker::runtime::builder::GeneralRuntimeBuilder;
-use trustworthiness_checker::{InputBatch, InputUpdate, Runtime, Value, VarName};
+use trustworthiness_checker::{InputBatch, InputUpdate, Runtime, Value, ValueMap, VarName};
 
 fn key(prefix: &str, name: &str) -> String {
     format!("tc:redis-knowledge:{prefix}:{name}")
@@ -158,7 +158,7 @@ async fn redis_knowledge_initial_snapshot_is_ordered_singleton_ticks(
     assert_eq!(values[&VarName::new("knowledge.missing")], Value::NoVal);
     assert_eq!(
         values[&VarName::new("knowledge.mode")],
-        Value::Map(BTreeMap::from([(
+        Value::Map(ValueMap::from([(
             "mode".into(),
             Value::Str("active".into())
         ),]))

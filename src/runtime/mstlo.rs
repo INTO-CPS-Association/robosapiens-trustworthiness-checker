@@ -19,7 +19,7 @@ use mstlo::{
 use smol::LocalExecutor;
 
 use crate::{
-    ExecutionPolicy, InputStream, Runtime, Value, VarName,
+    ExecutionPolicy, InputStream, Runtime, Value, ValueMap, VarName,
     core::{
         FileInputValue, JsonStreamValue, OutputBatch, OutputError, OutputUpdate, OutputWriter,
         StreamData, input,
@@ -646,13 +646,13 @@ impl MstloStreamValue for Value {
         let value = match value.into_mstlo_output() {
             MstloOutput::Quantitative(value) => Value::Float(value),
             MstloOutput::Qualitative(value) => Value::Bool(value),
-            MstloOutput::RobustnessInterval(lower, upper) => Value::Map(BTreeMap::from([
+            MstloOutput::RobustnessInterval(lower, upper) => Value::Map(ValueMap::from([
                 ("lower".into(), Value::Float(lower)),
                 ("upper".into(), Value::Float(upper)),
             ])),
         };
 
-        Ok(Value::Map(BTreeMap::from([
+        Ok(Value::Map(ValueMap::from([
             ("time".into(), Value::Int(time)),
             ("value".into(), value),
         ])))
@@ -708,13 +708,13 @@ impl TimedValue<MstloValue> {
         let value = match self.value {
             MstloValue::Float(value) => Value::Float(value),
             MstloValue::Bool(value) => Value::Bool(value),
-            MstloValue::RobustnessInterval(lower, upper) => Value::Map(BTreeMap::from([
+            MstloValue::RobustnessInterval(lower, upper) => Value::Map(ValueMap::from([
                 ("lower".into(), Value::Float(lower)),
                 ("upper".into(), Value::Float(upper)),
             ])),
             MstloValue::NoVal => unreachable!("NoVal was handled above"),
         };
-        Ok(Value::Map(BTreeMap::from([
+        Ok(Value::Map(ValueMap::from([
             ("time".into(), Value::Int(time)),
             ("value".into(), value),
         ])))
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     fn timed_value(time_ms: i64, value: f64) -> Value {
-        Value::Map(BTreeMap::from([
+        Value::Map(ValueMap::from([
             ("time".into(), Value::Int(time_ms)),
             ("value".into(), Value::Float(value)),
         ]))
@@ -1472,7 +1472,7 @@ mod tests {
         let output = MstloTimedValue::new(Duration::from_millis(20), MstloValue::Bool(true));
         assert_eq!(
             output.try_into_value().unwrap(),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("time".into(), Value::Int(20)),
                 ("value".into(), Value::Bool(true)),
             ]))

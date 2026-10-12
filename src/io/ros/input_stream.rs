@@ -20,7 +20,7 @@ use super::{
 use crate::core::empty_input_stream;
 use crate::io::ReconfigurationRequest;
 use crate::utils::cancellation_token::CancellationToken;
-use crate::{InputBatch, InputStream, LocalStream, Value, VarName};
+use crate::{InputBatch, InputStream, LocalStream, Value, ValueMap, VarName};
 
 pub struct RosInputControl {
     cancellation: CancellationToken,
@@ -455,7 +455,7 @@ impl RosMsgType {
             RosMsgType::Pose2D => Box::pin(
                 node.subscribe::<r2r::geometry_msgs::msg::Pose2D>(topic, qos)?
                     .map(|val| {
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("x".into(), Value::Float(val.x)),
                             ("y".into(), Value::Float(val.y)),
                             ("theta".into(), Value::Float(val.theta)),

@@ -351,8 +351,8 @@ pub fn check_value_conformance(
 mod tests {
     use super::*;
     use crate::core::JsonStreamValue;
+    use crate::core::ValueMap;
     use crate::lang::dsrv::type_checker::TCType;
-    use std::collections::BTreeMap;
 
     fn schema() -> ClosedUnion<StreamType> {
         ClosedUnion::new([
@@ -472,7 +472,7 @@ mod tests {
             assert!(serde_json::from_str::<Value>(raw).is_err(), "{raw}");
             assert!(Value::decode_json(raw.as_bytes()).is_err(), "{raw}");
         }
-        let collision = Value::Map(BTreeMap::from([("$tag".into(), Value::Str("X".into()))]));
+        let collision = Value::Map(ValueMap::from([("$tag".into(), Value::Str("X".into()))]));
         assert!(collision.encode_json().is_err());
         let nested: Value = UnionValue::new("Nested", Some(collision)).into();
         assert!(nested.encode_json().is_err());
@@ -531,13 +531,13 @@ mod tests {
     /// nested inside a container or union payload.
     #[test]
     fn any_accepts_unknown_concrete_shapes_but_rejects_embedded_markers() {
-        let concrete = Value::Map(BTreeMap::from([(
+        let concrete = Value::Map(ValueMap::from([(
             "nested".into(),
             Value::List(vec![Value::Int(1)].into()),
         )]));
         assert!(check_value_conformance(&concrete, &StreamType::Any).is_ok());
 
-        let marker = Value::Map(BTreeMap::from([(
+        let marker = Value::Map(ValueMap::from([(
             "nested".into(),
             Value::List(vec![Value::Deferred].into()),
         )]));
@@ -576,7 +576,7 @@ mod tests {
             )),
         )])
         .unwrap();
-        let missing = UnionValue::new("Record", Some(Value::Map(BTreeMap::new())));
+        let missing = UnionValue::new("Record", Some(Value::Map(ValueMap::new())));
         let error = check_union(&missing, &schema).unwrap_err();
         assert_eq!(
             error.cause,
@@ -592,7 +592,7 @@ mod tests {
 
         let extra = UnionValue::new(
             "Record",
-            Some(Value::Map(BTreeMap::from([
+            Some(Value::Map(ValueMap::from([
                 ("count".into(), Value::Int(1)),
                 ("unexpected".into(), Value::Bool(true)),
             ]))),
@@ -608,6 +608,32 @@ mod tests {
                 UnionPathSegment::Payload,
                 UnionPathSegment::Field("unexpected".into())
             ]
+        );
+    }
+
+    // A struct value shared by several payloads conforms on its own terms: a
+    // copy that gains a field is checked as that copy, and the original keeps
+    // conforming to its closed struct type.
+    #[test]
+    fn an_updated_copy_of_a_struct_is_checked_independently_of_the_original() {
+        let schema = StreamType::Struct(vec![("count".into(), StreamType::Int)].into(), false);
+        let original = ValueMap::from([("count".into(), Value::Int(1))]);
+        let mut updated = original.clone();
+        updated.insert("unexpected".into(), Value::Bool(true));
+
+        assert_eq!(
+            check_value_conformance(&Value::Map(original.clone()), &schema),
+            Ok(())
+        );
+        assert_eq!(
+            check_value_conformance(&Value::Map(updated), &schema)
+                .unwrap_err()
+                .cause,
+            UnionConformanceCause::ExtraField("unexpected".into())
+        );
+        assert_eq!(
+            crate::core::values::operations::map_get(Value::Map(original), &"count".into()),
+            Ok(Value::Int(1))
         );
     }
 }

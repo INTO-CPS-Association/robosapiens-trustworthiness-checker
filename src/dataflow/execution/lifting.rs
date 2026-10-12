@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::core::values::operations as value_operations;
-use crate::core::{BinaryOperator, PartialMarker, UnaryOperator};
+use crate::core::{BinaryOperator, PartialMarker, UnaryOperator, ValueMap};
 
 pub(in crate::dataflow) fn expect_value(
     result: Result<Value, value_operations::ValueOpError>,
@@ -48,7 +48,7 @@ pub(in crate::dataflow) fn lift_many(
 
 pub(in crate::dataflow) fn lift_map_values(
     values: Vec<(EcoString, Value)>,
-    f: impl FnOnce(BTreeMap<EcoString, Value>) -> Value,
+    f: impl FnOnce(ValueMap) -> Value,
 ) -> Value {
     if let Some(value) = propagated_special(values.iter().map(|(_, value)| value)) {
         value

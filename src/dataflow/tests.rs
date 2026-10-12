@@ -18,6 +18,7 @@ use crate::lang::dsrv::parser::parse_expr as parse_dsrv_expr;
 use crate::lang::dsrv::test_support::{arb_boolean_dsrv_spec, arb_dsrv_spec};
 use ::core::cfg_select;
 
+use crate::core::ValueMap;
 use crate::runtime::asynchronous::{AsyncRuntimeBuilder, Context};
 use crate::runtime::builder::{RuntimeBuilder, SemiSyncValueConfig};
 use crate::runtime::dataflow::DataflowRuntimeBuilder;
@@ -2431,13 +2432,203 @@ async fn dataflow_matches_map_operations(executor: Rc<LocalExecutor<'static>>) {
             (
                 "m",
                 vec![
-                    Value::Map(BTreeMap::from([("a".into(), Value::Int(1))])),
-                    Value::Map(BTreeMap::from([("a".into(), Value::Int(2))])),
+                    Value::Map(ValueMap::from([("a".into(), Value::Int(1))])),
+                    Value::Map(ValueMap::from([("a".into(), Value::Int(2))])),
                 ],
             ),
         ],
     )
     .await;
+}
+
+fn int_map(entries: &[(&str, i64)]) -> Value {
+    Value::Map(
+        entries
+            .iter()
+            .map(|(key, value)| (EcoString::from(*key), Value::Int(*value)))
+            .collect(),
+    )
+}
+
+fn output_column(rows: &[BTreeMap<VarName, Value>], name: &str) -> Vec<Value> {
+    rows.iter()
+        .map(|row| row[&VarName::new(name)].clone())
+        .collect()
+}
+
+// One map stream fans out to readers and to updates. Each update yields a new
+// map; the readers, the passthrough output and the retained operand of every
+// other consumer keep the map they were given. An absent map reuses the last
+// present one; a deferred map defers every consumer and is not retained.
+#[test]
+fn dataflow_map_fanout_updates_leave_shared_operands_unchanged() {
+    let spec = elaborated(
+        "in m: Map<Int>\n\
+         in x: Int\n\
+         out same: Map<Int>\n\
+         out a: Int\n\
+         out has_z: Bool\n\
+         out inserted: Map<Int>\n\
+         out removed: Map<Int>\n\
+         same = m\n\
+         a = Map.get(m, \"a\")\n\
+         has_z = Map.has_key(m, \"z\")\n\
+         inserted = Map.insert(m, \"z\", x)\n\
+         removed = Map.remove(m, \"a\")",
+    );
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("m"),
+            vec![
+                int_map(&[("a", 1), ("b", 2)]),
+                Value::NoVal,
+                Value::Deferred,
+                int_map(&[("a", 3)]),
+                Value::NoVal,
+            ],
+        ),
+        (
+            VarName::new("x"),
+            vec![10.into(), 20.into(), 30.into(), Value::NoVal, 50.into()],
+        ),
+    ]);
+
+    let rows = eval_dataflow_spec(spec, inputs);
+
+    assert_eq!(
+        output_column(&rows, "same"),
+        vec![
+            int_map(&[("a", 1), ("b", 2)]),
+            Value::NoVal,
+            Value::Deferred,
+            int_map(&[("a", 3)]),
+            Value::NoVal,
+        ]
+    );
+    assert_eq!(
+        output_column(&rows, "a"),
+        vec![1.into(), 1.into(), Value::Deferred, 3.into(), 3.into()]
+    );
+    assert_eq!(
+        output_column(&rows, "has_z"),
+        vec![
+            false.into(),
+            false.into(),
+            Value::Deferred,
+            false.into(),
+            false.into()
+        ]
+    );
+    assert_eq!(
+        output_column(&rows, "inserted"),
+        vec![
+            int_map(&[("a", 1), ("b", 2), ("z", 10)]),
+            int_map(&[("a", 1), ("b", 2), ("z", 20)]),
+            Value::Deferred,
+            int_map(&[("a", 3), ("z", 30)]),
+            int_map(&[("a", 3), ("z", 50)]),
+        ]
+    );
+    assert_eq!(
+        output_column(&rows, "removed"),
+        vec![
+            int_map(&[("b", 2)]),
+            int_map(&[("b", 2)]),
+            Value::Deferred,
+            int_map(&[]),
+            int_map(&[]),
+        ]
+    );
+}
+
+// A map read from history is the value committed at that tick: updating the
+// read value, on this tick or a later one, does not change what history holds.
+#[test]
+fn dataflow_map_history_reads_are_unaffected_by_updates() {
+    let spec = elaborated(
+        "in m: Map<Int>\n\
+         in x: Int\n\
+         out previous: Map<Int>\n\
+         out grown: Map<Int>\n\
+         previous = default(m[1], Map(\"a\": 0))\n\
+         grown = Map.insert(default(m[1], Map(\"a\": 0)), \"seen\", x)",
+    );
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("m"),
+            vec![
+                int_map(&[("a", 1)]),
+                int_map(&[("a", 2)]),
+                int_map(&[("a", 3)]),
+            ],
+        ),
+        (VarName::new("x"), vec![10.into(), 20.into(), 30.into()]),
+    ]);
+
+    let rows = eval_dataflow_spec(spec, inputs);
+
+    assert_eq!(
+        output_column(&rows, "previous"),
+        vec![
+            int_map(&[("a", 0)]),
+            int_map(&[("a", 1)]),
+            int_map(&[("a", 2)])
+        ]
+    );
+    assert_eq!(
+        output_column(&rows, "grown"),
+        vec![
+            int_map(&[("a", 0), ("seen", 10)]),
+            int_map(&[("a", 1), ("seen", 20)]),
+            int_map(&[("a", 2), ("seen", 30)]),
+        ]
+    );
+}
+
+// An eager `if` also runs its unselected branch. When that branch fails it is
+// rolled back, including the map its update retained before the failure, so a
+// later tick that selects it sees the map retained before the failed tick.
+#[test]
+fn dataflow_failed_unselected_branch_rolls_back_retained_map() {
+    let spec = elaborated(
+        "use experimental::pattern_matching\n\
+         in flag: Bool\n\
+         in m: Map<Int>\n\
+         in k: Int\n\
+         in guard\n\
+         in source: Str\n\
+         out z: Int\n\
+         z = dynamic(source: Int) + (if flag then 0 \
+             else Map.get(Map.insert(m, \"k\", k), \"a\") + match(k) { _ if guard -> 0, _ -> 0 })",
+    );
+    let inputs = BTreeMap::from([
+        (
+            VarName::new("flag"),
+            vec![false.into(), true.into(), false.into()],
+        ),
+        (
+            VarName::new("m"),
+            vec![int_map(&[("a", 1)]), int_map(&[("a", 5)]), Value::NoVal],
+        ),
+        (VarName::new("k"), vec![1.into(), 2.into(), 3.into()]),
+        // A non-Bool guard fails the unselected branch on the second tick.
+        (
+            VarName::new("guard"),
+            vec![true.into(), 7.into(), true.into()],
+        ),
+        // Dynamic evaluation is what makes this stream's evaluation fallible.
+        (
+            VarName::new("source"),
+            vec![Value::Str("0".into()), Value::NoVal, Value::NoVal],
+        ),
+    ]);
+
+    let rows = eval_dataflow_spec(spec, inputs);
+
+    assert_eq!(
+        output_column(&rows, "z"),
+        vec![1.into(), 0.into(), 1.into()]
+    );
 }
 
 #[apply(async_test)]
@@ -3516,10 +3707,10 @@ async fn dataflow_semisync_map_operator_lifting_parity(executor: Rc<LocalExecuto
                 (
                     VarName::new("m"),
                     vec![
-                        Value::Map(BTreeMap::from([("a".into(), 1.into())])),
+                        Value::Map(ValueMap::from([("a".into(), 1.into())])),
                         Value::NoVal,
-                        Value::Map(BTreeMap::from([("a".into(), 3.into())])),
-                        Value::Map(BTreeMap::from([("a".into(), 4.into())])),
+                        Value::Map(ValueMap::from([("a".into(), 3.into())])),
+                        Value::Map(ValueMap::from([("a".into(), 4.into())])),
                     ],
                 ),
                 (
@@ -3547,10 +3738,10 @@ async fn dataflow_semisync_map_operator_lifting_parity(executor: Rc<LocalExecuto
             (
                 VarName::new("m"),
                 vec![
-                    Value::Map(BTreeMap::from([("a".into(), 1.into())])),
+                    Value::Map(ValueMap::from([("a".into(), 1.into())])),
                     Value::NoVal,
-                    Value::Map(BTreeMap::from([("a".into(), 3.into())])),
-                    Value::Map(BTreeMap::from([("a".into(), 4.into())])),
+                    Value::Map(ValueMap::from([("a".into(), 3.into())])),
+                    Value::Map(ValueMap::from([("a".into(), 4.into())])),
                 ],
             ),
             (
@@ -3654,9 +3845,9 @@ async fn dataflow_semisync_map_predicate_lifting_parity(executor: Rc<LocalExecut
             (
                 VarName::new("m"),
                 vec![
-                    Value::Map(BTreeMap::from([("a".into(), 1.into())])),
+                    Value::Map(ValueMap::from([("a".into(), 1.into())])),
                     Value::NoVal,
-                    Value::Map(BTreeMap::new()),
+                    Value::Map(ValueMap::new()),
                     Value::NoVal,
                 ],
             ),

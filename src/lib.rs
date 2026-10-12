@@ -8,7 +8,7 @@ pub use core::{
     InputBinding, InputError, InputStream, InputTick, InputUpdate, InputUpdateRef, IoErrorKind,
     JsonStreamValue, LocalStream, OutputBatch, OutputBinding, OutputError, OutputInterface,
     OutputRole, OutputUpdate, OutputWriter, RosStreamValue, Route, Runtime, Specification, Value,
-    VarName,
+    ValueMap, VarName,
 };
 pub mod cli;
 pub mod dataflow;

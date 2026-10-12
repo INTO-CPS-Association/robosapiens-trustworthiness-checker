@@ -370,7 +370,7 @@ impl IndexMut<HistoryId> for HistoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use crate::core::ValueMap;
 
     #[test]
     fn ordering_and_wraparound_are_newest_first() {
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn entry_transfer_is_destructive_and_preserves_nontrivial_values() {
-        let value = Value::Map(BTreeMap::from([(
+        let value = Value::Map(ValueMap::from([(
             "payload".into(),
             Value::List(vec![Value::Int(9), Value::NoVal].into()),
         )]));
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(source.read(unrelated_id, 1), Value::Int(22));
         assert_eq!(
             destination.read(destination_id, 1),
-            Value::Map(BTreeMap::from([(
+            Value::Map(ValueMap::from([(
                 "payload".into(),
                 Value::List(vec![Value::Int(9), Value::NoVal].into()),
             )]))
