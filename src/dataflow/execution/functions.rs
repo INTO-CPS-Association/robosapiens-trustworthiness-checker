@@ -2,6 +2,8 @@ use super::super::ir::*;
 use super::super::*;
 use super::evaluator::{EvaluationEnvironment, Evaluator};
 use super::lifting::propagated_special;
+use crate::core::values::operations::ListFilter;
+use ecow::eco_vec;
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
@@ -248,14 +250,16 @@ pub(in crate::dataflow) fn evaluate_list_map(
         (Value::Function(function), _) if function.requires_call_site_instance() => {
             panic!("temporal functions are not supported by List.map")
         }
-        (Value::Function(function), Value::List(values)) => Ok(Value::List(
-            values
-                .into_iter()
-                .map(|value| {
-                    call_runtime_function_once(function.clone(), EcoVec::from(vec![value]))
-                })
-                .collect::<Result<_, _>>()?,
-        )),
+        (Value::Function(function), Value::List(values)) => {
+            let mut mapped = EcoVec::with_capacity(values.len());
+            for value in values {
+                mapped.push(call_runtime_function_once(
+                    function.clone(),
+                    eco_vec![value],
+                )?);
+            }
+            Ok(Value::List(mapped))
+        }
         (func, list) => panic!(
             "List.map requires a function and list, got {} and {}",
             func, list
@@ -275,18 +279,16 @@ pub(in crate::dataflow) fn evaluate_list_filter(
             panic!("temporal functions are not supported by List.filter")
         }
         (Value::Function(function), Value::List(values)) => {
-            let mut filtered = EcoVec::new();
-            for value in values {
-                match call_runtime_function_once(
-                    function.clone(),
-                    EcoVec::from(vec![value.clone()]),
-                )? {
-                    Value::Bool(true) => filtered.push(value),
-                    Value::Bool(false) => {}
-                    other => panic!("List.filter returned non-bool value {}", other),
-                }
+            let mut filter = ListFilter::new(values);
+            while let Some(value) = filter.pending() {
+                let keep =
+                    match call_runtime_function_once(function.clone(), eco_vec![value.clone()])? {
+                        Value::Bool(keep) => keep,
+                        other => panic!("List.filter returned non-bool value {}", other),
+                    };
+                filter.decide(keep);
             }
-            Ok(Value::List(filtered))
+            Ok(Value::List(filter.finish()))
         }
         (func, list) => panic!(
             "List.filter requires a function and list, got {} and {}",
@@ -309,7 +311,7 @@ pub(in crate::dataflow) fn evaluate_list_fold(
         }
         (Value::Function(function), mut acc, Value::List(values)) => {
             for value in values {
-                acc = call_runtime_function_once(function.clone(), EcoVec::from(vec![acc, value]))?;
+                acc = call_runtime_function_once(function.clone(), eco_vec![acc, value])?;
             }
             Ok(acc)
         }
@@ -421,4 +423,147 @@ fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
     };
     *slot.borrow_mut() = Some(runtime_function.clone());
     Value::Function(runtime_function)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    type Calls = Rc<RefCell<Vec<EcoVec<Value>>>>;
+
+    /// A function that records its arguments and returns `answers` in call order.
+    fn recording(answers: impl IntoIterator<Item = anyhow::Result<Value>>) -> (Value, Calls) {
+        let answers = RefCell::new(answers.into_iter().collect::<VecDeque<_>>());
+        let calls = Calls::default();
+        let recorded = Rc::clone(&calls);
+        let function = RuntimeFunction::native_value("recording", move |args| {
+            recorded.borrow_mut().push(args);
+            answers
+                .borrow_mut()
+                .pop_front()
+                .expect("the function was called more often than expected")
+        });
+        (Value::Function(function), calls)
+    }
+
+    fn ints(values: impl IntoIterator<Item = i64>) -> EcoVec<Value> {
+        values.into_iter().map(Value::Int).collect()
+    }
+
+    fn single_arguments(values: impl IntoIterator<Item = i64>) -> Vec<EcoVec<Value>> {
+        values
+            .into_iter()
+            .map(|value| eco_vec![Value::Int(value)])
+            .collect()
+    }
+
+    #[test]
+    fn list_filter_calls_every_predicate_in_order_whatever_it_keeps() {
+        for (answers, kept) in [
+            ([true, true, true], vec![1, 2, 3]),
+            ([false, false, false], vec![]),
+            ([true, false, true], vec![1, 3]),
+            ([false, true, true], vec![2, 3]),
+        ] {
+            for shared in [false, true] {
+                let (predicate, calls) = recording(answers.map(|keep| Ok(Value::Bool(keep))));
+                let retained = ints([1, 2, 3]);
+                let list = if shared {
+                    retained.clone()
+                } else {
+                    ints([1, 2, 3])
+                };
+                assert_eq!(
+                    evaluate_list_filter(predicate, Value::List(list)).unwrap(),
+                    Value::List(ints(kept.clone()))
+                );
+                assert_eq!(*calls.borrow(), single_arguments([1, 2, 3]));
+                assert_eq!(retained, ints([1, 2, 3]));
+            }
+        }
+    }
+
+    #[test]
+    fn list_callbacks_stop_at_the_first_failing_call() {
+        let (predicate, calls) = recording([
+            Ok(Value::Bool(true)),
+            Err(anyhow::anyhow!("predicate failed")),
+        ]);
+        assert!(matches!(
+            evaluate_list_filter(predicate, Value::List(ints([1, 2, 3]))),
+            Err(DataflowEvaluationError::FunctionApplication(_))
+        ));
+        assert_eq!(*calls.borrow(), single_arguments([1, 2]));
+
+        let (function, calls) = recording([Ok(Value::Int(10)), Err(anyhow::anyhow!("failed"))]);
+        assert!(matches!(
+            evaluate_list_map(function, Value::List(ints([1, 2, 3]))),
+            Err(DataflowEvaluationError::FunctionApplication(_))
+        ));
+        assert_eq!(*calls.borrow(), single_arguments([1, 2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "List.filter returned non-bool value")]
+    fn list_filter_rejects_a_non_bool_predicate_result() {
+        let (predicate, _) = recording([Ok(Value::Bool(true)), Ok(Value::NoVal)]);
+        let _ = evaluate_list_filter(predicate, Value::List(ints([1, 2, 3])));
+    }
+
+    #[test]
+    fn list_map_and_fold_call_in_order() {
+        let (function, calls) = recording([Ok(Value::Int(10)), Ok(Value::Int(20))]);
+        let retained = ints([1, 2]);
+        assert_eq!(
+            evaluate_list_map(function, Value::List(retained.clone())).unwrap(),
+            Value::List(ints([10, 20]))
+        );
+        assert_eq!(*calls.borrow(), single_arguments([1, 2]));
+        assert_eq!(retained, ints([1, 2]));
+
+        let (function, calls) = recording([Ok(Value::Int(1)), Ok(Value::Int(3))]);
+        assert_eq!(
+            evaluate_list_fold(function, Value::Int(0), Value::List(ints([1, 2]))).unwrap(),
+            Value::Int(3)
+        );
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                eco_vec![Value::Int(0), Value::Int(1)],
+                eco_vec![Value::Int(1), Value::Int(2)]
+            ]
+        );
+    }
+
+    #[test]
+    fn list_callbacks_propagate_partial_operands_without_calling() {
+        for (func_is_marker, list, expected) in [
+            (false, Value::NoVal, Value::NoVal),
+            (false, Value::Deferred, Value::Deferred),
+            (true, Value::List(ints([1])), Value::NoVal),
+            // Absence takes precedence over deferral.
+            (true, Value::Deferred, Value::NoVal),
+        ] {
+            let (function, calls) = recording([]);
+            let func = if func_is_marker {
+                Value::NoVal
+            } else {
+                function
+            };
+            assert_eq!(
+                evaluate_list_filter(func.clone(), list.clone()).unwrap(),
+                expected
+            );
+            assert_eq!(
+                evaluate_list_map(func.clone(), list.clone()).unwrap(),
+                expected
+            );
+            assert_eq!(
+                evaluate_list_fold(func, Value::Int(0), list).unwrap(),
+                expected
+            );
+            assert!(calls.borrow().is_empty());
+        }
+    }
 }

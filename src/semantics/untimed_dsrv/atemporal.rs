@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use ecow::EcoVec;
 
 use crate::VarName;
-use crate::core::values::operations as value_operations;
+use crate::core::values::operations::{self as value_operations, ListFilter};
 use crate::core::{BinaryOperator, PartialMarker, UnaryOperator, Value};
 use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::{ExprRef, ExprView};
@@ -368,12 +368,13 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
             apply_function(function, arguments, environment)
         }
         LMap(function, list) => match child(list)? {
-            Value::List(values) => Ok(Value::List(
-                values
-                    .into_iter()
-                    .map(|value| apply_function(function, vec![value], environment))
-                    .collect::<Result<_, _>>()?,
-            )),
+            Value::List(values) => {
+                let mut mapped = EcoVec::with_capacity(values.len());
+                for value in values {
+                    mapped.push(apply_function(function, vec![value], environment)?);
+                }
+                Ok(Value::List(mapped))
+            }
             absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
             other => Err(AtemporalError::Operation(format!(
                 "List.map requires a list, got {other}"
@@ -381,11 +382,10 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         },
         LFilter(function, list) => match child(list)? {
             Value::List(values) => {
-                let mut filtered = EcoVec::new();
-                for value in values {
+                let mut filter = ListFilter::new(values);
+                while let Some(value) = filter.pending() {
                     match apply_function(function, vec![value.clone()], environment)? {
-                        Value::Bool(true) => filtered.push(value),
-                        Value::Bool(false) => {}
+                        Value::Bool(keep) => filter.decide(keep),
                         other => {
                             return Err(AtemporalError::Operation(format!(
                                 "List.filter returned non-bool value {other}"
@@ -393,7 +393,7 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
                         }
                     }
                 }
-                Ok(Value::List(filtered))
+                Ok(Value::List(filter.finish()))
             }
             absent @ (Value::NoVal | Value::Deferred) => Ok(absent),
             other => Err(AtemporalError::Operation(format!(
@@ -518,6 +518,7 @@ mod tests {
     use smol::LocalExecutor;
 
     use super::*;
+    use crate::core::RuntimeFunction;
     use crate::async_test;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::parser::{parse_expr_with_context, parse_str};
@@ -626,6 +627,63 @@ mod tests {
             ),
             Ok(Value::List(vec![Value::Int(11), Value::Int(12)].into()))
         );
+    }
+
+    /// A predicate that records its arguments and answers from `answers` in call order.
+    fn recording_predicate(
+        answers: impl IntoIterator<Item = Value> + 'static,
+    ) -> (Value, Rc<std::cell::RefCell<Vec<Value>>>) {
+        let answers = std::cell::RefCell::new(answers.into_iter());
+        let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&calls);
+        let predicate = RuntimeFunction::native_value("predicate", move |arguments| {
+            recorded.borrow_mut().push(arguments[0].clone());
+            Ok(answers
+                .borrow_mut()
+                .next()
+                .expect("the predicate was called more often than expected"))
+        });
+        (Value::Function(predicate), calls)
+    }
+
+    #[test]
+    fn list_filter_calls_its_predicate_once_per_element_in_order() {
+        let ints = |values: &[i64]| values.iter().copied().map(Value::Int).collect::<Vec<_>>();
+        for (answers, kept) in [
+            ([true, true, true], &[1, 2, 3][..]),
+            ([false, false, false], &[][..]),
+            ([false, true, false], &[2][..]),
+            ([true, false, true], &[1, 3][..]),
+        ] {
+            let (predicate, calls) = recording_predicate(answers.map(Value::Bool));
+            let xs = EcoVec::from(ints(&[1, 2, 3]));
+            let bindings = environment([("p", predicate), ("xs", Value::List(xs.clone()))]);
+            assert_eq!(
+                evaluate("List.filter(p, xs)", &bindings),
+                Ok(Value::List(ints(kept).into()))
+            );
+            assert_eq!(*calls.borrow(), ints(&[1, 2, 3]));
+            assert_eq!(xs, ints(&[1, 2, 3]));
+        }
+
+        let (predicate, calls) =
+            recording_predicate([Value::Bool(true), Value::Int(1), Value::Bool(true)]);
+        let bindings = environment([
+            ("p", predicate),
+            ("xs", Value::List(ints(&[1, 2, 3]).into())),
+        ]);
+        assert!(matches!(
+            evaluate("List.filter(p, xs)", &bindings),
+            Err(AtemporalError::Operation(message)) if message.contains("non-bool")
+        ));
+        assert_eq!(*calls.borrow(), ints(&[1, 2]));
+
+        for absent in [Value::NoVal, Value::Deferred] {
+            let (predicate, calls) = recording_predicate(Vec::new());
+            let bindings = environment([("p", predicate), ("xs", absent.clone())]);
+            assert_eq!(evaluate("List.filter(p, xs)", &bindings), Ok(absent));
+            assert!(calls.borrow().is_empty());
+        }
     }
 
     #[test]

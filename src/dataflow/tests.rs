@@ -3743,6 +3743,93 @@ async fn dataflow_semisync_collection_operator_lifting_parity(
     .await;
 }
 
+fn keyed_record(key: i64) -> Value {
+    Value::from(BTreeMap::from([
+        ("key".into(), Value::Int(key)),
+        (
+            "label".into(),
+            Value::Str("a label longer than inline".into()),
+        ),
+    ]))
+}
+
+fn keyed_records(keys: impl IntoIterator<Item = i64>) -> Value {
+    Value::List(keys.into_iter().map(keyed_record).collect())
+}
+
+#[apply(async_test)]
+async fn dataflow_semisync_record_list_filter_and_edit_parity(
+    executor: Rc<LocalExecutor<'static>>,
+) {
+    let record = "Struct<key: Int, label: Str>";
+    let spec = format!(
+        "in xs: List<{record}>\nin k: Int\n\
+         out none: List<{record}>\nout one: List<{record}>\nout all_but_one: List<{record}>\n\
+         out all: List<{record}>\nout previous: List<{record}>\nout joined_left: List<{record}>\n\
+         out joined_right: List<{record}>\nout appended: List<{record}>\nout tail: List<{record}>\n\
+         none = List.filter(\\r: {record} -> false, xs)\n\
+         one = List.filter(\\r: {record} -> r.key == k, xs)\n\
+         all_but_one = List.filter(\\r: {record} -> r.key != k, xs)\n\
+         all = List.filter(\\r: {record} -> r.key >= 0, xs)\n\
+         previous = List.filter(\\r: {record} -> r.key >= 0, xs[1])\n\
+         joined_left = List.concat(none, xs)\n\
+         joined_right = List.concat(all, none)\n\
+         appended = List.append(all, {{ key: k, label: \"new\" }})\n\
+         tail = List.tail(xs)"
+    );
+    let rows = assert_dataflow_semisync_runtime_parity(
+        executor,
+        &spec,
+        BTreeMap::from([
+            (
+                VarName::new("xs"),
+                vec![
+                    keyed_records(0..3),
+                    Value::NoVal,
+                    keyed_records(3..5),
+                    keyed_records([5]),
+                ],
+            ),
+            (
+                VarName::new("k"),
+                vec![1.into(), 2.into(), 3.into(), 5.into()],
+            ),
+        ]),
+    )
+    .await;
+    let output = |tick: usize, name: &str| rows[tick][&VarName::new(name)].clone();
+    let new_record = |key: i64| {
+        Value::from(BTreeMap::from([
+            ("key".into(), Value::Int(key)),
+            ("label".into(), Value::Str("new".into())),
+        ]))
+    };
+
+    assert_eq!(output(0, "none"), keyed_records([]));
+    assert_eq!(output(0, "one"), keyed_records([1]));
+    assert_eq!(output(0, "all_but_one"), keyed_records([0, 2]));
+    assert_eq!(output(0, "all"), keyed_records(0..3));
+    assert_eq!(output(0, "previous"), Value::Deferred);
+    assert_eq!(output(0, "joined_left"), keyed_records(0..3));
+    assert_eq!(output(0, "joined_right"), keyed_records(0..3));
+    let Value::List(mut appended) = keyed_records(0..3) else {
+        unreachable!()
+    };
+    appended.push(new_record(1));
+    assert_eq!(output(0, "appended"), Value::List(appended));
+    assert_eq!(output(0, "tail"), keyed_records(1..3));
+
+    // An absent list is the retained one: the new key selects from it.
+    assert_eq!(output(1, "one"), keyed_records([2]));
+    assert_eq!(output(1, "all_but_one"), keyed_records([0, 1]));
+    assert_eq!(output(1, "previous"), keyed_records(0..3));
+
+    assert_eq!(output(3, "one"), keyed_records([5]));
+    assert_eq!(output(3, "all_but_one"), keyed_records([]));
+    assert_eq!(output(3, "previous"), keyed_records([3, 4]));
+    assert_eq!(output(3, "tail"), keyed_records([]));
+}
+
 #[apply(async_test)]
 async fn dataflow_semisync_map_operator_lifting_parity(executor: Rc<LocalExecutor<'static>>) {
     for expression in ["Map.insert(m, \"z\", x)", "Map.remove(m, \"a\")"] {
