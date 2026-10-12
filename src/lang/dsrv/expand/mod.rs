@@ -71,6 +71,7 @@
 //! checker's questions, asked of the assembled specification.
 
 pub(crate) mod constants;
+mod equation_where;
 pub(crate) mod functions;
 pub(crate) mod graph;
 pub(crate) mod inline;
@@ -305,16 +306,7 @@ pub(crate) fn expand_declarations_in(
         "a parsed file is expanded against the archive that holds it"
     );
     let language = language::resolve_language(parsed.declarations(), requested_dialect)?;
-    if let Some(ParsedDeclaration::EquationScope { span, .. }) = parsed
-        .declarations()
-        .iter()
-        .find(|declaration| matches!(declaration, ParsedDeclaration::EquationScope { .. }))
-    {
-        return Err(DsrvExpandError::InvalidEquationWhere {
-            problem: "equation-local where blocks are not supported".into(),
-            span: *span,
-        });
-    }
+    let parsed = equation_where::lower(parsed, &language)?;
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     // What a file may write is settled before anything is inlined, so a
@@ -922,6 +914,9 @@ pub(crate) fn expand_program(
     requested_dialect: Option<Dialect>,
 ) -> Result<DsrvSpecification, DsrvExpandError> {
     let graph = graph::build_graph(&sources, requested_dialect)?;
+    let sources = sources.map_parsed(|path, parsed| {
+        equation_where::lower(parsed, graph.get(path).expect("module context").language())
+    })?;
     let root_path = ModulePath::new();
     let context = graph
         .get(&root_path)

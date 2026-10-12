@@ -448,6 +448,27 @@ pub(crate) fn standalone(
     Ok(forest.into_roots().next().expect("one body makes one tree"))
 }
 
+/// Rename free stream references with the same lexical binder rules as def grafting.
+pub(crate) fn rename_tree(
+    cursor: ParsedExprRef<'_>,
+    names: &BTreeMap<VarName, VarName>,
+    builder: &mut ParsedExprBuilder,
+) -> Result<ParsedExprId, DsrvExpandError> {
+    let scope = Scope {
+        normalising: true,
+        renames: names.clone(),
+        ..Scope::default()
+    };
+    graft(
+        cursor,
+        &scope,
+        builder,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        None,
+    )
+}
+
 /// Copy a subtree into the builder, inlining any call to a def as it goes.
 ///
 /// The builder requires a node's children to be the trailing roots, so this

@@ -25,6 +25,44 @@ This is the same specification as declaring each stream and writing its
 equation separately. The checker prints specifications in that separate
 form.
 
+### Local auxiliaries on an equation
+
+Under `experimental::local_streams`, an `aux` or `out` equation can keep
+helpers private in a `where` block. The `high_level_dsrv` bundle includes
+this experiment. For example, this running total keeps its feedback helper
+inside the output equation:
+
+```dsrv
+use experimental::high_level_dsrv
+in x: Int
+out total: Int = previous + x
+where {
+  previous: Int = default(total[1], 0)
+}
+```
+
+Inputs `2`, `-1`, `3` produce totals `2`, `1`, `4`. The helper advances on
+every enclosing tick, including when a conditional result does not select it.
+An absent input keeps ordinary input/history behaviour. References to `total`
+reuse this equation's state.
+
+The block may follow a combined declaration or a split equation, on the same
+line or the next. Write locals as `name = expression`, `name: Type = expression`,
+or a separate `name: Type` declaration followed by its equation. No `aux`
+keyword is needed inside `where`; the explicit spelling is also accepted.
+An empty block is valid. Local equations may have
+nested `where` blocks. Locals can refer to enclosing streams, constants and
+functions, other locals declared later, and the owner's history. They shadow
+outer names and are invisible to sibling equations. Duplicate locals and a
+local with its owner's name are refused. Local `in`, `out` and `def`
+declarations are refused too.
+
+A local stream may call a [stream function](#local-stream-functions) as its whole
+right-hand side. Calls inside larger expressions or lazy arms remain refused.
+A plain equation block adds no stream-function runtime requirement; actual
+stream-function instances retain their runtime restrictions. The block belongs
+to the whole equation, rather than to an arbitrary expression or branch.
+
 ## The dynamic type `Any`
 
 A stream without a type annotation is checked as `Any` under the default

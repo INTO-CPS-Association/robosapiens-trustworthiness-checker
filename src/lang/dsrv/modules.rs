@@ -270,6 +270,18 @@ pub struct ModuleSources {
 }
 
 impl ModuleSources {
+    pub(crate) fn map_parsed<E>(
+        mut self,
+        mut map: impl FnMut(&[ModuleName], ParsedSpecification) -> Result<ParsedSpecification, E>,
+    ) -> Result<Self, E> {
+        self.modules = self
+            .modules
+            .into_iter()
+            .map(|(path, parsed)| Ok((path.clone(), map(&path, parsed)?)))
+            .collect::<Result<_, E>>()?;
+        Ok(self)
+    }
+
     /// Take the root module out, leaving the rest behind.
     pub(crate) fn into_root(mut self) -> ParsedSpecification {
         self.modules
