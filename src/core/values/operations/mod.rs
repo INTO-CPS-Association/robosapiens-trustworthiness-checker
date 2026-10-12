@@ -8,6 +8,7 @@ mod numeric;
 
 use super::Value;
 
+pub(crate) use collections::ListFilter;
 pub use collections::{
     list_append, list_concat, list_head, list_index, list_len, list_tail, map_get, map_has_key,
     map_insert, map_remove, tuple_get,

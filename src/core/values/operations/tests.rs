@@ -491,3 +491,125 @@ fn map_operations_are_copy_on_write_and_report_missing_keys() {
         Err(ValueOpError::MissingMapKey(key))
     );
 }
+
+use ecow::EcoVec;
+
+fn record(key: i64) -> Value {
+    Value::from(BTreeMap::from([
+        (EcoString::from("key"), Value::Int(key)),
+        (
+            EcoString::from("label"),
+            Value::Str("a label longer than inline".into()),
+        ),
+    ]))
+}
+
+fn records(keys: impl IntoIterator<Item = i64>) -> EcoVec<Value> {
+    keys.into_iter().map(record).collect()
+}
+
+#[test]
+fn list_edits_leave_a_retained_operand_unchanged() {
+    let retained = records(0..3);
+    let operand = || Value::List(retained.clone());
+
+    assert_eq!(
+        list_append(operand(), record(3)),
+        Ok(Value::List(records(0..4)))
+    );
+    assert_eq!(
+        list_concat(operand(), Value::List(records(3..5))),
+        Ok(Value::List(records(0..5)))
+    );
+    assert_eq!(list_tail(operand()), Ok(Value::List(records(1..3))));
+    assert_eq!(retained, records(0..3));
+
+    // The same edits of a list nothing else holds.
+    assert_eq!(
+        list_append(Value::List(records(0..3)), record(3)),
+        Ok(Value::List(records(0..4)))
+    );
+    assert_eq!(
+        list_concat(Value::List(records(0..3)), Value::List(records(3..5))),
+        Ok(Value::List(records(0..5)))
+    );
+    assert_eq!(
+        list_tail(Value::List(records(0..3))),
+        Ok(Value::List(records(1..3)))
+    );
+    assert_eq!(
+        list_tail(Value::List(records(0..1))),
+        Ok(Value::List(EcoVec::new()))
+    );
+    assert_eq!(
+        list_tail(Value::List(EcoVec::new())),
+        Err(ValueOpError::EmptyList)
+    );
+}
+
+#[test]
+fn list_concat_with_an_empty_side_is_the_other_list() {
+    let list = Value::List(records(0..2));
+    let empty = || Value::List(EcoVec::new());
+    assert_eq!(list_concat(empty(), list.clone()), Ok(list.clone()));
+    assert_eq!(list_concat(list.clone(), empty()), Ok(list.clone()));
+    assert_eq!(list_concat(empty(), empty()), Ok(empty()));
+
+    // A reused operand is still an independent value: editing the result leaves it intact.
+    let Ok(Value::List(mut joined)) = list_concat(empty(), list.clone()) else {
+        panic!("concatenation should produce a list");
+    };
+    joined.make_mut()[0] = record(9);
+    assert_eq!(list, Value::List(records(0..2)));
+    assert_eq!(joined, records([9, 1]));
+
+    assert_eq!(
+        list_concat(empty(), Value::Int(1)),
+        Err(ValueOpError::InvalidBinaryOperands {
+            operation: "list concatenation",
+            left: empty(),
+            right: Value::Int(1),
+        })
+    );
+}
+
+/// Every keep/reject sequence up to six elements, for a source that is shared and one that is
+/// not, gives the elements kept in their original order.
+#[test]
+fn list_filter_keeps_decided_elements_in_order() {
+    for len in 0..=6_usize {
+        for mask in 0..(1_u32 << len) {
+            let decisions = (0..len).map(|index| mask & (1 << index) != 0);
+            let expected: EcoVec<Value> = records(0..len as i64)
+                .iter()
+                .zip(decisions.clone())
+                .filter_map(|(value, keep)| keep.then(|| value.clone()))
+                .collect();
+            for shared in [false, true] {
+                let source = records(0..len as i64);
+                let retained = shared.then(|| source.clone());
+                let mut filter = ListFilter::new(source);
+                let mut seen = Vec::new();
+                for keep in decisions.clone() {
+                    seen.push(filter.pending().cloned().expect("an undecided element"));
+                    filter.decide(keep);
+                }
+                assert_eq!(filter.pending(), None);
+                assert_eq!(seen, records(0..len as i64).to_vec());
+                let mut filtered = filter.finish();
+                assert_eq!(
+                    filtered, expected,
+                    "len {len}, mask {mask:b}, shared {shared}"
+                );
+                if let Some(retained) = retained {
+                    assert_eq!(retained, records(0..len as i64));
+                    // The result may reuse the source; editing it must not change the source.
+                    if let Some(first) = filtered.make_mut().first_mut() {
+                        *first = Value::Unit;
+                    }
+                    assert_eq!(retained, records(0..len as i64));
+                }
+            }
+        }
+    }
+}

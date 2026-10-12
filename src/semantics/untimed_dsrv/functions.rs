@@ -8,6 +8,7 @@ use super::shared_output::SharedOutput;
 use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::RuntimeFunction;
+use crate::core::values::operations::ListFilter;
 use crate::core::{PartialMarker, Value, propagated_special};
 use crate::lang::dsrv::ast::{AstShared, CheckedExpr, Expr, ExprRef, ExprView};
 use crate::lang::dsrv::runtime_expression::{
@@ -163,9 +164,8 @@ where
     }
 }
 
-fn collection_marker(values: impl IntoIterator<Item = Value>) -> Option<Value> {
-    propagated_special(values.into_iter().map(|value| PartialMarker::of(&value)))
-        .map(PartialMarker::into_value)
+fn collection_marker<'a>(values: impl IntoIterator<Item = &'a Value>) -> Option<Value> {
+    propagated_special(values.into_iter().map(PartialMarker::of)).map(PartialMarker::into_value)
 }
 
 impl<AC> UntimedFunctionDef<AC>
@@ -883,7 +883,7 @@ where
     let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
-            if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
+            if let Some(marker) = collection_marker([&func_value, &list_value]) {
                 if let Value::Function(function) = &func_value {
                     advance_collection_captures::<AC>(function).await;
                 }
@@ -898,7 +898,7 @@ where
                         panic!("List.map requires a list, got {list_value}");
                     };
                     let mut callback = CollectionCallback::new::<AC>(function, "List.map").await;
-                    let mut mapped = EcoVec::new();
+                    let mut mapped = EcoVec::with_capacity(values.len());
                     for value in values {
                         mapped.push(callback.apply([value]).await);
                     }
@@ -922,7 +922,7 @@ where
     let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
-            if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
+            if let Some(marker) = collection_marker([&func_value, &list_value]) {
                 if let Value::Function(function) = &func_value {
                     advance_collection_captures::<AC>(function).await;
                 }
@@ -937,17 +937,15 @@ where
                         panic!("List.filter requires a list, got {list_value}");
                     };
                     let mut callback = CollectionCallback::new::<AC>(function, "List.filter").await;
-                    let mut filtered = EcoVec::new();
-                    let keep = |kept: Value, value: Value, filtered: &mut EcoVec<Value>| match kept {
-                        Value::Bool(true) => filtered.push(value),
-                        Value::Bool(false) => {}
-                        other => panic!("List.filter returned non-bool value {}", other),
-                    };
-                    for value in values {
-                        let kept = callback.apply([value.clone()]).await;
-                        keep(kept, value, &mut filtered);
+                    let mut filter = ListFilter::new(values);
+                    while let Some(value) = filter.pending() {
+                        let argument = value.clone();
+                        match callback.apply([argument]).await {
+                            Value::Bool(keep) => filter.decide(keep),
+                            other => panic!("List.filter returned non-bool value {}", other),
+                        }
                     }
-                    yield Value::List(filtered);
+                    yield Value::List(filter.finish());
                 }
                 func => panic!("List.filter requires a function, got {func}"),
             }
@@ -969,11 +967,7 @@ where
     let mut list_stream = mc::stream_lift_base(evaluate_scope::<AC>(list_expr, ctx));
     Box::pin(stream! {
         while let (Some(func_value), Some(init), Some(list_value)) = (func_stream.next().await, init_stream.next().await, list_stream.next().await) {
-            if let Some(marker) = collection_marker([
-                func_value.clone(),
-                init.clone(),
-                list_value.clone(),
-            ]) {
+            if let Some(marker) = collection_marker([&func_value, &init, &list_value]) {
                 if let Value::Function(function) = &func_value {
                     advance_collection_captures::<AC>(function).await;
                 }
@@ -984,7 +978,7 @@ where
                 Value::NoVal => yield Value::NoVal,
                 Value::Deferred => yield Value::Deferred,
                 Value::Function(function) => {
-                    if let Some(marker) = collection_marker([init.clone(), list_value.clone()]) {
+                    if let Some(marker) = collection_marker([&init, &list_value]) {
                         advance_collection_captures::<AC>(&function).await;
                         yield marker;
                         continue;
