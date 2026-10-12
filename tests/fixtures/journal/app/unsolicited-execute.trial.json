@@ -1,0 +1,24 @@
+{
+  "capture_file": "unsolicited-execute.jsonl",
+  "capture_sha256": "4fad02e8ebff4459838eef11b87eff17e6d8b017d3ff51e5cda78c3df04f1157",
+  "clock_file": "unsolicited-execute.clock.jsonl",
+  "converted_from_sha256": "bbfa7d0de9ea5949d90c267bf9561caa6a4500bbd0ffae2fd65bc5f9f7c6b370",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-unsolicited-execute-d0be8a2de1b2",
+  "observation_epoch": "E14bb15386d9c4173b3e673b6210ad299",
+  "record_count": 545,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [],
+    "core_validations": 12,
+    "description": "after a budget abort an external plan_validated reaches Execute, which aborts on the rejected LegitResult",
+    "disposition": "protocol: Execute started by an external plan_validated; Aborted(invalid authorization)",
+    "name": "unsolicited-execute",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 545
+}

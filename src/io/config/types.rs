@@ -680,6 +680,102 @@ fn default_redis_knowledge_publish_initial() -> bool {
     true
 }
 
+fn default_rpio_observation_database() -> u32 {
+    0
+}
+
+fn default_rpio_phase_stream() -> String {
+    "maple:observation:phase".to_owned()
+}
+
+fn default_rpio_knowledge_stream() -> String {
+    "maple:observation:knowledge".to_owned()
+}
+
+/// One step of a finite group schedule, as written in a step file line or
+/// inline: the members whose next tick forms one logical tick, and the
+/// "now" that tick must reach, if the schedule states it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayStepConfig {
+    pub step: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<serde_json::Number>,
+}
+
+/// Where a finite group's schedule comes from.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReplaySteps {
+    /// A JSON Lines step file, captured beside the journal it schedules.
+    File(String),
+    /// Steps written in the configuration itself.
+    Inline(Vec<ReplayStepConfig>),
+}
+
+/// Clock samples covering a prefix of the delivered capture. `through`
+/// counts records; it is independent of immutable Knowledge write identities.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpioReplaySample {
+    pub time: serde_json::Number,
+    pub through: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub with_record: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum RpioReplaySamples {
+    File(String),
+    Inline(Vec<RpioReplaySample>),
+}
+
+/// Frozen extent and bytes of one classic journal capture, before any view
+/// removes records. Entries correspond to the configured files in order.
+/// Record counts describe capture positions, never Knowledge write counters.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpioCaptureCheck {
+    pub records: usize,
+    pub sha256: String,
+    pub journal_clock: String,
+}
+
+fn validate_capture_checks(
+    source: &str,
+    files: &[String],
+    checks: &[RpioCaptureCheck],
+    clock: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        checks.is_empty() || checks.len() == files.len(),
+        "input source `{source}` capture_checks must name every file in configured order"
+    );
+    for check in checks {
+        anyhow::ensure!(
+            check.sha256.len() == 64 && check.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "input source `{source}` capture SHA-256 must contain 64 hexadecimal digits"
+        );
+        anyhow::ensure!(
+            !check.journal_clock.trim().is_empty(),
+            "input source `{source}` capture journal_clock must not be empty"
+        );
+        if let Some(clock) = clock {
+            anyhow::ensure!(
+                check.journal_clock == clock,
+                "input source `{source}` capture clock `{}` differs from journal_clock `{clock}`",
+                check.journal_clock
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceConfig {
@@ -725,6 +821,117 @@ pub enum SourceConfig {
         #[serde(default = "RetryPolicy::input_default")]
         retry: RetryPolicy,
     },
+    #[serde(rename = "rpio-observation-file")]
+    RpioObservationFile {
+        variable: VarName,
+        files: Vec<String>,
+        /// Frozen record counts, SHA-256 and clock identity, one per file.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capture_checks: Vec<RpioCaptureCheck>,
+        /// Observation capabilities removed before the journal is read, for an
+        /// ablation: any of `writers`, `identity`, `causality`, `reads`, `steps`.
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        remove: BTreeSet<crate::io::rpio::JournalCapability>,
+        /// A phase record naming a version the journal never wrote: `refuse`
+        /// the journal (the default) or read it as `incomplete`.
+        #[serde(
+            default,
+            skip_serializing_if = "crate::io::rpio::Unrecorded::is_default"
+        )]
+        unrecorded: crate::io::rpio::Unrecorded,
+    },
+    /// Finite RPIO replay of journal records and clock samples as typed
+    /// observations, interleaved by an explicit step schedule.
+    #[serde(rename = "rpio-observation-clock-file")]
+    RpioObservationClockFile {
+        variable: VarName,
+        /// The DSRV domain marker `D` of the observation's instants. It may
+        /// be left out when the specification declares the input's type.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
+        /// The clock that stamped the journal times. The files carry no
+        /// label, so this binds them.
+        journal_clock: String,
+        files: Vec<String>,
+        /// Frozen raw captures, checked before decoding or ablation.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capture_checks: Vec<RpioCaptureCheck>,
+        /// The replayed clock's samples, in seconds of the same domain.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        clock_values: Vec<serde_json::Number>,
+        /// Prefix-covered samples, inline or in a bounded streaming JSONL file.
+        /// An alternative to clock_values/steps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock_samples: Option<RpioReplaySamples>,
+        /// The schedule: a JSON Lines step file or inline steps. Without
+        /// one, every record is a tick of its own, followed by every sample.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        steps: Option<ReplaySteps>,
+        /// A JSON Lines file the group writes each tick's origins to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<String>,
+        /// Observation capabilities removed before the journal is read, for an
+        /// ablation: any of `writers`, `identity`, `causality`, `reads`, `steps`.
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        remove: BTreeSet<crate::io::rpio::JournalCapability>,
+        /// A phase record naming a version the journal never wrote: `refuse`
+        /// the journal (the default) or read it as `incomplete`.
+        #[serde(
+            default,
+            skip_serializing_if = "crate::io::rpio::Unrecorded::is_default"
+        )]
+        unrecorded: crate::io::rpio::Unrecorded,
+    },
+    #[serde(rename = "rpio-observation")]
+    RpioObservation {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default = "default_rpio_observation_database")]
+        database: u32,
+        variable: VarName,
+        #[serde(default = "default_rpio_phase_stream")]
+        phase_stream: String,
+        #[serde(default = "default_rpio_knowledge_stream")]
+        knowledge_stream: String,
+    },
+    /// Live RPIO journal records and periodic Redis-server clock samples as typed
+    /// observations, each on a tick of its own.
+    #[serde(rename = "rpio-observation-clock")]
+    RpioObservationClock {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default = "default_rpio_observation_database")]
+        database: u32,
+        variable: VarName,
+        /// The DSRV domain marker `D` of the observation's instants. It may
+        /// be left out when the specification declares the input's type.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        domain: Option<String>,
+        /// The `journal_clock` label every journal entry must carry.
+        journal_clock: String,
+        #[serde(default = "default_rpio_phase_stream")]
+        phase_stream: String,
+        #[serde(default = "default_rpio_knowledge_stream")]
+        knowledge_stream: String,
+        /// Omit to consume timed records without synthetic periodic samples.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clock_period_ms: Option<u64>,
+        /// A JSON Lines file the source writes each tick's origins to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<String>,
+    },
+    /// Periodic Unix wall-clock samples in fractional seconds.
+    Clock { variable: VarName, period_ms: u64 },
+    /// Finite supplied clock samples for deterministic replay.
+    #[serde(rename = "clock-file")]
+    ClockFile {
+        variable: VarName,
+        values: Vec<serde_json::Number>,
+    },
     Ros {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         routes: BTreeMap<VarName, Route>,
@@ -739,8 +946,14 @@ impl SourceConfig {
         match self {
             Self::Mqtt { host, .. }
             | Self::Redis { host, .. }
-            | Self::RedisKnowledge { host, .. } => host.as_deref(),
-            Self::Ros { .. } => None,
+            | Self::RedisKnowledge { host, .. }
+            | Self::RpioObservation { host, .. }
+            | Self::RpioObservationClock { host, .. } => host.as_deref(),
+            Self::Ros { .. }
+            | Self::RpioObservationFile { .. }
+            | Self::RpioObservationClockFile { .. }
+            | Self::Clock { .. }
+            | Self::ClockFile { .. } => None,
         }
     }
 
@@ -749,7 +962,13 @@ impl SourceConfig {
             Self::Mqtt { routes, .. } | Self::Redis { routes, .. } | Self::Ros { routes, .. } => {
                 routes
             }
-            Self::RedisKnowledge { .. } => empty_routes(),
+            Self::RedisKnowledge { .. }
+            | Self::RpioObservationFile { .. }
+            | Self::RpioObservationClockFile { .. }
+            | Self::RpioObservation { .. }
+            | Self::RpioObservationClock { .. }
+            | Self::Clock { .. }
+            | Self::ClockFile { .. } => empty_routes(),
         }
     }
 
@@ -767,9 +986,43 @@ impl SourceConfig {
                 reconfiguration_route,
                 ..
             } => reconfiguration_route.as_deref(),
-            Self::RedisKnowledge { .. } => None,
+            Self::RedisKnowledge { .. }
+            | Self::RpioObservationFile { .. }
+            | Self::RpioObservationClockFile { .. }
+            | Self::RpioObservation { .. }
+            | Self::RpioObservationClock { .. }
+            | Self::Clock { .. }
+            | Self::ClockFile { .. } => None,
         }
     }
+}
+
+/// The checks every RPIO observation-plus-clock source shares: one named
+/// variable, a nonempty domain if one is named, and a clock label.
+fn validate_observation_binding(
+    source: &SourceId,
+    variable: &VarName,
+    domain: Option<&str>,
+    journal_clock: &str,
+    provenance: Option<&str>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !variable.name().trim().is_empty(),
+        "input source `{source}` has an empty observation variable"
+    );
+    anyhow::ensure!(
+        domain.is_none_or(|domain| !domain.trim().is_empty()),
+        "input source `{source}` has an empty time `domain`"
+    );
+    anyhow::ensure!(
+        !journal_clock.trim().is_empty(),
+        "input source `{source}` has an empty `journal_clock`"
+    );
+    anyhow::ensure!(
+        provenance.is_none_or(|path| !path.trim().is_empty()),
+        "input source `{source}` has an empty provenance path"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -834,6 +1087,204 @@ impl InputConfigFile {
                                 "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
                             );
                         }
+                    }
+                }
+                SourceConfig::RpioObservationFile {
+                    variable,
+                    files,
+                    capture_checks,
+                    ..
+                } => {
+                    validate_capture_checks(source, files, capture_checks, None)?;
+                    anyhow::ensure!(
+                        !variable.name().trim().is_empty(),
+                        "input source `{source}` has an empty observation variable"
+                    );
+                    anyhow::ensure!(
+                        !files.is_empty(),
+                        "input source `{source}` requires at least one observation file"
+                    );
+                    for path in files {
+                        anyhow::ensure!(
+                            !path.trim().is_empty(),
+                            "input source `{source}` has an empty observation file path"
+                        );
+                    }
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
+                    }
+                }
+                SourceConfig::RpioObservationClockFile {
+                    variable,
+                    domain,
+                    journal_clock,
+                    files,
+                    capture_checks,
+                    clock_values,
+                    clock_samples,
+                    steps,
+                    provenance,
+                    ..
+                } => {
+                    validate_capture_checks(source, files, capture_checks, Some(journal_clock))?;
+                    if let Some(samples) = clock_samples {
+                        anyhow::ensure!(
+                            clock_values.is_empty() && steps.is_none(),
+                            "input source `{source}` clock_samples cannot be mixed with clock_values or steps"
+                        );
+                        match samples {
+                            RpioReplaySamples::File(path) => anyhow::ensure!(
+                                !path.trim().is_empty(),
+                                "input source `{source}` has an empty clock sample file path"
+                            ),
+                            RpioReplaySamples::Inline(samples) => anyhow::ensure!(
+                                samples
+                                    .iter()
+                                    .all(|s| s.time.as_f64().is_some_and(f64::is_finite)),
+                                "input source `{source}` clock sample times must be finite"
+                            ),
+                        }
+                    }
+                    validate_observation_binding(
+                        source,
+                        variable,
+                        domain.as_deref(),
+                        journal_clock,
+                        provenance.as_deref(),
+                    )?;
+                    anyhow::ensure!(
+                        !files.is_empty(),
+                        "input source `{source}` requires at least one observation file"
+                    );
+                    for path in files {
+                        anyhow::ensure!(
+                            !path.trim().is_empty(),
+                            "input source `{source}` has an empty observation file path"
+                        );
+                    }
+                    anyhow::ensure!(
+                        clock_values
+                            .iter()
+                            .all(|value| value.as_f64().is_some_and(f64::is_finite)),
+                        "input source `{source}` clock values must be finite"
+                    );
+                    match steps {
+                        Some(ReplaySteps::File(path)) => anyhow::ensure!(
+                            !path.trim().is_empty(),
+                            "input source `{source}` has an empty step file path"
+                        ),
+                        Some(ReplaySteps::Inline(steps)) => {
+                            for step in steps {
+                                anyhow::ensure!(
+                                    step.time.as_ref().is_none_or(|time| time
+                                        .as_f64()
+                                        .is_some_and(f64::is_finite)),
+                                    "input source `{source}` step times must be finite"
+                                );
+                            }
+                        }
+                        None => {}
+                    }
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
+                    }
+                }
+                SourceConfig::RpioObservation {
+                    variable,
+                    phase_stream,
+                    knowledge_stream,
+                    ..
+                } => {
+                    anyhow::ensure!(
+                        !variable.name().trim().is_empty(),
+                        "input source `{source}` has an empty observation variable"
+                    );
+                    anyhow::ensure!(
+                        !phase_stream.trim().is_empty(),
+                        "input source `{source}` has an empty RPIO phase stream"
+                    );
+                    anyhow::ensure!(
+                        !knowledge_stream.trim().is_empty(),
+                        "input source `{source}` has an empty RPIO knowledge stream"
+                    );
+                    anyhow::ensure!(
+                        phase_stream != knowledge_stream,
+                        "input source `{source}` requires distinct RPIO phase and knowledge streams"
+                    );
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
+                    }
+                }
+                SourceConfig::RpioObservationClock {
+                    variable,
+                    domain,
+                    journal_clock,
+                    phase_stream,
+                    knowledge_stream,
+                    clock_period_ms,
+                    provenance,
+                    ..
+                } => {
+                    validate_observation_binding(
+                        source,
+                        variable,
+                        domain.as_deref(),
+                        journal_clock,
+                        provenance.as_deref(),
+                    )?;
+                    anyhow::ensure!(
+                        !phase_stream.trim().is_empty() && !knowledge_stream.trim().is_empty(),
+                        "input source `{source}` has an empty RPIO stream"
+                    );
+                    anyhow::ensure!(
+                        phase_stream != knowledge_stream,
+                        "input source `{source}` requires distinct RPIO phase and knowledge streams"
+                    );
+                    anyhow::ensure!(
+                        clock_period_ms.is_none_or(|period| period > 0),
+                        "input source `{source}` clock_period_ms must be positive"
+                    );
+                    anyhow::ensure!(
+                        clock_period_ms.is_none() || journal_clock == "redis.server.time",
+                        "input source `{source}` samples the Redis server clock (`redis.server.time`), but its journal_clock is `{journal_clock}`"
+                    );
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
+                    }
+                }
+                SourceConfig::Clock {
+                    variable,
+                    period_ms,
+                } => {
+                    anyhow::ensure!(
+                        *period_ms > 0,
+                        "input source `{source}` clock period_ms must be positive"
+                    );
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
+                    }
+                }
+                SourceConfig::ClockFile { variable, values } => {
+                    anyhow::ensure!(
+                        values
+                            .iter()
+                            .all(|value| value.as_f64().is_some_and(f64::is_finite)),
+                        "input source `{source}` clock-file values must be finite"
+                    );
+                    if let Some(previous) = variables.insert(variable.clone(), source) {
+                        anyhow::bail!(
+                            "input config variable `{variable}` appears in both source `{previous}` and source `{source}`"
+                        );
                     }
                 }
                 _ => {
@@ -970,6 +1421,118 @@ mod tests {
 
     fn input_config(json: &str) -> InputConfigFile {
         json5::from_str(json).expect("input config should deserialize")
+    }
+
+    #[test]
+    fn clock_input_requires_a_positive_period() {
+        let config =
+            input_config(r#"{sources:{time:{kind:"clock",variable:"advance",period_ms:0}}}"#);
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("period_ms must be positive"));
+    }
+
+    #[test]
+    fn clock_file_requires_finite_numeric_samples() {
+        let valid = input_config(
+            r#"{sources:{time:{kind:"clock-file",variable:"advance",values:[0,1.5,2]}}}"#,
+        );
+        valid.validate().unwrap();
+
+        // The strict JSON number representation rejects non-finite samples at
+        // deserialization, before a source can be opened.
+        assert!(
+            json5::from_str::<InputConfigFile>(
+                r#"{sources:{time:{kind:"clock-file",variable:"advance",values:[Infinity]}}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn frozen_capture_config_requires_a_check_for_each_file_and_the_bound_clock() {
+        let text = r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",journal_clock:"fixture.journal",files:["trace.jsonl"],capture_checks:[{records:8,sha256:"SHA",journal_clock:"fixture.journal"}]}}}"#
+            .replace("SHA", &"a".repeat(64));
+        input_config(&text).validate().unwrap();
+        for (invalid, expected) in [
+            (
+                text.replace(
+                    "files:[\"trace.jsonl\"]",
+                    "files:[\"trace.jsonl\",\"second.jsonl\"]",
+                ),
+                "every file",
+            ),
+            (text.replace(&"a".repeat(64), "short"), "64 hexadecimal"),
+        ] {
+            let error = input_config(&invalid).validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+        let invalid = text.replacen(
+            "journal_clock:\"fixture.journal\"",
+            "journal_clock:\"other.clock\"",
+            1,
+        );
+        assert!(
+            input_config(&invalid)
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("differs from journal_clock")
+        );
+    }
+
+    #[test]
+    fn observation_clock_file_binds_a_clock_and_takes_inline_or_file_steps() {
+        let valid = input_config(
+            r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",domain:"JournalTime",journal_clock:"fixture.journal",files:["trace.jsonl"],clock_values:[1,2.5],steps:[{step:["journal"]},{step:["journal","clock"],time:1}],provenance:"origins.jsonl"}}}"#,
+        );
+        valid.validate().unwrap();
+        let SourceConfig::RpioObservationClockFile { steps, .. } = &valid.sources["trace"] else {
+            panic!("expected RPIO observation-clock file source")
+        };
+        let Some(ReplaySteps::Inline(steps)) = steps else {
+            panic!("expected inline steps")
+        };
+        assert_eq!(steps[1].step, ["journal", "clock"]);
+
+        let file = input_config(
+            r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",journal_clock:"fixture.journal",files:["trace.jsonl"],steps:"trace.steps.jsonl"}}}"#,
+        );
+        file.validate().unwrap();
+        assert!(matches!(
+            &file.sources["trace"],
+            SourceConfig::RpioObservationClockFile {
+                steps: Some(ReplaySteps::File(_)),
+                domain: None,
+                ..
+            }
+        ));
+
+        for (invalid, message) in [
+            (
+                r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",journal_clock:"",files:["trace.jsonl"]}}}"#,
+                "journal_clock",
+            ),
+            (
+                r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",domain:" ",journal_clock:"c",files:["trace.jsonl"]}}}"#,
+                "domain",
+            ),
+            (
+                r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",journal_clock:"c",files:["trace.jsonl"],steps:""}}}"#,
+                "step file",
+            ),
+        ] {
+            let error = input_config(invalid).validate().unwrap_err().to_string();
+            assert!(error.contains(message), "{invalid}: {error}");
+        }
+        for unknown in [
+            r#"{sources:{trace:{kind:"rpio-observation-clock-file",record_variable:"record",variable:"observation",journal_clock:"c",files:["trace.jsonl"]}}}"#,
+            r#"{sources:{trace:{kind:"rpio-observation-clock-file",variable:"observation",journal_clock:"c",files:["trace.jsonl"],steps:[{step:["journal"],at:1}]}}}"#,
+        ] {
+            assert!(
+                json5::from_str::<InputConfigFile>(unknown).is_err(),
+                "accepted {unknown}"
+            );
+        }
     }
 
     #[test]
@@ -1277,6 +1840,63 @@ mod tests {
         );
         let error = config.validate().unwrap_err();
         assert!(error.to_string().contains("appears in both source"));
+    }
+
+    #[test]
+    fn rpio_observation_source_uses_defaults_and_rejects_bad_streams() {
+        let config =
+            input_config(r#"{sources:{journal:{kind:"rpio-observation",variable:"observation"}}}"#);
+        config.validate().unwrap();
+        let SourceConfig::RpioObservation {
+            database,
+            phase_stream,
+            knowledge_stream,
+            ..
+        } = &config.sources["journal"]
+        else {
+            panic!("expected rpio-observation source")
+        };
+        assert_eq!(*database, 0);
+        assert_eq!(phase_stream, "maple:observation:phase");
+        assert_eq!(knowledge_stream, "maple:observation:knowledge");
+
+        for json in [
+            r#"{sources:{journal:{kind:"rpio-observation",variable:"x",phase_stream:""}}}"#,
+            r#"{sources:{journal:{kind:"rpio-observation",variable:"x",knowledge_stream:""}}}"#,
+            r#"{sources:{journal:{kind:"rpio-observation",variable:"x",phase_stream:"same",knowledge_stream:"same"}}}"#,
+        ] {
+            let config = input_config(json);
+            assert!(config.validate().is_err(), "accepted {json}");
+        }
+    }
+
+    #[test]
+    fn live_observation_clock_requires_a_clock_label_and_positive_period() {
+        let valid = input_config(
+            r#"{sources:{journal:{kind:"rpio-observation-clock",variable:"observation",journal_clock:"redis.server.time",clock_period_ms:100}}}"#,
+        );
+        valid.validate().unwrap();
+        let SourceConfig::RpioObservationClock {
+            database,
+            phase_stream,
+            knowledge_stream,
+            ..
+        } = &valid.sources["journal"]
+        else {
+            panic!("expected live RPIO observation-clock source")
+        };
+        assert_eq!(*database, 0);
+        assert_ne!(phase_stream, knowledge_stream);
+
+        for invalid in [
+            r#"{sources:{journal:{kind:"rpio-observation-clock",variable:"observation",journal_clock:"",clock_period_ms:100}}}"#,
+            r#"{sources:{journal:{kind:"rpio-observation-clock",variable:"observation",journal_clock:"redis.server.time",clock_period_ms:0}}}"#,
+        ] {
+            assert!(
+                input_config(invalid).validate().is_err(),
+                "accepted {invalid}"
+            );
+        }
     }
 
     #[test]

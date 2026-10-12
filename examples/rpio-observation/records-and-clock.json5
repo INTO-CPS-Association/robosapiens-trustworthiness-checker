@@ -1,0 +1,25 @@
+{
+  "sources": {
+    "journal": {
+      "kind": "rpio-observation-clock-file",
+      "variable": "observation",
+      "journal_clock": "fixture.journal",
+      "files": [
+        "fixtures/rpio/service-pending.jsonl"
+      ],
+      "capture_checks": [
+        {
+          "records": 2,
+          "sha256": "61e979d9419a12f52419c334b94c8cc3b1cb2abf480d906efea4fffb57ea6460",
+          "journal_clock": "fixture.journal"
+        }
+      ],
+      "clock_samples": [
+        {
+          "time": 12.0,
+          "through": 2
+        }
+      ]
+    }
+  }
+}

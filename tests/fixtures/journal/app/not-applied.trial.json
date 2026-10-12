@@ -1,0 +1,26 @@
+{
+  "capture_file": "not-applied.jsonl",
+  "capture_sha256": "3522ba40a386f9ff78fd522bebc3db4546274af3709080c2e308062a29133527",
+  "clock_file": "not-applied.clock.jsonl",
+  "converted_from_sha256": "804afd8f9b5955274f5ae2a10a43596fd56085e5dd82dd2624984514baefd351",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-not-applied-f308e6d81b2a",
+  "observation_epoch": "Ec5443383fb7b44c6ba902fd97f671b19",
+  "record_count": 306,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [
+      2
+    ],
+    "core_validations": 1,
+    "description": "the accepted plan_validated is delivered again with its original provenance: Execute does not reapply",
+    "disposition": "protocol: duplicate delivery of one plan_validated emission; Execute NotApplied",
+    "name": "not-applied",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 306
+}

@@ -49,3 +49,5 @@ macro_rules_attribute = "0.2.3"
 smol-macros = "0.1.1"
 futures-timeout = "0.2.1"
 r2r = { version = "0.9.5", optional = true }
+# Strategies for the journal property tests (`journal::strategies`).
+proptest = "1.11.0"

@@ -1,0 +1,15 @@
+// The RPIO journal input with its clock samples, declared with local types so that
+// the model does not depend on the timing library.
+use experimental::{modules, generics, tagged_unions, pattern_matching, newtypes}
+use std::option::{Option}
+
+use std::time::{Instant}
+newtype JournalTime = Unit
+type TimedRecord = Struct<time: Instant<JournalTime>, value: Any>
+type Sample = Struct<clock: Str, time: Instant<JournalTime>, origin: Str>
+type Observation = Struct<record: Option<TimedRecord>, clock: Option<Sample>>
+
+in observation: Observation
+out recorded: Bool = std::option::is_some(observation.record)
+out clocked: Bool = std::option::is_some(observation.clock)
+out instants: Observation = observation

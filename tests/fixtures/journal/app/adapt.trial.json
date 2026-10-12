@@ -1,0 +1,26 @@
+{
+  "capture_file": "adapt.jsonl",
+  "capture_sha256": "ac16e8d5e7e0e79569cdb79947aafef99a493b6ed48d191574b0af4547e357d1",
+  "clock_file": "adapt.clock.jsonl",
+  "converted_from_sha256": "d2b297fb20e05ec9ab89eb5566bed315fcb89fdf8f11adea072f1dcaefd4a0a0",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-adapt-232e317a2a35",
+  "observation_epoch": "E15d4b19b50044c8e87cdd66ef0204dc9",
+  "record_count": 301,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [
+      2
+    ],
+    "core_validations": 1,
+    "description": "anomaly at the tenth cycle, accepted on the first plan. On LocalBus Execute's window reset runs nested inside the outer Analysis, before its cycle_completed (old completion); on Redis transport cycle_completed precedes Plan",
+    "disposition": "nominal",
+    "name": "adapt",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 301
+}

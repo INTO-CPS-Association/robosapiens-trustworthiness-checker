@@ -1,0 +1,24 @@
+{
+  "capture_file": "no-plan.jsonl",
+  "capture_sha256": "4773bc5fcec593c229acf14e8687c075b8518cc5d297afcae0dacc765128a8a5",
+  "clock_file": "no-plan.clock.jsonl",
+  "converted_from_sha256": "396bac5cb49252619a02a311254b911b5c46718e47ec82df04f93550193dad53",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-no-plan-203b81169544",
+  "observation_epoch": "Ead1808b1ded646d5a28e1fbb17495d2f",
+  "record_count": 305,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [],
+    "core_validations": 0,
+    "description": "no distinct candidate: Plan aborts",
+    "disposition": "nominal",
+    "name": "no-plan",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 305
+}

@@ -1,0 +1,7 @@
+use experimental::{modules, generics, tagged_unions, functions, pattern_matching, newtypes}
+use rpio::journal::timing::{Observation}
+use std::option
+newtype JournalTime = Unit
+in observation: Observation<Any, Any, Any, JournalTime>
+out recorded: Bool = std::option::is_some(observation.record)
+out clocked: Bool = std::option::is_some(observation.clock)

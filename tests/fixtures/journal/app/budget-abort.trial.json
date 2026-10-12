@@ -1,0 +1,24 @@
+{
+  "capture_file": "budget-abort.jsonl",
+  "capture_sha256": "b1cae6a2b6c9e616e890a2d24ff69e0e135c6754b0a14a4a1b825b1196b36880",
+  "clock_file": "budget-abort.clock.jsonl",
+  "converted_from_sha256": "a24d6281f32e9b0d07b9c69bb7ef4d133d498937186dc0df3ec30584173005ad",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-budget-abort-4aea4f7278e5",
+  "observation_epoch": "Ea07c91efe904453cb032b68eb0a0e47d",
+  "record_count": 542,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [],
+    "core_validations": 12,
+    "description": "R+1 rejections: Legitimate aborts on the fourth",
+    "disposition": "domain: replan budget exhausted (counter R+1 retained)",
+    "name": "budget-abort",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 542
+}

@@ -13,7 +13,7 @@ Select exactly one CLI input mode. A finite file provides timestamped rows and l
 | Redis route catalog | `--input-redis-file PATH` | Compact variable-to-channel JSON5 object | Live |
 | Redis knowledge state | `--redis-knowledge-input` | Selected Redis keys plus keyspace notifications | Live; startup snapshot is enabled by default |
 | ROS 2 route catalog | `--input-ros-file PATH` | Compact route object with `[topic, message type/codec]` entries | Live; requires `--features ros` |
-| Named sources | `--input-config PATH` | JSON5 source registry with MQTT, Redis, Redis knowledge, or ROS sources | Source-dependent; variables have one owner |
+| Named sources | `--input-config PATH` | JSON5 source registry with MQTT, Redis, Redis knowledge, ROS, or [RPIO observation](../reference/input-configuration.md#rpio-observation-journals) sources | Source-dependent; variables have one owner |
 
 `--input-config` is exclusive with the other input-selection flags. Generic MQTT and Redis routes default to the model variable names. Redis knowledge mappings are explicit: use `--redis-knowledge-key INPUT=KEY` or a `redis-knowledge` source's `keys` object; the checker never derives a key implicitly from a variable name.
 

@@ -1,0 +1,128 @@
+{
+  "converted_from_sha256": "15ec9930de6d53ec11cb38da28bff7e2dcf15cde18cab258df9cb010deb4511e",
+  "deployed_model_id": 2,
+  "epoch": "Ed5f6aa2a08c84c3db52fd96786875b35",
+  "excluded_old_outer_cycle_events": [
+    {
+      "analysis_start_seq": 472,
+      "cycle_id": "32f3bba9e91d4dcdb7595bdaa0476319",
+      "detection_write_seq": 477,
+      "event_seq": 551,
+      "frame_path": "frames/cycle-0023.jpg",
+      "model_id": 1,
+      "screw_entropy": 0.9
+    }
+  ],
+  "first_applied_end_seq": 541,
+  "fragment_extent": {
+    "after": 0,
+    "through": 764
+  },
+  "fragment_sha256": "625e574650cb4dc015ed9213567c7d51298fa119db58c1e7c2bfc39dc2b5d375",
+  "fresh_deployed_cycle_samples": [
+    {
+      "analysis_start_seq": 559,
+      "cycle_id": "3d2c814859f048b0815b758ea1dfb95b",
+      "detection_write_seq": 564,
+      "event_seq": 572,
+      "frame_path": "frames/cycle-0024.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 580,
+      "cycle_id": "81a6444121334370b25062fe5de206df",
+      "detection_write_seq": 585,
+      "event_seq": 593,
+      "frame_path": "frames/cycle-0025.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 601,
+      "cycle_id": "6f81cbbc308f42de88187c0b661dc169",
+      "detection_write_seq": 606,
+      "event_seq": 614,
+      "frame_path": "frames/cycle-0026.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 622,
+      "cycle_id": "fdd6cf0d101648feac091139e32e4576",
+      "detection_write_seq": 627,
+      "event_seq": 635,
+      "frame_path": "frames/cycle-0027.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 643,
+      "cycle_id": "9fd5457c21f0474daa4922ae977c4827",
+      "detection_write_seq": 648,
+      "event_seq": 656,
+      "frame_path": "frames/cycle-0028.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 664,
+      "cycle_id": "87b3092305b14fa6a6b800a90aef1102",
+      "detection_write_seq": 669,
+      "event_seq": 677,
+      "frame_path": "frames/cycle-0029.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 685,
+      "cycle_id": "310e26b02ce54ac0b08053af0e767abe",
+      "detection_write_seq": 690,
+      "event_seq": 698,
+      "frame_path": "frames/cycle-0030.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 706,
+      "cycle_id": "c39980f6c5f44446a9ab4172d37ee42d",
+      "detection_write_seq": 711,
+      "event_seq": 719,
+      "frame_path": "frames/cycle-0031.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 727,
+      "cycle_id": "f51f7a84e3e440c6a2e5cbe09f04917b",
+      "detection_write_seq": 732,
+      "event_seq": 740,
+      "frame_path": "frames/cycle-0032.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    },
+    {
+      "analysis_start_seq": 748,
+      "cycle_id": "14ed9cfd5de8401580d9bb53bb7aaf8c",
+      "detection_write_seq": 753,
+      "event_seq": 761,
+      "frame_path": "frames/cycle-0033.jpg",
+      "model_id": 2,
+      "screw_entropy": 0.15
+    }
+  ],
+  "journal_clock": "redis.server.time",
+  "journal_schema_version": 4,
+  "kind": "actual-capture-prefix-fragment",
+  "limitations": "Historical actual producer evidence; no new capture verification or final-core conformance claim. Raw prefix bytes and original positions preserved.",
+  "source_capture": "/home/twright/worktrees/robosapiens-trustworthiness-checker2-journal-investigation/.local-design/bounded-observation/case-study-tests/runs/long-0645/long-run@redis-store.jsonl",
+  "source_capture_sha256": "909c5d249ddc6d86e4598b261e2e120053cb0198f752d10df616d153dc0f5e1f",
+  "source_extent": {
+    "after": 0,
+    "through": 22127
+  },
+  "source_trial": "/home/twright/worktrees/robosapiens-trustworthiness-checker2-journal-investigation/.local-design/bounded-observation/case-study-tests/runs/long-0645/long-run@redis-store.trial.json",
+  "tenth_fresh_cycle_event_seq": 761,
+  "terminal_monitor_end_seq": 764,
+  "verified_capture": false
+}

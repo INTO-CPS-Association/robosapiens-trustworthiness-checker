@@ -59,6 +59,9 @@ pub(crate) enum InputSourceControl {
         active_topics: std::collections::BTreeMap<crate::VarName, String>,
     },
     Channel(crate::io::channel::ReconfigurableChannelControl),
+    /// A polled live journal, which drains what it holds once stopped.
+    #[cfg(feature = "redis")]
+    JournalStop(Rc<crate::io::rpio::observation_redis::StopSignal>),
     #[cfg(test)]
     DelayedTest {
         delay: std::time::Duration,
@@ -92,6 +95,8 @@ impl InputSourceControl {
                 control.pause(boundary).await?;
                 Ok(true)
             }
+            #[cfg(feature = "redis")]
+            Self::JournalStop(_) => Ok(false),
             #[cfg(test)]
             Self::DelayedTest { .. } => Ok(false),
         }
@@ -112,6 +117,8 @@ impl InputSourceControl {
                 Ok(())
             }
             Self::Channel(control) => control.resume(),
+            #[cfg(feature = "redis")]
+            Self::JournalStop(_) => Ok(()),
             #[cfg(test)]
             Self::DelayedTest { .. } => Ok(()),
         }
@@ -179,6 +186,10 @@ impl InputSourceControl {
                     )
                     .await
             }
+            #[cfg(feature = "redis")]
+            Self::JournalStop(_) => {
+                anyhow::bail!("an RPIO journal input does not support in-place rebind")
+            }
             #[cfg(test)]
             Self::DelayedTest { .. } => {
                 anyhow::bail!("delayed test input owner does not support rebind")
@@ -212,6 +223,11 @@ impl InputSourceControl {
             }
             Self::Channel(control) => {
                 control.shutdown().await;
+                Ok(())
+            }
+            #[cfg(feature = "redis")]
+            Self::JournalStop(signal) => {
+                signal.stop();
                 Ok(())
             }
             #[cfg(test)]
@@ -280,6 +296,20 @@ impl<V: 'static> OpenedInputSource<V> {
             },
             control: None,
         }
+    }
+
+    /// A live source polled directly, whose control asks it to stop
+    /// fetching and drain what it already holds; graceful drain then polls
+    /// it to EOF.
+    #[cfg(feature = "redis")]
+    pub(crate) fn direct_with_control(
+        id: SourceId,
+        stream: ReconfigurableInputStream<V>,
+        control: InputSourceControl,
+    ) -> Self {
+        let mut source = Self::direct(id, stream);
+        source.control = Some(control);
+        source
     }
 
     #[cfg(test)]
@@ -382,6 +412,12 @@ impl<V: 'static> OpenedInputSource<V> {
     }
 
     fn stop_ingress(&mut self) {
+        #[cfg(feature = "redis")]
+        if let Some(InputSourceControl::JournalStop(signal)) = &self.control {
+            signal.stop();
+            self.control = None;
+            return;
+        }
         self.ingress.stop(self.control.take());
     }
 

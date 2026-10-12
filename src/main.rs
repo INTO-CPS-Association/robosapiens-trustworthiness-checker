@@ -201,6 +201,14 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         Some(InputSource::<Value>::redis_knowledge),
         &cli,
     )?;
+    // Typed sources take what the specification declares for their
+    // variables, such as the time domain of an RPIO observation.
+    let input_pipeline = match &model {
+        LangSpecification::Dsrv(model) => input_pipeline
+            .bind_declared_types(model.type_annotations())
+            .context("Input configuration does not match the model's declared input types")?,
+        LangSpecification::Mstlo(_) => input_pipeline,
+    };
     #[cfg(feature = "diagnostics")]
     let diagnostics = cli
         .diagnostics

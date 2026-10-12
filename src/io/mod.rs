@@ -5,6 +5,7 @@ pub mod file;
 pub mod lifecycle;
 pub mod map;
 pub mod mqtt;
+pub mod provenance;
 pub mod retry;
 #[cfg(feature = "ros")]
 pub mod ros;
@@ -32,7 +33,6 @@ pub use retry::{InvalidRetryPolicy, RetryLimit, RetryPolicy, RetryTracker};
 pub mod output;
 pub use output::*;
 mod aggregation;
-#[cfg(feature = "redis")]
 pub mod redis;
 mod redis_config;
 pub mod rpio;
@@ -41,3 +41,5 @@ pub mod source_diagnostics;
 pub(crate) mod reconfigurable_input;
 mod step_controlled;
 pub use step_controlled::{InputController, controlled};
+
+pub(crate) mod group;

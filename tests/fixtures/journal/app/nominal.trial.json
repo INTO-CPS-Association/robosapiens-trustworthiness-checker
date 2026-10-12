@@ -1,0 +1,24 @@
+{
+  "capture_file": "nominal.jsonl",
+  "capture_sha256": "424072fb89d1c5fc2a4c1f3179bb61bd501026c25b8cf21a1f787956e9a414e9",
+  "clock_file": "nominal.clock.jsonl",
+  "converted_from_sha256": "e8a6ea7066da130b2aaf23368fdf259c7ba3af9c7c53a2a65a165fa94794d1fb",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-nominal-fe7bb6f8ccf3",
+  "observation_epoch": "Eb3ab17c049c14272b32738cf7f4007a7",
+  "record_count": 257,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [],
+    "core_validations": 0,
+    "description": "healthy entropy; no anomaly",
+    "disposition": "nominal",
+    "name": "nominal",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 257
+}

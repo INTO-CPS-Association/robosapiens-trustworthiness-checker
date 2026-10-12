@@ -1,0 +1,26 @@
+{
+  "capture_file": "retries-then-accept.jsonl",
+  "capture_sha256": "2ea286e17f9dd0211e934ce55a2070bd12df68c5680776b6d626466c6cc98ad8",
+  "clock_file": "retries-then-accept.clock.jsonl",
+  "converted_from_sha256": "678f64175ef9fd49d2c2eb9f06aacd0f41671210885bf29c31037732cfb8d307",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-retries-then-accept-938e217b6907",
+  "observation_epoch": "Ea1c85f580443484e9947ebb9d61261c0",
+  "record_count": 367,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [
+      2
+    ],
+    "core_validations": 4,
+    "description": "R=3 rejections, then acceptance",
+    "disposition": "nominal",
+    "name": "retries-then-accept",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 367
+}

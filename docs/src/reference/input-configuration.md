@@ -36,7 +36,7 @@ The input-file value is JSON5. Field names can be quoted or unquoted, string val
 - Use `Struct<level: Int, valid: Bool>` when named fields have distinct types. `Map<Int>` instead describes an object whose values all have the same type, with keys chosen independently of a fixed field list.
 - Select declared fields in DSRV equations with dot notation, for example `reading.status.valid`. A field absent from the declared struct type is a type-checking error.
 - `Struct<level: Int, ...>` permits additional fields when type-checking struct expressions in a model. The listed fields retain their declared types. The ellipsis does not make them optional or declare types for the additional fields.
-- Incoming JSON5 objects are decoded independently of these model checks. Extra incoming fields are currently accepted even without `...`; a struct annotation is not an input schema validator. Supply all fields the equations read, with values of the declared types. Accessing a missing field fails monitoring with `Missing key for map get: FIELD`; a wrong field type can fail when the value is used. Missing fields do not inherit previous values.
+- Incoming JSON5 objects are decoded independently of these model checks. Extra incoming fields are currently accepted even without `...`; a struct annotation is not an input schema validator. Supply all fields the equations read, with values of the declared types. Accessing a missing field fails monitoring with `Missing key for map get: FIELD`; a wrong field type can fail when the value is used. Missing fields do not inherit previous values. Timed RPIO observation sources enforce the complete declared type at admission; see [RPIO observation journals](#rpio-observation-journals).
 
 To construct a struct inside a DSRV equation, use an object expression such as `{level: x, valid: true}` or the explicit constructor `Struct("level": x, "valid": true)`. These are expression fragments: `x` refers to a stream in the model. An input file instead supplies concrete JSON5 values; it cannot contain the `Struct(...)` constructor or evaluate `x` as a stream reference.
 
@@ -104,7 +104,7 @@ A string is the normal route form for MQTT and Redis. Their optional format in `
 |---|---|---|
 | `default` | root | Optional source ID used when a binding does not name an owner. It must exist in `sources`. |
 | `sources` | root | Non-empty map of unique source IDs. A model variable may be owned by only one configured source. |
-| `kind` | source | `mqtt`, `redis`, `redis-knowledge`, or `ros`. |
+| `kind` | source | `mqtt`, `redis`, `redis-knowledge`, `ros`, or one of the [RPIO observation](#rpio-observation-journals) kinds. |
 | `host`, `port` | MQTT/Redis sources | Optional connection address; omitted values use the adapter's defaults/CLI port. |
 | `protocol` | MQTT | `"3.1.1"` (default) or `"5"`. |
 | `routes` | MQTT/Redis/ROS | Variable-to-route map. ROS routes normally include a codec. |
@@ -117,6 +117,146 @@ A string is the normal route form for MQTT and Redis. Their optional format in `
 MQTT and plain Redis input retry transient transport failures indefinitely by default. An explicit retry policy can bound the total attempts, including the initial attempt. A rejected MQTT 5 protocol acknowledgement is terminal for the shared driver and is not retried as a transient connection failure. Redis knowledge uses its selected-key recovery policy; see its linked guide for snapshot behavior. Retry limits are separate from `--io-shutdown-timeout-ms`, whose omitted value permits unlimited graceful shutdown.
 
 Unknown fields are rejected. A named source is structurally validated before it is opened; variable ownership, route codecs, feature availability, and external connection are later boundaries.
+
+## RPIO observation journals
+
+RPIO records describe callback steps and the immutable Knowledge versions they
+name. The selected native wire format is schema version 2: phase records carry
+version references, and separate Knowledge records supply each referenced
+value and writer. Activation tokens are strings within a callback run;
+Knowledge write sequences belong to a store epoch. Neither is a global record
+position.
+
+| Kind | Input value | Reads |
+|---|---|---|
+| `rpio-observation-file` | `rpio::journal::Record<K, E, M>` | Ordered `files` of native JSON Lines records; no clock ticks. |
+| `rpio-observation` | `rpio::journal::Record<K, E, M>` | Separate Redis `phase_stream` and `knowledge_stream`; no clock ticks. |
+| `rpio-observation-clock-file` | `rpio::journal::timing::Observation<K, E, M, D>` | Native `files`, with optional replay clock samples. |
+| `rpio-observation-clock` | `rpio::journal::timing::Observation<K, E, M, D>` | Separate Redis phase/Knowledge streams; optional periodic Redis `TIME` samples. |
+
+Use a timed observation kind when the model needs branded instants or complete
+admission against its declared input type, including when no clock samples
+are required. Its value has this shape:
+
+```text
+Struct<record: Option<Struct<time: std::time::Instant<D>, value: Record>>,
+       clock: Option<Struct<clock: Str, time: std::time::Instant<D>, origin: Str>>>
+```
+
+A record's instant comes from its native `arrival.journal_time`; the source
+keeps that value when resolving references. Clock-only ticks have `record:
+None`. Knowledge values are tagged by key; triggers and event details retain their
+explicit union tags, and event envelopes retain their declared structs. Timed-source admission checks every declared field:
+integer-written Float fields are converted to Float, absent optional struct
+fields become `None`, supplied Options require their explicit `Some`/`None`
+tags, and newtype brands must match. Closed structs reject undeclared fields.
+`Any` retains concrete values without imposing a domain schema.
+
+| Field | Applies to | Meaning |
+|---|---|---|
+| `variable` | all four kinds | Input variable owned by this source. |
+| `files` | file kinds | Non-empty ordered list of native JSON Lines capture paths. |
+| `capture_checks` | file kinds | Optional frozen metadata, one entry per file in the same order: `{records, sha256, journal_clock}`. `records` counts nonblank records; SHA-256 covers exact file bytes. |
+| `domain` | timed kinds | Optional brand of `D`, e.g. `JournalTime`; inferred from the declared Observation type when omitted. A supplied brand must agree. |
+| `journal_clock` | timed kinds | Physical clock label for the captured instants. File manifests must agree; live entries must carry this label. |
+| `clock_samples` | timed file | Inline samples or a JSON Lines filename: `{time, through, with_record?}`. Alternative to `clock_values`/`steps`. |
+| `clock_values` | timed file | Inline sample times; without `steps`, all records are delivered first, followed by all samples. |
+| `steps` | timed file | Inline `{step:["journal","clock"], time?}` steps or a JSON Lines filename; schedules `clock_values` and records, consuming all supplied members. |
+| `host`, `port`, `database` | live kinds | Redis address; defaults are `localhost`, `6379`, database `0`. CLI Redis port applies when source port is omitted. |
+| `phase_stream`, `knowledge_stream` | live kinds | Defaults: `maple:observation:phase`, `maple:observation:knowledge`. |
+| `clock_period_ms` | timed live | Optional positive period. Omitted or `null` means no periodic samples. When present, `journal_clock` must be `redis.server.time`. |
+| `provenance` | timed kinds | Optional JSON Lines output describing each delivered tick's origins. |
+| `remove` | file kinds | Observation ablation capabilities: `writers`, `identity`, `causality`, `reads`, `steps`. |
+| `unrecorded` | file kinds | `refuse` (default) rejects absent Knowledge definitions; `incomplete` exposes unresolved evidence explicitly. |
+
+`epoch`, `namespace`, `file`, `after` and top-level `through` are not accepted
+fields for these source kinds. Sample `through` is a count of admitted capture
+records, independent of Knowledge's global write sequence and Redis IDs.
+
+### Order and capture completeness
+
+File sources resolve references against immutable Knowledge definitions and
+preserve capture order. An identical repeated definition is idempotent;
+contradictory value/writer definitions of the same reference are errors. A
+frozen `capture_checks` manifest rejects changed bytes, record counts and
+missing final line feeds before evaluation. Without the manifest, a valid
+shorter capture does not establish the intended trial extent.
+
+Live sources start both Redis cursors at `0-0`. Redis IDs are opaque transport
+cursors. Within each completed fetched snapshot, each stream retains its
+Redis-ID order even when its clock goes backwards. Only the two stream heads
+are compared by `journal_time`, with Knowledge first on equal timestamps.
+This is not a globally numbered journal:
+a missing numeric ID or Knowledge write sequence is not a record-gap proof.
+Use a trial manifest and expected source/output counts to establish experiment
+completion. Unresolvable references and incomplete fetched snapshots report
+errors rather than quietly completing; already proven output may drain.
+
+The resolved property view is a separate contract under
+`rpio::journal::view`, with later timing/Knowledge/MAPLE-K helpers below that
+namespace and the coordinator in `rpio::journal::state`. An application
+adapter supplies processing positions, the physical clock label and message
+projections. The view's compatibility field `ActivationId.start_seq` holds
+the original string token, not a numeric Start position. Native source input
+and the resolved property view must be adapted explicitly.
+
+### Clock samples
+
+A replay sample is released after `through` records across the configured
+files. Samples must be nondecreasing in coverage and within the capture's
+record count; coverage zero precedes the first record. `with_record: true`
+combines a sample with that record's tick and must be the first sample at a
+nonempty prefix. Its clock label is `journal_clock`, and origin is `Replay`.
+
+A `clock_samples` file is checked completely before output, then read one line
+at a time with a second-pass digest check. Lines are bounded to 1 MiB. A
+complete final JSON sample without a line feed is accepted. This streaming
+bound applies to file clock samples; native capture records are materialised
+for exact reference resolution.
+
+Live periodic samples atomically read Redis `TIME` and both stream high-water
+IDs. A sample waits until both covered prefixes have been delivered and never
+overtakes buffered evidence. Due samples are served even during continuous
+input. Missed periods coalesce into one outstanding sample; during silence,
+samples advance time. Live sample origin is `Periodic`.
+
+### Finite example: two records and a later sample
+
+This model exposes whether each tick carries a record or a clock:
+
+```dsrv
+{{#include ../../../examples/rpio-observation/records-and-clock.dsrv}}
+```
+
+From the repository root, run:
+
+```sh
+cargo run --bin trustworthiness_checker -- \
+  examples/rpio-observation/records-and-clock.dsrv \
+  --input-config examples/rpio-observation/records-and-clock.json5 \
+  --output-stdout
+```
+
+The configuration reads the two-record native service capture and releases a
+sample at 12 seconds after both records. It exits after three ticks:
+`recorded[0]` and `recorded[1]` are `true`, `recorded[2]` is `false`;
+`clocked[0]` and `clocked[1]` are `false`, `clocked[2]` is `true`.
+
+### Provenance
+
+Timed sources optionally write one JSON line per delivered logical tick:
+
+```json
+{"tick":4,"origins":[{"member":"journal","kind":"phase","cursor":"trial.jsonl:4","time":12.0},{"member":"clock","kind":"clock","clock":"fixture.journal","time":20.0}]}
+```
+
+Kinds are `phase`, `knowledge`, `incomplete` or `clock`. File cursors identify
+physical `file:line`; live cursors retain Redis stream IDs. Clock origins name
+the clock label. Ticks begin at zero and, for a model with this source as its
+only input, correspond to stdout row numbers, including silent rows.
+Provenance records delivery into the input pipeline, so the last provenance
+line does not alone prove evaluation or output completion. A stopped/error
+run must be reconciled with expected counts before it is accepted as a trial.
 
 ## Redis knowledge CLI form
 

@@ -3865,6 +3865,7 @@ dependencies = [
  "futures",
  "futures-timeout",
  "macro_rules_attribute",
+ "proptest",
  "r2r",
  "redis",
  "redis-macros",

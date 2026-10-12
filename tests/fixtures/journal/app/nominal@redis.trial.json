@@ -1,0 +1,24 @@
+{
+  "capture_file": "nominal@redis.jsonl",
+  "capture_sha256": "469901fab629fc074575077a0fa9e4abb546f8e5ea6a28b634cd26f44ce327d9",
+  "clock_file": "nominal@redis.clock.jsonl",
+  "converted_from_sha256": "485a1038dd039b3ad2414ce8423c0469c3fa75a26665f624e4aa90c0caa46d78",
+  "journal_clock": "redis.server.time",
+  "journal_schema_version": 4,
+  "namespace": "screw-nominal-redis-99301a619fc2",
+  "observation_epoch": "E99247e705ef541fdaef4cfb1483fc192",
+  "record_count": 257,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [],
+    "core_validations": 0,
+    "description": "healthy entropy; no anomaly",
+    "disposition": "nominal",
+    "name": "nominal@redis",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "redis"
+  },
+  "start_after_seq": 0,
+  "through_seq": 257
+}

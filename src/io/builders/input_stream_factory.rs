@@ -1,4 +1,4 @@
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -12,6 +12,7 @@ use async_stream::stream;
 use futures::{Stream, StreamExt};
 use smol::LocalExecutor;
 
+use super::super::config::InputPolicy;
 use crate::core::{
     FileInputValue, InputBatch, InputStream, MQTT_HOSTNAME, REDIS_HOSTNAME, RosStreamValue, Value,
     VarName,
@@ -33,10 +34,6 @@ use crate::io::{
 };
 use crate::stream_utils::Fanout;
 use ::core::cfg_select;
-#[cfg(feature = "redis")]
-use std::any::Any;
-
-use super::super::config::InputPolicy;
 
 /// An opened ordinary input pipeline and the resources that keep it live.
 ///
@@ -195,6 +192,30 @@ enum InputSourceKind<V = Value> {
         retry: RetryPolicy,
     },
     RedisKnowledge(RedisKnowledgeConfig),
+    RpioObservationFile {
+        variable: VarName,
+        files: Vec<String>,
+        capture_checks: Vec<crate::io::config::RpioCaptureCheck>,
+        reading: crate::io::rpio::JournalReading,
+    },
+    RpioObservationClockFile(crate::io::rpio::observation_clock::FiniteObservationClock),
+    RpioObservation {
+        host: String,
+        port: Option<u16>,
+        database: u32,
+        variable: VarName,
+        phase_stream: String,
+        knowledge_stream: String,
+    },
+    RpioObservationClock(crate::io::rpio::observation_clock::LiveObservationClock),
+    Clock {
+        variable: VarName,
+        period: std::time::Duration,
+    },
+    ClockFile {
+        variable: VarName,
+        values: Vec<f64>,
+    },
     Channel {
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
@@ -208,14 +229,7 @@ pub struct InputSource<V = Value> {
     /// Transport-local route carrying monitor reconfiguration messages:
     /// an MQTT topic, Redis Pub/Sub channel, ROS topic, or equivalent.
     reconfiguration_route: Option<Box<str>>,
-}
-
-#[cfg(feature = "diagnostics")]
-impl<V> InputSource<V> {
-    /// Attach a source recorder from `hub` to sources that record their own phases.
-    fn with_diagnostics(self, _hub: &crate::diagnostics::DiagnosticsHub) -> Self {
-        self
-    }
+    diagnostics: crate::io::source_diagnostics::SourceProbe,
 }
 
 impl InputSource<Value> {
@@ -224,6 +238,107 @@ impl InputSource<Value> {
     /// a constructor on arbitrary `InputSource<V>` specializations.
     pub fn redis_knowledge(config: RedisKnowledgeConfig) -> Self {
         Self::new(InputSourceKind::RedisKnowledge(config))
+    }
+
+    pub fn rpio_observation_files(variable: VarName, files: Vec<String>) -> Self {
+        Self::new(InputSourceKind::RpioObservationFile {
+            variable,
+            files,
+            capture_checks: Vec::new(),
+            reading: Default::default(),
+        })
+    }
+
+    pub fn rpio_observation(
+        host: String,
+        port: Option<u16>,
+        database: u32,
+        variable: VarName,
+        phase_stream: String,
+        knowledge_stream: String,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !phase_stream.is_empty(),
+            "RPIO phase stream must not be empty"
+        );
+        anyhow::ensure!(
+            !knowledge_stream.is_empty(),
+            "RPIO Knowledge stream must not be empty"
+        );
+        anyhow::ensure!(
+            phase_stream != knowledge_stream,
+            "RPIO phase and Knowledge streams must be distinct"
+        );
+        Ok(Self::new(InputSourceKind::RpioObservation {
+            host,
+            port,
+            database,
+            variable,
+            phase_stream,
+            knowledge_stream,
+        }))
+    }
+
+    /// A live composed source delivering `variable` as a typed observation
+    /// of RPIO journal records and periodic host-clock samples.
+    ///
+    /// `domain` is the DSRV marker `D` of its instants; it may be `None`
+    /// when the specification's declaration of `variable` is
+    /// [bound](InputPipeline::bind_declared_types) before the source opens.
+    /// Every journal entry must carry the `journal_clock` label given here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rpio_observation_clock(
+        host: String,
+        port: Option<u16>,
+        database: u32,
+        variable: VarName,
+        domain: Option<String>,
+        journal_clock: String,
+        phase_stream: String,
+        knowledge_stream: String,
+        period: std::time::Duration,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            domain
+                .as_deref()
+                .is_none_or(|domain| !domain.trim().is_empty()),
+            "RPIO observation time domain must not be empty"
+        );
+        anyhow::ensure!(
+            !journal_clock.trim().is_empty(),
+            "RPIO journal clock label must not be empty"
+        );
+        anyhow::ensure!(!period.is_zero(), "clock period must be positive");
+        anyhow::ensure!(
+            !phase_stream.is_empty() && !knowledge_stream.is_empty(),
+            "RPIO streams must not be empty"
+        );
+        anyhow::ensure!(
+            phase_stream != knowledge_stream,
+            "RPIO phase and Knowledge streams must be distinct"
+        );
+        Ok(Self::new(InputSourceKind::RpioObservationClock(
+            crate::io::rpio::observation_clock::LiveObservationClock {
+                binding: crate::io::rpio::observation_clock::ObservationBinding {
+                    variable,
+                    domain: domain.map(Into::into),
+                    journal_clock: journal_clock.into(),
+                    declared: None,
+                },
+                host,
+                port,
+                database,
+                phase_stream,
+                knowledge_stream,
+                period: Some(period),
+                provenance: None,
+            },
+        )))
+    }
+
+    pub fn clock(variable: VarName, period: std::time::Duration) -> anyhow::Result<Self> {
+        anyhow::ensure!(!period.is_zero(), "clock period must be positive");
+        Ok(Self::new(InputSourceKind::Clock { variable, period }))
     }
 }
 
@@ -259,6 +374,186 @@ where
         }
     });
     Ok((stream, owner))
+}
+
+fn open_rpio_observation_files<V>(
+    files: &[String],
+    variable: VarName,
+    reading: &crate::io::rpio::JournalReading,
+    capture_checks: &[crate::io::config::RpioCaptureCheck],
+) -> anyhow::Result<InputStream<V>>
+where
+    V: 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "RPIO observation file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    let batches = crate::io::rpio::observation_file::read_files_checked(
+        files,
+        variable,
+        reading,
+        capture_checks,
+    )?;
+    Ok(Box::pin(async_stream::try_stream! {
+        for batch in batches {
+            let batch = batch.try_map_values(|value| {
+                let value: Box<dyn Any> = Box::new(value);
+                value
+                    .downcast::<V>()
+                    .map(|value| *value)
+                    .map_err(|_| anyhow::anyhow!("RPIO observation value-domain conversion failed"))
+            })?;
+            yield batch;
+        }
+    }))
+}
+
+#[cfg(feature = "redis")]
+async fn open_rpio_observation<V>(
+    host: String,
+    port: Option<u16>,
+    database: u32,
+    phase_stream: String,
+    knowledge_stream: String,
+    variable: VarName,
+    diagnostics: crate::io::source_diagnostics::SourceProbe,
+) -> anyhow::Result<(
+    InputStream<V>,
+    Rc<crate::io::rpio::observation_redis::StopSignal>,
+)>
+where
+    V: 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "RPIO observation input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    let (values, stop) = crate::io::rpio::observation_redis::open(
+        host,
+        port,
+        database,
+        phase_stream,
+        knowledge_stream,
+        variable,
+        diagnostics,
+    )
+    .await?;
+    Ok((value_stream(values, "RPIO observation"), stop))
+}
+
+fn wall_clock_seconds(now: std::time::SystemTime) -> anyhow::Result<f64> {
+    Ok(now
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs_f64())
+}
+
+fn open_clock<V>(variable: VarName, period: std::time::Duration) -> anyhow::Result<InputStream<V>>
+where
+    V: 'static,
+{
+    open_clock_with(variable, period, || {
+        wall_clock_seconds(std::time::SystemTime::now())
+    })
+}
+
+fn open_clock_with<V, F>(
+    variable: VarName,
+    period: std::time::Duration,
+    mut sample: F,
+) -> anyhow::Result<InputStream<V>>
+where
+    V: 'static,
+    F: FnMut() -> anyhow::Result<f64> + 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "clock input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    Ok(Box::pin(async_stream::try_stream! {
+        let mut ticks = smol::Timer::interval(period);
+        while ticks.next().await.is_some() {
+            let value = Value::Float(sample()?);
+            let value: Box<dyn Any> = Box::new(value);
+            let value = value
+                .downcast::<V>()
+                .map(|value| *value)
+                .map_err(|_| anyhow::anyhow!("clock value-domain conversion failed"))?;
+            yield InputBatch::update(variable.clone(), value);
+        }
+    }))
+}
+
+#[cfg(feature = "redis")]
+async fn open_rpio_observation_clock<V>(
+    source: crate::io::rpio::observation_clock::LiveObservationClock,
+    diagnostics: crate::io::source_diagnostics::SourceProbe,
+) -> anyhow::Result<(
+    InputStream<V>,
+    Rc<crate::io::rpio::observation_redis::StopSignal>,
+)>
+where
+    V: 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "RPIO observation-clock input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    let (values, stop) = source.open(diagnostics).await?;
+    Ok((value_stream(values, "RPIO observation-clock"), stop))
+}
+
+fn open_rpio_observation_clock_files<V>(
+    source: crate::io::rpio::observation_clock::FiniteObservationClock,
+) -> anyhow::Result<InputStream<V>>
+where
+    V: 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "RPIO observation-clock file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    Ok(value_stream(source.open()?, "RPIO observation-clock file"))
+}
+
+/// A `Value` stream as the stream of the requested value domain, which a
+/// caller has already checked is `Value`.
+fn value_stream<V: 'static>(mut values: InputStream<Value>, what: &'static str) -> InputStream<V> {
+    Box::pin(async_stream::try_stream! {
+        while let Some(batch) = values.next().await {
+            let batch = batch?.try_map_values(|value| {
+                let value: Box<dyn Any> = Box::new(value);
+                value
+                    .downcast::<V>()
+                    .map(|value| *value)
+                    .map_err(|_| anyhow::anyhow!("{what} value-domain conversion failed"))
+            })?;
+            yield batch;
+        }
+    })
+}
+
+fn open_clock_file<V>(variable: VarName, values: Vec<f64>) -> anyhow::Result<InputStream<V>>
+where
+    V: 'static,
+{
+    anyhow::ensure!(
+        TypeId::of::<V>() == TypeId::of::<Value>(),
+        "clock-file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+    );
+    let batches = values
+        .into_iter()
+        .map(|value| {
+            let value: Box<dyn Any> = Box::new(Value::Float(value));
+            let value = value
+                .downcast::<V>()
+                .map(|value| *value)
+                .map_err(|_| anyhow::anyhow!("clock-file value-domain conversion failed"))?;
+            Ok(InputBatch::update(variable.clone(), value))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(Box::pin(futures::stream::iter(batches.into_iter().map(Ok))))
 }
 
 /// An owned local source set containing source-owned catalogs and
@@ -356,6 +651,29 @@ impl<V> InputSources<V> {
 
     pub fn source_mut(&mut self, source: &str) -> Option<&mut InputSource<V>> {
         self.sources.get_mut(source)
+    }
+
+    /// Bind each typed source to what the specification declares for its
+    /// variable. An RPIO observation-plus-clock source takes its time
+    /// domain `D` from the declared `std::time::Instant<D>` of its
+    /// observation, and refuses a configured domain that disagrees.
+    pub fn bind_declared_types(
+        &mut self,
+        declared: &BTreeMap<VarName, crate::core::StreamType>,
+    ) -> anyhow::Result<()> {
+        for (id, source) in &mut self.sources {
+            let binding = match &mut source.kind {
+                InputSourceKind::RpioObservationClockFile(source) => &mut source.binding,
+                InputSourceKind::RpioObservationClock(source) => &mut source.binding,
+                _ => continue,
+            };
+            if let Some(declared) = declared.get(&binding.variable) {
+                binding
+                    .bind_declared(declared)
+                    .with_context(|| format!("input source `{id}`"))?;
+            }
+        }
+        Ok(())
     }
 
     fn sole_reconfigurable_source_id(&self) -> Option<SourceId> {
@@ -505,6 +823,169 @@ impl<V> InputSources<V> {
                             keys,
                             retry,
                         })),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::RpioObservationFile {
+                    variable,
+                    files,
+                    capture_checks,
+                    remove,
+                    unrecorded,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "RPIO observation file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::RpioObservationFile {
+                            variable,
+                            files,
+                            capture_checks,
+                            reading: crate::io::rpio::JournalReading { remove, unrecorded },
+                        }),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::RpioObservationClockFile {
+                    variable,
+                    domain,
+                    journal_clock,
+                    files,
+                    capture_checks,
+                    clock_values,
+                    clock_samples,
+                    steps,
+                    provenance,
+                    remove,
+                    unrecorded,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "RPIO observation-clock file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::RpioObservationClockFile(
+                            crate::io::rpio::observation_clock::FiniteObservationClock {
+                                binding: crate::io::rpio::observation_clock::ObservationBinding {
+                                    variable,
+                                    domain: domain.map(Into::into),
+                                    journal_clock: journal_clock.into(),
+                                    declared: None,
+                                },
+                                files,
+                                capture_checks,
+                                clock_values: clock_values
+                                    .into_iter()
+                                    .map(|value| {
+                                        value
+                                            .as_f64()
+                                            .expect("validated observation clock value is finite")
+                                    })
+                                    .collect(),
+                                clock_samples,
+                                steps,
+                                provenance,
+                                reading: crate::io::rpio::JournalReading { remove, unrecorded },
+                            },
+                        )),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::RpioObservation {
+                    host,
+                    port,
+                    database,
+                    variable,
+                    phase_stream,
+                    knowledge_stream,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "RPIO observation input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::RpioObservation {
+                            host: host.unwrap_or_else(|| REDIS_HOSTNAME.to_owned()),
+                            port: port.or(redis_port),
+                            database,
+                            variable,
+                            phase_stream,
+                            knowledge_stream,
+                        }),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::RpioObservationClock {
+                    host,
+                    port,
+                    database,
+                    variable,
+                    domain,
+                    journal_clock,
+                    phase_stream,
+                    knowledge_stream,
+                    clock_period_ms,
+                    provenance,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "RPIO observation-clock input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::RpioObservationClock(
+                            crate::io::rpio::observation_clock::LiveObservationClock {
+                                binding: crate::io::rpio::observation_clock::ObservationBinding {
+                                    variable,
+                                    domain: domain.map(Into::into),
+                                    journal_clock: journal_clock.into(),
+                                    declared: None,
+                                },
+                                host: host.unwrap_or_else(|| REDIS_HOSTNAME.to_owned()),
+                                port: port.or(redis_port),
+                                database,
+                                phase_stream,
+                                knowledge_stream,
+                                period: clock_period_ms.map(std::time::Duration::from_millis),
+                                provenance,
+                            },
+                        )),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::Clock {
+                    variable,
+                    period_ms,
+                } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "clock input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::Clock {
+                            variable,
+                            period: std::time::Duration::from_millis(period_ms),
+                        }),
+                        None,
+                    )
+                }
+                crate::io::config::SourceConfig::ClockFile { variable, values } => {
+                    anyhow::ensure!(
+                        TypeId::of::<V>() == TypeId::of::<Value>(),
+                        "clock-file input produces ordinary `Value` input and is unsupported for MSTLO or other non-Value input domains"
+                    );
+                    (
+                        InputSource::new(InputSourceKind::ClockFile {
+                            variable,
+                            values: values
+                                .into_iter()
+                                .map(|value| {
+                                    value
+                                        .as_f64()
+                                        .expect("validated clock-file value is finite")
+                                })
+                                .collect(),
+                        }),
                         None,
                     )
                 }
@@ -749,6 +1230,9 @@ impl<V> InputSource<V> {
         matches!(
             self.kind,
             InputSourceKind::File { .. }
+                | InputSourceKind::RpioObservationFile { .. }
+                | InputSourceKind::RpioObservationClockFile { .. }
+                | InputSourceKind::ClockFile { .. }
                 | InputSourceKind::InMemoryRows { .. }
                 | InputSourceKind::InMemoryTicks { .. }
         )
@@ -867,6 +1351,43 @@ impl<V> InputSource<V> {
                 open_configured_redis_knowledge::<V>(config.clone(), keys).await?;
             return Ok((stream, Some(InputSourceControl::RedisKnowledge(owner))));
         }
+        #[cfg(feature = "redis")]
+        if let InputSourceKind::RpioObservation {
+            host,
+            port,
+            database,
+            variable,
+            phase_stream,
+            knowledge_stream,
+        } = &self.kind
+        {
+            anyhow::ensure!(
+                variables.len() == 1 && variables.contains(variable),
+                "RPIO observation source must bind only `{variable}`"
+            );
+            return open_rpio_observation::<V>(
+                host.clone(),
+                *port,
+                *database,
+                phase_stream.clone(),
+                knowledge_stream.clone(),
+                variable.clone(),
+                self.diagnostics.clone(),
+            )
+            .await
+            .map(|(stream, stop)| (stream, Some(InputSourceControl::JournalStop(stop))));
+        }
+        #[cfg(feature = "redis")]
+        if let InputSourceKind::RpioObservationClock(source) = &self.kind {
+            let variable = &source.binding.variable;
+            anyhow::ensure!(
+                variables.len() == 1 && variables.contains(variable),
+                "RPIO observation source must bind only `{variable}`"
+            );
+            return open_rpio_observation_clock::<V>(source.clone(), self.diagnostics.clone())
+                .await
+                .map(|(stream, stop)| (stream, Some(InputSourceControl::JournalStop(stop))));
+        }
         self.open(bindings, variables)
             .await
             .map(|stream| (stream, None))
@@ -876,6 +1397,7 @@ impl<V> InputSource<V> {
         Self {
             kind,
             reconfiguration_route: None,
+            diagnostics: Default::default(),
         }
     }
 
@@ -1055,6 +1577,36 @@ impl<V> InputSource<V> {
                     }
                 }
             }
+            InputSourceKind::RpioObservationFile { variable, .. } => {
+                if requested.contains(variable) {
+                    record(variable)?;
+                }
+            }
+            InputSourceKind::RpioObservationClockFile(source) => {
+                if requested.contains(&source.binding.variable) {
+                    record(&source.binding.variable)?;
+                }
+            }
+            InputSourceKind::RpioObservation { variable, .. } => {
+                if requested.contains(variable) {
+                    record(variable)?;
+                }
+            }
+            InputSourceKind::RpioObservationClock(source) => {
+                if requested.contains(&source.binding.variable) {
+                    record(&source.binding.variable)?;
+                }
+            }
+            InputSourceKind::Clock { variable, .. } => {
+                if requested.contains(variable) {
+                    record(variable)?;
+                }
+            }
+            InputSourceKind::ClockFile { variable, .. } => {
+                if requested.contains(variable) {
+                    record(variable)?;
+                }
+            }
             InputSourceKind::Channel { fanouts, .. } => {
                 for variable in requested {
                     if fanouts.contains_key(variable) {
@@ -1085,6 +1637,12 @@ impl<V> InputSource<V> {
                 .keys
                 .get(variable)
                 .map(|key| Route::new(key.clone(), None).expect("configured keys are nonempty")),
+            InputSourceKind::RpioObservationFile { .. } => None,
+            InputSourceKind::RpioObservationClockFile(_) => None,
+            InputSourceKind::RpioObservation { .. } => None,
+            InputSourceKind::RpioObservationClock(_) => None,
+            InputSourceKind::Clock { .. } => None,
+            InputSourceKind::ClockFile { .. } => None,
             InputSourceKind::File { .. }
             | InputSourceKind::InMemoryRows { .. }
             | InputSourceKind::InMemoryTicks { .. }
@@ -1303,6 +1861,43 @@ impl<V> InputSource<V> {
                     },
                 }
             }
+            InputSourceKind::RpioObservationFile {
+                variable,
+                files,
+                capture_checks,
+                reading,
+            } => {
+                anyhow::ensure!(
+                    variables.len() == 1 && variables.contains(&variable),
+                    "RPIO observation file source must bind only its configured variable `{variable}`"
+                );
+                open_rpio_observation_files(&files, variable, &reading, &capture_checks)
+            }
+            InputSourceKind::RpioObservationClockFile(source) => {
+                let variable = &source.binding.variable;
+                anyhow::ensure!(
+                    variables.len() == 1 && variables.contains(variable),
+                    "RPIO observation-clock file source must bind only its configured variable `{variable}`"
+                );
+                open_rpio_observation_clock_files(source)
+            }
+            InputSourceKind::RpioObservation { .. } | InputSourceKind::RpioObservationClock(_) => {
+                anyhow::bail!("a live RPIO journal is opened with its drain control")
+            }
+            InputSourceKind::Clock { variable, period } => {
+                anyhow::ensure!(
+                    variables.len() == 1 && variables.contains(&variable),
+                    "clock source must bind only its configured variable `{variable}`"
+                );
+                open_clock(variable, period)
+            }
+            InputSourceKind::ClockFile { variable, values } => {
+                anyhow::ensure!(
+                    variables.len() == 1 && variables.contains(&variable),
+                    "clock-file source must bind only its configured variable `{variable}`"
+                );
+                open_clock_file(variable, values)
+            }
             InputSourceKind::Channel { fanouts, .. } => {
                 let streams = fanouts
                     .into_iter()
@@ -1456,6 +2051,12 @@ impl<V> InputSource<V> {
                 Ok((stream, Some(InputSourceControl::Channel(owner))))
             }
             InputSourceKind::File { .. }
+            | InputSourceKind::RpioObservationFile { .. }
+            | InputSourceKind::RpioObservationClockFile { .. }
+            | InputSourceKind::RpioObservation { .. }
+            | InputSourceKind::RpioObservationClock { .. }
+            | InputSourceKind::Clock { .. }
+            | InputSourceKind::ClockFile { .. }
             | InputSourceKind::InMemoryRows { .. }
             | InputSourceKind::InMemoryTicks { .. } => {
                 anyhow::bail!("file and in-memory row/tick sources do not support reconfiguration")
@@ -1573,6 +2174,7 @@ impl<V> InputSource<V> {
                 let source = Self {
                     kind,
                     reconfiguration_route: self.reconfiguration_route,
+                    diagnostics: self.diagnostics,
                 };
                 let (stream, owner) = source.open_owned(bindings, variables).await?;
                 Ok((
@@ -1762,14 +2364,23 @@ impl<V> InputPipeline<V> {
         &self.sources
     }
 
+    /// Bind typed sources to the specification's declared input types; see
+    /// [`InputSources::bind_declared_types`].
+    pub fn bind_declared_types(
+        mut self,
+        declared: &BTreeMap<VarName, crate::core::StreamType>,
+    ) -> anyhow::Result<Self> {
+        self.sources.bind_declared_types(declared)?;
+        Ok(self)
+    }
+
     /// Attach the local executor used only by live source ingress relays.
     pub fn with_executor(mut self, executor: Rc<LocalExecutor<'static>>) -> Self {
         self.executor = Some(executor);
         self
     }
 
-    /// Attach a diagnostics hub. Sources that record their own phases (currently RPIO journal
-    /// replay and live input) register a recorder with it when they open; others are unchanged.
+    /// Attach the input diagnostics recorder without changing source scheduling.
     #[cfg(feature = "diagnostics")]
     pub fn diagnostics(mut self, hub: crate::diagnostics::DiagnosticsHub) -> Self {
         self.diagnostics = Some(hub);
@@ -1974,10 +2585,19 @@ impl<V> InputPipeline<V> {
                 ))?)
                 };
             #[cfg(feature = "diagnostics")]
-            let source = &match &self.diagnostics {
-                Some(hub) => source.clone().with_diagnostics(hub),
-                None => source.clone(),
-            };
+            let probe = self
+                .diagnostics
+                .as_ref()
+                .map(|hub| {
+                    crate::io::source_diagnostics::SourceProbe::attached(
+                        hub.source_recorder(format!("{description} (input)")),
+                    )
+                })
+                .unwrap_or_default();
+            #[cfg(not(feature = "diagnostics"))]
+            let probe = crate::io::source_diagnostics::SourceProbe::default();
+            let mut source = source.clone();
+            source.diagnostics = probe.clone();
             let (source_stream, control) = match source
                 .clone()
                 .open_owned(bindings, variables)
@@ -1999,16 +2619,38 @@ impl<V> InputPipeline<V> {
             let stream_description = description.clone();
             let stream: ReconfigurableInputStream<V> = Box::pin(async_stream::stream! {
                 let mut source_stream = source_stream;
-                while let Some(result) = source_stream.next().await {
+                loop {
+                    let stamp = probe.stamp();
+                    let result = source_stream.next().await;
+                    probe.phase(stamp, crate::io::source_diagnostics::SourcePhase::InputWait);
+                    let Some(result) = result else { break };
+                    if result.is_ok() { probe.delivered(); }
                     yield result
                         .map(ReconfigurableInputItem::Data)
-                        .map_err(|error| anyhow::Error::new(error).context(
-                            format!("input source `{stream_description}` emitted an error")
+                        .map_err(|error| anyhow::Error::new(error.clone()).context(
+                            format!("input source `{stream_description}` emitted an error: {error}")
                         ));
                 }
             });
+            #[cfg(feature = "redis")]
+            let journal_owned = matches!(control, Some(InputSourceControl::JournalStop(_)));
+            #[cfg(not(feature = "redis"))]
+            let journal_owned = false;
             let source = if finite {
                 OpenedInputSource::direct(description, stream)
+            } else if journal_owned {
+                #[cfg(feature = "redis")]
+                {
+                    OpenedInputSource::direct_with_control(
+                        description,
+                        stream,
+                        control.expect("matched"),
+                    )
+                }
+                #[cfg(not(feature = "redis"))]
+                {
+                    unreachable!()
+                }
             } else {
                 OpenedInputSource::relay_with_control(
                     description,
@@ -2325,6 +2967,234 @@ mod resolution_tests {
                 .to_string()
                 .contains("produces ordinary `Value` input")
         );
+    }
+
+    #[test]
+    fn configured_rpio_observation_file_is_a_finite_value_source() {
+        let path = std::env::temp_dir().join(format!(
+            "tc-rpio-config-{}-{}.jsonl",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(
+            &path,
+            r#"{"schema_version":2,"$tag":"Knowledge","payload":{"version":{"ref":{"store_epoch":"E","global_write_sequence":1,"key":"K"},"value":{"$tag":"K","payload":{"n":7}},"written_by":{"$tag":"External","payload":{"name":"test"}}},"arrival":{"journal_time":1.0}}}
+"#,
+        )
+        .unwrap();
+        let config: InputConfigFile = json5::from_str(&format!(
+            r#"{{ sources: {{ journal: {{ kind: "rpio-observation-file", variable: "observation", files: [{}] }} }} }}"#,
+            serde_json::to_string(&path.display().to_string()).unwrap()
+        ))
+        .unwrap();
+        let sources = InputSources::<Value>::from_config(
+            config,
+            Rc::new(LocalExecutor::new()),
+            None,
+            None,
+            MqttProtocol::default(),
+        )
+        .unwrap();
+        smol::block_on(async {
+            let input = InputPipeline::from_sources(sources)
+                .build(BTreeSet::from([VarName::new("observation")]))
+                .await
+                .unwrap();
+            let mut drain = input.into_drain();
+            let batch = drain.next().await.unwrap().unwrap();
+            assert_eq!((batch.tick_count(), batch.update_count()), (1, 1));
+            assert!(drain.next().await.is_none());
+        });
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn clock_source_emits_current_unix_seconds_on_its_own_tick() {
+        smol::block_on(async {
+            let mut clock =
+                open_clock::<Value>(VarName::new("advance"), std::time::Duration::from_millis(1))
+                    .unwrap();
+            let batch = clock.next().await.unwrap().unwrap();
+            assert_eq!((batch.tick_count(), batch.update_count()), (1, 1));
+            let update = batch.updates().next().unwrap();
+            assert_eq!(update.variable, &VarName::new("advance"));
+            let Value::Float(seconds) = update.value else {
+                panic!("clock must emit a Float")
+            };
+            assert!(*seconds > 1_500_000_000.0, "unexpected Unix time {seconds}");
+        });
+    }
+
+    #[test]
+    fn clock_source_is_value_only() {
+        let error = match open_clock::<crate::runtime::mstlo::MstloTimedValue>(
+            VarName::new("advance"),
+            std::time::Duration::from_millis(1),
+        ) {
+            Ok(_) => panic!("MSTLO clock source must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("ordinary `Value` input"));
+    }
+
+    #[test]
+    fn clock_sampler_failure_is_emitted_once_then_terminates() {
+        smol::block_on(async {
+            let mut clock = open_clock_with::<Value, _>(
+                VarName::new("advance"),
+                std::time::Duration::from_millis(1),
+                || anyhow::bail!("controlled clock failure"),
+            )
+            .unwrap();
+            let error = clock.next().await.unwrap().unwrap_err();
+            assert!(error.to_string().contains("controlled clock failure"));
+            assert!(clock.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn clock_file_emits_each_supplied_second_as_one_finite_tick() {
+        smol::block_on(async {
+            let mut clock =
+                open_clock_file::<Value>(VarName::new("advance"), vec![0.0, 10.5, 11.0]).unwrap();
+            let mut observed = Vec::new();
+            while let Some(batch) = clock.next().await {
+                let batch = batch.unwrap();
+                assert_eq!((batch.tick_count(), batch.update_count()), (1, 1));
+                let update = batch.updates().next().unwrap();
+                assert_eq!(update.variable, &VarName::new("advance"));
+                observed.push(update.value.clone());
+            }
+            assert_eq!(
+                observed,
+                vec![Value::Float(0.0), Value::Float(10.5), Value::Float(11.0)]
+            );
+        });
+    }
+
+    #[test]
+    fn configured_observation_clock_file_delivers_one_typed_variable() {
+        use crate::core::StreamType;
+        let config: InputConfigFile = json5::from_str(&format!(
+            r#"{{ sources: {{ journal: {{
+                kind: "rpio-observation-clock-file",
+                variable: "observation",
+                journal_clock: "fixture.journal",
+                files: [{}],
+                clock_values: [11.0],
+                steps: [{{step: ["journal"]}}, {{step: ["journal", "clock"], time: 11.0}}],
+            }} }} }}"#,
+            serde_json::to_string(&format!(
+                "{}/fixtures/rpio/service-pending.jsonl",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap()
+        ))
+        .unwrap();
+        let sources = || {
+            InputSources::<Value>::from_config(
+                config.clone(),
+                Rc::new(LocalExecutor::new()),
+                None,
+                None,
+                MqttProtocol::default(),
+            )
+            .unwrap()
+        };
+        let observation = VarName::new("observation");
+        smol::block_on(async {
+            // Neither configuration nor a declaration names the domain.
+            let error = InputPipeline::from_sources(sources())
+                .build(BTreeSet::from([observation.clone()]))
+                .await
+                .err()
+                .expect("a source without a time domain is refused");
+            assert!(
+                format!("{error:#}").contains("has no time domain"),
+                "{error:#}"
+            );
+
+            // The record variable is gone: only the observation is bound.
+            let error = InputPipeline::from_sources(sources())
+                .build(BTreeSet::from([
+                    observation.clone(),
+                    VarName::new("record"),
+                ]))
+                .await
+                .err()
+                .expect("the composed source has no record variable");
+            assert!(format!("{error:#}").contains("record"), "{error:#}");
+
+            let marker = StreamType::Newtype(crate::core::NewtypeSchema::new(
+                "JournalTime",
+                ecow::EcoVec::new(),
+                StreamType::Unit,
+            ));
+            let instant = StreamType::Newtype(crate::core::NewtypeSchema::new(
+                "std::time::Instant<JournalTime>",
+                ecow::EcoVec::from([marker]),
+                StreamType::Float,
+            ));
+            let sample = StreamType::Struct(
+                ecow::EcoVec::from([
+                    ("clock".into(), StreamType::Str),
+                    ("time".into(), instant),
+                    ("origin".into(), StreamType::Str),
+                ]),
+                false,
+            );
+            let declared = BTreeMap::from([(
+                observation.clone(),
+                StreamType::Struct(
+                    ecow::EcoVec::from([
+                        ("record".into(), StreamType::Any),
+                        (
+                            "clock".into(),
+                            StreamType::Union(
+                                crate::core::ClosedUnion::new([
+                                    crate::core::UnionAlternative::new(
+                                        "None",
+                                        crate::core::UnionPayload::Nullary,
+                                    ),
+                                    crate::core::UnionAlternative::new(
+                                        "Some",
+                                        crate::core::UnionPayload::Of(sample),
+                                    ),
+                                ])
+                                .unwrap(),
+                            ),
+                        ),
+                    ]),
+                    false,
+                ),
+            )]);
+            let input = InputPipeline::from_sources(sources())
+                .bind_declared_types(&declared)
+                .unwrap()
+                .build(BTreeSet::from([observation.clone()]))
+                .await
+                .unwrap();
+            let mut drain = input.into_drain();
+            let mut ticks = Vec::new();
+            while let Some(batch) = drain.next().await {
+                ticks.extend(batch.unwrap().into_ticks());
+            }
+            assert_eq!(ticks.len(), 2);
+            assert!(
+                ticks
+                    .iter()
+                    .all(|tick| tick.len() == 1 && tick[0].variable == observation)
+            );
+            let Value::Map(combined) = &ticks[1][0].value else {
+                panic!("an observation is a struct")
+            };
+            for field in ["record", "clock"] {
+                assert!(
+                    matches!(&combined[field], Value::Union(option) if option.tag() == "Some"),
+                    "{combined:?}"
+                );
+            }
+        });
     }
 
     #[test]
@@ -3214,6 +4084,39 @@ mod resolution_tests {
             // the admission boundary and lets cleanup reach EOF.
             sender.send(Value::Int(2)).await;
             assert!(drain.next().await.is_none());
+        }));
+    }
+
+    #[test]
+    fn ordinary_owner_cancels_periodic_clock_and_drain_reaches_eof() {
+        let executor = Rc::new(LocalExecutor::new());
+        let task_executor = Rc::clone(&executor);
+        smol::block_on(executor.run(async move {
+            let source = InputSource::<Value>::clock(
+                VarName::new("advance"),
+                std::time::Duration::from_millis(1),
+            )
+            .unwrap();
+            let mut input = InputPipeline::new(source)
+                .with_executor(task_executor)
+                .build(BTreeSet::from([VarName::new("advance")]))
+                .await
+                .unwrap();
+            let first = input.next().await.unwrap().unwrap();
+            assert_eq!((first.tick_count(), first.update_count()), (1, 1));
+
+            let mut drain = input.into_drain_with_deadline(ShutdownDeadline::after(
+                std::time::Duration::from_secs(1),
+            ));
+            let mut buffered = 0;
+            while let Some(batch) = drain.next().await {
+                batch.unwrap();
+                buffered += 1;
+            }
+            assert!(
+                buffered <= 1,
+                "shutdown may drain the relay boundary, not generate {buffered} later ticks"
+            );
         }));
     }
 }

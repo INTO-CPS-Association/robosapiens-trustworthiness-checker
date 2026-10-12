@@ -7,4 +7,5 @@ pub mod ros;
 #[cfg(feature = "testcontainers")]
 pub mod testcontainers;
 
+pub mod journal;
 pub mod streams;

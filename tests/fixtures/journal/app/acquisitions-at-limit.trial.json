@@ -1,0 +1,26 @@
+{
+  "capture_file": "acquisitions-at-limit.jsonl",
+  "capture_sha256": "e69e61163b91908c65d4ead7f76cecb4c932fcf9a664a513131c0197ff4779e6",
+  "clock_file": "acquisitions-at-limit.clock.jsonl",
+  "converted_from_sha256": "902cde401aa2db1cef1926c1d2c5f911587c8f278b699bf80b2136d865f9ead3",
+  "journal_clock": "python:time.time_ns",
+  "journal_schema_version": 4,
+  "namespace": "screw-acquisitions-at-limit-30880d7dd530",
+  "observation_epoch": "Ec1e4139b58094debbb5b96f8f0666202",
+  "record_count": 301,
+  "scenario": {
+    "core_cycles": 12,
+    "core_swaps": [
+      2
+    ],
+    "core_validations": 1,
+    "description": "Execute's ten acquisitions fit a limit of ten",
+    "disposition": "nominal",
+    "name": "acquisitions-at-limit",
+    "retention": "unbounded",
+    "ticks": 12,
+    "transport": "local"
+  },
+  "start_after_seq": 0,
+  "through_seq": 301
+}

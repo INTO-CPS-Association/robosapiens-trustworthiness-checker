@@ -14,6 +14,11 @@ pub(crate) mod admission;
 pub mod journal_view;
 pub mod json;
 pub mod knowledge_resolver;
+pub(crate) mod observation_clock;
+pub(crate) mod observation_file;
+#[cfg(feature = "redis")]
+pub(crate) mod observation_redis;
+pub(crate) mod replay_samples;
 pub mod time;
 pub mod wire;
 
