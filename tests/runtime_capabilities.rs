@@ -37,17 +37,25 @@ const DOCUMENTED_RUNTIME_CAPABILITIES: &[RuntimeCapability] = &[
     RuntimeCapability::TaggedUnions,
     RuntimeCapability::PatternMatching,
     RuntimeCapability::LazyIf,
+    RuntimeCapability::StreamFunctions,
 ];
 
-/// The evaluator selected by each CLI runtime. Reconfigurable variants use
-/// the same evaluator capability set as their ordinary counterparts.
+/// The evaluator selected by each CLI runtime, with what its scheduler adds.
+/// Reconfigurable variants use the same evaluator capability set as their
+/// ordinary counterparts, but refuse stream function instances.
 fn declared(runtime: &str) -> RuntimeCapabilities {
     match runtime {
         "async" => <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES,
-        "semi-sync" | "reconf-semi-sync" => {
+        "semi-sync" => {
+            <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::RUNTIME_CAPABILITIES
+                .union(trustworthiness_checker::runtime::semi_sync::RUNTIME_CAPABILITIES)
+        }
+        "reconf-semi-sync" => {
             <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::RUNTIME_CAPABILITIES
         }
-        "dataflow" | "reconf-dataflow" => trustworthiness_checker::dataflow::RUNTIME_CAPABILITIES,
+        "dataflow" => trustworthiness_checker::dataflow::RUNTIME_CAPABILITIES,
+        "reconf-dataflow" => trustworthiness_checker::dataflow::RUNTIME_CAPABILITIES
+            .without(RuntimeCapability::StreamFunctions),
         "distributed" => {
             <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::RUNTIME_CAPABILITIES
         }
@@ -62,6 +70,7 @@ fn fixture(capability: RuntimeCapability) -> (&'static str, &'static str) {
         RuntimeCapability::TaggedUnions => ("tagged_union.dsrv", "tagged_union.input"),
         RuntimeCapability::PatternMatching => ("pattern_matching.dsrv", "pattern_matching.input"),
         RuntimeCapability::LazyIf => ("lazy_if.dsrv", "lazy_if.input"),
+        RuntimeCapability::StreamFunctions => ("stream_function.dsrv", "stream_function.input"),
     }
 }
 

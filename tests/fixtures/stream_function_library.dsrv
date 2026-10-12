@@ -1,0 +1,7 @@
+use experimental::{functions, local_streams}
+
+// A running sum. Each use keeps its own history.
+def sum(value: Int) -> Int = total
+where {
+  total: Int = default(total[1], 0) + value
+}

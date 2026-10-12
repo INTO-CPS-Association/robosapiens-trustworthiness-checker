@@ -1,0 +1,8 @@
+use experimental::{functions, modules, local_streams}
+mod stream_function_library
+use stream_function_library
+
+// Uses exactly one capability: two instances of a stream function.
+in x: Int
+out total: Int = stream_function_library::sum(x)
+out doubled: Int = stream_function_library::sum(x + x)

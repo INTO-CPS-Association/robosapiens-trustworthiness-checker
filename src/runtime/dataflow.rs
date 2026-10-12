@@ -101,7 +101,7 @@ use std::sync::Arc;
 
 use crate::core::{
     ExecutionPolicy, InputBatch, InputStream, OutputBatch, OutputError, OutputWriter, Runtime,
-    Semantics, Specification, Value,
+    Semantics, Specification, Value, ensure_no_stream_function_instances,
 };
 #[cfg(feature = "jit")]
 use crate::dataflow::JitConfig;
@@ -501,6 +501,9 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             if let Err(error) = ensure_check_mode(semantics, &model) {
                 return failed_dataflow_runtime(policy, error);
             }
+            if let Err(error) = ensure_no_stream_function_instances(&model, "reconf-dataflow") {
+                return failed_dataflow_runtime(policy, error.into());
+            }
             let compiled = match compile_model(model, semantics) {
                 Ok(compiled) => compiled,
                 Err(error) => return failed_dataflow_runtime(policy, error.into()),
@@ -537,6 +540,7 @@ impl RuntimeBuilder<ElaboratedDsrvSpecification, Value> for ReconfigurableDatafl
             let compiler: ReconfigurationCompiler = Rc::new(move |source| {
                 let model = prepare_replacement(source)?;
                 ensure_check_mode(semantics, &model)?;
+                ensure_no_stream_function_instances(&model, "reconf-dataflow")?;
                 compile_model(model, semantics).map_err(anyhow::Error::from)
             });
 

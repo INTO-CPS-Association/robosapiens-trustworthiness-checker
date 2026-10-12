@@ -758,7 +758,8 @@ pub const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
     crate::core::RuntimeCapabilities::NONE
         .with(crate::core::RuntimeCapability::TaggedUnions)
         .with(crate::core::RuntimeCapability::PatternMatching)
-        .with(crate::core::RuntimeCapability::LazyIf);
+        .with(crate::core::RuntimeCapability::LazyIf)
+        .with(crate::core::RuntimeCapability::StreamFunctions);
 
 pub use typed::{
     TypedBindingError, TypedDataflowMonitor, TypedEvaluationError, TypedField, TypedInput,

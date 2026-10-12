@@ -260,6 +260,7 @@ fn try_inline_aux(
     );
     inlined.source_context = spec.source_context;
     inlined.sources = spec.sources;
+    inlined.stream_function_instances = spec.stream_function_instances;
     Ok(CheckedDsrvSpecification::new(
         inlined,
         expr_types,

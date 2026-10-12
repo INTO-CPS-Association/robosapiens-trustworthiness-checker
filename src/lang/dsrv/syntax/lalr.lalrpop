@@ -3,7 +3,7 @@ use ecow::{EcoString, EcoVec};
 use lalrpop_util::ParseError;
 
 use crate::lang::dsrv::ast::{ReconfigurableExprScope, SyntaxLiteral, VarOrNodeName};
-use crate::lang::dsrv::syntax::parsed::{SpanningBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset};
+use crate::lang::dsrv::syntax::parsed::{SpanningBuilder as ExprBuilder, ParsedExprKind as ExprKind, ParsedExprId as ExprId, ParsedDeclaration as Declaration, SourceAscription as StreamTypeAscription, SourceOffset, DefGeneric};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind as StreamType, SourceAlternative, AliasDeclaration, AliasKind, TypeName};
 use crate::lang::dsrv::path::{ImportKind, ModuleName, PathSegment, TypePath, UseTree, ValuePath};
 use crate::core::{BinaryOperator, VarName};
@@ -69,6 +69,8 @@ Float: f64 = <l:@L> <s:r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)|[0-9]+\.[0-9]+">
         Err(ParseError::User { error: "float literal is out of range" })
     }
 };
+// One numeric suffix token keeps unit names available as ordinary identifiers.
+
 Bool: bool = {
     "true" => true,
     "false" => false
@@ -255,7 +257,7 @@ ContainerExpr: ExprId = {
     },
   <l:@L> "{" <kv_pairs: DelimitedSepListOpt<ObjectLiteralKVPair, ",">> "}" <r:@R> => {
         builder.alloc(ExprKind::ObjectLiteral(kv_pairs.into()), Span::new(l as u32, r as u32))
-    }
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -546,7 +548,28 @@ Atom: ExprId = {
     CallableAtom,
     UnionConstructor,
     SpannedUpperVar,
+    StreamFunctionCall,
 }
+
+// Explicit fixed arguments use `::<...>` to preserve comparison syntax.
+// Calls without fixed arguments are resolved alongside ordinary calls.
+StreamFunctionCall: ExprId = {
+    <l:@L> <segments:(<LowerIdent> "::")+> "<"
+        <fixed:DelimitedSepListOpt<UnaryExpr, ",">> ">"
+        "(" <streams:ExprList> ")" <r:@R> =>? {
+        let mut segments = segments;
+        let name = TypeName::new(segments.pop().unwrap()).unwrap();
+        let module = segments.into_iter().map(ModuleName::new)
+            .collect::<Result<EcoVec<_>, _>>().unwrap();
+        let mut arguments = fixed;
+        let count = arguments.len();
+        arguments.extend(streams);
+        Ok(builder.alloc(
+            ExprKind::StreamFunctionCall(arguments, TypePath::new(module, name), count),
+            Span::new(l as u32, r as u32),
+        ))
+    },
+};
 
 // -----------------------------------------------------------------------------
 // Unary expressions
@@ -825,21 +848,40 @@ InputDecl: Declaration = {
 };
 
 // A stream may be defined on its declaration line: `out x: T = e`.
-Definition: ExprId = {
-   "=" <Expr>
+Definition: (ExprId, Option<Vec<Declaration>>) = {
+   "=" <expr:Expr> <locals:EquationLocals?> => (expr, locals)
+};
+
+EquationLocals: Vec<Declaration> = {
+    "where" "{" <LocalDeclaration*> "}"
 };
 
 OutputDecl: Declaration = {
-   <l:@L> "out" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => Declaration::Output(id, typ, def, Span::new(l as u32, r as u32)),
+   <l:@L> "out" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => {
+       let span = Span::new(l as u32, r as u32);
+       let (root, locals) = def.map_or((None, None), |(root, locals)| (Some(root), locals));
+       Declaration::Output(id, typ, root, span).with_locals(locals, span)
+   },
 };
 
 AuxDecl: Declaration = {
-   <l:@L> "aux" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => Declaration::Aux(id, typ, def, Span::new(l as u32, r as u32)),
-   <l:@L> "var" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => Declaration::Aux(id, typ, def, Span::new(l as u32, r as u32)),
+   <l:@L> "aux" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => {
+       let span = Span::new(l as u32, r as u32);
+       let (root, locals) = def.map_or((None, None), |(root, locals)| (Some(root), locals));
+       Declaration::Aux(id, typ, root, span).with_locals(locals, span)
+   },
+   <l:@L> "var" <id: Ident> <typ: TypeAnno?> <def: Definition?> <r:@R> => {
+       let span = Span::new(l as u32, r as u32);
+       let (root, locals) = def.map_or((None, None), |(root, locals)| (Some(root), locals));
+       Declaration::Aux(id, typ, root, span).with_locals(locals, span)
+   },
 };
 
 Equation: Declaration = {
-   <l:@L> <var: Ident> "=" <expr: Expr> <r:@R> => Declaration::Equation(var, expr, Span::new(l as u32, r as u32))
+   <l:@L> <var: Ident> "=" <expr: Expr> <locals:EquationLocals?> <r:@R> => {
+       let span = Span::new(l as u32, r as u32);
+       Declaration::Equation(var, expr, span).with_locals(locals, span)
+   }
 }
 
 // Type parameters are capitalised like any other type name, and are in
@@ -947,18 +989,39 @@ DefParam: (VarName, SourceType) = <name:Ident> ":" <ty:StreamTyp> => (name, ty);
 // forest like any other definition and must be consumed in declaration
 // order by expansion.
 DefDecl: Declaration = {
-   <l:@L> <internal:"internal"?> "def" <name:Ident> <tp:AliasParameters?>
+   <l:@L> <internal:"internal"?> "def" <name:Ident> <tp:("<" <DelimitedSepListOpt<DefGenericRule, ",">> ">")?>
        "(" <parameters:DelimitedSepListOpt<DefParam, ",">> ")" "->" <result:StreamTyp>
-       "=" <body:Expr> <r:@R> =>
+       "=" <body:Expr> <locals:("where" "{" <LocalDeclaration*> "}")?> <r:@R> => {
+       let mut type_parameters = EcoVec::new();
+       let mut fixed = EcoVec::new();
+       for generic in tp.unwrap_or_else(EcoVec::new) {
+           match generic {
+               DefGeneric::Type(name) => type_parameters.push(name),
+               DefGeneric::Fixed(name, ty) => fixed.push((name, ty)),
+           }
+       }
        Declaration::Def {
            name,
-           type_parameters: tp.unwrap_or_else(EcoVec::new),
+           type_parameters,
+           fixed,
+           locals: locals.map(Into::into),
            parameters,
            result,
            body,
            internal: internal.is_some(),
            span: Span::new(l as u32, r as u32),
-       },
+       }
+   },
+};
+
+LocalDeclaration: Declaration = {
+    AuxDecl,
+    Equation,
+    <l:@L> <id:Ident> <typ:TypeAnno> <def:Definition?> <r:@R> => {
+        let span = Span::new(l as u32, r as u32);
+        let (root, locals) = def.map_or((None, None), |(root, locals)| (Some(root), locals));
+        Declaration::Aux(id, Some(typ), root, span).with_locals(locals, span)
+    },
 };
 
 // A constant. Its body is an ordinary expression, so it joins the forest
@@ -974,6 +1037,13 @@ ConstDecl: Declaration = {
            internal: internal.is_some(),
            span: Span::new(l as u32, r as u32),
        },
+};
+
+// Between a stream function's angle brackets: a type parameter, or a fixed argument
+// with its type.
+DefGenericRule: DefGeneric = {
+    <name:SourceName> => DefGeneric::Type(name),
+    <name:Ident> ":" <ty:StreamTyp> => DefGeneric::Fixed(name, ty),
 };
 
 ModDecl: Declaration = {

@@ -3,7 +3,7 @@
 //! A module under a registered package root is activated by an ordinary
 //! `use`, from text compiled into the checker, with no `mod` and no
 //! prelude. `std::option` itself is ordinary DSRV: a structural union and
-//! three defs, inlined like any other module's.
+//! ordinary defs, inlined like any other module's.
 
 use contiguous_tree::TreeCursorExt;
 
@@ -111,7 +111,7 @@ fn collect(root: &str) -> Result<ModuleSources, ModuleCollectError> {
 // The module
 // -----------------------------------------------------------------------------
 
-/// The module holds exactly the agreed API: one structural type and three
+/// The module holds exactly the agreed API: one structural type and its
 /// defs, none internal.
 #[test]
 fn std_option_declares_exactly_its_api() {
@@ -131,18 +131,33 @@ fn std_option_declares_exactly_its_api() {
             ParsedDeclaration::Def {
                 name,
                 internal,
-                type_parameters,
+                type_parameters: _,
                 ..
             } => {
                 assert!(!internal);
-                assert_eq!(type_parameters.len(), 1);
                 items.push(name.name().to_string());
             }
             ParsedDeclaration::Use { .. } => {}
             other => panic!("std::option declares something else: {other:?}"),
         }
     }
-    assert_eq!(items, ["Option", "is_some", "is_none", "unwrap_or"]);
+    assert_eq!(
+        items,
+        [
+            "Option",
+            "is_some",
+            "is_none",
+            "some",
+            "is_some_and",
+            "map",
+            "and_then",
+            "map_or",
+            "or_else",
+            "known_eq",
+            "unwrap_or",
+            "only_if",
+        ]
+    );
 }
 
 /// `Option<T>` is the union a caller could have written, not a type of its
@@ -242,6 +257,46 @@ const PROGRAM: &str = "in x: Int\nin o: Option<Int>\n\
     out flat: Int = unwrap_or(unwrap_or(nested, empty), x + 1)\n";
 
 #[test]
+fn combinators_preserve_presence_and_do_not_treat_two_absences_as_known_equal() {
+    let header = HEADER.replace("tagged_unions}", "tagged_unions, functions}");
+    let source = format!(
+        "{header}in o: Option<Int>\nin other: Option<Int>\n\
+         out selected: Option<Int> = or_else(o, other)\n\
+         out mapped: Option<Int> = map(o, \\v: Int -> v + 1)\n\
+         out chained: Option<Int> = and_then(o, \\v: Int -> some(v))\n\
+         out shown: Int = map_or(o, -1, \\v: Int -> v * 2)\n\
+         out positive: Bool = is_some_and(o, \\v: Int -> v > 0)\n\
+         out same: Bool = known_eq(o, other)\n"
+    );
+    let rows = evaluate(
+        &source,
+        &[
+            vec![none(), none()],
+            vec![some(Value::Int(2)), some(Value::Int(2))],
+        ],
+    );
+    let value = |row: &[(String, Value)], name: &str| {
+        row.iter()
+            .find(|(candidate, _)| candidate == name)
+            .unwrap_or_else(|| panic!("{name} is an output"))
+            .1
+            .clone()
+    };
+    assert_eq!(value(&rows[0], "selected"), none());
+    assert_eq!(value(&rows[0], "mapped"), none());
+    assert_eq!(value(&rows[0], "chained"), none());
+    assert_eq!(value(&rows[0], "shown"), Value::Int(-1));
+    assert_eq!(value(&rows[0], "positive"), Value::Bool(false));
+    assert_eq!(value(&rows[0], "same"), Value::Bool(false));
+    assert_eq!(value(&rows[1], "selected"), some(Value::Int(2)));
+    assert_eq!(value(&rows[1], "mapped"), some(Value::Int(3)));
+    assert_eq!(value(&rows[1], "chained"), some(Value::Int(2)));
+    assert_eq!(value(&rows[1], "shown"), Value::Int(4));
+    assert_eq!(value(&rows[1], "positive"), Value::Bool(true));
+    assert_eq!(value(&rows[1], "same"), Value::Bool(true));
+}
+
+#[test]
 fn the_api_checks_strictly_and_gradually() {
     let source = format!("{HEADER}{PROGRAM}");
     for options in BOTH {
@@ -300,10 +355,13 @@ fn constructors_are_contextual() {
             );
         }
     }
-    // Nothing gives a bare constructor a union, and no inference invents one.
-    let unanchored = format!("{HEADER}in x: Int\nout y: Int = unwrap_or(None, x)\n");
+    // The result and fallback ground the generic signature's Option<Int>
+    // parameter, so its constructor now has a declared union context.
+    let contextual = format!("{HEADER}in x: Int\nout y: Int = unwrap_or(None, x)\n");
     for options in BOTH {
-        check_err(&unanchored, options);
+        assert_eq!(type_of(&check(&contextual, options), "y"), TCType::Int);
+        // A Bool result says nothing about Option<T>'s payload.
+        check_err(&format!("{HEADER}out y: Bool = is_some(None)\n"), options);
     }
 }
 
@@ -574,7 +632,7 @@ fn a_missing_owned_path_is_reported_at_its_import() {
 /// A def the module does not export is the ordinary unknown function.
 #[test]
 fn an_item_std_option_does_not_export_is_an_ordinary_error() {
-    let source = format!("{HEADER}in o: Option<Int>\nout y: Int = std::option::map(o)\n");
+    let source = format!("{HEADER}in o: Option<Int>\nout y: Int = std::option::filter(o)\n");
     assert!(matches!(
         parse_str(&source),
         Err(DsrvParseError::Modules(message)) if message.contains("names no function")

@@ -60,6 +60,9 @@ pub enum DsrvParseError {
 
     #[error("invalid module structure: {0}")]
     Collect(#[from] ModuleCollectError),
+
+    #[error("invalid stream template: {0}")]
+    StreamFunction(String),
 }
 
 impl From<DsrvSyntaxError> for DsrvParseError {
@@ -88,6 +91,7 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::UnknownExport { .. }
             | DsrvExpandError::InternalImport { .. }
             | DsrvExpandError::Inlined(_)
+            | DsrvExpandError::InvalidEquationWhere { .. }
             | DsrvExpandError::UnknownFunction { .. }
             | DsrvExpandError::RecursiveFunction { .. }
             | DsrvExpandError::FunctionArity { .. }
@@ -98,6 +102,16 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::ConstantType { .. }
             | DsrvExpandError::ConstantCheck { .. }
             | DsrvExpandError::ConstantOffset { .. }) => Self::Modules(other.to_string()),
+            other @ (DsrvExpandError::MisplacedStreamFunctionCall { .. }
+            | DsrvExpandError::UnknownStreamFunction { .. }
+            | DsrvExpandError::StreamFunctionArity { .. }
+            | DsrvExpandError::StreamFunctionFixedArgument { .. }
+            | DsrvExpandError::StreamFunctionTypeInference { .. }
+            | DsrvExpandError::InvalidStreamFunction { .. }
+            | DsrvExpandError::RecursiveStreamFunction { .. }
+            | DsrvExpandError::StreamFunctionLimit { .. }) => {
+                Self::StreamFunction(other.to_string())
+            }
         }
     }
 }

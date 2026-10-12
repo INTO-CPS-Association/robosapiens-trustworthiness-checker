@@ -8,7 +8,7 @@ use super::checked::{CheckedExpressionContext, ExprTypes};
 use super::{
     AstShared, CheckedExpr, CheckedExprRef, Expr, ExprBuilder, ExprForest, ExprForestMap, ExprRef,
 };
-use crate::core::{RuntimeCapabilities, RuntimeCapabilityRequirement};
+use crate::core::{RuntimeCapabilities, RuntimeCapability, RuntimeCapabilityRequirement};
 use crate::core::{Specification, StreamType, VarName};
 use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
@@ -35,6 +35,21 @@ pub enum DsrvAstError {
 
     #[error("invalid expression map: {0}")]
     InvalidExpressionMap(#[from] contiguous_tree::ForestMapError),
+}
+
+/// A stream function instance a specification was expanded with.
+///
+/// Only the ordinary streams the instance generated are evaluated; the
+/// record lets a runtime that cannot admit an instance refuse the
+/// specification, whose streams alone would not say they came from one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamFunctionInstance {
+    /// The function, as `module::name`.
+    pub stream_function: ecow::EcoString,
+    /// The stream the instance's result defines.
+    pub result: VarName,
+    /// Where the written use that led to this instance is.
+    pub span: Span,
 }
 
 /// One top-level form of a specification, in source order, as far as the
@@ -258,11 +273,16 @@ pub struct DsrvSpecification {
     /// share it; it is never part of the specification's meaning.
     #[serde(skip)]
     pub(crate) sources: AstShared<SourceArchive>,
+    /// The stream function instances the streams were expanded from, which a
+    /// runtime admits separately.
+    #[serde(skip)]
+    pub(crate) stream_function_instances: ecow::EcoVec<StreamFunctionInstance>,
 }
 
 impl PartialEq for DsrvSpecification {
     fn eq(&self, other: &Self) -> bool {
-        self.input_vars == other.input_vars
+        self.stream_function_instances == other.stream_function_instances
+            && self.input_vars == other.input_vars
             && self.output_vars == other.output_vars
             && self.aux_vars == other.aux_vars
             && self.stream_vars == other.stream_vars
@@ -626,7 +646,14 @@ impl DsrvSpecification {
             declarations,
             source_context: AstShared::new(SourceContext::default()),
             sources: AstShared::new(SourceArchive::new()),
+            stream_function_instances: ecow::EcoVec::new(),
         }
+    }
+
+    /// The stream function instances this specification was expanded from, in the
+    /// order their uses were written.
+    pub fn stream_function_instances(&self) -> &[StreamFunctionInstance] {
+        &self.stream_function_instances
     }
 
     /// The archive of the text the specification was expanded from.
@@ -797,6 +824,16 @@ impl Specification for DsrvSpecification {
         &self,
         supported: RuntimeCapabilities,
     ) -> Option<RuntimeCapabilityRequirement> {
+        // An instance is admitted as a whole, before its generated streams.
+        if !supported.contains(RuntimeCapability::StreamFunctions)
+            && let Some(instance) = self.stream_function_instances.first()
+        {
+            return Some(RuntimeCapabilityRequirement {
+                capability: RuntimeCapability::StreamFunctions,
+                construct: "a stream function instance",
+                span: instance.span,
+            });
+        }
         self.roots()
             .find_map(|(_, root)| super::requirements::first_unsupported_construct(root, supported))
     }

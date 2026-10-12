@@ -473,6 +473,50 @@ fn a_phantom_argument_is_inferred_through_a_generic_alias_nested_in_itself() {
 }
 
 #[test]
+fn a_stream_function_infers_a_phantom_argument_from_a_newtype_stream() {
+    const TRACK: &str = r#"use experimental::{modules, functions, generics, local_streams, newtypes}
+use time
+// The latest instant seen so far.
+def latest<D>(now: time::Instant<D>) -> time::Instant<D> = result
+where {
+  aux previous: time::Instant<D> = default(result[1], now)
+  aux result: time::Instant<D> = if time::later(previous, now) then now else previous
+}
+"#;
+    let root = r#"use experimental::{modules, functions, generics, local_streams, newtypes}
+mod app
+mod time
+mod track
+use app
+use time
+use track
+type IJ = time::Instant<app::JournalTime>
+in x: Float
+aux now: IJ = time::at(x)
+out latest = track::latest(now)
+"#;
+    let spec = expand(root, &[("app", APP), ("time", TIME), ("track", TRACK)])
+        .unwrap_or_else(|error| panic!("{error}"));
+    for options in BOTH {
+        let elaborated = elaborate(spec.clone(), options);
+        let latest = elaborated
+            .var_expr_ref(&VarName::from("latest"))
+            .unwrap()
+            .typ()
+            .to_string();
+        assert_eq!(latest, "time::Instant<app::JournalTime>");
+        let (rows, failure) = run_both(elaborated, inputs([("x", floats(&[1.0, 3.0, 2.0]))]));
+        assert_eq!(failure, None);
+        let latest = rows
+            .iter()
+            .map(|row| row[&VarName::from("latest")].clone())
+            .collect::<Vec<_>>();
+        let instant = |at| value_of("time::Instant<app::JournalTime>", at);
+        assert_eq!(latest, [instant(1.0), instant(3.0), instant(3.0)]);
+    }
+}
+
+#[test]
 fn a_call_mixing_domains_fails_at_check() {
     let body = "in j: IJ\nin p: IP\nout moved: Bool = time::later(j, p)\n";
     for options in BOTH {

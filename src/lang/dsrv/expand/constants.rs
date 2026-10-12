@@ -158,11 +158,14 @@ pub(crate) fn add_module(
                 local.push((name.clone(), root, *internal, typ, *span));
                 root += 1;
             }
+            // A def of this module that a constant calls is inlined from
+            // its source, as one this module's equations call would be.
             ParsedDeclaration::Def {
                 name,
                 type_parameters,
                 parameters,
                 result,
+                locals: None,
                 ..
             } => {
                 defs.insert(
@@ -179,10 +182,7 @@ pub(crate) fn add_module(
                 );
                 root += 1;
             }
-            ParsedDeclaration::Equation(..)
-            | ParsedDeclaration::Output(_, _, Some(_), _)
-            | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
-            _ => {}
+            other => root += other.root_count(),
         }
     }
     if local.is_empty() {
@@ -321,7 +321,8 @@ impl Folder<'_, '_> {
         scope: &ConstScope,
     ) -> Result<SyntaxLiteral, DsrvExpandError> {
         let span = parsed::span_of(body);
-        // A constant is a value, so no template instance can live in one.
+        // A constant is a value, so no stream_function instance can live in one.
+        super::stream_functions::refuse_uses(body, "a `const`")?;
         let inlined = {
             let mut inline_scope =
                 functions::imported_scope(&self.imported, self.folding.functions);
@@ -504,6 +505,8 @@ fn names_in(
 fn needs_checking(cursor: ParsedExprRef<'_>, scope: &ConstScope, context: &SourceContext) -> bool {
     cursor.postorder().any(|node| match node.kind() {
         ParsedExprKind::Apply(..) => true,
+        // Which fields an update keeps is its base's type, which only
+        // checking knows.
         ParsedExprKind::Constructor(_, _, Some(qualifier)) => {
             super::newtype_target(context, qualifier).is_some()
         }

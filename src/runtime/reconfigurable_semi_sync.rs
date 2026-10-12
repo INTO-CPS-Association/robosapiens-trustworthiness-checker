@@ -438,6 +438,9 @@ where
             })?;
         let next_model = prepare_replacement(&request.specification)
             .map_err(|error| anyhow!("failed to parse reconfiguration command: {error}"))?;
+        // Refuse a replacement that instantiates a stream function before switching
+        // to it, as the initial model is refused.
+        crate::core::ensure_no_stream_function_instances(&next_model, "reconf-semi-sync")?;
         let old_model = self.builder.model_ref()?.clone();
         self.log_model_changes(&old_model, &next_model);
 
@@ -541,10 +544,13 @@ where
             )
         };
         let mut terminal_deadline = None;
+        // A model this runtime may replace instantiates no stream function: see
+        // `RuntimeCapability::StreamFunctions`.
         let setup = SemiSyncRuntime::<AC, MS>::setup_evaluation(
             model,
             self.builder.starting_history.clone().unwrap_or_default(),
             "reconf-semi-sync",
+            crate::core::RuntimeCapabilities::NONE,
         )
         .await;
         let mut pending_builder = match setup {
@@ -1235,5 +1241,43 @@ mod tests {
             data_fanout.prune_events() > seen,
             "input owner was not released"
         );
+    }
+
+    #[apply(async_test)]
+    async fn reconfigurable_semi_sync_rejects_stream_function_syntax_before_switching(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        let (input, data_sender, _data_fanout, control_sender, _control_fanout) = channel_input();
+        let runtime = build_runtime(
+            executor,
+            PENDING_MODEL,
+            input,
+            OutputPipeline::from_backend(OutputBackendConfig::null()),
+        )
+        .await;
+        let replacement = r#"use experimental::{functions, local_streams, tagged_unions}
+def id(value: Int) -> Int = value
+where { }
+in x: Int
+out z: Int = id(x)"#;
+        control_sender
+            .send(Value::Str(
+                serde_json::json!({"specification": replacement})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        drop(data_sender);
+        drop(control_sender);
+
+        let error = run_with_timeout(runtime)
+            .await
+            .expect_err("stream function syntax must be refused before replacement");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("cannot run on the reconf-semi-sync runtime"),
+            "{message}"
+        );
+        assert!(message.contains("stream function instances"), "{message}");
     }
 }

@@ -81,6 +81,7 @@ pub enum Feature {
     Constants,
     Casts,
     LazyIf,
+    LocalStreams,
     Newtypes,
 }
 
@@ -95,6 +96,7 @@ impl Feature {
         Self::Constants,
         Self::Casts,
         Self::LazyIf,
+        Self::LocalStreams,
         Self::Newtypes,
     ];
 
@@ -108,6 +110,7 @@ impl Feature {
             Self::Constants => "constants",
             Self::Casts => "casts",
             Self::LazyIf => "lazy_if",
+            Self::LocalStreams => "local_streams",
             Self::Newtypes => "newtypes",
         }
     }
@@ -144,6 +147,7 @@ impl Feature {
                 | Self::Constants
                 | Self::Casts
                 | Self::LazyIf
+                | Self::LocalStreams
                 | Self::Newtypes => true,
             },
         }
@@ -209,7 +213,7 @@ impl MetaFeature {
 ///
 /// Revision 3: `lazy_if` joins the experiments, and with it
 /// `high_level_dsrv`.
-pub const EXPERIMENTAL_REVISION: u32 = 5;
+pub const EXPERIMENTAL_REVISION: u32 = 10;
 
 /// How an `if` chooses between its branches.
 ///
@@ -1039,7 +1043,7 @@ mod tests {
             matches!(&unknown, UnknownFeature { name, known, .. }
                 if name == "teleporting"
                     && known
-                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if, newtypes"),
+                        == "tagged_unions, pattern_matching, generics, modules, functions, constants, casts, lazy_if, local_streams, newtypes"),
             "{unknown}"
         );
         // An import of anything but `experimental` is an ordinary item
@@ -1310,9 +1314,10 @@ mod tests {
                     Feature::Constants,
                     Feature::Casts,
                     Feature::LazyIf,
+                    Feature::LocalStreams,
                     Feature::Newtypes,
                 ],
-                5,
+                10,
             )
         );
         assert_eq!(

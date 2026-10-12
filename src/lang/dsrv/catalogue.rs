@@ -47,11 +47,18 @@ impl Catalogue {
     /// The modules every program may import.
     pub const STANDARD: Self = Self {
         roots: &["std"],
-        modules: &[EmbeddedModule {
-            path: &["std", "option"],
-            file: "std/option.dsrv",
-            source: include_str!("std/option.dsrv"),
-        }],
+        modules: &[
+            EmbeddedModule {
+                path: &["std", "stream"],
+                file: "std/stream.dsrv",
+                source: include_str!("std/stream.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["std", "option"],
+                file: "std/option.dsrv",
+                source: include_str!("std/option.dsrv"),
+            },
+        ],
     };
 
     /// The registered root `path` begins with, if any.

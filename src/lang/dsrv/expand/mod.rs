@@ -75,6 +75,7 @@ pub(crate) mod functions;
 pub(crate) mod graph;
 pub(crate) mod inline;
 pub(crate) mod language;
+pub(crate) mod stream_functions;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -83,7 +84,7 @@ use ecow::EcoVec;
 use super::ast::AstShared as Rc;
 use super::ast::{
     Declaration, DsrvAstError, Expr, ExprBuilder, ExprId, ExprKind, ExprMetadata,
-    UnvalidatedDsrvSpecification,
+    StreamFunctionInstance, UnvalidatedDsrvSpecification,
 };
 use super::source::SourceType;
 use super::source::{SourceContext, SourceResolveError};
@@ -184,6 +185,70 @@ pub enum DsrvExpandError {
 
     #[error("`{name}` is not a count, so it cannot be a stream offset")]
     ConstantOffset { name: String, span: Span },
+
+    #[error(
+        "stream function `{stream_function}` is used inside {construct} at {span:?}; a stream function call must be \
+         the whole right-hand side of an `aux` or `out` equation"
+    )]
+    MisplacedStreamFunctionCall {
+        stream_function: String,
+        construct: &'static str,
+        span: Span,
+    },
+
+    #[error("`{name}` at {span:?} names no visible stream function")]
+    UnknownStreamFunction { name: String, span: Span },
+
+    #[error(
+        "stream function `{stream_function}` takes {expected} {kind} arguments, given {found}, at {span:?}"
+    )]
+    StreamFunctionArity {
+        stream_function: String,
+        kind: &'static str,
+        expected: usize,
+        found: usize,
+        span: Span,
+    },
+
+    #[error(
+        "fixed argument `{parameter}` of stream function `{stream_function}` at {span:?} {problem}"
+    )]
+    StreamFunctionFixedArgument {
+        stream_function: String,
+        parameter: String,
+        problem: String,
+        span: Span,
+    },
+
+    #[error(
+        "cannot infer type parameter `{parameter}` of stream function `{stream_function}` at {span:?}: {reason}"
+    )]
+    StreamFunctionTypeInference {
+        stream_function: String,
+        parameter: String,
+        reason: String,
+        span: Span,
+    },
+
+    #[error("stream function `{stream_function}` at {span:?} is invalid: {problem}")]
+    InvalidStreamFunction {
+        stream_function: String,
+        problem: String,
+        span: Span,
+    },
+
+    #[error("equation where block at {span:?} is invalid: {problem}")]
+    InvalidEquationWhere { problem: String, span: Span },
+
+    #[error("stream function instantiation recurses: {chain}")]
+    RecursiveStreamFunction { chain: String },
+
+    #[error("stream function instantiation exceeds {limit} {what}: {chain}")]
+    StreamFunctionLimit {
+        limit: usize,
+        what: &'static str,
+        chain: String,
+    },
 }
 
 /// A parsed specification's declarations, with names and types resolved.
@@ -195,6 +260,8 @@ pub(crate) struct ExpandedDeclarations {
     /// Each equation's expression, in the order of the equations.
     pub(crate) roots: EcoVec<ExprId>,
     pub(crate) context: Rc<SourceContext>,
+    /// The stream function instances the equations were expanded from.
+    pub(crate) instances: EcoVec<StreamFunctionInstance>,
 }
 
 impl SourceAscription {
@@ -238,6 +305,16 @@ pub(crate) fn expand_declarations_in(
         "a parsed file is expanded against the archive that holds it"
     );
     let language = language::resolve_language(parsed.declarations(), requested_dialect)?;
+    if let Some(ParsedDeclaration::EquationScope { span, .. }) = parsed
+        .declarations()
+        .iter()
+        .find(|declaration| matches!(declaration, ParsedDeclaration::EquationScope { .. }))
+    {
+        return Err(DsrvExpandError::InvalidEquationWhere {
+            problem: "equation-local where blocks are not supported".into(),
+            span: *span,
+        });
+    }
     let core = language.dialect() == Dialect::Core;
     let mut context = SourceContext::builder();
     // What a file may write is settled before anything is inlined, so a
@@ -352,6 +429,24 @@ pub(crate) fn expand_declarations_in(
         .as_ref()
         .map_or_else(inline::Scope::default, |callable| callable.scope());
     let parsed = inline::inline_functions(parsed, scope)?;
+    // A stream function call is instantiated once its arguments' calls are inlined.
+    // What the file declares is what the uses' types are inferred from.
+    let declared = parsed
+        .declarations()
+        .iter()
+        .filter_map(|declaration| match declaration {
+            ParsedDeclaration::Input(name, Some(ty), _)
+            | ParsedDeclaration::Output(name, Some(ty), _, _)
+            | ParsedDeclaration::Aux(name, Some(ty), _, _) => {
+                context.resolve_type(ty).ok().map(|ty| (name.clone(), ty))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut instantiator =
+        stream_functions::Instantiator::new(callable.as_deref(), &context, declared);
+    let mut instances = EcoVec::new();
+    let mut result_types = BTreeMap::new();
     let (expressions, parsed_declarations, source) = parsed.into_parts();
     let mut builder = ExprBuilder::with_capacity(expressions.nodes().count());
     let mut roots = expressions.into_roots();
@@ -369,6 +464,9 @@ pub(crate) fn expand_declarations_in(
     }
     for declaration in parsed_declarations {
         let resolved = match declaration {
+            ParsedDeclaration::EquationScope { .. } => {
+                unreachable!("equation scopes lowered before expansion")
+            }
             ParsedDeclaration::Input(name, ty, span) => Declaration::Input {
                 name,
                 annotation: resolve_annotation(ty.as_ref(), &context)?,
@@ -386,15 +484,23 @@ pub(crate) fn expand_declarations_in(
                     continue;
                 }
                 let expression = roots.next().expect("each definition owns one parsed root");
-                equation_roots.push(expand_tree(
+                expand_equation(
+                    name,
                     expression.as_ref(),
-                    &mut builder,
+                    span,
+                    &mut instantiator,
+                    &mut Equations {
+                        builder: &mut builder,
+                        declarations: &mut declarations,
+                        roots: &mut equation_roots,
+                        instances: &mut instances,
+                        result_types: &mut result_types,
+                    },
                     &context,
                     callable.as_ref(),
                     source,
-                    false,
-                )?);
-                Declaration::Equation { name, span }
+                )?;
+                continue;
             }
             ParsedDeclaration::Aux(name, ty, definition, span) => {
                 declarations.push(Declaration::Aux {
@@ -406,27 +512,43 @@ pub(crate) fn expand_declarations_in(
                     continue;
                 }
                 let expression = roots.next().expect("each definition owns one parsed root");
-                equation_roots.push(expand_tree(
+                expand_equation(
+                    name,
                     expression.as_ref(),
-                    &mut builder,
+                    span,
+                    &mut instantiator,
+                    &mut Equations {
+                        builder: &mut builder,
+                        declarations: &mut declarations,
+                        roots: &mut equation_roots,
+                        instances: &mut instances,
+                        result_types: &mut result_types,
+                    },
                     &context,
                     callable.as_ref(),
                     source,
-                    false,
-                )?);
-                Declaration::Equation { name, span }
+                )?;
+                continue;
             }
             ParsedDeclaration::Equation(name, _, span) => {
                 let expression = roots.next().expect("each equation owns one parsed root");
-                equation_roots.push(expand_tree(
+                expand_equation(
+                    name,
                     expression.as_ref(),
-                    &mut builder,
+                    span,
+                    &mut instantiator,
+                    &mut Equations {
+                        builder: &mut builder,
+                        declarations: &mut declarations,
+                        roots: &mut equation_roots,
+                        instances: &mut instances,
+                        result_types: &mut result_types,
+                    },
                     &context,
                     callable.as_ref(),
                     source,
-                    false,
-                )?);
-                Declaration::Equation { name, span }
+                )?;
+                continue;
             }
             ParsedDeclaration::Alias(alias) => Declaration::TypeAlias {
                 name: alias.name,
@@ -439,10 +561,10 @@ pub(crate) fn expand_declarations_in(
             // into them, so neither is kept as a declaration; both own a
             // root and must consume it here so the remaining declarations
             // still line up with theirs.
-            ParsedDeclaration::Def { .. } | ParsedDeclaration::Const { .. } => {
-                roots
-                    .next()
-                    .expect("each def and constant owns one parsed root");
+            declaration @ (ParsedDeclaration::Def { .. } | ParsedDeclaration::Const { .. }) => {
+                for _ in 0..declaration.root_count() {
+                    roots.next().expect("each expression owns one parsed root");
+                }
                 continue;
             }
             // The header is expanded into the source context, not kept.
@@ -452,12 +574,100 @@ pub(crate) fn expand_declarations_in(
         };
         declarations.push(resolved);
     }
+    // A use site that declared no type for its stream takes the stream function's
+    // declared result.
+    for declaration in declarations.make_mut() {
+        if let Declaration::Output {
+            name, annotation, ..
+        }
+        | Declaration::Aux {
+            name, annotation, ..
+        } = declaration
+            && annotation.is_none()
+            && let Some(ty) = result_types.get(&*name)
+        {
+            *annotation = Some(ty.clone());
+        }
+    }
     Ok(ExpandedDeclarations {
         builder,
         declarations,
         roots: equation_roots,
         context,
+        instances,
     })
+}
+
+/// Where a file's expanded equations are collected.
+struct Equations<'a> {
+    builder: &'a mut ExprBuilder,
+    declarations: &'a mut EcoVec<Declaration>,
+    roots: &'a mut EcoVec<ExprId>,
+    instances: &'a mut EcoVec<StreamFunctionInstance>,
+    result_types: &'a mut BTreeMap<crate::VarName, StreamType>,
+}
+
+/// Expand the equation of `name`. A stream function call becomes the equations of
+/// its instance: the use site's own, then its private streams'.
+#[allow(clippy::too_many_arguments)]
+fn expand_equation(
+    name: crate::VarName,
+    expression: ParsedExprRef<'_>,
+    span: Span,
+    instantiator: &mut stream_functions::Instantiator<'_>,
+    out: &mut Equations<'_>,
+    context: &Rc<SourceContext>,
+    callable: Option<&Rc<Callable>>,
+    source: Option<SourceId>,
+) -> Result<(), DsrvExpandError> {
+    let Some(instance) = instantiator.instantiate(&name, expression)? else {
+        out.roots.push(expand_tree(
+            expression,
+            out.builder,
+            context,
+            callable,
+            source,
+            false,
+        )?);
+        out.declarations.push(Declaration::Equation { name, span });
+        return Ok(());
+    };
+    out.roots.push(expand_tree(
+        instance.result.as_ref(),
+        out.builder,
+        context,
+        callable,
+        source,
+        false,
+    )?);
+    out.declarations.push(Declaration::Equation {
+        name: name.clone(),
+        span,
+    });
+    if let Some(ty) = instance.result_type {
+        out.result_types.insert(name, ty);
+    }
+    for generated in instance.generated {
+        out.declarations.push(Declaration::Aux {
+            name: generated.name.clone(),
+            annotation: generated.annotation,
+            span,
+        });
+        out.roots.push(expand_tree(
+            generated.expression.as_ref(),
+            out.builder,
+            context,
+            callable,
+            source,
+            false,
+        )?);
+        out.declarations.push(Declaration::Equation {
+            name: generated.name,
+            span,
+        });
+    }
+    out.instances.extend(instance.instances);
+    Ok(())
 }
 
 /// Refuse to inline defs whose provenance `target` cannot address.
@@ -479,8 +689,8 @@ fn check_provenance(
     }
 }
 
-/// Whether a file declares a function or a constant, which is what makes
-/// a table worth building for it.
+/// Whether a file declares a function, a constant or a stream function, which is
+/// what makes a table worth building for it.
 fn declares_a_def_or_constant(declarations: &[ParsedDeclaration]) -> bool {
     declarations.iter().any(|declaration| {
         matches!(
@@ -754,9 +964,11 @@ fn finish_specification(
         declarations,
         roots,
         context,
+        instances,
     } = expanded;
     let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
+    specification.stream_function_instances = instances;
     specification.sources = archive;
     let language = specification.source_context.language().clone();
     for node in specification.nodes() {
@@ -898,6 +1110,9 @@ pub(crate) fn expand_tree(
     source: Option<SourceId>,
     runtime_text: bool,
 ) -> Result<ExprId, DsrvExpandError> {
+    // A use that reaches here is not the whole right-hand side of an
+    // equation, so it cannot be one statically known instance.
+    stream_functions::refuse_uses(expression, "an expression")?;
     let environments = Environments::new(expression, context, callable, runtime_text);
     check_expression_types(expression, &environments)?;
     builder
@@ -1086,6 +1301,9 @@ pub(crate) fn expand_tree(
                     ExprKind::MonitoredAt(name.clone(), location.clone())
                 }
                 Dist(a, b) => ExprKind::Dist(a.clone(), b.clone()),
+                StreamFunctionCall(..) => {
+                    unreachable!("stream function calls are refused before conversion")
+                }
             };
             Ok::<_, SourceResolveError>((kind, metadata))
         })

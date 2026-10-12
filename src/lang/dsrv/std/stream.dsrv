@@ -1,0 +1,37 @@
+// Small stream recurrences on the enclosing clock; values are after this tick.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use std::option::{Option}
+
+// Previous held value defaults to initial; update selects this tick's value.
+def hold_when<T>(initial: T, updating: Bool, value: T) -> T = held
+where {
+  previous: T = default(held[1], initial)
+  held: T = if updating then value else previous
+}
+
+// Initial count is zero; reset wins over increment on the same tick.
+def count_when(reset: Bool, increment: Bool) -> Int = count
+where {
+  previous: Int = default(count[1], 0)
+  count: Int = if reset then 0 else if increment then previous + 1 else previous
+}
+
+// Retain the first capacity entries in their existing order. Entries already
+// within capacity are retained as they are; a match evaluates only its
+// selected arm, so they are not refolded.
+internal def take<T>(entries: List<T>, capacity: Int) -> List<T> = match(entries) {
+  _ if List.len(entries) <= capacity -> entries,
+  _ -> List.fold(\kept, entry ->
+    if List.len(kept) < capacity then List.append(kept, entry) else kept,
+    List.filter(\entry -> false, entries), entries),
+}
+
+// Before is the previous after, initially []; after is newest first.
+// Equal values are separate occurrences. Reset wins over sample; capacity <= 0
+// retains no entries. None retains the existing history.
+def recent<T, capacity: Int>(sample: Option<T>, reset: Bool) -> Struct<before: List<T>, after: List<T>> = { before, after }
+where {
+  before: List<T> = default(after[1], [])
+  inserted: List<T> = match(sample) { Some(value) -> List.concat([value], before), None -> before }
+  after: List<T> = if reset then [] else take(inserted, capacity)
+}

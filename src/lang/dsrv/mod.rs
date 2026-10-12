@@ -28,6 +28,8 @@ mod generic_tests;
 #[cfg(test)]
 mod lexical_tests;
 #[cfg(test)]
+mod local_stream_tests;
+#[cfg(test)]
 mod match_tests;
 #[cfg(test)]
 mod module_tests;
@@ -35,6 +37,8 @@ mod module_tests;
 mod newtype_tests;
 #[cfg(test)]
 mod std_option_tests;
+#[cfg(test)]
+mod stream_function_tests;
 #[cfg(test)]
 mod tagged_union_tests;
 #[cfg(test)]

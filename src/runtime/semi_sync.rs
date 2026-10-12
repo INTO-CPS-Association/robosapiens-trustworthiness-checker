@@ -27,6 +27,12 @@ use unsync::spsc;
 
 const CHANNEL_SIZE: usize = 8;
 
+/// What the semi-sync scheduler adds to the capabilities of its semantics.
+/// Stream function instances expand to ordinary streams, and their results agree
+/// with the dataflow runtime's.
+pub const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities =
+    crate::core::RuntimeCapabilities::NONE.with(crate::core::RuntimeCapability::StreamFunctions);
+
 pub struct SemiSyncRuntimeBuilder<AC, MS>
 where
     AC: AsyncConfig,
@@ -712,7 +718,8 @@ where
         let mut output_writer = output_writer;
         let setup_result = async {
             let (subscriptions, context, expr_evals) =
-                Self::setup_evaluation(model, starting_history, "semi-sync").await?;
+                Self::setup_evaluation(model, starting_history, "semi-sync", RUNTIME_CAPABILITIES)
+                    .await?;
             let writer = output_writer
                 .take()
                 .ok_or_else(|| anyhow!("SemiSync output writer must be set"))?;
@@ -753,17 +760,25 @@ where
 
     /// Build the model state independently of transport ownership. Reconfigurable
     /// runtimes retain their I/O sessions while replacing this evaluation state.
+    ///
+    /// `scheduler` is what the calling runtime adds to its semantics'
+    /// capabilities.
     pub(crate) async fn setup_evaluation(
         model: AC::Spec,
         starting_history: BTreeMap<VarName, Vec<AC::Val>>,
         runtime: &'static str,
+        scheduler: crate::core::RuntimeCapabilities,
     ) -> anyhow::Result<(
         BTreeMap<VarName, LocalStream<AC::Val>>,
         SemiSyncContext<AC>,
         Vec<ExprEvalutor<AC, MS>>,
     )> {
         // Refuse unsupported constructs before building the dependency graph.
-        crate::core::ensure_runtime_support(&model, MS::RUNTIME_CAPABILITIES, runtime)?;
+        crate::core::ensure_runtime_support(
+            &model,
+            MS::RUNTIME_CAPABILITIES.union(scheduler),
+            runtime,
+        )?;
         let input_vars = model.input_vars();
         // Starting-history rows must align before replaying them into the context.
         let hist_len = starting_history

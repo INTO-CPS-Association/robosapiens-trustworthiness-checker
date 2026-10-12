@@ -401,6 +401,62 @@ stored in a list, strict type checking reports `cannot infer the type of
 lambda parameter`, and gradual checking gives the parameter the dynamic type
 `Any`.
 
+## Local stream functions
+
+Under `use experimental::local_streams`, a `def` can keep private stream
+history in a `where` block. Enable `functions` too, or use the
+`high_level_dsrv` bundle:
+
+```dsrv
+use experimental::high_level_dsrv
+
+def count_events(hit: Bool) -> Int = count
+where {
+  count: Int = default(count[1], 0) + (if hit then 1 else 0)
+}
+
+in hit: Bool
+aux count: Int = count_events(hit)
+out seen: Bool = count > 0
+```
+
+Each written call creates an independent instance. Binding a call's result to
+one stream and reusing that stream shares the instance. Arguments and local
+streams advance on every enclosing tick, with ordinary history and `NoVal`
+behaviour. Local names are private. The `where` block may appear on the same
+line as the result and may be empty; it admits stream declarations and equations,
+including split declarations and forward references, but no `in`, `out` or
+nested `def` declarations.
+
+Call a stream function as the whole right-hand side of an `aux` or `out`
+equation, including a local equation. A function may also return another
+stream function's entire result. Such a forwarding function has the same
+placement restrictions. Calls inside operators, conditionals, match arms,
+lambdas, list callbacks, constants or runtime `dynamic`/`defer` text are refused.
+Bind a stateful intermediate to a local stream in a `where` block instead.
+
+A stream function may separate inferred type parameters and fixed configuration
+from tick-varying arguments:
+
+```dsrv
+def remembered<T, selected: (T -> Bool)>(input: T) -> Bool = seen
+where {
+  seen: Bool = default(seen[1], false) || selected(input)
+}
+```
+
+Call it with `remembered::<is_relevant>(observation)`, or qualify the name when
+it is imported. Fixed data must be closed and independent of streams; fixed
+functions must be named ordinary defs or forwarded fixed parameters. Inline
+lambdas, captured stream/history/runtime text and stateful callbacks are
+refused. The returned value has the declared result type.
+
+The experiment is checked in the defining module, including for unused defs.
+Actual instances run with `dataflow` and `semi-sync`; reconfigurable runtimes
+refuse them in both the initial model and replacements. Enabling the experiment
+or declaring an unused function alone does not require instance support.
+An ordinary `def` without `where` keeps its existing semantics.
+
 ## Constants
 
 Under `use experimental::{constants}`, `const name: Type = e` names a value

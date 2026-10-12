@@ -6,7 +6,45 @@ def is_some<T>(option: Option<T>) -> Bool = matches(option, Some(_))
 
 def is_none<T>(option: Option<T>) -> Bool = matches(option, None)
 
+def some<T>(value: T) -> Option<T> = Some(value)
+
+def is_some_and<T>(option: Option<T>, predicate: (T -> Bool)) -> Bool = match(option) {
+    Some(value) -> predicate(value),
+    None -> false,
+}
+
+def map<T, U>(option: Option<T>, project: (T -> U)) -> Option<U> = match(option) {
+    Some(value) -> Some(project(value)),
+    None -> None,
+}
+
+def and_then<T, U>(option: Option<T>, project: (T -> Option<U>)) -> Option<U> = match(option) {
+    Some(value) -> project(value),
+    None -> None,
+}
+
+def map_or<T, U>(option: Option<T>, fallback: U, project: (T -> U)) -> U = match(option) {
+    Some(value) -> project(value),
+    None -> fallback,
+}
+
+// Use the fallback only when the optional value is absent.
+def or_else<T>(option: Option<T>, fallback: Option<T>) -> Option<T> = match(option) {
+    Some(_) -> option,
+    None -> fallback,
+}
+
+// Equal present values supply identity evidence; two absent values do not.
+def known_eq<T>(left: Option<T>, right: Option<T>) -> Bool = match(Tuple(left, right)) {
+    (Some(a), Some(b)) -> a == b,
+    _ -> false,
+}
+
 def unwrap_or<T>(option: Option<T>, fallback: T) -> T = match(option) {
     Some(value) -> value,
     None -> fallback,
 }
+
+// Select an optional value without inventing one when the condition holds.
+def only_if<T>(condition: Bool, value: Option<T>) -> Option<T> =
+    if condition then value else None

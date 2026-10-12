@@ -31,7 +31,7 @@
             name: "DSRV",
             aliases: ["dsrv"],
             keywords: {
-                keyword: "in out var aux if then else",
+                keyword: "in out var aux if then else def where type internal mod use const newtype match matches",
                 literal: "true false",
             },
             contains: [

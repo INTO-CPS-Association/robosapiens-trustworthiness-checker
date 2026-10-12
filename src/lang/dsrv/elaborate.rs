@@ -530,6 +530,7 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
     );
     elaborated.source_context = spec.source_context.clone();
     elaborated.sources = AstShared::clone(&spec.sources);
+    elaborated.stream_function_instances = spec.stream_function_instances.clone();
     CheckedDsrvSpecification::new(elaborated, expr_types, checked.check_mode())
 }
 

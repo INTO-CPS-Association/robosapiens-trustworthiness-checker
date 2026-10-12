@@ -25,6 +25,12 @@ pub enum RuntimeCapability {
     /// An `if` under `lazy_if`, which runs only its selected branch, on a
     /// timeline of its own.
     LazyIf,
+    /// A stream function instance. Its generated streams are ordinary, but a
+    /// runtime admits instances only where their behaviour has been checked
+    /// against the dataflow runtime's; one that may replace its model
+    /// refuses them, since carrying history across a replacement does not
+    /// establish that an instance's state still means the same.
+    StreamFunctions,
 }
 
 impl RuntimeCapability {
@@ -34,6 +40,7 @@ impl RuntimeCapability {
         Self::TaggedUnions,
         Self::PatternMatching,
         Self::LazyIf,
+        Self::StreamFunctions,
     ];
 
     const fn bit(self) -> u32 {
@@ -42,6 +49,7 @@ impl RuntimeCapability {
             Self::TaggedUnions => 1 << 1,
             Self::PatternMatching => 1 << 2,
             Self::LazyIf => 1 << 3,
+            Self::StreamFunctions => 1 << 4,
         }
     }
 
@@ -52,6 +60,7 @@ impl RuntimeCapability {
             Self::TaggedUnions => "tagged unions",
             Self::PatternMatching => "pattern matching",
             Self::LazyIf => "lazy if",
+            Self::StreamFunctions => "stream function instances",
         }
     }
 }
@@ -80,6 +89,16 @@ impl RuntimeCapabilities {
     /// What two semantics both provide, for a runtime that may use either.
     pub const fn intersection(self, other: Self) -> Self {
         Self(self.0 & other.0)
+    }
+
+    /// These capabilities with those a runtime adds to its evaluator's.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// These capabilities without `capability`.
+    pub const fn without(self, capability: RuntimeCapability) -> Self {
+        Self(self.0 & !capability.bit())
     }
 }
 
@@ -115,6 +134,22 @@ impl fmt::Display for UnsupportedRuntimeConstruct {
             self.runtime
         )
     }
+}
+
+/// Refuse a model that instantiates a stream function on a runtime that may
+/// replace its model, whether as its initial model or as a replacement.
+/// Everything else is left to the evaluator's own admission.
+pub fn ensure_no_stream_function_instances<S: Specification>(
+    model: &S,
+    runtime: &'static str,
+) -> Result<(), UnsupportedRuntimeConstruct> {
+    let everything_else = RuntimeCapability::ALL
+        .iter()
+        .fold(RuntimeCapabilities::NONE, |all, capability| {
+            all.with(*capability)
+        })
+        .without(RuntimeCapability::StreamFunctions);
+    ensure_runtime_support(model, everything_else, runtime)
 }
 
 /// Admit `model` on the runtime named `runtime` if it needs nothing outside
@@ -229,7 +264,10 @@ mod tests {
             SemiSyncValueConfig,
             UntimedDsrvSemantics,
         >::setup_evaluation(
-            lazy(), Default::default(), "semi-sync"
+            lazy(),
+            Default::default(),
+            "semi-sync",
+            crate::runtime::semi_sync::RUNTIME_CAPABILITIES,
         ));
         let Err(error) = result else {
             panic!("a lazy `if` was admitted");

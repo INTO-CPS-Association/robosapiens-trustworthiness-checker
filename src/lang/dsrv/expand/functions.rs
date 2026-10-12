@@ -38,7 +38,9 @@ use super::constants::{ConstantTable, Constants};
 use super::graph::ModuleGraph;
 use super::inline::{Def, Scope, standalone};
 use super::language::Dialect;
+use super::stream_functions::{self, StreamFunctionEntry};
 use super::{DsrvExpandError, graph};
+use crate::lang::dsrv::path::{TypePath, ValuePath};
 
 /// One module's lexical environment, by its place in a function table.
 ///
@@ -97,6 +99,9 @@ pub(crate) struct Entry {
 #[derive(Debug, Default)]
 pub(crate) struct FunctionTable {
     entries: BTreeMap<(ModulePath, VarName), Entry>,
+    /// Defs whose calls instantiate private stream equations instead of
+    /// inlining a pure expression, keyed in their defining module.
+    stream_functions: BTreeMap<(ModulePath, TypeName), StreamFunctionEntry>,
     /// The archive whose IDs the entries carry.
     archive: Option<ArchiveToken>,
     /// By [`LexicalId`].
@@ -228,6 +233,85 @@ fn add_module(
     archive: Option<&SourceArchive>,
     label: &str,
 ) -> Result<(), DsrvExpandError> {
+    let imported = imported_modules(path, parsed.declarations())?;
+    // Discover stateful forwarding transitively before ordinary inlining.
+    let mut stream_function_paths: BTreeSet<TypePath> = table
+        .stream_functions
+        .keys()
+        .filter(|(module, _)| imported.contains_key(module))
+        .flat_map(|(module, name)| {
+            let mut paths = vec![TypePath::new(
+                module.iter().cloned().collect(),
+                name.clone(),
+            )];
+            if imported[module] {
+                paths.push(TypePath::new(EcoVec::new(), name.clone()));
+            }
+            paths
+        })
+        .collect();
+    let mut local_names = BTreeSet::new();
+    for declaration in parsed.declarations() {
+        if let ParsedDeclaration::Def { name, span, .. } = declaration {
+            if !local_names.insert(name.clone()) {
+                return Err(DsrvExpandError::InvalidStreamFunction {
+                    stream_function: name.to_string(),
+                    problem: "the def name is declared twice".into(),
+                    span: *span,
+                });
+            }
+            // A local def shadows a glob-imported def regardless of state.
+            stream_function_paths.remove(&TypePath::new(
+                EcoVec::new(),
+                TypeName::new(name.name()).unwrap(),
+            ));
+        }
+    }
+    let held = parsed.roots();
+    let mut candidates = Vec::new();
+    let mut root = 0;
+    for declaration in parsed.declarations() {
+        match declaration {
+            ParsedDeclaration::Def { name, locals, .. } => {
+                let name = TypeName::new(name.name()).expect("a function name");
+                if locals.is_some() {
+                    stream_function_paths.insert(TypePath::new(EcoVec::new(), name.clone()));
+                    stream_function_paths
+                        .insert(TypePath::new(path.iter().cloned().collect(), name.clone()));
+                }
+                candidates.push((name, root, super::inline::declaration_bindings(declaration)));
+            }
+            _ => {}
+        }
+        root += declaration.root_count();
+    }
+    loop {
+        let before = stream_function_paths.len();
+        for (name, root, bound) in &candidates {
+            let normalised = super::inline::normalise_stream_expression(
+                held[*root].as_ref(),
+                &stream_function_paths,
+                bound.clone(),
+            )?;
+            let stateful = normalised.as_ref().postorder().any(|node| {
+                matches!(
+                    node.kind(),
+                    crate::lang::dsrv::syntax::parsed::ParsedExprKind::StreamFunctionCall(..)
+                )
+            });
+            if stateful {
+                stream_function_paths.insert(TypePath::new(EcoVec::new(), name.clone()));
+                stream_function_paths
+                    .insert(TypePath::new(path.iter().cloned().collect(), name.clone()));
+            }
+        }
+        if before == stream_function_paths.len() {
+            break;
+        }
+    }
+    let stream_paths = stream_function_paths.clone();
+    let normalised = super::inline::normalise_stream_functions(parsed, stream_function_paths)?;
+    let parsed = &normalised;
     let declarations = parsed.declarations();
     let held = parsed.roots();
     let trees: Vec<ParsedExprRef<'_>> = held.iter().map(|tree| tree.as_ref()).collect();
@@ -259,7 +343,7 @@ fn add_module(
     )?;
     unshared(table).lexicals[id.index()] = lexical(constants)?;
 
-    let built = {
+    let (built, built_stream_functions) = {
         let table: &FunctionTable = table;
         let lexical = table
             .lexical(id)
@@ -269,6 +353,16 @@ fn add_module(
         // they name is this module's, folded here rather than at a caller
         // that may name something else by it.
         let mut scope = scope_of(&lexical.imported, table);
+        scope
+            .stream_values
+            .extend(super::inline::parsed_stream_names(declarations));
+        for name in &local_names {
+            scope.stream_functions.remove(&TypePath::new(
+                EcoVec::new(),
+                TypeName::new(name.name()).unwrap(),
+            ));
+        }
+        scope.stream_functions.extend(stream_paths.iter().cloned());
         scope.constants = Some(&lexical.constants);
         let mut local: Vec<(
             VarName,
@@ -278,18 +372,32 @@ fn add_module(
             SourceType,
             bool,
         )> = Vec::new();
+        let mut stream_functions = Vec::new();
         let mut root = 0usize;
         for declaration in declarations {
             match declaration {
-                ParsedDeclaration::Def { .. } => {
-                    local_def(declaration, &mut local, root);
+                ParsedDeclaration::Def { name, fixed, .. } => {
+                    let name = TypePath::new(EcoVec::new(), TypeName::new(name.name()).unwrap());
+                    if stream_paths.contains(&name) {
+                        stream_functions.push((stream_declaration(declaration)?, root));
+                    } else {
+                        if !fixed.is_empty() {
+                            return Err(DsrvExpandError::InvalidStreamFunction {
+                                stream_function: name.to_string(),
+                                problem: "fixed parameters require a stream function".into(),
+                                span: declaration_span(declaration),
+                            });
+                        }
+                        stream_functions::refuse_uses(trees[root], "a `def`")?;
+                        local_def(declaration, &mut local, root);
+                    }
+                    root += declaration.root_count();
+                }
+                ParsedDeclaration::Const { .. } => {
+                    stream_functions::refuse_uses(trees[root], "a `const`")?;
                     root += 1;
                 }
-                ParsedDeclaration::Equation(..)
-                | ParsedDeclaration::Const { .. }
-                | ParsedDeclaration::Output(_, _, Some(_), _)
-                | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
-                _ => {}
+                other => root += other.root_count(),
             }
         }
         for (name, index, parameters, type_parameters, result, _) in &local {
@@ -326,10 +434,26 @@ fn add_module(
                 },
             ));
         }
-        built
+        // A stream_function body reads this module's defs and constants as a def
+        // body does, so it is inlined against the same scope.
+        let mut built_stream_functions = Vec::with_capacity(stream_functions.len());
+        for (stream_function, first) in stream_functions {
+            let entry = stream_functions::build_entry(
+                &stream_function,
+                &trees[first..first + stream_function.body.len()],
+                &scope,
+                lexical.context.language(),
+                path,
+                parsed.source(),
+                id,
+            )?;
+            built_stream_functions.push(((path.clone(), stream_function.name.clone()), entry));
+        }
+        (built, built_stream_functions)
     };
     let table = unshared(table);
     table.entries.extend(built);
+    table.stream_functions.extend(built_stream_functions);
     Ok(())
 }
 
@@ -424,9 +548,12 @@ impl Callable {
     }
 
     /// Whether any def is callable at all, which is what says a node needs
-    /// to carry this on into the text it is given.
+    /// to carry this on into the text it is given. A program with a
+    /// stream_function keeps its table too: instantiated code is read in the
+    /// environment of the module that wrote it.
     pub(crate) fn is_empty(&self) -> bool {
         self.table.entries.is_empty()
+            && self.table.stream_functions.is_empty()
             && self
                 .lexical()
                 .is_none_or(|lexical| lexical.constants.is_empty())
@@ -635,12 +762,109 @@ impl Callable {
         sources
     }
 
+    /// The environment of the module whose text this is.
+    pub(crate) fn own(&self) -> LexicalId {
+        self.own
+    }
+
+    /// The stream_function `path` names in text written in environment `from`:
+    /// one of a module that text imported.
+    pub(crate) fn stream_function(
+        &self,
+        from: LexicalId,
+        path: &TypePath,
+    ) -> Option<&StreamFunctionEntry> {
+        let lexical = self.table.lexical(from)?;
+        let name = path.name().clone();
+        if path.module().is_empty() {
+            if let Some(entry) = self
+                .table
+                .stream_functions
+                .get(&(lexical.module.clone(), name.clone()))
+            {
+                return Some(entry);
+            }
+            return lexical
+                .imported
+                .iter()
+                .filter(|(_, bare)| **bare)
+                .find_map(|(module, _)| {
+                    self.table
+                        .stream_functions
+                        .get(&(module.clone(), name.clone()))
+                        .filter(|entry| !entry.internal)
+                });
+        }
+        let module = path.module().to_vec();
+        if module != lexical.module && !lexical.imported.contains_key(&module) {
+            return None;
+        }
+        self.table
+            .stream_functions
+            .get(&(module.clone(), name))
+            .filter(|entry| module == lexical.module || !entry.internal)
+    }
+
+    /// The def `path` names in text written in environment `from`, as the
+    /// module and name the table holds it under. A bare name finds the
+    /// module's own defs before the ones its globs imported, as a call does.
+    pub(crate) fn resolve_def(
+        &self,
+        from: LexicalId,
+        path: &ValuePath,
+    ) -> Option<(ModulePath, VarName)> {
+        let lexical = self.table.lexical(from)?;
+        let name = path.name();
+        if path.module().is_empty() {
+            if self
+                .table
+                .entries
+                .contains_key(&(lexical.module.clone(), name.clone()))
+            {
+                return Some((lexical.module.clone(), name.clone()));
+            }
+            return lexical
+                .imported
+                .iter()
+                .filter(|(_, bare)| **bare)
+                .map(|(module, _)| (module.clone(), name.clone()))
+                .filter(|key| {
+                    self.table
+                        .entries
+                        .get(key)
+                        .is_some_and(|entry| !entry.internal)
+                })
+                .last();
+        }
+        let key = (path.module().to_vec(), name.clone());
+        let own = key.0 == lexical.module;
+        let reachable = own || lexical.imported.contains_key(&key.0);
+        let entry = self.table.entries.get(&key)?;
+        (reachable && (own || !entry.internal)).then_some(key)
+    }
+
+    /// The def the table holds under `key`.
+    pub(crate) fn def(&self, key: &(ModulePath, VarName)) -> Option<Def<'_>> {
+        self.table.entries.get(key).map(Entry::as_def)
+    }
+
     /// Borrow the table into a scope for one expansion.
     pub(crate) fn scope(&self) -> Scope<'_> {
         let Some(lexical) = self.lexical() else {
             return Scope::default();
         };
         let mut scope = scope_of(&lexical.imported, &self.table);
+        for ((module, name), entry) in &self.table.stream_functions {
+            if *module == lexical.module && (!self.runtime_text || !entry.internal) {
+                scope
+                    .stream_functions
+                    .insert(TypePath::new(EcoVec::new(), name.clone()));
+                scope.stream_functions.insert(TypePath::new(
+                    module.iter().cloned().collect(),
+                    name.clone(),
+                ));
+            }
+        }
         scope.constants = Some(if self.runtime_text {
             &lexical.runtime_constants
         } else {
@@ -656,6 +880,10 @@ impl Callable {
             self.table.declared(&lexical.module)
         };
         for (name, entry) in own {
+            scope.stream_functions.remove(&TypePath::new(
+                EcoVec::new(),
+                TypeName::new(name.name()).unwrap(),
+            ));
             scope.bare.insert(name.clone(), entry.as_def());
             scope
                 .qualified
@@ -731,6 +959,19 @@ pub(super) fn imported_scope<'a>(
 fn scope_of<'a>(imported: &BTreeMap<ModulePath, bool>, table: &'a FunctionTable) -> Scope<'a> {
     let mut scope = Scope::default();
     for (module, bare) in imported {
+        for ((owner, name), entry) in &table.stream_functions {
+            if owner == module && !entry.internal {
+                scope.stream_functions.insert(TypePath::new(
+                    module.iter().cloned().collect(),
+                    name.clone(),
+                ));
+                if *bare {
+                    scope
+                        .stream_functions
+                        .insert(TypePath::new(EcoVec::new(), name.clone()));
+                }
+            }
+        }
         for (name, entry) in table.exported(module) {
             if *bare {
                 scope.bare.insert(name.clone(), entry.as_def());
@@ -761,4 +1002,106 @@ fn describe_def(out: &mut String, def: &Def<'_>) {
         .collect::<Vec<_>>()
         .join(",");
     let _ = write!(out, "({parameters})->{:?}={:?};", def.result, def.body);
+}
+
+fn declaration_span(declaration: &ParsedDeclaration) -> crate::lang::dsrv::span::Span {
+    let ParsedDeclaration::Def { span, .. } = declaration else {
+        unreachable!()
+    };
+    *span
+}
+
+/// Assemble split local declarations while retaining source equation order.
+fn stream_declaration(
+    declaration: &ParsedDeclaration,
+) -> Result<crate::lang::dsrv::syntax::parsed::StreamFunctionDeclaration, DsrvExpandError> {
+    use crate::lang::dsrv::syntax::parsed::{LocalEquation, StreamFunctionDeclaration};
+    let ParsedDeclaration::Def {
+        name,
+        type_parameters,
+        fixed,
+        parameters,
+        result,
+        body,
+        locals,
+        internal,
+        span,
+    } = declaration
+    else {
+        unreachable!()
+    };
+    let invalid = |problem: String, span| DsrvExpandError::InvalidStreamFunction {
+        stream_function: name.to_string(),
+        problem,
+        span,
+    };
+    let mut annotations = BTreeMap::new();
+    let mut equations = Vec::new();
+    let mut defined = BTreeSet::new();
+    for local in locals.iter().flatten() {
+        match local {
+            ParsedDeclaration::Aux(name, ty, root, span) => {
+                if annotations.insert(name.clone(), ty.clone()).is_some() {
+                    return Err(invalid(
+                        format!("local stream `{name}` is declared twice"),
+                        *span,
+                    ));
+                }
+                if let Some(root) = root {
+                    if !defined.insert(name.clone()) {
+                        return Err(invalid(
+                            format!("local stream `{name}` is defined twice"),
+                            *span,
+                        ));
+                    }
+                    equations.push((name.clone(), *root, *span));
+                }
+            }
+            ParsedDeclaration::Equation(name, root, span) => {
+                if !defined.insert(name.clone()) {
+                    return Err(invalid(
+                        format!("local stream `{name}` is defined twice"),
+                        *span,
+                    ));
+                }
+                equations.push((name.clone(), *root, *span));
+            }
+            _ => unreachable!("local grammar admits only aux declarations and equations"),
+        }
+    }
+    for local in annotations.keys() {
+        if !defined.contains(local) {
+            return Err(invalid(
+                format!("local stream `{local}` has no equation"),
+                *span,
+            ));
+        }
+    }
+    let mut equations_body: EcoVec<LocalEquation> = EcoVec::new();
+    equations_body.push(LocalEquation {
+        output: true,
+        name: VarName::from("$result"),
+        ty: Some(result.clone()),
+        root: *body,
+        span: *span,
+    });
+    for (name, root, span) in equations {
+        equations_body.push(LocalEquation {
+            output: false,
+            ty: annotations.remove(&name).flatten(),
+            name,
+            root,
+            span,
+        });
+    }
+    Ok(StreamFunctionDeclaration {
+        internal: *internal,
+        name: TypeName::new(name.name()).unwrap(),
+        type_parameters: type_parameters.clone(),
+        fixed: fixed.clone(),
+        streams: parameters.clone(),
+        result: Some(result.clone()),
+        body: equations_body,
+        span: *span,
+    })
 }

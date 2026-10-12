@@ -80,6 +80,9 @@ contiguous_tree::tree_schema! {
         Map(entries: keyed_children),
         Struct(entries: keyed_children),
         ObjectLiteral(entries: keyed_children),
+        // `{ a: x, ..base }`: `base` with the named fields replaced. The
+        // children are in source order, each named field's value and then
+        // the base, since a tree's fixed children must precede a collection.
         MGet(map: child, key: data(EcoString)),
         SGet(value: child, key: data(EcoString)),
         MInsert(map: child, key: data(EcoString), value: child),
@@ -95,6 +98,11 @@ contiguous_tree::tree_schema! {
         Round(value: child),
         MonitoredAt(variable: data(VarName), node: data(NodeName)),
         Dist(left: data(VarOrNodeName), right: data(VarOrNodeName)),
+        // A stream function call, `m::f::<fixed…>(streams…)`: the first `fixed`
+        // arguments are the fixed ones, the rest are streams. Expansion
+        // instantiates a use that is the whole right-hand side of an
+        // equation and refuses any other, so none reaches the core AST.
+        StreamFunctionCall(arguments: children, stream_function: data(TypePath), fixed: copy(usize)),
     }
 }
 
@@ -110,6 +118,7 @@ pub(crate) struct ParsedOrigin {
     pub(crate) definition: Option<SourceSite>,
     pub(crate) lexical: Option<LexicalId>,
     pub(crate) generic_def: Option<crate::lang::dsrv::ast::AstShared<GenericFunctionSignature>>,
+    pub(crate) duration_seconds: Option<f64>,
 }
 
 /// Source-only signature carried by the lambda generated for a generic `def`.
@@ -127,6 +136,7 @@ impl From<Span> for ParsedOrigin {
             definition: None,
             lexical: None,
             generic_def: None,
+            duration_seconds: None,
         }
     }
 }
@@ -172,6 +182,12 @@ pub(crate) enum ParsedDeclaration {
     /// `aux x`, `aux x: T`, or a one-line definition `aux x: T = e`.
     Aux(VarName, Option<SourceType>, Option<ParsedExprId>, Span),
     Equation(VarName, ParsedExprId, Span),
+    /// Private aux equations attached to one complete stream RHS.
+    EquationScope {
+        equation: Box<ParsedDeclaration>,
+        locals: EcoVec<ParsedDeclaration>,
+        span: Span,
+    },
     Alias(AliasDeclaration),
     /// `language <name>`, with the name unchecked.
     Language(EcoString, Span),
@@ -180,12 +196,14 @@ pub(crate) enum ParsedDeclaration {
         tree: UseTree,
         span: Span,
     },
-    /// `def <name>(<args>) -> <type> = <body>`: a pure function, inlined at
-    /// each call site rather than evaluated.
+    /// A named def: pure bodies inline, while a `where` block or a
+    /// stateful forwarding result makes each static call a stream instance.
     Def {
         name: VarName,
         type_parameters: EcoVec<TypeName>,
         parameters: EcoVec<(VarName, SourceType)>,
+        fixed: EcoVec<(VarName, SourceType)>,
+        locals: Option<EcoVec<ParsedDeclaration>>,
         result: SourceType,
         body: ParsedExprId,
         internal: bool,
@@ -208,6 +226,84 @@ pub(crate) enum ParsedDeclaration {
     },
 }
 
+impl ParsedDeclaration {
+    pub(crate) fn with_locals(self, locals: Option<Vec<Self>>, span: Span) -> Self {
+        match locals {
+            Some(locals) => Self::EquationScope {
+                equation: Box::new(self),
+                locals: locals.into(),
+                span,
+            },
+            None => self,
+        }
+    }
+
+    /// The expression roots this declaration owns, in the order the parsed
+    /// forest holds them.
+    pub(crate) fn roots(&self) -> Vec<ParsedExprId> {
+        match self {
+            ParsedDeclaration::Equation(_, root, _)
+            | ParsedDeclaration::Output(_, _, Some(root), _)
+            | ParsedDeclaration::Aux(_, _, Some(root), _)
+            | ParsedDeclaration::Const { body: root, .. } => vec![*root],
+            ParsedDeclaration::EquationScope {
+                equation, locals, ..
+            } => {
+                let mut roots = equation.roots();
+                roots.extend(locals.iter().flat_map(Self::roots));
+                roots
+            }
+            ParsedDeclaration::Def { body, locals, .. } => {
+                let mut roots = vec![*body];
+                if let Some(locals) = locals {
+                    roots.extend(locals.iter().flat_map(Self::roots));
+                }
+                roots
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// How many expression roots this declaration owns.
+    pub(crate) fn root_count(&self) -> usize {
+        self.roots().len()
+    }
+}
+
+/// A parameter written between a stream function's angle brackets: a type
+/// parameter, or a fixed argument with its type.
+#[derive(Clone, Debug)]
+pub(crate) enum DefGeneric {
+    Type(TypeName),
+    Fixed(VarName, SourceType),
+}
+
+/// Internal expansion view of a def result and its local aux equations.
+#[derive(Clone, Debug)]
+pub(crate) struct StreamFunctionDeclaration {
+    pub(crate) internal: bool,
+    pub(crate) name: TypeName,
+    pub(crate) type_parameters: EcoVec<TypeName>,
+    /// Arguments fixed for the life of an instance, in order.
+    pub(crate) fixed: EcoVec<(VarName, SourceType)>,
+    /// Stream arguments, bound to the enclosing streams on every tick.
+    pub(crate) streams: EcoVec<(VarName, SourceType)>,
+    pub(crate) result: Option<SourceType>,
+    pub(crate) body: EcoVec<LocalEquation>,
+    pub(crate) span: Span,
+}
+
+/// A local aux equation or the synthetic equation for a def result.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalEquation {
+    /// Whether this equation represents the def's result expression.
+    pub(crate) output: bool,
+    pub(crate) name: VarName,
+    pub(crate) ty: Option<SourceType>,
+    pub(crate) root: ParsedExprId,
+    pub(crate) span: Span,
+}
+
 /// The parsed forest is validated before any semantic node is allocated.
 pub(crate) struct ParsedSpecification {
     expressions: ParsedExprForest,
@@ -222,16 +318,7 @@ impl ParsedSpecification {
         builder: ParsedExprBuilder,
         declarations: EcoVec<ParsedDeclaration>,
     ) -> Result<Self, DsrvSyntaxError> {
-        let roots = declarations
-            .iter()
-            .filter_map(|declaration| match declaration {
-                ParsedDeclaration::Equation(_, root, _)
-                | ParsedDeclaration::Output(_, _, Some(root), _)
-                | ParsedDeclaration::Aux(_, _, Some(root), _)
-                | ParsedDeclaration::Def { body: root, .. }
-                | ParsedDeclaration::Const { body: root, .. } => Some(*root),
-                _ => None,
-            });
+        let roots = declarations.iter().flat_map(ParsedDeclaration::roots);
         let expressions = builder
             .finish_forest(roots)
             .map_err(super::super::ast::DsrvAstError::from)?;
@@ -240,6 +327,33 @@ impl ParsedSpecification {
             declarations,
             source: None,
         })
+    }
+
+    /// Make the literal's owning library available through the normal import
+    /// path. This imports the module, never its names into the local namespace.
+    pub(crate) fn with_duration_import(mut self) -> Self {
+        if self.declarations.iter().any(|declaration| matches!(
+            declaration,
+            ParsedDeclaration::Use { tree, .. }
+                if matches!(tree.kind(), super::super::path::ImportKind::Item)
+                    && tree.path().iter().map(super::super::path::PathSegment::as_str).eq(["std", "time"])
+        )) {
+            return self;
+        }
+        let span = Span::default();
+        self.declarations.push(ParsedDeclaration::Use {
+            tree: UseTree::new(
+                [
+                    super::super::path::PathSegment::Module(ModuleName::new("std").unwrap()),
+                    super::super::path::PathSegment::Module(ModuleName::new("time").unwrap()),
+                ]
+                .into(),
+                super::super::path::ImportKind::Item,
+                span,
+            ),
+            span,
+        });
+        self
     }
 
     /// Record the archived file this was parsed from.

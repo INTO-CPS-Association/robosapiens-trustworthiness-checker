@@ -24,13 +24,13 @@
 //! and expansion reads that node in that environment. Arguments are read in
 //! the caller's.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contiguous_tree::{TreeCursor, TreeNodeMut};
 use ecow::EcoVec;
 
 use crate::VarName;
-use crate::lang::dsrv::path::{ModuleName, ValuePath};
+use crate::lang::dsrv::path::{ModuleName, TypePath, ValuePath};
 use crate::lang::dsrv::source::{SourceType, SourceTypeKind, TypeName};
 use crate::lang::dsrv::source_map::{SourceId, SourceSite};
 use crate::lang::dsrv::span::Span;
@@ -72,15 +72,15 @@ pub(crate) struct Def<'a> {
 /// How a subtree grafted from another module's def is placed: at the
 /// call's span, remembering the file and environment it was written in.
 #[derive(Clone, Copy)]
-struct Stamp {
-    span: Span,
-    definition: Option<SourceId>,
-    lexical: Option<LexicalId>,
+pub(crate) struct Stamp {
+    pub(crate) span: Span,
+    pub(crate) definition: Option<SourceId>,
+    pub(crate) lexical: Option<LexicalId>,
 }
 
 impl Stamp {
     /// Where the copy of `cursor` is placed.
-    fn place(stamp: Option<Self>, cursor: ParsedExprRef<'_>) -> ParsedOrigin {
+    pub(crate) fn place(stamp: Option<Self>, cursor: ParsedExprRef<'_>) -> ParsedOrigin {
         let origin = parsed::origin_of(cursor);
         match stamp {
             None => origin,
@@ -95,13 +95,14 @@ impl Stamp {
                 }),
                 lexical: origin.lexical.or(stamp.lexical),
                 generic_def: origin.generic_def,
+                duration_seconds: origin.duration_seconds,
             },
         }
     }
 }
 
 impl Def<'_> {
-    fn ascription(&self, ty: &SourceType) -> Option<SourceType> {
+    pub(crate) fn ascription(&self, ty: &SourceType) -> Option<SourceType> {
         (!self.mentions_a_type_parameter(ty)).then(|| ty.clone())
     }
 
@@ -152,8 +153,13 @@ pub(crate) fn inline_functions(
                 type_parameters,
                 parameters,
                 result,
+                locals: None,
                 ..
-            } => {
+            } if !imported.stream_functions.contains(&TypePath::new(
+                EcoVec::new(),
+                TypeName::new(name.name()).unwrap(),
+            )) =>
+            {
                 declared.push(Declared {
                     name: name.clone(),
                     parameters: parameters.clone(),
@@ -165,11 +171,7 @@ pub(crate) fn inline_functions(
             }
             // Every declaration that owns a root, in the order
             // `ParsedSpecification::new` collects them.
-            ParsedDeclaration::Equation(..)
-            | ParsedDeclaration::Const { .. }
-            | ParsedDeclaration::Output(_, _, Some(_), _)
-            | ParsedDeclaration::Aux(_, _, Some(_), _) => root += 1,
-            _ => {}
+            other => root += other.root_count(),
         }
     }
     // A file that declares no def may still call an imported one, and a
@@ -177,6 +179,7 @@ pub(crate) fn inline_functions(
     let names_nothing = declared.is_empty()
         && imported.bare.is_empty()
         && imported.qualified.is_empty()
+        && imported.stream_functions.is_empty()
         && imported
             .constants
             .is_none_or(|constants| constants.is_empty());
@@ -193,6 +196,9 @@ pub(crate) fn inline_functions(
     // Imports first, then this file's own defs, so a local name wins as it
     // does for types (S11).
     let mut scope = imported;
+    scope
+        .stream_values
+        .extend(parsed_stream_names(&declarations));
     for def in declared {
         scope.bare.insert(
             def.name,
@@ -210,18 +216,118 @@ pub(crate) fn inline_functions(
 
     let mut builder = ParsedExprBuilder::with_capacity(node_count);
     let mut roots = Vec::with_capacity(trees.len());
-    for tree in &trees {
-        let mut active = Vec::new();
-        roots.push(graft(
-            *tree,
-            &scope,
-            &mut builder,
-            &mut active,
-            &mut Vec::new(),
-            None,
-        )?);
+    let mut index = 0;
+    for declaration in declarations.iter() {
+        for _ in 0..declaration.root_count() {
+            let mut bound = declaration_bindings(declaration);
+            roots.push(graft(
+                trees[index],
+                &scope,
+                &mut builder,
+                &mut Vec::new(),
+                &mut bound,
+                None,
+            )?);
+            index += 1;
+        }
     }
 
+    finish_rewrite(builder, declarations.as_ref(), roots, source)
+}
+
+/// Identify stream function calls before validating declaration bodies or constants.
+pub(crate) fn normalise_stream_functions(
+    parsed: &ParsedSpecification,
+    stream_functions: BTreeSet<TypePath>,
+) -> Result<ParsedSpecification, DsrvExpandError> {
+    let held = parsed.roots();
+    let declarations = parsed.declarations();
+    let source = parsed.source();
+    let scope = Scope {
+        stream_functions,
+        normalising: true,
+        ..Scope::default()
+    };
+    let mut builder = ParsedExprBuilder::with_capacity(
+        held.iter()
+            .map(|tree| tree.as_ref().subtree_ids().len())
+            .sum(),
+    );
+    let mut roots = Vec::new();
+    let mut index = 0;
+    for declaration in declarations {
+        for _ in 0..declaration.root_count() {
+            let mut bound = declaration_bindings(declaration);
+            roots.push(graft(
+                held[index].as_ref(),
+                &scope,
+                &mut builder,
+                &mut Vec::new(),
+                &mut bound,
+                None,
+            )?);
+            index += 1;
+        }
+    }
+    finish_rewrite(builder, declarations, roots, source)
+}
+
+pub(crate) fn parsed_stream_names(declarations: &[ParsedDeclaration]) -> BTreeSet<VarName> {
+    declarations
+        .iter()
+        .filter_map(|declaration| match declaration {
+            ParsedDeclaration::Input(name, ..)
+            | ParsedDeclaration::Output(name, ..)
+            | ParsedDeclaration::Aux(name, ..)
+            | ParsedDeclaration::Equation(name, ..) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Names bound by a def, including all its forward-declared local streams.
+pub(crate) fn declaration_bindings(declaration: &ParsedDeclaration) -> Vec<VarName> {
+    let ParsedDeclaration::Def {
+        parameters,
+        fixed,
+        locals,
+        ..
+    } = declaration
+    else {
+        return Vec::new();
+    };
+    parameters
+        .iter()
+        .chain(fixed)
+        .map(|(name, _)| name.clone())
+        .chain(locals.iter().flatten().filter_map(|local| match local {
+            ParsedDeclaration::Aux(name, ..) | ParsedDeclaration::Equation(name, ..) => {
+                Some(name.clone())
+            }
+            _ => None,
+        }))
+        .collect()
+}
+
+pub(crate) fn normalise_stream_expression(
+    tree: ParsedExprRef<'_>,
+    paths: &BTreeSet<TypePath>,
+    bound: Vec<VarName>,
+) -> Result<ParsedExpr, DsrvExpandError> {
+    let scope = Scope {
+        stream_functions: paths.clone(),
+        normalising: true,
+        ..Scope::default()
+    };
+    standalone(tree, &scope, bound)
+}
+
+fn finish_rewrite(
+    builder: ParsedExprBuilder,
+    declarations: &[ParsedDeclaration],
+    roots: Vec<ParsedExprId>,
+    source: Option<SourceId>,
+) -> Result<ParsedSpecification, DsrvExpandError> {
     // Declarations name their root by id, so each takes the id its tree was
     // rewritten to, in the same order.
     let mut next = roots.into_iter();
@@ -241,19 +347,37 @@ pub(crate) fn inline_functions(
                 name,
                 type_parameters,
                 parameters,
+                fixed,
+                mut locals,
                 result,
                 internal,
                 span,
                 ..
-            } => ParsedDeclaration::Def {
-                name,
-                type_parameters,
-                parameters,
-                result,
-                body: next.next().expect("one root each"),
-                internal,
-                span,
-            },
+            } => {
+                let body = next.next().expect("one result root");
+                if let Some(locals) = &mut locals {
+                    for declaration in locals.make_mut() {
+                        match declaration {
+                            ParsedDeclaration::Aux(_, _, Some(root), _)
+                            | ParsedDeclaration::Equation(_, root, _) => {
+                                *root = next.next().expect("one local equation root")
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                ParsedDeclaration::Def {
+                    name,
+                    type_parameters,
+                    parameters,
+                    result,
+                    body,
+                    fixed,
+                    locals,
+                    internal,
+                    span,
+                }
+            }
             ParsedDeclaration::Const {
                 name,
                 ty,
@@ -280,14 +404,19 @@ pub(crate) fn inline_functions(
     })
 }
 
-/// What a call site may name: bare names, and defs reached through a
-/// module.
+/// What a call site may name in its lexical module.
 #[derive(Default)]
 pub(crate) struct Scope<'a> {
     /// What a bare or qualified name stands for, where it names a constant
     /// rather than a stream. A constant is a value, not a tree, so it is
     /// written in as a literal rather than grafted.
     pub(crate) constants: Option<&'a dyn super::constants::ConstantNames>,
+    pub(crate) stream_functions: BTreeSet<TypePath>,
+    /// Declared top-level streams shadow bare function values while named
+    /// calls retain the existing def-call syntax.
+    pub(crate) stream_values: BTreeSet<VarName>,
+    normalising: bool,
+    renames: BTreeMap<VarName, VarName>,
     pub(crate) bare: BTreeMap<VarName, Def<'a>>,
     pub(crate) qualified: BTreeMap<(Vec<ModuleName>, VarName), Def<'a>>,
 }
@@ -333,6 +462,75 @@ fn graft(
     bound: &mut Vec<VarName>,
     stamp: Option<Stamp>,
 ) -> Result<ParsedExprId, DsrvExpandError> {
+    if let ParsedExprKind::Var(name) = cursor.kind()
+        && !bound.contains(name)
+        && let Some(renamed) = scope.renames.get(name)
+    {
+        return Ok(builder.alloc(
+            ParsedExprKind::Var(renamed.clone()),
+            Stamp::place(stamp, cursor),
+        ));
+    }
+    // Stream calls retain their named identity before pure def inlining.
+    if let ParsedExprKind::Apply(function, arguments) = cursor.kind() {
+        let path = match cursor.child(*function).kind() {
+            ParsedExprKind::ModuleItem(path) => Some(TypePath::new(
+                path.module().iter().cloned().collect(),
+                TypeName::new(path.name().name()).expect("a value name"),
+            )),
+            ParsedExprKind::Var(name) if !bound.contains(name) => TypeName::new(name.name())
+                .ok()
+                .map(|name| TypePath::new(EcoVec::new(), name)),
+            _ => None,
+        };
+        if let Some(path) = path
+            && scope.stream_functions.contains(&path)
+        {
+            let arguments = arguments
+                .iter()
+                .map(|argument| {
+                    graft(
+                        cursor.child(*argument),
+                        scope,
+                        builder,
+                        active,
+                        bound,
+                        stamp,
+                    )
+                })
+                .collect::<Result<EcoVec<_>, _>>()?;
+            return Ok(builder.alloc(
+                ParsedExprKind::StreamFunctionCall(arguments, path, 0),
+                Stamp::place(stamp, cursor),
+            ));
+        }
+    }
+    // Stateful defs are callable only at static whole-equation sites.
+    // In particular, a named list callback cannot hide an instance.
+    let stream_value = match cursor.kind() {
+        ParsedExprKind::Var(name)
+            if !bound.contains(name) && !scope.stream_values.contains(name) =>
+        {
+            TypeName::new(name.name())
+                .ok()
+                .map(|name| TypePath::new(EcoVec::new(), name))
+        }
+        ParsedExprKind::ModuleItem(path) => Some(TypePath::new(
+            path.module().iter().cloned().collect(),
+            TypeName::new(path.name().name()).unwrap(),
+        )),
+        _ => None,
+    };
+    if !scope.normalising
+        && let Some(path) = stream_value
+        && scope.stream_functions.contains(&path)
+    {
+        return Err(DsrvExpandError::MisplacedStreamFunctionCall {
+            stream_function: path.to_string(),
+            construct: "a function value or callback",
+            span: parsed::span_of(cursor),
+        });
+    }
     // A bare name a binder introduced is that binder's, not a def's: a
     // lambda parameter, a pattern's name, or a def's own parameter called as
     // a function is the value bound there. This is the rule a constant
@@ -350,6 +548,7 @@ fn graft(
     }
     if let ParsedExprKind::Apply(function, arguments) = cursor.kind()
         && let ParsedExprKind::ModuleItem(path) = cursor.child(*function).kind()
+        && !scope.normalising
     {
         let path = path.clone();
         let arguments = arguments.clone();
@@ -596,30 +795,7 @@ fn build_call(
     if guard.is_some() {
         active.pop();
     }
-    let parameters: EcoVec<(VarName, Option<SourceType>)> = def
-        .parameters
-        .iter()
-        .map(|(parameter, ty)| (parameter.clone(), def.ascription(ty)))
-        .collect();
-    // The parameters and their types were written with the body, so the
-    // lambda binding them is read where the body is, though it stands at
-    // the call.
-    let lambda = builder.alloc(
-        ParsedExprKind::Lambda(parameters, body),
-        ParsedOrigin {
-            lexical: def.lexical.or(at_call.lexical),
-            generic_def: (!def.type_parameters.is_empty()).then(|| {
-                crate::lang::dsrv::ast::AstShared::new(
-                    crate::lang::dsrv::syntax::parsed::GenericFunctionSignature {
-                        type_parameters: def.type_parameters.clone(),
-                        parameters: def.parameters.iter().map(|(_, ty)| ty.clone()).collect(),
-                        result: def.result.clone(),
-                    },
-                )
-            }),
-            ..at_call
-        },
-    );
+    let lambda = call_lambda(def, &at_call, body, builder);
 
     let mut grafted = EcoVec::new();
     for argument in arguments {
@@ -632,13 +808,90 @@ fn build_call(
             stamp,
         )?);
     }
+    Ok(finish_call(def, &at_call, lambda, grafted, builder))
+}
+
+/// The lambda binding a def's parameters around its already grafted `body`.
+fn call_lambda(
+    def: &Def<'_>,
+    at_call: &ParsedOrigin,
+    body: ParsedExprId,
+    builder: &mut ParsedExprBuilder,
+) -> ParsedExprId {
+    let parameters: EcoVec<(VarName, Option<SourceType>)> = def
+        .parameters
+        .iter()
+        .map(|(parameter, ty)| (parameter.clone(), def.ascription(ty)))
+        .collect();
+    // The parameters and their types were written with the body, so the
+    // lambda binding them is read where the body is, though it stands at
+    // the call.
+    builder.alloc(
+        ParsedExprKind::Lambda(parameters, body),
+        ParsedOrigin {
+            lexical: def.lexical.or(at_call.lexical),
+            generic_def: (!def.type_parameters.is_empty()).then(|| {
+                crate::lang::dsrv::ast::AstShared::new(
+                    crate::lang::dsrv::syntax::parsed::GenericFunctionSignature {
+                        type_parameters: def.type_parameters.clone(),
+                        parameters: def.parameters.iter().map(|(_, ty)| ty.clone()).collect(),
+                        result: def.result.clone(),
+                    },
+                )
+            }),
+            ..at_call.clone()
+        },
+    )
+}
+
+/// The lambda of a call to a def the function table holds, placed at
+/// `at_call`. Its body was inlined where it was written, so nothing at the
+/// call reaches into it. The caller allocates the arguments next, then
+/// finishes the call with [`finish_call`].
+pub(crate) fn foreign_call_lambda(
+    def: &Def<'_>,
+    at_call: &ParsedOrigin,
+    builder: &mut ParsedExprBuilder,
+) -> Result<ParsedExprId, DsrvExpandError> {
+    debug_assert!(def.foreign, "only a table's def stands on its own");
+    let inner = Stamp {
+        span: at_call.span,
+        definition: def.source,
+        lexical: def.lexical,
+    };
+    let mut body_bound = def
+        .parameters
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let body = graft(
+        def.body,
+        &Scope::default(),
+        builder,
+        &mut Vec::new(),
+        &mut body_bound,
+        Some(inner),
+    )?;
+    Ok(call_lambda(def, at_call, body, builder))
+}
+
+/// Apply a call's lambda to its arguments, ascribing the def's declared
+/// result where it names no type parameter.
+pub(crate) fn finish_call(
+    def: &Def<'_>,
+    at_call: &ParsedOrigin,
+    lambda: ParsedExprId,
+    arguments: EcoVec<ParsedExprId>,
+    builder: &mut ParsedExprBuilder,
+) -> ParsedExprId {
+    let grafted = arguments;
     let mut call_origin = at_call.clone();
     call_origin.definition = def.source.map(|source| SourceSite {
         source,
         span: def.result.span,
     });
     let call = builder.alloc(ParsedExprKind::Apply(lambda, grafted), call_origin);
-    Ok(match def.ascription(&def.result) {
+    match def.ascription(&def.result) {
         Some(result) => builder.alloc(
             ParsedExprKind::Ascribe(call, result),
             ParsedOrigin {
@@ -647,9 +900,9 @@ fn build_call(
                     span: def.result.span,
                 }),
                 lexical: def.lexical.or(at_call.lexical),
-                ..at_call
+                ..at_call.clone()
             },
         ),
         None => call,
-    })
+    }
 }

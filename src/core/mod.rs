@@ -5,7 +5,7 @@ pub use variables::*;
 pub mod capability;
 pub use capability::{
     RuntimeCapabilities, RuntimeCapability, RuntimeCapabilityRequirement,
-    UnsupportedRuntimeConstruct, ensure_runtime_support,
+    UnsupportedRuntimeConstruct, ensure_no_stream_function_instances, ensure_runtime_support,
 };
 pub mod interfaces;
 pub use interfaces::*;
