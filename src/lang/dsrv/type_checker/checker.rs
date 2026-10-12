@@ -18,7 +18,8 @@ use crate::core::{
 use crate::lang::dsrv::ast::{
     AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
     ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, NewtypeOperation,
-    NewtypeOperationKind, NewtypeTarget, ReconfigurableExprScope, SyntaxLiteral,
+    NewtypeOperationKind, NewtypeTarget, ReconfigurableExprScope, SyntaxLiteral, duplicate_name,
+    struct_update_parts,
 };
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticError, SemanticResult, SemanticWarning, SemanticWarningKind,
@@ -1070,6 +1071,62 @@ fn check(
                 _ => actual,
             };
             (checked, None)
+        }
+        // An update has its base's type: each field it names must be one of
+        // that type's, and is checked against it.
+        StructUpdate(values, fields) => {
+            if let Some(key) = duplicate_name(&fields) {
+                return Err(error(
+                    expr,
+                    TypeErrorKind::DuplicateField,
+                    format!("expression contains duplicate field {key:?}"),
+                ));
+            }
+            let (fields, base) = struct_update_parts(values, &fields);
+            // The base is checked on its own, so that a base which is not a
+            // struct is reported as such rather than as a mismatch with
+            // where the update stands.
+            let base_type = check(base, None, context)?;
+            match &base_type {
+                TCType::Struct(field_types, _) => {
+                    for (name, value) in fields {
+                        let Some((_, field_type)) =
+                            field_types.iter().find(|(field, _)| field == name)
+                        else {
+                            return Err(error(
+                                expr,
+                                TypeErrorKind::StructUnknownField,
+                                format!(
+                                    "struct update names field {name}, which {base_type} does not have"
+                                ),
+                            ));
+                        };
+                        let actual = check_field(expr, name, value, Some(field_type), context)?;
+                        if unify(&actual, field_type).is_none() {
+                            return Err(error(
+                                expr,
+                                TypeErrorKind::StructFieldTypeMismatch,
+                                format!("field {name} has type {actual}, expected {field_type}"),
+                            ));
+                        }
+                    }
+                }
+                // Only a running monitor knows which fields a gradual base
+                // has, as it does for a field read.
+                TCType::Any => {
+                    for (_, value) in fields {
+                        check(value, None, context)?;
+                    }
+                }
+                other => {
+                    return Err(error(
+                        expr,
+                        TypeErrorKind::StructExpected,
+                        format!("struct update requires a Struct base, got {other}"),
+                    ));
+                }
+            }
+            (base_type, None)
         }
         MGet(map, key) => match check(map, None, context)? {
             TCType::Map(value) => (*value, None),

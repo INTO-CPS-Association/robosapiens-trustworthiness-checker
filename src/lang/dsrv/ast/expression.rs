@@ -384,6 +384,10 @@ contiguous_tree::tree_schema! {
         Map(entries: keyed_children),
         Struct(entries: keyed_children),
         ObjectLiteral(entries: keyed_children),
+        // `{ a: x, ..base }`: `base` with the named fields replaced. The
+        // children are in source order, each named field's value and then
+        // the base, since a tree's fixed children must precede a collection.
+        StructUpdate(values: children, fields: data(EcoVec<EcoString>)),
         MGet(map: child, key: data(EcoString)),
         SGet(value: child, key: data(EcoString)),
         MInsert(map: child, key: data(EcoString), value: child),
@@ -404,11 +408,41 @@ contiguous_tree::tree_schema! {
     }
 }
 
+impl ExprKind {
+    /// The first field this construction or update names twice.
+    pub(crate) fn duplicate_field(&self) -> Option<&EcoString> {
+        match self {
+            Self::StructUpdate(_, fields) => duplicate_name(fields),
+            kind => kind.duplicate_key(),
+        }
+    }
+}
+
 impl<'arena> ExprRef<'arena> {
     pub(crate) fn duplicate_field(self) -> Option<&'arena EcoString> {
         self.postorder()
-            .find_map(|expression| expression.kind().duplicate_key())
+            .find_map(|expression| expression.kind().duplicate_field())
     }
+}
+
+/// The first name that `names` repeats.
+pub(crate) fn duplicate_name(names: &[EcoString]) -> Option<&EcoString> {
+    names
+        .iter()
+        .enumerate()
+        .find_map(|(at, name)| names[..at].contains(name).then_some(name))
+}
+
+/// The fields a struct update `{ a: x, ..base }` names, each with its value,
+/// and its base, from the update's children in source order.
+pub(crate) fn struct_update_parts<'fields, T>(
+    values: impl IntoIterator<Item = T>,
+    fields: &'fields [EcoString],
+) -> (Vec<(&'fields EcoString, T)>, T) {
+    let mut values: Vec<T> = values.into_iter().collect();
+    let base = values.pop().expect("a struct update has a base");
+    assert_eq!(values.len(), fields.len(), "one value per updated field");
+    (fields.iter().zip(values).collect(), base)
 }
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize)]

@@ -42,6 +42,8 @@ mod std_option_tests;
 #[cfg(test)]
 mod stream_function_tests;
 #[cfg(test)]
+mod struct_update_tests;
+#[cfg(test)]
 mod tagged_union_tests;
 #[cfg(test)]
 pub(crate) mod test_support;

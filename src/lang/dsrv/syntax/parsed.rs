@@ -83,6 +83,7 @@ contiguous_tree::tree_schema! {
         // `{ a: x, ..base }`: `base` with the named fields replaced. The
         // children are in source order, each named field's value and then
         // the base, since a tree's fixed children must precede a collection.
+        StructUpdate(values: children, fields: data(EcoVec<EcoString>)),
         MGet(map: child, key: data(EcoString)),
         SGet(value: child, key: data(EcoString)),
         MInsert(map: child, key: data(EcoString), value: child),

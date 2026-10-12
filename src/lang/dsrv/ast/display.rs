@@ -214,6 +214,14 @@ impl Display for ExprRef<'_> {
                     .join(", ");
                 write!(f, "{{{fields}}}")
             }
+            StructUpdate(values, fields) => {
+                let (fields, base) = super::struct_update_parts(values, &fields);
+                write!(f, "{{")?;
+                for (key, value) in fields {
+                    write!(f, "{key:?}: {value}, ")?;
+                }
+                write!(f, "..{base}}}")
+            }
             MGet(expr, key) => write!(f, "Map.get({expr}, {key:?})"),
             SGet(expr, key) => write!(f, "{expr}.{key}"),
             MInsert(expr, key, value) => {

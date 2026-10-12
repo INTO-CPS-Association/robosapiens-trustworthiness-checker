@@ -507,6 +507,7 @@ fn needs_checking(cursor: ParsedExprRef<'_>, scope: &ConstScope, context: &Sourc
         ParsedExprKind::Apply(..) => true,
         // Which fields an update keeps is its base's type, which only
         // checking knows.
+        ParsedExprKind::StructUpdate(..) => true,
         ParsedExprKind::Constructor(_, _, Some(qualifier)) => {
             super::newtype_target(context, qualifier).is_some()
         }

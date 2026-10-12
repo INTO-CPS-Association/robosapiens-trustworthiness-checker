@@ -23,13 +23,14 @@ use ecow::EcoVec;
 
 use crate::VarName;
 use crate::core::values::operations::{self as value_operations, ListFilter};
-use crate::core::{BinaryOperator, PartialMarker, UnaryOperator, Value};
+use crate::core::{BinaryOperator, PartialMarker, RuntimeFunction, UnaryOperator, Value};
 use crate::lang::dsrv::IfPolicy;
-use crate::lang::dsrv::ast::{ExprRef, ExprView};
+use crate::lang::dsrv::ast::{ExprBuilder, ExprRef, ExprView, struct_update_parts};
 use crate::lang::dsrv::patterns::{
     ArmSelection, Bindings, GuardOutcome, MatchArm, MatchPattern, select_arm,
 };
 use crate::lang::dsrv::span::Span;
+use contiguous_tree::TreeCursorExt;
 
 /// What the names of an expression hold at the tick it is evaluated in.
 pub(crate) trait Environment {
@@ -345,6 +346,16 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         MInsert(map, key, value) => lift2(child(map)?, child(value)?, |map, value| {
             operation(value_operations::map_insert(map, key, value))
         }),
+        StructUpdate(values, fields) => {
+            let (fields, base) = struct_update_parts(values, fields);
+            let mut updated = child(base)?;
+            for (key, value) in fields {
+                updated = lift2(updated, child(value)?, |map, value| {
+                    operation(value_operations::map_insert(map, key, value))
+                })?;
+            }
+            Ok(updated)
+        }
         SGet(value, key) => lift1(child(value)?, |value| {
             match (&value, key.parse::<usize>()) {
                 (Value::Tuple(values) | Value::List(values), Ok(index)) => {
@@ -435,9 +446,48 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         When(..) => Err(temporal("when", node.span())),
         Dynamic(..) => Err(temporal("dynamic", node.span())),
         Defer(..) => Err(temporal("defer", node.span())),
-        Lambda(..) | Fix(..) | Partial(..) => {
-            Err(AtemporalError::NotCallable { span: node.span() })
+        Lambda(parameters, body) => {
+            let parameter_names = parameters
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut captures = BTreeMap::new();
+            for name in body.postorder().filter_map(|child| match child.view() {
+                ExprView::Var(name) => Some(name.clone()),
+                _ => None,
+            }) {
+                if !parameter_names.contains(&name)
+                    && let Some(value) = environment.get(&name)
+                {
+                    captures.insert(name, value);
+                }
+            }
+            let mut builder = ExprBuilder::with_capacities(body.subtree_len(), 1);
+            let root = builder.clone_subtree(body);
+            let body = builder.finish(root).expect("a lambda body is one tree");
+            let parameters = parameters.clone();
+            Ok(Value::Function(RuntimeFunction::native_value(
+                "atemporal lambda",
+                move |arguments| {
+                    if parameters.len() != arguments.len() {
+                        anyhow::bail!(
+                            "function expected {} arguments, got {}",
+                            parameters.len(),
+                            arguments.len()
+                        );
+                    }
+                    let mut bound = captures.clone();
+                    bound.extend(
+                        parameters
+                            .iter()
+                            .map(|(name, _)| name.clone())
+                            .zip(arguments),
+                    );
+                    eval_atemporal(body.as_ref(), &bound).map_err(anyhow::Error::new)
+                },
+            )))
         }
+        Fix(..) | Partial(..) => Err(AtemporalError::NotCallable { span: node.span() }),
         MonitoredAt(..) | Dist(..) => Err(AtemporalError::Operation(
             "the distribution primitives are evaluated by the distributed semantics".to_owned(),
         )),
@@ -528,7 +578,6 @@ mod tests {
 
     use super::*;
     use crate::async_test;
-    use crate::core::RuntimeFunction;
     use crate::dsrv_fixtures::TestConfig;
     use crate::lang::dsrv::parser::{parse_expr_with_context, parse_str};
     use crate::runtime::asynchronous::Context;

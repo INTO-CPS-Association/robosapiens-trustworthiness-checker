@@ -1281,6 +1281,10 @@ pub(crate) fn expand_tree(
                         .collect::<EcoVec<_>>()
                         .into(),
                 ),
+                StructUpdate(values, fields) => ExprKind::StructUpdate(
+                    values.iter().map(|id| *node.child(*id)).collect(),
+                    fields.clone(),
+                ),
                 MGet(a, key) => ExprKind::MGet(*node.child(*a), key.clone()),
                 SGet(a, key) => ExprKind::SGet(*node.child(*a), key.clone()),
                 MInsert(a, key, b) => {

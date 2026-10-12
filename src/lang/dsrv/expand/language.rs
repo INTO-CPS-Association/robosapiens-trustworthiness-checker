@@ -853,6 +853,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         ExprKind::Map(..) => Some("a map"),
         ExprKind::Struct(..) => Some("a struct"),
         ExprKind::ObjectLiteral(..) => Some("an object literal"),
+        ExprKind::StructUpdate(..) => Some("a struct update"),
         ExprKind::MGet(..)
         | ExprKind::MInsert(..)
         | ExprKind::MRemove(..)

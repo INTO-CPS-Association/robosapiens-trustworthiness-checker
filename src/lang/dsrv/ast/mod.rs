@@ -37,7 +37,7 @@ pub use expression::{
 };
 pub(crate) use expression::{
     ExprArena, ExprBuilder, ExprFieldRefs, ExprForest, ExprForestMap, ExprKind, ExprMetadata,
-    ExprRefs, ExprRewriteNode,
+    ExprRefs, ExprRewriteNode, duplicate_name, struct_update_parts,
 };
 
 pub(crate) use specification::UnvalidatedDsrvSpecification;

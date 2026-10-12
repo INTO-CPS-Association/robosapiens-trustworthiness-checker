@@ -393,6 +393,21 @@ fn expected_children<'a>(node: CheckedExprRef<'a>) -> Vec<(CheckedExprRef<'a>, T
                 Some((value, expected))
             })
             .collect(),
+        // The base stands where the update does; each field where the
+        // base's type has it.
+        StructUpdate(values, fields) => {
+            let (fields, base) = super::ast::struct_update_parts(values, fields);
+            let mut children = same(&[base]);
+            if let TCType::Struct(types, _) = typ {
+                children.extend(fields.into_iter().filter_map(|(name, value)| {
+                    types
+                        .iter()
+                        .find(|(field, _)| field == name)
+                        .map(|(_, field)| (value, field.clone()))
+                }));
+            }
+            children
+        }
         MInsert(_, key, value) => match typ {
             TCType::Map(element) => vec![(value, (**element).clone())],
             TCType::Struct(fields, _) => fields

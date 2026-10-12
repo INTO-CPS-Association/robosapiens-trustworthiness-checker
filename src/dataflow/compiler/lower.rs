@@ -296,6 +296,20 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
                 value,
             })
         }
+        // An update is its base with each named field inserted in turn.
+        StructUpdate(values, fields) => {
+            let (fields, base) = crate::lang::dsrv::ast::struct_update_parts(values, fields);
+            let mut map = lower_expression(base, builder);
+            for (key, value) in fields {
+                let value = lower_expression(value, builder);
+                map = builder.push(UnboundOp::MInsert {
+                    map,
+                    key: key.clone(),
+                    value,
+                });
+            }
+            map
+        }
         MHasKey(map, key) => {
             let map = lower_expression(map, builder);
             builder.push(UnboundOp::MHasKey {

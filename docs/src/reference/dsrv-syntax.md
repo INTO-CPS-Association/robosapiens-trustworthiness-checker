@@ -397,6 +397,34 @@ out reading: Struct<x: Int, label: Str, "unit name": Str> = {x, label, "unit nam
 Here `{x, label, …}` is `{x: x, label: label, …}`. A quoted field name has no
 short form, and naming the same field twice is an error.
 
+### Struct update
+
+`{ field: value, ..base }` is the struct `base` with the fields it names
+replaced. The base comes last, after the fields, where the `..` of a struct
+pattern stands for the fields the pattern does not name. The update has the
+base's type, so every field it names must be one of that type's, and each
+value must have that field's type. The other fields keep the base's values:
+
+```dsrv
+type Reading = Struct<x: Int, label: Str, valid: Bool>
+in reading: Reading
+out checked: Reading = { valid: reading.x >= 0, ..reading }
+```
+
+Fields take the same short forms as in an object literal, and a trailing
+comma may follow the base. `{ ..base }` is the base itself. The base can be
+any struct-typed expression, such as a stream, a field, or a call:
+`{ sequence: Some(n), ..empty(head) }` builds on what `empty` returns. A
+field the base's type lacks, a field named twice, and a base that is not a
+struct are all errors. Under gradual checking a base of type `Any` is
+accepted, and its fields are only known when the monitor runs.
+
+This example evaluates two updates and shows the forms that do not check:
+
+```rust
+{{#include ../../../tests/docs_examples.rs:dsrv_struct_update}}
+```
+
 ## Delimited lists
 
 One trailing comma is allowed in delimited value, call, variable-set, and

@@ -2,7 +2,7 @@
 
 use super::combinators as mc;
 use crate::core::{BinaryOperator, LocalStream, UnaryOperator, Value};
-use crate::lang::dsrv::ast::{ExprRef, ExprView};
+use crate::lang::dsrv::ast::{ExprRef, ExprView, struct_update_parts};
 
 pub(crate) fn evaluate<'a>(
     node: ExprRef<'a>,
@@ -62,6 +62,15 @@ pub(crate) fn evaluate<'a>(
         MGet(map, key) => mc::mget(evaluate(map), key.clone()),
         MRemove(map, key) => mc::mremove(evaluate(map), key.clone()),
         MInsert(map, key, value) => mc::minsert(evaluate(map), key.clone(), evaluate(value)),
+        // An update is its base with each named field inserted in turn.
+        StructUpdate(values, fields) => {
+            let (fields, base) = struct_update_parts(values, fields);
+            fields
+                .into_iter()
+                .fold(evaluate(base), |value, (key, field)| {
+                    mc::minsert(value, key.clone(), evaluate(field))
+                })
+        }
         MHasKey(map, key) => mc::mhas_key(evaluate(map), key.clone()),
         // Elaboration has settled which union the tag belongs to, so the
         // value carries the tag and its payload and nothing else.

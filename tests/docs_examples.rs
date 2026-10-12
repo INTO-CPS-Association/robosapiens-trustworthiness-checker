@@ -475,7 +475,7 @@ fn evaluate_phantom_newtypes() -> anyhow::Result<()> {
     use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
 
     let declarations = "use experimental::{newtypes, generics, functions}\n\
-        newtype Journal = Unit\n\
+        newtype JournalTime = Unit\n\
         newtype Producer = Unit\n\
         newtype Instant<D> = Float\n\
         def at<D>(x: Float) -> Instant<D> = Instant::new(x)\n\
@@ -483,8 +483,8 @@ fn evaluate_phantom_newtypes() -> anyhow::Result<()> {
           Instant::value(b) > Instant::value(a)\n\
         in x: Float\n";
     let source = format!(
-        "{declarations}aux start: Instant<Journal> = at(0.0)\n\
-         aux now: Instant<Journal> = at(x)\n\
+        "{declarations}aux start: Instant<JournalTime> = at(0.0)\n\
+         aux now: Instant<JournalTime> = at(x)\n\
          out moved: Bool = later(start, now)"
     );
     let (spec, _) =
@@ -499,9 +499,9 @@ fn evaluate_phantom_newtypes() -> anyhow::Result<()> {
     // the other: both are refused when the specification is checked.
     for mixed in [
         "aux start: Instant<Producer> = at(0.0)\n\
-         aux now: Instant<Journal> = at(x)\n\
+         aux now: Instant<JournalTime> = at(x)\n\
          out moved: Bool = later(start, now)",
-        "aux now: Instant<Journal> = at(x)\nout raw: Float = now",
+        "aux now: Instant<JournalTime> = at(x)\nout raw: Float = now",
     ] {
         let (checked, _) = ElaboratedDsrvSpecification::parse_with(
             &format!("{declarations}{mixed}"),
@@ -520,17 +520,17 @@ fn evaluate_newtype_constant() -> anyhow::Result<()> {
     use trustworthiness_checker::{ElaboratedDsrvSpecification, TypeCheckOptions, Value};
 
     let declarations = "use experimental::{newtypes, generics, functions, constants}\n\
-        newtype Journal = Unit\n\
+        newtype JournalTime = Unit\n\
         newtype Producer = Unit\n\
         newtype Duration<D> = Float\n\
         def seconds<D>(x: Float) -> Duration<D> =\n\
           if x >= 0.0 then Duration::new(x) else Duration::new(0.0)\n\
         def longer<D>(a: Duration<D>, b: Duration<D>) -> Bool =\n\
           Duration::value(a) > Duration::value(b)\n\
-        const budget: Duration<Journal> = seconds(0.2)\n\
+        const budget: Duration<JournalTime> = seconds(0.2)\n\
         in x: Float\n";
     let source = format!(
-        "{declarations}aux elapsed: Duration<Journal> = seconds(x)\n\
+        "{declarations}aux elapsed: Duration<JournalTime> = seconds(x)\n\
          out over: Bool = longer(elapsed, budget)"
     );
     let (spec, _) =
@@ -543,7 +543,7 @@ fn evaluate_newtype_constant() -> anyhow::Result<()> {
         assert_eq!(row[0], Value::Bool(over));
     }
 
-    // The constant is a `Duration<Journal>` wherever it is named, so it is
+    // The constant is a `Duration<JournalTime>` wherever it is named, so it is
     // neither a `Float` nor a duration in another domain.
     for misuse in [
         "out raw: Float = budget",
@@ -559,6 +559,60 @@ fn evaluate_newtype_constant() -> anyhow::Result<()> {
     Ok(())
 }
 // ANCHOR_END: dsrv_newtype_constants
+
+// ANCHOR: dsrv_struct_update
+fn evaluate_struct_update() -> anyhow::Result<()> {
+    use trustworthiness_checker::dataflow::DataflowMonitor;
+    use trustworthiness_checker::{
+        ElaboratedDsrvSpecification, TypeCheckOptions, Value, ValueMap, VarName,
+    };
+
+    let declarations = "type Reading = Struct<x: Int, label: Str, valid: Bool>\n\
+        in reading: Reading\n";
+    let source = format!(
+        "{declarations}out checked: Reading = {{ valid: reading.x >= 0, ..reading }}\n\
+         out cleared: Reading = {{ x: 0, valid: true, ..checked }}"
+    );
+    let (spec, _) =
+        ElaboratedDsrvSpecification::parse_with(&source, TypeCheckOptions::STRICT)?.into_parts();
+    let spec = spec.map_err(|errors| anyhow::anyhow!("{errors:?}"))?;
+    let mut monitor = DataflowMonitor::compile_checked(spec)?;
+    let reading = |x: i64, valid: bool| {
+        Value::Map(ValueMap::from([
+            ("x".into(), Value::Int(x)),
+            ("label".into(), Value::Str("left".into())),
+            ("valid".into(), Value::Bool(valid)),
+        ]))
+    };
+    let mut row = vec![Value::NoVal; 2];
+    monitor.evaluate(&[reading(-3, true)], &mut row)?;
+    let at = |name: &str| {
+        monitor
+            .output_vars()
+            .iter()
+            .position(|variable| variable == &VarName::new(name))
+            .expect("declared output")
+    };
+    assert_eq!(row[at("checked")], reading(-3, false));
+    assert_eq!(row[at("cleared")], reading(0, true));
+
+    // Each field must be one the base has, with the type the base gives it,
+    // and the base must be a struct.
+    for misuse in [
+        "out bad: Reading = { unit: \"mm\", ..reading }",
+        "out bad: Reading = { x: \"zero\", ..reading }",
+        "out bad: Reading = { x: 0, ..reading.x }",
+    ] {
+        let (checked, _) = ElaboratedDsrvSpecification::parse_with(
+            &format!("{declarations}{misuse}"),
+            TypeCheckOptions::STRICT,
+        )?
+        .into_parts();
+        assert!(checked.is_err(), "{misuse} must not check");
+    }
+    Ok(())
+}
+// ANCHOR_END: dsrv_struct_update
 
 #[test]
 fn dataflow_monitor_evaluates_rows() {
@@ -644,4 +698,9 @@ fn newtype_reference_example_runs() {
 #[test]
 fn newtype_constant_reference_example_runs() {
     evaluate_newtype_constant().expect("documented newtype constant example should run");
+}
+
+#[test]
+fn struct_update_reference_example_runs() {
+    evaluate_struct_update().expect("documented struct update example should run");
 }

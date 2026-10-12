@@ -488,6 +488,24 @@ impl Lowerer<'_> {
                     Box::new(self.lower_expr(value)?),
                 )
             }
+            StructUpdate(values, fields) if self.profile == ConstraintProfile::Sat => {
+                // An update is its base with each named field inserted in turn.
+                let (fields, base) = crate::lang::dsrv::ast::struct_update_parts(values, fields);
+                let mut map = self.lower_expr(base)?;
+                for (key, value) in fields {
+                    let value = self.lower_expr(value)?;
+                    map = ConstraintExpr {
+                        kind: ConstraintExprKind::MapInsert(
+                            Box::new(map),
+                            key.clone(),
+                            Box::new(value),
+                        ),
+                        span,
+                        display: display.clone(),
+                    };
+                }
+                return Ok(map);
+            }
             MRemove(map, key) if self.profile == ConstraintProfile::Sat => {
                 ConstraintExprKind::MapRemove(Box::new(self.lower_expr(map)?), key.clone())
             }

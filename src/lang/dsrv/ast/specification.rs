@@ -237,7 +237,7 @@ impl UnvalidatedDsrvSpecification {
 
         if let Some(field) = exprs
             .nodes()
-            .find_map(|expression| expression.kind().duplicate_key().cloned())
+            .find_map(|expression| expression.kind().duplicate_field().cloned())
         {
             return Err(DsrvAstError::DuplicateExpressionField { field });
         }

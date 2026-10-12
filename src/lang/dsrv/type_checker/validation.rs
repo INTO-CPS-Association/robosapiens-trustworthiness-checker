@@ -8,7 +8,7 @@ use super::TCType;
 use crate::core::StreamType;
 use crate::lang::dsrv::ast::{
     Declaration, DsrvSpecification, ExprFieldRefs, ExprRef, ExprView, ReconfigurableExprScope,
-    SyntaxLiteral, ValidatedDsrvSpecification,
+    SyntaxLiteral, ValidatedDsrvSpecification, duplicate_name,
 };
 use crate::lang::dsrv::diagnostics::{
     SemanticError, SemanticResult, TypeErrorKind, materialise_errors,
@@ -153,6 +153,12 @@ fn validate_expression(
             validate_runtime_scope(expression, scope, context)?;
             validate_expression(source, context)
         }
+        StructUpdate(_, fields) => {
+            if let Some(key) = duplicate_name(&fields) {
+                return Err(duplicate_field_error(expression, key));
+            }
+            validate_children(expression, context)
+        }
         Map(fields) | Struct(fields) | ObjectLiteral(fields) => {
             validate_unique_fields(expression, &fields)?;
             validate_children(expression, context)
@@ -212,15 +218,19 @@ fn validate_unique_fields(
     expression: ExprRef<'_>,
     fields: &ExprFieldRefs<'_>,
 ) -> Result<(), SemanticError> {
-    if let Some(key) = fields.duplicate_key() {
-        return Err(SemanticError::type_error_at(
-            TypeErrorKind::DuplicateField,
-            format!("expression contains duplicate field {key:?}"),
-            expression.span(),
-        )
-        .located(expression.origin()));
+    match fields.duplicate_key() {
+        Some(key) => Err(duplicate_field_error(expression, key)),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+fn duplicate_field_error(expression: ExprRef<'_>, key: &ecow::EcoString) -> SemanticError {
+    SemanticError::type_error_at(
+        TypeErrorKind::DuplicateField,
+        format!("expression contains duplicate field {key:?}"),
+        expression.span(),
+    )
+    .located(expression.origin())
 }
 
 fn check_value_type_ref(typ: &TCType, value: &Value) -> Result<(), String> {

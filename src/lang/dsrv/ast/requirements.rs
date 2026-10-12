@@ -58,6 +58,7 @@ pub(super) fn requirement(node: ExprRef<'_>) -> Option<(RuntimeCapability, &'sta
         | ExprKind::Map(..)
         | ExprKind::Struct(..)
         | ExprKind::ObjectLiteral(..)
+        | ExprKind::StructUpdate(..)
         | ExprKind::MGet(..)
         | ExprKind::SGet(..)
         | ExprKind::MInsert(..)
