@@ -300,10 +300,11 @@ fn constructors_are_contextual() {
             );
         }
     }
-    // Nothing gives a bare constructor a union, and no inference invents one.
-    let unanchored = format!("{HEADER}in x: Int\nout y: Int = unwrap_or(None, x)\n");
+    // The result and fallback provide the constructor's Option<Int> context.
+    let contextual = format!("{HEADER}in x: Int\nout y: Int = unwrap_or(None, x)\n");
     for options in BOTH {
-        check_err(&unanchored, options);
+        assert_eq!(type_of(&check(&contextual, options), "y"), TCType::Int);
+        check_err(&format!("{HEADER}out y: Bool = is_some(None)\n"), options);
     }
 }
 

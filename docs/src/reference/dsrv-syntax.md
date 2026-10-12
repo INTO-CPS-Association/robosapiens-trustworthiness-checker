@@ -87,7 +87,8 @@ module import, the current spellings are `option::Option<T>` for the type and
 
 A caller enables `modules` and `generics` to import and use `Option<T>`, plus
 `tagged_unions` if it writes `Some` or `None`. Constructors need an expected
-`Option<T>` type; an unanchored `unwrap_or(None, 7)` cannot infer one.
+`Option<T>` type. The fallback in `unwrap_or(None, 7)` supplies that context;
+`is_some(None)` has no context for the payload type and cannot infer one.
 `unwrap_or` evaluates its fallback argument even for `Some`. The module does
 not currently provide `unwrap`, `or`, `map`, or `and_then`. The
 [inspection example](../developer-tools/tc-expand.md#example) shows a complete
