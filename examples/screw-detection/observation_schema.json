@@ -1,0 +1,17 @@
+{
+  "schema_version": 4,
+  "knowledge": {
+    "FrameRef": {"frame_path": "Option<Str>", "timestamp": "Option<Str>", "detection_type": "Option<Str>", "tcp_pose": "Option<Any>", "brightness": "Option<Float>"},
+    "Detections": {"items": "Any", "screw_entropy": "Option<Float>", "adaptive_cycle": "Bool", "model_id": "Int", "detection_type": "Str", "frame_path": "Str"},
+    "EntropyHistory": {"values": "List<Float>", "model_id": "Option<Int>"},
+    "RunningAvgEntropy": {"value": "Option<Float>"},
+    "ActiveModel": {"model_id": "Int"},
+    "CandidateModel": {"model_id": "Option<Int>"},
+    "InPlanning": {"in_planning": "Bool"},
+    "ReplanningCounter": {"count": "Int"},
+    "LegitResult": {"is_legit": "Bool", "candidate_model_id": "Option<Int>", "candidate_avg_entropy": "Option<Float>", "current_avg_entropy": "Option<Float>", "evidence_count": "Int", "evidence_complete": "Bool", "evidence_matches_window": "Bool", "evidence_unique": "Bool"},
+    "ActionCommand": {"command": "Option<Str>", "model_id": "Option<Int>", "effect_model_id": "Option<Int>", "effect_acknowledged": "Bool"}
+  },
+  "message": {"run_id": "Option<Str>", "cycle_id": "Option<Str>", "episode_id": "Option<Str>", "attempt_id": "Option<Str>", "reason": "Option<Str>"},
+  "trigger": {"run_id": "Option<Str>", "cycle_id": "Option<Str>", "episode_id": "Option<Str>", "attempt_id": "Option<Str>", "detection_type": "Option<Str>", "tcp_pose": "Option<Any>"}
+}

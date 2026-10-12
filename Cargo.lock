@@ -4429,6 +4429,7 @@ dependencies = [
  "sat-solver",
  "serde",
  "serde_json",
+ "sha2",
  "smol",
  "smol-macros",
  "static_assertions",

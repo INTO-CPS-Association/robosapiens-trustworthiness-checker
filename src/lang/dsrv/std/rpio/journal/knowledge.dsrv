@@ -1,0 +1,83 @@
+// Knowledge evidence selected from the exact versions phase records name.
+// One sequential activation per role; one selected Knowledge key per projection.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use rpio::journal::{self, Record, Resolved, Version, Role}
+use rpio::journal::timing::{Observation}
+use std::option::{self, Option}
+
+type Access = Union<Read, Write>
+type KnowledgeState<T> = Struct<latest: Option<Resolved<T>>, updated: Bool>
+
+// A Read or Write by an activation of `role`.
+def is_access_by<K, E, M>(record: Record<K, E, M>, role: Role, access: Access) -> Bool = match(record) {
+  Phase({ activation: { role: r, .. }, step: Read(_), .. }) if r == role -> access == Access::Read,
+  Phase({ activation: { role: r, .. }, step: Write(_), .. }) if r == role -> access == Access::Write,
+  _ -> false,
+}
+
+// The Knowledge version this phase record names, if it names exactly one.
+def named_version<K, E, M>(record: Record<K, E, M>) -> Option<Resolved<K>> =
+  match(record) { Phase({ knowledge: One(r), .. }) -> Some(r), _ -> None }
+
+def named_value<K, E, M>(record: Record<K, E, M>) -> Option<K> =
+  value(named_version(record))
+
+// A named version whose value `project` accepts, with that value selected.
+def selected<K, T>(named: Option<Resolved<K>>, project: (K -> Option<T>)) -> Option<Resolved<T>> =
+  match(named) {
+    Some(r) -> match(project(r.value)) {
+      Some(value) -> Some({ ref: r.ref, value, written_by: r.written_by }),
+      _ -> None,
+    },
+    _ -> None,
+  }
+
+// Does version `a` supersede version `b`? Versions are ordered by global write
+// sequence within a store epoch; a version from another epoch supersedes.
+def supersedes(a: Version, b: Version) -> Bool =
+  a.store_epoch != b.store_epoch || a.global_write_sequence > b.global_write_sequence
+
+// The selected version, value and writer last read or written by `role`.
+// The role's Start clears it; each role must run one activation at a time.
+// Only phase records naming exactly one version can update it.
+def last_access<K, E, M, D, T, role: Role, access: Access, project: (K -> Option<T>)>(
+  observation: Observation<K, E, M, D>,
+) -> Option<Resolved<T>> = result
+where {
+  record: Option<Record<K, E, M>> = rpio::journal::timing::record_of(observation)
+  hit: Option<Resolved<T>> = match(record) {
+    Some(r) if is_access_by(r, role, access) -> selected(named_version(r), project),
+    _ -> None,
+  }
+  starts: Bool = matches(record, Some(r) if rpio::journal::is_start_of(r, role))
+  previous: Option<Resolved<T>> = default(result[1], None)
+  result: Option<Resolved<T>> =
+    if starts then None else std::option::or_else(hit, previous)
+}
+
+// The newest selected evidence named by a phase record.
+// `updated` marks an update on this tick. Only records naming exactly
+// one version can update it. `project` must select one Knowledge key; selecting
+// several would mix their version histories.
+def latest<K, E, M, D, T, project: (K -> Option<T>)>(observation: Observation<K, E, M, D>) -> KnowledgeState<T> = { latest: newest, updated }
+where {
+  named: Option<Resolved<K>> = match(rpio::journal::timing::record_of(observation)) {
+    Some(record) -> named_version(record),
+    None -> None,
+  }
+  hit: Option<Resolved<T>> = selected(named, project)
+  previous: Option<Resolved<T>> = default(newest[1], None)
+  updated: Bool = match(Tuple(hit, previous)) {
+    (Some(h), Some(p)) -> supersedes(h.ref, p.ref),
+    (Some(_), None) -> true,
+    (None, _) -> false,
+    _ -> false,
+  }
+  newest: Option<Resolved<T>> = if updated then hit else previous
+}
+
+// Pure projections leave absence explicit; latest and last_access keep evidence.
+def value<T>(evidence: Option<Resolved<T>>) -> Option<T> =
+  match(evidence) { Some(r) -> Some(r.value), _ -> None }
+def version<T>(evidence: Option<Resolved<T>>) -> Option<Version> =
+  match(evidence) { Some(r) -> Some(r.ref), _ -> None }

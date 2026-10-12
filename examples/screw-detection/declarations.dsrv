@@ -1,0 +1,43 @@
+// GENERATED from observation_schema.json by generate_rpio_declarations; do not edit.
+use experimental::high_level_dsrv
+use rpio::journal::{Resolved}
+use std::option::Option
+
+// Knowledge values, one type per key.
+type ActionCommand = Struct<command: Option<Str>, effect_acknowledged: Bool, effect_model_id: Option<Int>, model_id: Option<Int>, ...>
+type ActiveModel = Struct<model_id: Int, ...>
+type CandidateModel = Struct<model_id: Option<Int>, ...>
+type Detections = Struct<adaptive_cycle: Bool, detection_type: Str, frame_path: Str, items: Any, model_id: Int, screw_entropy: Option<Float>, ...>
+type EntropyHistory = Struct<model_id: Option<Int>, values: List<Float>, ...>
+type FrameRef = Struct<brightness: Option<Float>, detection_type: Option<Str>, frame_path: Option<Str>, tcp_pose: Option<Any>, timestamp: Option<Str>, ...>
+type InPlanning = Struct<in_planning: Bool, ...>
+type LegitResult = Struct<candidate_avg_entropy: Option<Float>, candidate_model_id: Option<Int>, current_avg_entropy: Option<Float>, evidence_complete: Bool, evidence_count: Int, evidence_matches_window: Bool, evidence_unique: Bool, is_legit: Bool, ...>
+type ReplanningCounter = Struct<count: Int, ...>
+type RunningAvgEntropy = Struct<value: Option<Float>, ...>
+type Knowledge = Union<ActionCommand: ActionCommand, ActiveModel: ActiveModel, CandidateModel: CandidateModel, Detections: Detections, EntropyHistory: EntropyHistory, FrameRef: FrameRef, InPlanning: InPlanning, LegitResult: LegitResult, ReplanningCounter: ReplanningCounter, RunningAvgEntropy: RunningAvgEntropy>
+
+// The messages callbacks send (Event) and the messages that start them (Start).
+type Message = Struct<attempt_id: Option<Str>, cycle_id: Option<Str>, episode_id: Option<Str>, reason: Option<Str>, run_id: Option<Str>, ...>
+type Trigger = Struct<attempt_id: Option<Str>, cycle_id: Option<Str>, detection_type: Option<Str>, episode_id: Option<Str>, run_id: Option<Str>, tcp_pose: Option<Any>, ...>
+
+// The value of a cited tuple, when it is of that key.
+def action_command(r: Option<Resolved<Knowledge>>) -> Option<ActionCommand> =
+  match(r) { Some({ value: ActionCommand(v), .. }) -> Some(v), _ -> None }
+def active_model(r: Option<Resolved<Knowledge>>) -> Option<ActiveModel> =
+  match(r) { Some({ value: ActiveModel(v), .. }) -> Some(v), _ -> None }
+def candidate_model(r: Option<Resolved<Knowledge>>) -> Option<CandidateModel> =
+  match(r) { Some({ value: CandidateModel(v), .. }) -> Some(v), _ -> None }
+def detections(r: Option<Resolved<Knowledge>>) -> Option<Detections> =
+  match(r) { Some({ value: Detections(v), .. }) -> Some(v), _ -> None }
+def entropy_history(r: Option<Resolved<Knowledge>>) -> Option<EntropyHistory> =
+  match(r) { Some({ value: EntropyHistory(v), .. }) -> Some(v), _ -> None }
+def frame_ref(r: Option<Resolved<Knowledge>>) -> Option<FrameRef> =
+  match(r) { Some({ value: FrameRef(v), .. }) -> Some(v), _ -> None }
+def in_planning(r: Option<Resolved<Knowledge>>) -> Option<InPlanning> =
+  match(r) { Some({ value: InPlanning(v), .. }) -> Some(v), _ -> None }
+def legit_result(r: Option<Resolved<Knowledge>>) -> Option<LegitResult> =
+  match(r) { Some({ value: LegitResult(v), .. }) -> Some(v), _ -> None }
+def replanning_counter(r: Option<Resolved<Knowledge>>) -> Option<ReplanningCounter> =
+  match(r) { Some({ value: ReplanningCounter(v), .. }) -> Some(v), _ -> None }
+def running_avg_entropy(r: Option<Resolved<Knowledge>>) -> Option<RunningAvgEntropy> =
+  match(r) { Some({ value: RunningAvgEntropy(v), .. }) -> Some(v), _ -> None }

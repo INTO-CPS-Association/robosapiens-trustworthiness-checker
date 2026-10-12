@@ -46,8 +46,23 @@ pub struct Catalogue {
 impl Catalogue {
     /// The modules every program may import.
     pub const STANDARD: Self = Self {
-        roots: &["std"],
+        roots: &["std", "rpio"],
         modules: &[
+            EmbeddedModule {
+                path: &["rpio", "journal"],
+                file: "rpio/journal.dsrv",
+                source: include_str!("std/rpio/journal.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "knowledge"],
+                file: "rpio/journal/knowledge.dsrv",
+                source: include_str!("std/rpio/journal/knowledge.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "timing"],
+                file: "rpio/journal/timing.dsrv",
+                source: include_str!("std/rpio/journal/timing.dsrv"),
+            },
             EmbeddedModule {
                 path: &["std", "time"],
                 file: "std/time.dsrv",

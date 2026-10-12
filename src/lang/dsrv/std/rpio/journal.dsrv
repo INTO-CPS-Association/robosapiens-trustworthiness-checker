@@ -1,0 +1,154 @@
+// Journal records with application-selected Knowledge (`K`), emitted-event
+// payloads (`E`) and trigger tags (`M`). Phase records name resolved Knowledge
+// versions. Emission identities and `caused_by` link activations causally;
+// cycle and episode identities are derived by the MAPLE-K libraries.
+use experimental::{modules, generics, tagged_unions, functions, pattern_matching}
+
+use std::option::{self, Option}
+
+type Role = Union<Monitor, Analysis, Plan, Legitimate, Execute>
+
+// An activation's identity, unique within a run and never reused.
+type ActivationId = Str
+
+type ServiceOutcome = Union<Delivered, NotDelivered>
+
+// One event published by an activation: the second thing activation 7
+// published is `{ activation_id: "7", ordinal: 2 }`. The identity travels in
+// the event envelope, so the activation it wakes can name it.
+type Emission = Struct<activation_id: ActivationId, ordinal: Int>
+
+// One phase callback. `caused_by` names the emission that woke it, or is
+// absent for a direct call or a trigger from outside the loop.
+type Activation = Struct<
+  run_id: Str,
+  loop: LoopId,
+  role: Role,
+  producer: Str,
+  activation_id: ActivationId,
+  caused_by: Option<Emission>,
+  ...
+>
+
+// The loop path, e.g. ["robot1", "navigation"]. Records can represent concurrent
+// loops and activations; each library instance defines the protocol it accepts.
+type LoopId = List<Str>
+
+type Version = Struct<store_epoch: Str, global_write_sequence: Int, key: Str, ...>
+
+// Who wrote the Knowledge value: a phase activation, a startup source or an
+// external writer. Activation identities include their run; external writers
+// belong to no loop run. Properties can distinguish their provenance.
+type Writer = Union<
+  Activation: Struct<run_id: Str, activation_id: ActivationId, ...>,
+  Node:       Struct<run_id: Str, name: Str, ...>,
+  External:   Struct<name: Str, ...>,
+>
+
+// A Knowledge version with its value and writer. The resolver obtains these
+// from the Knowledge record, including when a phase record names the version.
+type Resolved<K> = Struct<ref: Version, value: K, written_by: Writer, ...>
+
+// The Knowledge versions a phase record names: the version a Read read, the
+// version a Write wrote, or the versions an End outcome names. The Knowledge
+// resolver supplies each resolved value in place.
+type KnowledgeRefs<K> = Union<Nothing, One: Resolved<K>, Several: List<Resolved<K>>>
+
+type Arrival = Struct<journal_time: Float, ...>
+
+// The decision recorded at callback End. Payload fields name Knowledge
+// versions, so a property can check the exact plan, evidence or applied value.
+// Applied and NotApplied describe recorded outcomes, not independent proof
+// that the managed system changed.
+type AbortReason<K> = Union<BudgetExhausted, Timeout, Failed: Str, Application: Resolved<K>>
+type Outcome<K> = Union<
+  Monitored: Struct<observation: Resolved<K>>,
+  Analysed: Union<Nominal, Anomaly: Struct<evidence: Resolved<K>>>,
+  Planned: Union<Generated: Struct<plan: Resolved<K>>, NoPlan>,
+  Legitimised: Union<
+    Accepted: Struct<plan: Resolved<K>, legitimate_result: Resolved<K>>,
+    Rejected: Struct<plan: Resolved<K>, legitimate_result: Resolved<K>>,
+  >,
+  Executed: Union<
+    Applied: Struct<plan: Resolved<K>, effect: Resolved<K>>,
+    NotApplied: Struct<plan: Resolved<K>, reason: AbortReason<K>>,
+  >,
+  Aborted: Struct<reason: AbortReason<K>>,
+>
+
+// The wire decoder checks that the tag of `trigger` equals the trigger event,
+// that the tag of an event payload's detail equals `name`, and that a named
+// emission exists and was published by the activation it names.
+type Step<K, E, M> = Union<
+  Start: Struct<trigger: M, ...>,
+  Read: Struct<key: Str, ...>,
+  Write: Struct<key: Str, ...>,
+  Event: Struct<name: Str, payload: E, emission: Emission, ...>,
+  ServiceStarted: Struct<service: Str, request_id: Str, ...>,
+  ServiceCompleted: Struct<service: Str, request_id: Str, outcome: ServiceOutcome, ...>,
+  End: Struct<outcome: Outcome<K>, ...>,
+>
+
+type Record<K, E, M> = Union<
+  Phase: Struct<activation: Activation, step: Step<K, E, M>, knowledge: KnowledgeRefs<K>, arrival: Arrival, ...>,
+  Knowledge: Struct<version: Resolved<K>, arrival: Arrival, ...>,
+  Incomplete: Struct<activation: Activation, arrival: Arrival, ...>,
+>
+
+// Pure queries over the record actually present on a tick.
+def is_phase<K, E, M>(record: Record<K, E, M>) -> Bool = matches(record, Phase(_))
+
+// Every record carries its arrival in the journal.
+def arrival<K, E, M>(record: Record<K, E, M>) -> Arrival = match(record) {
+  Phase({ arrival, .. }) -> arrival,
+  Knowledge({ arrival, .. }) -> arrival,
+  Incomplete({ arrival, .. }) -> arrival,
+  _ -> { journal_time: 0.0 },
+}
+
+// The activation of a phase record.
+def phase_activation<K, E, M>(record: Record<K, E, M>) -> Option<Activation> =
+  match(record) { Phase({ activation, .. }) -> Some(activation), _ -> None }
+
+// The Start of an activation of `role`.
+def is_start_of<K, E, M>(record: Record<K, E, M>, role: Role) -> Bool =
+  matches(record, Phase({ activation: { role: r, .. }, step: Start(_), .. }) if r == role)
+
+// The payload of the event this tick emits.
+def event_payload<K, E, M>(record: Record<K, E, M>) -> Option<E> =
+  match(record) { Phase({ step: Event({ payload, .. }), .. }) -> Some(payload), _ -> None }
+
+// The message that started this activation.
+def start_trigger<K, E, M>(record: Record<K, E, M>) -> Option<M> =
+  match(record) { Phase({ step: Start({ trigger, .. }), .. }) -> Some(trigger), _ -> None }
+
+// The End this record carries, with the activation that ended.
+def end_outcome<K, E, M>(record: Record<K, E, M>) -> Option<(Activation, Outcome<K>)> =
+  match(record) {
+    Phase({ activation, step: End({ outcome, .. }), .. }) -> Some(Tuple(activation, outcome)),
+    _ -> None,
+  }
+
+// The activation whose emission woke this one.
+def woken_by(activation: Activation, id: ActivationId) -> Bool =
+  std::option::is_some_and(activation.caused_by, \e: Emission -> e.activation_id == id)
+
+// Activation and emission identities include the run in which they are unique.
+type ActivationKey = Struct<run: Str, activation: ActivationId>
+type EmissionKey = Struct<run: Str, emission: Emission>
+def activation_key(a: Activation) -> ActivationKey = { run: a.run_id, activation: a.activation_id }
+def emission_key(a: Activation, emission: Emission) -> EmissionKey = { run: a.run_id, emission }
+def cause_key(a: Activation) -> Option<EmissionKey> =
+  std::option::map(a.caused_by, \e: Emission -> emission_key(a, e))
+def caused_by(a: Activation, cause: EmissionKey) -> Bool =
+  std::option::is_some_and(cause_key(a), \seen: EmissionKey -> seen == cause)
+def published_key<K, E, M>(record: Record<K, E, M>) -> Option<EmissionKey> = match(record) {
+  Phase({ activation, step: Event({ emission, .. }), .. }) -> Some(emission_key(activation, emission)),
+  _ -> None,
+}
+// A Start selected by its role and application trigger.
+def requested<K, E, M>(record: Record<K, E, M>, role: Role, select: (M -> Bool)) -> Option<Activation> =
+  match(record) {
+    Phase({ activation: a, step: Start({ trigger, .. }), .. }) if a.role == role && select(trigger) -> Some(a),
+    _ -> None,
+  }
