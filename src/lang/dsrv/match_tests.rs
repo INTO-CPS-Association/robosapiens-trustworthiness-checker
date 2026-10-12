@@ -244,3 +244,44 @@ fn match_needs_its_experiment_and_is_outside_core() {
         ))
     ));
 }
+
+// An empty list literal takes its element type from the list it joins, so a
+// `match` may fall back to `[]` beside arms of a typed list.
+#[test]
+fn an_empty_list_arm_takes_the_element_type_of_the_other_arms() {
+    let checked =
+        check("out ys: List<Str>\nys = match(state) {\n  Stopped -> [\"a\"],\n  _ -> [],\n}\n");
+    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+    let checked =
+        check("out ys: List<Str>\nys = match(state) {\n  Moving(_) -> [],\n  _ -> [\"a\"],\n}\n");
+    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+}
+
+#[test]
+fn an_empty_list_arm_of_a_def_takes_its_element_type_from_the_other_arms() {
+    let source = format!(
+        "use experimental::{{tagged_unions, pattern_matching, functions}}\n{STATE}in x: Int\naux state: State\nstate = Moving(x)\n\
+         def needs(s: State) -> List<Str> = match(s) {{\n  Stopped -> [\"a\"],\n  _ -> [],\n}}\n\
+         out ys: List<Str>\nys = needs(state)\n"
+    );
+    let checked = parse_str(&source)
+        .unwrap_or_else(|error| panic!("{source}: {error}"))
+        .check(TypeCheckOptions::GRADUAL)
+        .without_warnings()
+        .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
+    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Str));
+}
+
+#[test]
+fn an_empty_list_branch_joins_a_typed_list_in_an_if() {
+    let checked = check("out ys: List<Int>\nys = if x > 0 then [x] else []\n");
+    assert_eq!(type_of(&checked, "ys"), TCType::list(TCType::Int));
+}
+
+#[test]
+fn an_empty_list_arm_still_refuses_a_different_list_type() {
+    let errors = check_err(
+        "out ys: List<Str>\nys = match(state) {\n  Stopped -> [1],\n  _ -> [\"a\"],\n}\n",
+    );
+    assert!(!errors.is_empty());
+}

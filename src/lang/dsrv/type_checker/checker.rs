@@ -390,8 +390,14 @@ fn check(
         BinOp(lhs, rhs, parsed) => {
             // The result constraint is not an operand constraint: comparisons
             // produce `Bool` while comparing values of another type.
-            let lhs_type = check(lhs, None, context)?;
-            let rhs_type = check(rhs, None, context)?;
+            let (lhs_type, rhs_type) = if matches!(
+                parsed.kind(),
+                BinaryOperatorKind::Equality | BinaryOperatorKind::Ordering
+            ) {
+                check_comparison_operands(lhs, rhs, context)?
+            } else {
+                (check(lhs, None, context)?, check(rhs, None, context)?)
+            };
             if parsed == BinaryOperator::Power
                 && lhs_type == TCType::Int
                 && rhs_type == TCType::Int
@@ -1053,25 +1059,7 @@ fn check(
                         .find(|(field, _)| field == name)
                         .map(|(_, typ)| typ)
                 });
-                let actual = check(value, field_expected, context).map_err(|err| match err {
-                    SemanticError::TypeError(type_error)
-                        if type_error.kind() == &TypeErrorKind::AnnotationTypeMismatch =>
-                    {
-                        let actual = type_error
-                            .message()
-                            .split_once(", got ")
-                            .map_or("an incompatible type", |(_, actual)| actual);
-                        error(
-                            expr,
-                            TypeErrorKind::StructFieldTypeMismatch,
-                            format!(
-                                "field {name} has type {actual}, expected {}",
-                                field_expected.expect("annotation mismatch needs an expectation")
-                            ),
-                        )
-                    }
-                    err => err,
-                })?;
+                let actual = check_field(expr, name, value, field_expected, context)?;
                 types.push((name.clone(), actual));
             }
             let actual = TCType::Struct(types, false);
@@ -1416,6 +1404,12 @@ fn unify(a: &TCType, b: &TCType) -> Option<TCType> {
         Some(a.clone())
     } else if let (TCType::Expr(a_inner), TCType::Expr(b_inner)) = (a, b) {
         unify(a_inner, b_inner).map(|inner| TCType::Expr(Box::new(inner)))
+    } else if let (TCType::List(a_inner), TCType::List(b_inner)) = (a, b) {
+        // An empty list literal is `List<Unknown>`: it takes its element
+        // type from the list it joins.
+        unify(a_inner, b_inner).map(TCType::list)
+    } else if let (TCType::Map(a_inner), TCType::Map(b_inner)) = (a, b) {
+        unify(a_inner, b_inner).map(TCType::map)
     } else if let (TCType::Struct(a_fields, a_extra), TCType::Struct(b_fields, b_extra)) = (a, b) {
         let compatible = |required: &EcoVec<_>, actual: &EcoVec<_>| {
             required.iter().all(|(name, required_type)| {
@@ -1864,6 +1858,10 @@ fn check_generic_def_call(
         .expect("expanded generic definitions retain their source context");
     let parameters: BTreeSet<TypeName> = signature.type_parameters.iter().cloned().collect();
     let mut bound = BTreeMap::new();
+    // Prefer result-context inference, including `Any` for a result-only
+    // parameter. Nested recursive aliases can fail this structural pre-bind;
+    // that case falls back to argument inference below and is still checked
+    // against the call-site result after instantiation.
     if let Some(expected) = expected.and_then(TCType::to_stream_type) {
         if !match_source_type(
             definition_context,
@@ -1872,48 +1870,69 @@ fn check_generic_def_call(
             &parameters,
             &mut bound,
         ) {
-            return Err(error(
-                call,
-                TypeErrorKind::AnnotationTypeMismatch,
-                "generic def result does not satisfy the call-site expected type",
-            ));
+            // Recursive/nested aliases can be structurally compatible while
+            // still being impossible to pre-bind from the result alone. Fall
+            // back to argument inference; the instantiated result is checked
+            // against `expected` below, so this does not relax type safety.
+            bound.clear();
         }
     }
-    let argument_hints: Vec<_> = {
-        let source_bound: BTreeMap<&TypeName, SourceType> = bound
-            .iter()
-            .map(|(name, ty)| (name, ty.clone().into()))
-            .collect();
-        let source_bound_refs: BTreeMap<&TypeName, &SourceType> =
-            source_bound.iter().map(|(name, ty)| (*name, ty)).collect();
-        signature
-            .parameters
-            .iter()
-            .map(|pattern| {
-                definition_context
-                    .resolve_type(&substitute_source(pattern, &source_bound_refs))
-                    .ok()
-                    .map(|ty| TCType::from_stream_type(&ty))
-            })
-            .collect()
-    };
-    let arguments = args
+    // Keep successful argument checks: rechecking every grounded subtree
+    // would multiply work at each level of nested generic applications.
+    // Result context and independently grounded siblings both supply hints.
+    let mut inferred = bound.clone();
+    let mut hints = generic_argument_hints(definition_context, &signature.parameters, &inferred);
+    let mut arguments: Vec<_> = args
         .clone()
-        .zip(argument_hints)
-        .map(|(arg, hint)| {
-            let actual = check(arg, None, context)?;
-            if hint
-                .as_ref()
-                .is_some_and(|_| contains_unresolved_type(&actual))
-            {
-                check(arg, hint.as_ref(), context)
-            } else {
-                Ok(actual)
+        .zip(&hints)
+        .map(|(arg, hint)| check_generic_argument(arg, hint.as_ref(), context))
+        .collect();
+    loop {
+        for (pattern, actual) in signature.parameters.iter().zip(&arguments) {
+            if let Some(actual) = actual.as_ref().ok().and_then(TCType::to_stream_type) {
+                let mut candidate = inferred.clone();
+                if match_source_type(
+                    definition_context,
+                    pattern,
+                    &actual,
+                    &parameters,
+                    &mut candidate,
+                ) {
+                    inferred = candidate;
+                }
             }
-        })
-        .collect::<Result<EcoVec<_>, _>>()?;
-    for (pattern, actual) in signature.parameters.iter().zip(&arguments) {
-        let Some(actual) = actual.to_stream_type() else {
+        }
+        let next_hints =
+            generic_argument_hints(definition_context, &signature.parameters, &inferred);
+        let mut retried = false;
+        for (((arg, actual), hint), previous) in args
+            .clone()
+            .zip(&mut arguments)
+            .zip(&next_hints)
+            .zip(&hints)
+        {
+            if actual.as_ref().map_or(true, contains_unresolved_type)
+                && hint.is_some()
+                && hint != previous
+            {
+                *actual = check_generic_argument(arg, hint.as_ref(), context);
+                retried = true;
+            }
+        }
+        hints = next_hints;
+        if !retried {
+            break;
+        }
+    }
+    let arguments = arguments.into_iter().collect::<Result<EcoVec<_>, _>>()?;
+    // Infer argument-owned parameters from the arguments themselves. A result
+    // context may have pre-bound the same parameter through a recursively
+    // expanded alias whose open structural details are less precise than the
+    // argument. Argument inference is authoritative for those parameters;
+    // result-only bindings are merged back afterwards.
+    let result_bound = std::mem::take(&mut bound);
+    for (pattern, actual_type) in signature.parameters.iter().zip(&arguments) {
+        let Some(actual) = actual_type.to_stream_type() else {
             return Err(error(
                 call,
                 TypeErrorKind::AnnotationTypeMismatch,
@@ -1927,12 +1946,32 @@ fn check_generic_def_call(
             &parameters,
             &mut bound,
         ) {
-            return Err(error(
-                call,
-                TypeErrorKind::AnnotationTypeMismatch,
-                "generic def argument does not satisfy its declared type",
-            ));
+            let mut fallback_bound = result_bound.clone();
+            fallback_bound.extend(bound.clone());
+            let source_bound: BTreeMap<&TypeName, SourceType> = fallback_bound
+                .iter()
+                .map(|(name, ty)| (name, ty.clone().into()))
+                .collect();
+            let source_bound_refs: BTreeMap<&TypeName, &SourceType> =
+                source_bound.iter().map(|(name, ty)| (*name, ty)).collect();
+            let resolved_expected = definition_context
+                .resolve_type(&substitute_source(pattern, &source_bound_refs))
+                .ok()
+                .map(|expected| TCType::from_stream_type(&expected));
+            let compatible = resolved_expected
+                .as_ref()
+                .is_some_and(|expected| unify(actual_type, expected).is_some());
+            if !compatible {
+                return Err(error(
+                    call,
+                    TypeErrorKind::AnnotationTypeMismatch,
+                    "generic def argument does not satisfy its declared type",
+                ));
+            }
         }
+    }
+    for (parameter, result_type) in result_bound {
+        bound.entry(parameter).or_insert(result_type);
     }
     if bound.len() != parameters.len() {
         return Err(error(
@@ -1983,7 +2022,95 @@ fn check_generic_def_call(
     for (actual, expected) in arguments.into_iter().zip(&parameter_types) {
         require(actual, expected, call)?;
     }
+    if let Some(expected) = expected {
+        require(result.clone(), expected, call)?;
+    }
     Ok((result, None))
+}
+
+/// A comparison's result is Bool, but either grounded operand can supply the
+/// other operand's context. Numeric promotion remains the operator's job.
+fn check_comparison_operands(
+    lhs: ExprRef<'_>,
+    rhs: ExprRef<'_>,
+    context: &mut TypeContext<'_>,
+) -> Result<(TCType, TCType), SemanticError> {
+    let mut left = check_generic_argument(lhs, None, context);
+    let mut right = check_generic_argument(rhs, None, context);
+    if left.as_ref().map_or(true, contains_unresolved_type) {
+        if let Ok(hint) = &right {
+            if !contains_unresolved_type(hint) {
+                left = check_generic_argument(lhs, Some(hint), context);
+            }
+        }
+    }
+    if right.as_ref().map_or(true, contains_unresolved_type) {
+        if let Ok(hint) = &left {
+            if !contains_unresolved_type(hint) {
+                right = check_generic_argument(rhs, Some(hint), context);
+            }
+        }
+    }
+    Ok((left?, right?))
+}
+
+/// Delay a failed argument while siblings supply context. Successful checks
+/// already carry their authoritative annotations; failed attempts emit no
+/// warnings and cannot alter the caller's local bindings or parameter hints.
+fn check_generic_argument(
+    argument: ExprRef<'_>,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    let mut warnings = WarningCollector::default();
+    let mut attempt = TypeContext {
+        environment: Cow::Borrowed(context.environment.as_ref()),
+        local_bindings: context.local_bindings.clone(),
+        expr_types: context.expr_types.take(),
+        owner: context.owner.clone(),
+        strict_runtime_sources: context.strict_runtime_sources,
+        dynamic_unhinted_parameters: context.dynamic_unhinted_parameters,
+        parameter_hints: None,
+        warnings: context.warnings.is_some().then_some(&mut warnings),
+    };
+    let result = check(argument, expected, &mut attempt);
+    context.expr_types = attempt.expr_types.take();
+    if result.is_ok() {
+        if let Some(collector) = context.warnings.as_deref_mut() {
+            collector.absorb(warnings);
+        }
+    }
+    // A concrete argument owns its type even when a result-derived hint
+    // disagrees. Let the call's signature check report that mismatch at the
+    // call, retaining the embedded definition note.
+    if result.is_err() && expected.is_some() {
+        if let Ok(actual) = check_generic_argument(argument, None, context) {
+            return Ok(actual);
+        }
+    }
+    result
+}
+
+/// Instantiate only parameter patterns whose generic arguments are grounded.
+fn generic_argument_hints(
+    definition_context: &crate::lang::dsrv::source::SourceContext,
+    patterns: &[SourceType],
+    bound: &BTreeMap<TypeName, StreamType>,
+) -> Vec<Option<TCType>> {
+    let source_bound: BTreeMap<&TypeName, SourceType> = bound
+        .iter()
+        .map(|(name, ty)| (name, ty.clone().into()))
+        .collect();
+    let source_bound_refs = source_bound.iter().map(|(name, ty)| (*name, ty)).collect();
+    patterns
+        .iter()
+        .map(|pattern| {
+            definition_context
+                .resolve_type(&substitute_source(pattern, &source_bound_refs))
+                .ok()
+                .map(|ty| TCType::from_stream_type(&ty))
+        })
+        .collect()
 }
 
 /// An elaborated `Wrap` (`wrap`) or `Unwrap` of one newtype instance.
@@ -2099,7 +2226,7 @@ fn require(actual: TCType, expected: &TCType, expr: ExprRef<'_>) -> Result<(), S
 
 fn contains_unresolved_type(typ: &TCType) -> bool {
     match typ {
-        TCType::Unknown | TCType::EmptyList | TCType::EmptyMap => true,
+        TCType::Any | TCType::Unknown | TCType::EmptyList | TCType::EmptyMap => true,
         TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => {
             contains_unresolved_type(inner)
         }
@@ -2107,6 +2234,16 @@ fn contains_unresolved_type(typ: &TCType) -> bool {
         TCType::Struct(fields, _) => fields
             .iter()
             .any(|(_, field)| contains_unresolved_type(field)),
+        TCType::Function(arguments, result) => {
+            arguments.iter().any(contains_unresolved_type) || contains_unresolved_type(result)
+        }
+        TCType::Union(schema) => schema.alternatives().iter().any(|alternative| {
+            use crate::core::UnionPayload;
+            match alternative.payload() {
+                UnionPayload::Nullary => false,
+                UnionPayload::Of(payload) => contains_unresolved_type(payload),
+            }
+        }),
         _ => false,
     }
 }
@@ -2117,6 +2254,36 @@ fn mismatch(expr: ExprRef<'_>, expected: &TCType, actual: &TCType) -> SemanticEr
         TypeErrorKind::AnnotationTypeMismatch,
         format!("expected {expected}, got {actual}"),
     )
+}
+
+/// Check the value of struct field `name` of `expr` against the type the
+/// field is expected to have, reporting a mismatch as one of that field.
+fn check_field(
+    expr: ExprRef<'_>,
+    name: &str,
+    value: ExprRef<'_>,
+    expected: Option<&TCType>,
+    context: &mut TypeContext<'_>,
+) -> Result<TCType, SemanticError> {
+    check(value, expected, context).map_err(|err| match err {
+        SemanticError::TypeError(type_error)
+            if type_error.kind() == &TypeErrorKind::AnnotationTypeMismatch =>
+        {
+            let actual = type_error
+                .message()
+                .split_once(", got ")
+                .map_or("an incompatible type", |(_, actual)| actual);
+            error(
+                expr,
+                TypeErrorKind::StructFieldTypeMismatch,
+                format!(
+                    "field {name} has type {actual}, expected {}",
+                    expected.expect("annotation mismatch needs an expectation")
+                ),
+            )
+        }
+        err => err,
+    })
 }
 
 fn reject_duplicate_fields(

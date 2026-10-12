@@ -170,6 +170,32 @@ fn generic_def_result_can_anchor_an_otherwise_unbound_parameter() {
 }
 
 #[test]
+fn instantiated_generic_result_context_reaches_constructors_in_the_body() {
+    assert!(generic_def_checks(
+        "type Maybe<T> = Union<Some: T, None>\n\
+         def wrap<T>(x: T) -> Maybe<T> = Some(x)\n\
+         in x: Int\n\
+         out wrapped: Maybe<Int> = wrap(x)\n"
+    ));
+}
+
+#[test]
+fn argument_inference_handles_repeated_parameters_in_nested_open_aliases() {
+    assert!(generic_def_checks(
+        "type Maybe<T> = Union<Some: T, None>\n\
+         type Resolved<T> = Struct<value: T, ...>\n\
+         type Acceptance<T> = Struct<result: Resolved<T>>\n\
+         type Plan<T> = Struct<plan: Resolved<T>, accepted: Maybe<Acceptance<T>>>\n\
+         type Episode<T> = Union<Idle, Active: Struct<plan: Maybe<Plan<T>>>>\n\
+         type Step<T> = Union<Stayed, Moved: Episode<T>>\n\
+         def advance<T>(witness: T, current: Episode<T>) -> Step<T> = Stayed\n\
+         in witness: Struct<key: Int, ...>\n\
+         in current: Episode<Struct<key: Int, ...>>\n\
+         out step: Step<Struct<key: Int, ...>> = advance(witness, current)\n"
+    ));
+}
+
+#[test]
 fn a_parameter_becomes_the_argument_it_was_applied_to() {
     assert_eq!(
         annotation("type Box<A> = List<A>\nin x: Box<Int>\n"),
@@ -367,4 +393,44 @@ fn applying_a_name_needs_the_experiment() {
         ),
         "got {error:?}",
     );
+}
+
+#[test]
+fn nested_generic_calls_take_context_from_sibling_arguments_in_either_order() {
+    for call in ["same(a, make())", "same(make(), a)"] {
+        assert!(generic_def_checks(&format!(
+            "def make<T>() -> List<T> = []\ndef same<T>(a: List<T>, b: List<T>) -> Bool = true\nin a: List<Int>\nout ok: Bool = {call}\n"
+        )));
+    }
+    assert!(generic_def_checks(
+        "def make<T>() -> List<T> = []\ndef id<T>(x: T) -> T = x\nout x: List<Int> = id(make())\n"
+    ));
+    assert!(!generic_def_checks(
+        "def make<T>() -> List<T> = []\ndef same<T>(a: List<T>, b: List<T>) -> Bool = true\nout ok: Bool = same(make(), make())\n"
+    ));
+}
+
+#[test]
+fn nested_generic_identity_calls_do_not_repeat_grounded_subtrees() {
+    let nested = (0..24).fold("1".to_owned(), |inner, _| format!("id({inner})"));
+    for output in [
+        format!("out x: Int = {nested}"),
+        format!("out ok: Bool = {nested} == 1"),
+    ] {
+        assert!(generic_def_checks(&format!(
+            "def id<T>(x: T) -> T = x\n{output}\n"
+        )));
+    }
+}
+
+#[test]
+fn comparison_operands_supply_context_to_nested_generic_calls_in_either_order() {
+    for expression in ["value == make()", "make() == value", "make() != value"] {
+        assert!(generic_def_checks(&format!(
+            "def make<T>() -> List<T> = []\nin value: List<Int>\nout same: Bool = {expression}\n"
+        )));
+    }
+    assert!(!generic_def_checks(
+        "def make<T>() -> List<T> = []\nout same: Bool = make() == make()\n"
+    ));
 }
