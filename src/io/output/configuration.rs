@@ -108,7 +108,7 @@ fn destination_from_config<V>(
                 .retry
                 .unwrap_or_else(crate::io::RetryPolicy::output_default),
         ),
-        DestinationKind::Redis => OutputBackendConfig::redis_with_retry(
+        DestinationKind::Redis => OutputBackendConfig::redis_with_retry_and_publish_timeout(
             config
                 .host
                 .unwrap_or_else(|| crate::core::REDIS_HOSTNAME.to_owned()),
@@ -116,6 +116,9 @@ fn destination_from_config<V>(
             config
                 .retry
                 .unwrap_or_else(crate::io::RetryPolicy::output_default),
+            config
+                .publish_timeout_ms
+                .map(std::time::Duration::from_millis),
         ),
         DestinationKind::Ros => {
             #[cfg(feature = "ros")]
@@ -172,7 +175,8 @@ mod tests {
                     redis: {
                         kind: "redis",
                         mirror: true,
-                        retry: {max_attempts: 3, initial_delay_ms: 7, max_delay_ms: 21}
+                        retry: {max_attempts: 3, initial_delay_ms: 7, max_delay_ms: 21},
+                        publish_timeout_ms: 1234
                     }
                 }
             }"#,
@@ -180,7 +184,12 @@ mod tests {
         .unwrap();
         let pipeline = OutputPipeline::<Value>::from_config(config).unwrap();
         let backend = pipeline.destinations().destinations()["redis"].backend();
-        let OutputBackendConfig::Redis { retry, .. } = backend else {
+        let OutputBackendConfig::Redis {
+            retry,
+            publish_timeout,
+            ..
+        } = backend
+        else {
             panic!("configured backend should be Redis")
         };
         assert_eq!(
@@ -192,6 +201,20 @@ mod tests {
             )
             .unwrap()
         );
+        assert_eq!(
+            *publish_timeout,
+            Some(std::time::Duration::from_millis(1234))
+        );
+    }
+
+    #[test]
+    fn publish_timeout_is_positive_and_only_valid_for_redis() {
+        for json in [
+            r#"{destinations: {out: {kind: "redis", publish_timeout_ms: 0}}}"#,
+            r#"{destinations: {out: {kind: "mqtt", publish_timeout_ms: 5}}}"#,
+        ] {
+            assert!(OutputConfigFile::from_json(json).is_err(), "{json}");
+        }
     }
 
     #[test]

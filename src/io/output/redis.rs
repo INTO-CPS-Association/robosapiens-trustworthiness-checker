@@ -18,6 +18,7 @@ pub(crate) async fn open<V: JsonStreamValue>(
     host: &str,
     port: Option<u16>,
     retry: RetryPolicy,
+    publish_timeout: Option<std::time::Duration>,
     interface: OutputInterface,
 ) -> Result<OutputWriter<V>, OutputError> {
     let uri = format!("redis://{}:{}", host, port.unwrap_or(6379));
@@ -26,7 +27,7 @@ pub(crate) async fn open<V: JsonStreamValue>(
             "failed to configure Redis client for `{uri}`: {error}"
         ))
     })?;
-    let connection = open_connection(&client, &uri, retry).await?;
+    let connection = open_connection(&client, &uri, retry, publish_timeout).await?;
     let connection = Rc::new(connection);
     Ok(OutputWriter::from_output_sink(InterfaceSink::new(
         interface,
@@ -55,11 +56,17 @@ async fn open_connection(
     client: &redis::Client,
     uri: &str,
     retry: RetryPolicy,
+    publish_timeout: Option<std::time::Duration>,
 ) -> Result<MultiplexedConnection, OutputError> {
     let mut tracker = retry.tracker();
     loop {
         match client.get_multiplexed_async_connection().await {
-            Ok(connection) => return Ok(connection),
+            Ok(mut connection) => {
+                if let Some(timeout) = publish_timeout {
+                    connection.set_response_timeout(timeout);
+                }
+                return Ok(connection);
+            }
             Err(error) if retryable_connection_error(&error) => {
                 let Some(delay) = tracker.record_failure() else {
                     return Err(OutputError::backend(format!(

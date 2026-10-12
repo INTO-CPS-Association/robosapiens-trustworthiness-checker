@@ -135,6 +135,9 @@ pub struct DestinationConfig {
     pub protocol: Option<crate::io::mqtt::MqttProtocol>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<crate::io::RetryPolicy>,
+    /// Maximum time in milliseconds to wait for a Redis publish reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -177,6 +180,7 @@ impl DestinationConfig {
             port: None,
             protocol: None,
             retry: None,
+            publish_timeout_ms: None,
             limit: None,
             routes: BTreeMap::new(),
             partition: None,
@@ -190,6 +194,17 @@ impl DestinationConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.kind == DestinationKind::Redis || self.publish_timeout_ms.is_none(),
+            "output destination kind {:?} does not support `publish_timeout_ms`; it is only valid for `redis`",
+            self.kind
+        );
+        if let Some(timeout) = self.publish_timeout_ms {
+            anyhow::ensure!(
+                timeout > 0,
+                "Redis output `publish_timeout_ms` must be greater than zero"
+            );
+        }
         anyhow::ensure!(
             self.kind == DestinationKind::Mqtt || self.protocol.is_none(),
             "output destination kind {:?} does not support `protocol`; `protocol` is only valid for `mqtt`",

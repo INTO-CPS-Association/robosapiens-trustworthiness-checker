@@ -79,6 +79,73 @@ mod integration_tests {
     const X_TOPIC: &str = "x";
     const Y_TOPIC: &str = "y";
 
+    #[apply(async_test)]
+    async fn redis_publish_timeout_controls_wait_for_server_reply(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) -> anyhow::Result<()> {
+        let redis = start_redis().await;
+        let port = redis.get_host_port_ipv4(6379).await?;
+        let variable = VarName::new("timeout_test");
+        let make_writer = |timeout: Option<u64>| {
+            let variable = variable.clone();
+            async move {
+                OutputPipeline::<Value>::from_backend(
+                    OutputBackendConfig::redis_with_retry_and_publish_timeout(
+                        REDIS_HOSTNAME,
+                        Some(port),
+                        trustworthiness_checker::io::RetryPolicy::output_default(),
+                        timeout.map(Duration::from_millis),
+                    ),
+                )
+                .build(vec![variable.clone()], Vec::<VarName>::new(), None)
+                .await
+            }
+        };
+        let mut short = make_writer(Some(100)).await?;
+        let mut long = make_writer(Some(2_000)).await?;
+        let mut default = make_writer(None).await?;
+        let client = redis::Client::open(format!("redis://{REDIS_HOSTNAME}:{port}"))?;
+        let mut admin = client.get_multiplexed_async_connection().await?;
+        admin.set_response_timeout(Duration::from_secs(2));
+
+        redis::cmd("CLIENT")
+            .arg("PAUSE")
+            .arg(600)
+            .query_async::<()>(&mut admin)
+            .await?;
+        let error = short
+            .send(OutputBatch::update(variable.clone(), Value::Int(1)))
+            .await
+            .expect_err("a short timeout must expire while Redis is paused");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to publish Redis message"),
+            "{error}"
+        );
+
+        // Wait for the first pause to end before installing the second one.
+        redis::cmd("PING").query_async::<String>(&mut admin).await?;
+        redis::cmd("CLIENT")
+            .arg("PAUSE")
+            .arg(600)
+            .query_async::<()>(&mut admin)
+            .await?;
+        long.send(OutputBatch::update(variable.clone(), Value::Int(2)))
+            .await?;
+
+        redis::cmd("CLIENT")
+            .arg("PAUSE")
+            .arg(1_200)
+            .query_async::<()>(&mut admin)
+            .await?;
+        default
+            .send(OutputBatch::update(variable, Value::Int(3)))
+            .await
+            .expect_err("the default Redis client timeout must expire during a longer pause");
+        Ok(())
+    }
+
     fn generate_test_publisher_tasks(
         executor: Rc<LocalExecutor<'static>>,
         port: u16,

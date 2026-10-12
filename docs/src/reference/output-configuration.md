@@ -90,6 +90,7 @@ This example assigns otherwise-unassigned outputs to MQTT and mirrors them to Re
 | `host`, `port` | Supported for MQTT and Redis. The `port` overrides the CLI port for that destination. |
 | `protocol` | MQTT wire protocol: `"3.1.1"` (default) or `"5"`. |
 | `retry` | MQTT/Redis retry policy described below. |
+| `publish_timeout_ms` | Redis only: positive milliseconds to wait for a publish reply. Omitted uses the Redis client's default (500 ms with the current dependency). |
 | `limit` | Required and positive for `limited-null`; invalid for other kinds. |
 | `routes` | Variable-to-route catalog. MQTT/Redis formats, if present, must be `json` or `json5`; ROS routes require a message-type format. |
 | `partition` | Explicit, non-empty set of variables assigned to this destination. Cannot be combined with `mirror`. |

@@ -46,6 +46,7 @@ pub enum OutputBackendConfig<V = crate::Value> {
         host: String,
         port: Option<u16>,
         retry: RetryPolicy,
+        publish_timeout: Option<std::time::Duration>,
     },
     #[cfg(feature = "ros")]
     Ros {
@@ -78,11 +79,17 @@ impl<V> fmt::Debug for OutputBackendConfig<V> {
                 .field("protocol", protocol)
                 .field("retry", retry)
                 .finish(),
-            Self::Redis { host, port, retry } => f
+            Self::Redis {
+                host,
+                port,
+                retry,
+                publish_timeout,
+            } => f
                 .debug_struct("OutputBackendConfig::Redis")
                 .field("host", host)
                 .field("port", port)
                 .field("retry", retry)
+                .field("publish_timeout", publish_timeout)
                 .finish(),
             #[cfg(feature = "ros")]
             Self::Ros { node_name, .. } => f
@@ -142,10 +149,20 @@ impl<V> OutputBackendConfig<V> {
         port: Option<u16>,
         retry: RetryPolicy,
     ) -> Self {
+        Self::redis_with_retry_and_publish_timeout(host, port, retry, None)
+    }
+    /// Configure a Redis output's publish response timeout; `None` uses the default.
+    pub fn redis_with_retry_and_publish_timeout(
+        host: impl Into<String>,
+        port: Option<u16>,
+        retry: RetryPolicy,
+        publish_timeout: Option<std::time::Duration>,
+    ) -> Self {
         Self::Redis {
             host: host.into(),
             port,
             retry,
+            publish_timeout,
         }
     }
     #[cfg(feature = "ros")]
@@ -191,6 +208,16 @@ impl<V> OutputBackendConfig<V> {
         }
     }
     pub(crate) fn validate_local(&self) -> anyhow::Result<()> {
+        if let Self::Redis {
+            publish_timeout: Some(timeout),
+            ..
+        } = self
+        {
+            anyhow::ensure!(
+                !timeout.is_zero(),
+                "Redis output publish timeout must be greater than zero"
+            );
+        }
         match self {
             Self::Mqtt { host, .. } | Self::Redis { host, .. } => anyhow::ensure!(
                 !host.trim().is_empty(),
@@ -223,14 +250,19 @@ impl<V: JsonStreamValue + RosStreamValue> OutputBackendConfig<V> {
                 protocol,
                 retry,
             } => super::mqtt::open(host.clone(), *port, *protocol, *retry, interface).await,
-            Self::Redis { host, port, retry } => {
+            Self::Redis {
+                host,
+                port,
+                retry,
+                publish_timeout,
+            } => {
                 #[cfg(feature = "redis")]
                 {
-                    super::redis::open(host, *port, *retry, interface).await
+                    super::redis::open(host, *port, *retry, *publish_timeout, interface).await
                 }
                 #[cfg(not(feature = "redis"))]
                 {
-                    let _ = (host, port, retry, interface);
+                    let _ = (host, port, retry, publish_timeout, interface);
                     Err(OutputError::backend("Redis support not enabled"))
                 }
             }
