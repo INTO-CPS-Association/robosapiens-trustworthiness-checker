@@ -324,7 +324,7 @@ impl DistributionConstraintPlan {
                         .map(|value| (key.clone(), value))
                 })
                 .collect::<Option<BTreeMap<_, _>>>()
-                .map(Value::Map),
+                .map(Value::from),
             E::MapGet(map, key) => {
                 value_operations::map_get(self.evaluate(map, bindings, monitored_at, stack)?, key)
                     .ok()

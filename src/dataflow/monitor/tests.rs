@@ -33,6 +33,7 @@ pub(in crate::dataflow) mod test_support {
 use super::*;
 use crate::DsrvSpecification;
 use crate::core::Semantics;
+use crate::core::ValueMap;
 use crate::dataflow::execution::evaluator_state::{reset_state_clone_count, state_clone_count};
 use crate::dataflow::stream_id::StreamId;
 use crate::dataflow::{
@@ -2794,7 +2795,7 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
             Value::Str("a".into()),
             Value::List(vec![Value::Int(1), Value::Int(2)].into()),
             Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
-            Value::Map(BTreeMap::from([("k".into(), Value::Int(3))])),
+            Value::Map(ValueMap::from([("k".into(), Value::Int(3))])),
             Value::Unit,
             Value::NoVal,
             Value::Deferred,

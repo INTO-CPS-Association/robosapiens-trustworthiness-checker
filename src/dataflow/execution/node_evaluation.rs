@@ -990,7 +990,7 @@ pub(in crate::dataflow) fn function_history_bindings(
 fn lift_call_args(mut args: Vec<Value>, last: &mut [Option<Value>]) -> EcoVec<Value> {
     debug_assert_eq!(args.len(), last.len());
     for (arg, last) in args.iter_mut().zip(last) {
-        *arg = retain_last_value(arg.clone(), last);
+        *arg = retain_last_value(std::mem::replace(arg, Value::NoVal), last);
     }
     args.into()
 }
@@ -1005,7 +1005,7 @@ fn lift_value_operands(
     };
     debug_assert_eq!(values.len(), last_operands.len());
     for (value, last) in values.iter_mut().zip(last_operands) {
-        *value = retain_last_value(value.clone(), last);
+        *value = retain_last_value(std::mem::replace(value, Value::NoVal), last);
     }
     values
 }

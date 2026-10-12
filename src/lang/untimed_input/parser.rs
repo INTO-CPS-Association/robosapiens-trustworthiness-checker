@@ -184,6 +184,7 @@ mod tests {
     use winnow::error::ContextError;
 
     use super::*;
+    use crate::core::ValueMap;
     use crate::{Value, lang::untimed_input::parser::value_assignment};
 
     fn presult_to_string<T: std::fmt::Debug, E: std::fmt::Debug>(
@@ -256,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_json_object_literal_assignments() {
-        let expected = Value::Map(BTreeMap::from([
+        let expected = Value::Map(ValueMap::from([
             ("x".into(), Value::Int(10)),
             ("y".into(), Value::Int(20)),
         ]));
@@ -324,7 +325,7 @@ mod tests {
             BTreeMap::from([
                 (
                     0,
-                    vec![Value::Map(BTreeMap::from([
+                    vec![Value::Map(ValueMap::from([
                         ("mode".into(), Value::Str("safe".into())),
                         (
                             "url".into(),
@@ -334,7 +335,7 @@ mod tests {
                 ),
                 (
                     1,
-                    vec![Value::Map(BTreeMap::from([(
+                    vec![Value::Map(ValueMap::from([(
                         "mode".into(),
                         Value::Str("active".into()),
                     )]))],

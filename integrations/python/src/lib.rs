@@ -597,7 +597,7 @@ fn py_to_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
         for (key, value) in dict.iter() {
             values.insert(key.extract::<String>()?.into(), py_to_value(&value)?);
         }
-        Ok(Value::Map(values))
+        Ok(Value::Map(values.into()))
     } else {
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "unsupported input value type: {}",

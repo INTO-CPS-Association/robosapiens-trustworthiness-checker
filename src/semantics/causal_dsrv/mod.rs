@@ -331,6 +331,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::core::ValueMap;
     use std::{
         collections::{BTreeMap, BTreeSet},
         rc::Rc,
@@ -489,7 +490,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         let point = |x: i64, label: &str| {
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), Value::Int(x)),
                 ("label".into(), Value::Str(label.into())),
             ]))

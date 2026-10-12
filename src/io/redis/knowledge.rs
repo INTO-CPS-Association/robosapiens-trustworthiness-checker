@@ -1014,6 +1014,7 @@ async fn open_value_source(
 #[cfg(test)]
 mod redis_knowledge_tests {
     use super::*;
+    use crate::core::ValueMap;
     use std::{
         cell::{Cell, RefCell},
         future::Future,
@@ -1185,11 +1186,11 @@ mod redis_knowledge_tests {
         );
         assert_eq!(
             decode_redis_knowledge_value("json", Some(br#"{"a": 1}"#)).unwrap(),
-            Value::Map(BTreeMap::from([("a".into(), Value::Int(1))]))
+            Value::Map(ValueMap::from([("a".into(), Value::Int(1))]))
         );
         assert_eq!(
             decode_redis_knowledge_value("json5", Some(b"{a: 1}")).unwrap(),
-            Value::Map(BTreeMap::from([("a".into(), Value::Int(1))]))
+            Value::Map(ValueMap::from([("a".into(), Value::Int(1))]))
         );
         assert_eq!(
             decode_redis_knowledge_value("text", Some(b"plain text")).unwrap(),

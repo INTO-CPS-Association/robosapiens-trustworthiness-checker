@@ -221,7 +221,7 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
             for (key, value) in entries.iter() {
                 map.insert(key.clone(), eval_atemporal(value, environment)?);
             }
-            Ok(Value::Map(map))
+            Ok(Value::Map(map.into()))
         }
         Constructor(payload, tag, _) => match payload.into_iter().next() {
             Some(payload) => lift1(child(payload)?, |payload| {

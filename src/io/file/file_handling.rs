@@ -19,7 +19,7 @@ pub async fn parse_file<O: Debug, E: Display>(
 #[cfg(test)]
 mod tests {
 
-    use std::collections::BTreeMap;
+    use crate::core::ValueMap;
 
     use crate::core::input;
     use crate::{Value, io::file};
@@ -73,11 +73,11 @@ mod tests {
         assert_eq!(
             payload_vals,
             vec![
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("x".into(), Value::Int(10)),
                     ("y".into(), Value::Int(20)),
                 ])),
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("x".into(), Value::Int(30)),
                     ("y".into(), Value::Int(40)),
                 ])),

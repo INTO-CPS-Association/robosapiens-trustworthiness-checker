@@ -306,8 +306,8 @@ pub fn extract_value_type(value: Value) -> TCType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ValueMap;
     use crate::lang::dsrv::test_support::type_check_gradual;
-    use std::collections::BTreeMap;
     use test_log::test;
 
     #[test]
@@ -371,7 +371,7 @@ mod tests {
         assert!(check_value_type(TCType::EmptyMap, &Value::Float(3.14)).is_ok());
 
         let list_val = Value::List(vec![Value::Int(1), Value::Int(2)].into());
-        let map_val = Value::Map(BTreeMap::from([("x".into(), Value::Int(1))]));
+        let map_val = Value::Map(ValueMap::from([("x".into(), Value::Int(1))]));
         assert!(check_value_type(TCType::EmptyList, &list_val).is_ok());
         assert!(check_value_type(TCType::EmptyMap, &map_val).is_ok());
 
@@ -583,14 +583,14 @@ mod tests {
 
     #[test]
     fn test_map_value_type_matching() {
-        let map = Value::Map(BTreeMap::from([
+        let map = Value::Map(ValueMap::from([
             ("x".into(), Value::Int(1)),
             ("y".into(), Value::Int(2)),
         ]));
         assert!(check_value_type(TCType::map(TCType::Int), &map).is_ok());
         assert!(check_value_type(TCType::map(TCType::Str), &map).is_err());
 
-        let nested = Value::Map(BTreeMap::from([(
+        let nested = Value::Map(ValueMap::from([(
             "xs".into(),
             Value::List(vec![Value::Bool(true)].into()),
         )]));

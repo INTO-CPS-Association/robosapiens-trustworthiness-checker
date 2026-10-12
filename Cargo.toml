@@ -71,6 +71,7 @@ async-compat = "0.2.5"
 # sat-solver 0.2.1 requires the mutually exclusive tikv-jemalloc 0.6 link target.
 tikv-jemallocator = { version = "0.6.1", optional = true }
 ecow = { version = "0.3.0", features = ["serde"] }
+imbl = "=7.0.2"
 async_cell = "0.2.3"
 async-channel = "2.5.0"
 ordered-float = "5.5.0"

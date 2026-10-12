@@ -1171,6 +1171,7 @@ fn build_labelled_graph_from_solution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ValueMap;
     use crate::distributed::scheduling::planning_context::PlanningContext;
     use crate::dsrv_fixtures::TestDistConfig;
     use crate::runtime::RuntimeBuilder;
@@ -1632,7 +1633,7 @@ c = (Map.get(m, "k") == 42) && monitored_at(x, A)"#;
         let mut row = BTreeMap::<VarName, Value>::new();
         row.insert(
             VarName::new("m"),
-            Value::Map(BTreeMap::from([("k".into(), Value::Int(42))])),
+            Value::Map(ValueMap::from([("k".into(), Value::Int(42))])),
         );
         let mut snapshot = BTreeMap::<usize, BTreeMap<VarName, Value>>::new();
         snapshot.insert(0usize, row);
@@ -2113,7 +2114,7 @@ c = (Map.get(m, "k") == 7)
         let mut row0 = BTreeMap::<VarName, Value>::new();
         row0.insert(
             VarName::new("m"),
-            Value::Map(BTreeMap::from([("k".into(), Value::Int(7))])),
+            Value::Map(ValueMap::from([("k".into(), Value::Int(7))])),
         );
         row0.insert(VarName::new("xs"), Value::NoVal);
 

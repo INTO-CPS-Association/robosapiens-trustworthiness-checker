@@ -5,6 +5,7 @@ use smol::LocalExecutor;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use tc_testutils::streams::with_timeout;
+use trustworthiness_checker::ValueMap;
 use trustworthiness_checker::core::{
     ExecutionPolicy, LocalStream, OutputInterface, OutputWriter, Runtime, RuntimeSpec, Semantics,
     StreamType,
@@ -599,7 +600,7 @@ async fn test_struct_equality_compares_whole_values_in_every_runtime(
 ) -> anyhow::Result<()> {
     let spec = "in a: Struct<x: Int, ...>\nin b: Struct<x: Int, ...>\nout same: Bool = a == b";
     let value = |x: i64, extra: i64| {
-        Value::Map(BTreeMap::from([
+        Value::Map(ValueMap::from([
             ("x".into(), Value::Int(x)),
             ("extra".into(), Value::Int(extra)),
         ]))
@@ -1066,7 +1067,7 @@ active = List.get(robot.flags, 0)
                     ("id".into(), Value::Int(11)),
                     (
                         "robot".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
@@ -1083,7 +1084,7 @@ active = List.get(robot.flags, 0)
                     ("id".into(), Value::Int(12)),
                     (
                         "robot".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
@@ -1185,14 +1186,14 @@ structid = objstruct.id
                     ("mapvalue".into(), Value::Int(2)),
                     (
                         "objmap".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("x".into(), Value::Int(1)),
                             ("y".into(), Value::Int(2)),
                         ])),
                     ),
                     (
                         "objstruct".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("id".into(), Value::Int(11)),
                             ("label".into(), Value::Str("robot".into())),
                         ])),
@@ -1206,14 +1207,14 @@ structid = objstruct.id
                     ("mapvalue".into(), Value::Int(3)),
                     (
                         "objmap".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("x".into(), Value::Int(2)),
                             ("y".into(), Value::Int(3)),
                         ])),
                     ),
                     (
                         "objstruct".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("id".into(), Value::Int(12)),
                             ("label".into(), Value::Str("robot".into())),
                         ])),
@@ -1460,7 +1461,7 @@ echoed = payload
                 BTreeMap::from([
                     (
                         "echoed".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("extra".into(), Value::Int(99)),
                             ("x".into(), Value::Int(10)),
                             ("y".into(), Value::Int(20)),
@@ -1474,7 +1475,7 @@ echoed = payload
                 BTreeMap::from([
                     (
                         "echoed".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("extra".into(), Value::Int(100)),
                             ("x".into(), Value::Int(30)),
                             ("y".into(), Value::Int(40)),
@@ -1683,7 +1684,7 @@ updated = Map.insert(robot, "id", tick + 10)
                     ("id".into(), Value::Int(1)),
                     (
                         "robot".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
@@ -1696,7 +1697,7 @@ updated = Map.insert(robot, "id", tick + 10)
                     ("sensor_value".into(), Value::Int(101)),
                     (
                         "updated".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(false)].into()),
@@ -1715,7 +1716,7 @@ updated = Map.insert(robot, "id", tick + 10)
                     ("id".into(), Value::Int(2)),
                     (
                         "robot".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
@@ -1728,7 +1729,7 @@ updated = Map.insert(robot, "id", tick + 10)
                     ("sensor_value".into(), Value::Int(102)),
                     (
                         "updated".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             (
                                 "flags".into(),
                                 Value::List(vec![Value::Bool(true), Value::Bool(true)].into()),
@@ -1805,7 +1806,7 @@ id = Map.get(robot, "id")
                     ("id".into(), Value::Int(7)),
                     (
                         "robot".into(),
-                        Value::Map(BTreeMap::from([
+                        Value::Map(ValueMap::from([
                             ("active".into(), Value::Bool(true)),
                             ("id".into(), Value::Int(7)),
                         ])),
@@ -1838,12 +1839,12 @@ renamed = Map.insert(robot, "name", "bb8")
         let input_stream = map::input_stream(BTreeMap::from([(
             "robot".into(),
             vec![
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("active".into(), Value::Bool(true)),
                     ("id".into(), Value::Int(7)),
                     ("name".into(), Value::Str("r2d2".into())),
                 ])),
-                Value::Map(BTreeMap::from([
+                Value::Map(ValueMap::from([
                     ("active".into(), Value::Bool(false)),
                     ("id".into(), Value::Int(8)),
                     ("name".into(), Value::Str("c3po".into())),
@@ -1880,7 +1881,7 @@ renamed = Map.insert(robot, "name", "bb8")
                         ("id".into(), Value::Int(7)),
                         (
                             "renamed".into(),
-                            Value::Map(BTreeMap::from([
+                            Value::Map(ValueMap::from([
                                 ("active".into(), Value::Bool(true)),
                                 ("id".into(), Value::Int(7)),
                                 ("name".into(), Value::Str("bb8".into())),
@@ -1895,7 +1896,7 @@ renamed = Map.insert(robot, "name", "bb8")
                         ("id".into(), Value::Int(8)),
                         (
                             "renamed".into(),
-                            Value::Map(BTreeMap::from([
+                            Value::Map(ValueMap::from([
                                 ("active".into(), Value::Bool(false)),
                                 ("id".into(), Value::Int(8)),
                                 ("name".into(), Value::Str("bb8".into())),
@@ -2029,7 +2030,7 @@ nested = Map.insert(Map(), "xs", List(tick, tick + 1))
                 0,
                 BTreeMap::from([(
                     "nested".into(),
-                    Value::Map(BTreeMap::from([(
+                    Value::Map(ValueMap::from([(
                         "xs".into(),
                         Value::List(vec![Value::Int(3), Value::Int(4)].into()),
                     )])),
@@ -2039,7 +2040,7 @@ nested = Map.insert(Map(), "xs", List(tick, tick + 1))
                 1,
                 BTreeMap::from([(
                     "nested".into(),
-                    Value::Map(BTreeMap::from([(
+                    Value::Map(ValueMap::from([(
                         "xs".into(),
                         Value::List(vec![Value::Int(4), Value::Int(5)].into()),
                     )])),
@@ -4650,9 +4651,9 @@ async fn test_map_get_deferred_propagates(
         let input_stream = map::input_stream(BTreeMap::from([(
             "m".into(),
             vec![
-                Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+                Value::Map(ValueMap::from([("x".into(), 1.into())])),
                 Value::Deferred,
-                Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+                Value::Map(ValueMap::from([("x".into(), 3.into())])),
             ],
         )]));
 

@@ -1,5 +1,6 @@
 use crate::core::UnionValue;
 use crate::core::Value;
+use crate::core::ValueMap;
 use crate::core::values::operations as value_operations;
 use crate::core::{BinaryOperator, UnaryOperator};
 use crate::core::{PartialMarker, StreamData, propagated_special, retain_stream};
@@ -510,7 +511,7 @@ pub fn map(xs: BTreeMap<EcoString, LocalStream<Value>>) -> LocalStream<Value> {
 
     Box::pin(stream! {
         if xs.is_empty() {
-            Value::Map(BTreeMap::new());
+            Value::Map(ValueMap::new());
         }
         loop {
             let iters = xs.iter_mut().map(|(k, v)| {
@@ -1296,11 +1297,11 @@ mod combinator_tests {
             BTreeMap::from([("x".into(), s1), ("y".into(), s2)]);
         let res: Vec<Value> = map(m).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("y".into(), 3.into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 2.into()),
                 ("y".into(), 4.into()),
             ])),
@@ -1312,7 +1313,7 @@ mod combinator_tests {
     async fn test_map_no_stream() {
         let x: BTreeMap<EcoString, LocalStream<Value>> = BTreeMap::new();
         let res: Vec<Value> = map(x).take(2).collect().await;
-        let exp: Vec<Value> = vec![Value::Map(BTreeMap::new()), Value::Map(BTreeMap::new())];
+        let exp: Vec<Value> = vec![Value::Map(ValueMap::new()), Value::Map(ValueMap::new())];
         assert_eq!(res, exp);
     }
 
@@ -1330,7 +1331,7 @@ mod combinator_tests {
     #[apply(async_test)]
     async fn test_map_stream_sending_empty_lists() {
         // Stream that sends empty list twice
-        let s: LocalStream<Value> = Box::pin(stream::repeat(Value::Map(BTreeMap::new())).take(2));
+        let s: LocalStream<Value> = Box::pin(stream::repeat(Value::Map(ValueMap::new())).take(2));
         let x: BTreeMap<EcoString, LocalStream<Value>> = BTreeMap::from([("x".into(), s)]);
         let res: Vec<Value> = map(x).collect().await;
         // Streams of Maps with single key (x) sending empty maps
@@ -1361,11 +1362,11 @@ mod combinator_tests {
         ]);
         let res: Vec<Value> = map(m).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 4.into()),
                 ("y".into(), "Hello World".into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 6.into()),
                 ("y".into(), "Goddag Verden".into()),
             ])),
@@ -1405,8 +1406,8 @@ mod combinator_tests {
         let m = BTreeMap::from([(EcoString::from("x"), s1), (EcoString::from("y"), s2)]);
         let res: Vec<Value> = mremove(map(m), "y".into()).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
-            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            Value::Map(ValueMap::from([("x".into(), 1.into())])),
+            Value::Map(ValueMap::from([("x".into(), 3.into())])),
         ];
         assert_eq!(res, exp);
     }
@@ -1418,11 +1419,11 @@ mod combinator_tests {
         let m = BTreeMap::from([(EcoString::from("x"), s1)]);
         let res: Vec<Value> = minsert(map(m), "y".into(), s2).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("y".into(), 2.into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 3.into()),
                 ("y".into(), 4.into()),
             ])),
@@ -1439,11 +1440,11 @@ mod combinator_tests {
         // Overwrite y with new stream
         let res: Vec<Value> = minsert(map(m), "y".into(), s3).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("y".into(), 3.into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 4.into()),
                 ("y".into(), 6.into()),
             ])),
@@ -1475,9 +1476,9 @@ mod combinator_tests {
     async fn test_map_get_with_deferred() {
         // mget must propagate Deferred rather than panicking
         let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
-            Value::Map(BTreeMap::from([("y".into(), 2.into())])),
+            Value::Map(ValueMap::from([("y".into(), 2.into())])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([("y".into(), 4.into())])),
+            Value::Map(ValueMap::from([("y".into(), 4.into())])),
         ]));
         let res: Vec<Value> = mget(map_stream, "y".into()).collect().await;
         let exp: Vec<Value> = vec![2.into(), Value::Deferred, 4.into()];
@@ -1488,9 +1489,9 @@ mod combinator_tests {
     async fn test_map_has_key_with_deferred() {
         // mhas_key must propagate Deferred rather than panicking
         let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
-            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Map(ValueMap::from([("x".into(), 1.into())])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            Value::Map(ValueMap::from([("x".into(), 3.into())])),
         ]));
         let res: Vec<Value> = mhas_key(map_stream, "x".into()).collect().await;
         let exp: Vec<Value> = vec![true.into(), Value::Deferred, true.into()];
@@ -1501,21 +1502,21 @@ mod combinator_tests {
     async fn test_map_remove_with_deferred() {
         // mremove must propagate Deferred rather than panicking
         let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("y".into(), 2.into()),
             ])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 3.into()),
                 ("y".into(), 4.into()),
             ])),
         ]));
         let res: Vec<Value> = mremove(map_stream, "y".into()).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Map(ValueMap::from([("x".into(), 1.into())])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            Value::Map(ValueMap::from([("x".into(), 3.into())])),
         ];
         assert_eq!(res, exp);
     }
@@ -1524,20 +1525,20 @@ mod combinator_tests {
     async fn test_map_insert_with_deferred_map() {
         // When the map argument is Deferred the whole output tick is Deferred
         let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
-            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
+            Value::Map(ValueMap::from([("x".into(), 1.into())])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            Value::Map(ValueMap::from([("x".into(), 3.into())])),
         ]));
         let val_stream: LocalStream<Value> =
             Box::pin(stream::iter(vec![10.into(), 20.into(), 30.into()]));
         let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("z".into(), 10.into()),
             ])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 3.into()),
                 ("z".into(), 30.into()),
             ])),
@@ -1549,20 +1550,20 @@ mod combinator_tests {
     async fn test_map_insert_with_deferred_value() {
         // When the value argument is Deferred the whole output tick is also Deferred
         let map_stream: LocalStream<Value> = Box::pin(stream::iter(vec![
-            Value::Map(BTreeMap::from([("x".into(), 1.into())])),
-            Value::Map(BTreeMap::from([("x".into(), 2.into())])),
-            Value::Map(BTreeMap::from([("x".into(), 3.into())])),
+            Value::Map(ValueMap::from([("x".into(), 1.into())])),
+            Value::Map(ValueMap::from([("x".into(), 2.into())])),
+            Value::Map(ValueMap::from([("x".into(), 3.into())])),
         ]));
         let val_stream: LocalStream<Value> =
             Box::pin(stream::iter(vec![10.into(), Value::Deferred, 30.into()]));
         let res: Vec<Value> = minsert(map_stream, "z".into(), val_stream).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 1.into()),
                 ("z".into(), 10.into()),
             ])),
             Value::Deferred,
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), 3.into()),
                 ("z".into(), 30.into()),
             ])),
@@ -2134,19 +2135,19 @@ mod noval_tests {
             BTreeMap::from([("x".into(), x), ("y".into(), y)]);
         let res: Vec<Value> = map(m).collect().await;
         let exp: Vec<Value> = vec![
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), Value::NoVal),
                 ("y".into(), Value::NoVal),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), Value::NoVal),
                 ("y".into(), "y2".into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), "x3".into()),
                 ("y".into(), "y2".into()),
             ])),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("x".into(), "x4".into()),
                 ("y".into(), "y4".into()),
             ])),

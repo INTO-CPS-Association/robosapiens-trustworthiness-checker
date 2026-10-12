@@ -9,7 +9,7 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value as JValue;
 
-use super::{ClosedUnion, UnionValue};
+use super::{ClosedUnion, UnionValue, ValueMap};
 use std::fmt;
 
 use crate::core::{JsonStreamValue, LocalStream};
@@ -196,10 +196,10 @@ impl PartialEq for RuntimeFunction {
 }
 
 // Anything inside a stream should be clonable in O(1) time in order for the
-// runtimes to be efficiently implemented. This is why we use EcoString and
-// EcoVec instead of String and Vec. These types are essentially references
-// which allow mutation in place if there is only one reference to the data or
-// copy-on-write if there is more than one reference.
+// runtimes to be efficiently implemented. This is why we use EcoString,
+// EcoVec and ValueMap instead of String, Vec and BTreeMap, and Rc for unions. These types are essentially references which allow mutation
+// in place if there is only one reference to the data or copy-on-write if
+// there is more than one reference.
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -212,7 +212,7 @@ pub enum Value {
     Union(Rc<UnionValue>),
     List(EcoVec<Value>),
     Tuple(EcoVec<Value>),
-    Map(BTreeMap<EcoString, Value>),
+    Map(ValueMap),
     Unit,     // Indicates the absence of a value
     Deferred, // Indicates a value that cannot yet be computed due to lack of history
     NoVal,    // Indicates no value for the current stream step (due to async stream inputs)
@@ -438,7 +438,7 @@ impl TryFrom<JValue> for Value {
                         let x = v.clone().try_into()?;
                         Ok((k.clone().into(), x))
                     })
-                    .collect::<Result<BTreeMap<EcoString, Value>, Self::Error>>()?;
+                    .collect::<Result<ValueMap, Self::Error>>()?;
                 Ok(Value::Map(btree))
             }
         }
@@ -481,6 +481,11 @@ impl From<Vec<Value>> for Value {
 }
 impl From<BTreeMap<EcoString, Value>> for Value {
     fn from(value: BTreeMap<EcoString, Value>) -> Self {
+        Value::Map(value.into())
+    }
+}
+impl From<ValueMap> for Value {
+    fn from(value: ValueMap) -> Self {
         Value::Map(value)
     }
 }
@@ -956,7 +961,7 @@ impl<'de> Deserialize<'de> for Value {
                     }
                     return Ok(UnionValue::new(tag, payload).into());
                 }
-                Ok(Value::Map(out))
+                Ok(Value::Map(out.into()))
             }
         }
 
@@ -1035,7 +1040,7 @@ mod dsrv_source_tests {
         let mut entries = BTreeMap::new();
         entries.insert(EcoString::from("count"), Value::Int(2));
         entries.insert(EcoString::from("on"), Value::Bool(true));
-        let value = Value::Map(entries);
+        let value = Value::Map(entries.into());
         assert_eq!(value.dsrv_source(), r#"Map("count": 2, "on": true)"#);
         round_trips(value);
     }
@@ -1060,11 +1065,11 @@ mod tests {
     fn stream_decoder_accepts_strict_json_and_json5() {
         assert_eq!(
             Value::decode_json(br#"{"mode":"safe"}"#).unwrap(),
-            Value::Map(BTreeMap::from([("mode".into(), Value::Str("safe".into()))]))
+            Value::Map(ValueMap::from([("mode".into(), Value::Str("safe".into()))]))
         );
         assert_eq!(
             Value::decode_json(br#"{/* state */ mode: "safe", enabled: true,}"#).unwrap(),
-            Value::Map(BTreeMap::from([
+            Value::Map(ValueMap::from([
                 ("enabled".into(), Value::Bool(true)),
                 ("mode".into(), Value::Str("safe".into())),
             ])),
@@ -1089,7 +1094,7 @@ mod tests {
 
     #[test]
     fn stream_encoder_keeps_finite_values_strict_and_preserves_non_finite_values() {
-        let finite = Value::Map(BTreeMap::from([("value".into(), Value::Float(1.5))]));
+        let finite = Value::Map(ValueMap::from([("value".into(), Value::Float(1.5))]));
         let encoded = finite.encode_json().unwrap();
         assert_eq!(encoded, r#"{"value":1.5}"#);
         assert!(serde_json::from_str::<serde_json::Value>(&encoded).is_ok());
@@ -1100,7 +1105,7 @@ mod tests {
         assert!(encoded.contains("Infinity"));
         assert_eq!(Value::decode_json(encoded.as_bytes()).unwrap(), infinite);
 
-        let aggregate = Value::Map(BTreeMap::from([(
+        let aggregate = Value::Map(ValueMap::from([(
             "values".into(),
             Value::List(vec![Value::Float(f64::NEG_INFINITY), Value::Float(f64::NAN)].into()),
         )]));
@@ -1182,7 +1187,7 @@ mod tests {
         expected.insert("y".into(), Value::Bool(true));
         expected.insert("z".into(), Value::Str("hello".into()));
 
-        assert_eq!(v, Value::Map(expected));
+        assert_eq!(v, Value::Map(expected.into()));
     }
 
     #[test]
@@ -1201,9 +1206,9 @@ mod tests {
             "nums".into(),
             Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)].into()),
         );
-        expected.insert("nested".into(), Value::Map(nested));
+        expected.insert("nested".into(), Value::Map(nested.into()));
 
-        assert_eq!(v, Value::Map(expected));
+        assert_eq!(v, Value::Map(expected.into()));
     }
 
     #[test]
@@ -1259,7 +1264,7 @@ mod tests {
     fn test_json_try_into_empty_object() {
         let jv = json!({});
         let v: Value = jv.try_into().unwrap();
-        assert_eq!(v, Value::Map(BTreeMap::new()));
+        assert_eq!(v, Value::Map(ValueMap::new()));
     }
 
     #[test]
@@ -1267,8 +1272,8 @@ mod tests {
         let jv = json!({ "nested": {} });
         let v: Value = jv.try_into().unwrap();
         let mut expected = BTreeMap::new();
-        expected.insert("nested".into(), Value::Map(BTreeMap::new()));
-        assert_eq!(v, Value::Map(expected));
+        expected.insert("nested".into(), Value::Map(ValueMap::new()));
+        assert_eq!(v, Value::Map(expected.into()));
     }
 
     #[test]
@@ -1278,7 +1283,7 @@ mod tests {
         let mut expected = BTreeMap::new();
         expected.insert("Key".into(), Value::Int(1));
         expected.insert("key".into(), Value::Int(2));
-        assert_eq!(v, Value::Map(expected));
+        assert_eq!(v, Value::Map(expected.into()));
     }
 
     #[test]
@@ -1292,15 +1297,15 @@ mod tests {
         dmap.insert("d".into(), Value::Int(1));
 
         let mut cmap = BTreeMap::new();
-        cmap.insert("c".into(), Value::Map(dmap));
+        cmap.insert("c".into(), Value::Map(dmap.into()));
 
         let mut bmap = BTreeMap::new();
-        bmap.insert("b".into(), Value::Map(cmap));
+        bmap.insert("b".into(), Value::Map(cmap.into()));
 
         let mut amap = BTreeMap::new();
-        amap.insert("a".into(), Value::Map(bmap));
+        amap.insert("a".into(), Value::Map(bmap.into()));
 
-        assert_eq!(v, Value::Map(amap));
+        assert_eq!(v, Value::Map(amap.into()));
     }
 
     #[test]
@@ -1312,7 +1317,7 @@ mod tests {
                 Value::Map({
                     let mut m = BTreeMap::new();
                     m.insert("k".into(), Value::Bool(true));
-                    m
+                    m.into()
                 }),
             ]
             .into(),
@@ -1409,7 +1414,7 @@ mod tests {
         let mut m = BTreeMap::new();
         m.insert("x".into(), Value::Int(42));
         m.insert("y".into(), Value::Bool(true));
-        let v = Value::Map(m);
+        let v = Value::Map(m.into());
 
         let json = to_string(&v).unwrap();
         // Because BTreeMap orders keys, we know the order in the JSON string.
@@ -1430,9 +1435,9 @@ mod tests {
         inner.insert("a".into(), Value::Float(1.5));
 
         let mut outer = BTreeMap::new();
-        outer.insert("inner".into(), Value::Map(inner));
+        outer.insert("inner".into(), Value::Map(inner.into()));
 
-        let v = Value::Map(outer);
+        let v = Value::Map(outer.into());
         let json = to_string(&v).unwrap();
         let back: Value = from_str(&json).unwrap();
         assert_eq!(v, back);
@@ -1441,7 +1446,7 @@ mod tests {
     #[test]
     fn test_json_empty_array_and_map() {
         let v_arr = Value::List(vec![].into());
-        let v_map = Value::Map(BTreeMap::new());
+        let v_map = Value::Map(ValueMap::new());
 
         let json_arr = to_string(&v_arr).unwrap();
         let json_map = to_string(&v_map).unwrap();

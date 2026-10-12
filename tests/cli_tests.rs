@@ -1901,7 +1901,6 @@ mod integration_tests {
         use async_compat::Compat as TokioCompat;
         use async_unsync::oneshot;
         use futures::{StreamExt, stream};
-        use std::collections::BTreeMap;
         use std::os::unix::process::ExitStatusExt;
         use tc_testutils::{
             mqtt::{dummy_stream_mqtt_publisher, get_mqtt_outputs, start_mqtt},
@@ -1909,6 +1908,7 @@ mod integration_tests {
             streams::{TickSender, with_timeout, with_timeout_res},
         };
         use trustworthiness_checker::Value;
+        use trustworthiness_checker::ValueMap;
         use trustworthiness_checker::core::{MQTT_HOSTNAME, REDIS_HOSTNAME};
         use trustworthiness_checker::io::mqtt::{self, MqttMessage};
 
@@ -2460,7 +2460,7 @@ mod integration_tests {
                 "Expected 3 output values, got {}",
                 results.len()
             );
-            let wrap = |val: Value| Value::Map(BTreeMap::from([("value".into(), val)]));
+            let wrap = |val: Value| Value::Map(ValueMap::from([("value".into(), val)]));
             assert_eq!(results[0], wrap(Value::Int(3)), "First result should be 3");
             assert_eq!(results[1], wrap(Value::Int(7)), "Second result should be 7");
             assert_eq!(
