@@ -1315,6 +1315,19 @@ mod tests {
     }
 
     #[test]
+    fn test_json_float_text_parses_to_the_nearest_f64() {
+        // Python writes the shortest text that reads back as the same f64.
+        // Without serde_json's `float_roundtrip`, this one parses one ULP low.
+        let text = "1393.9222020371267";
+        let jv: serde_json::Value = serde_json::from_str(text).unwrap();
+        let v: Value = jv.try_into().unwrap();
+        let Value::Float(parsed) = v else {
+            panic!("a JSON float must become a Float")
+        };
+        assert_eq!(parsed.to_bits(), text.parse::<f64>().unwrap().to_bits());
+    }
+
+    #[test]
     fn test_json_try_into_empty_string() {
         let jv = json!("");
         let v: Value = jv.try_into().unwrap();

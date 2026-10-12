@@ -40,6 +40,8 @@ mod newtype_tests;
 #[cfg(test)]
 mod std_option_tests;
 #[cfg(test)]
+mod std_timing_tests;
+#[cfg(test)]
 mod stream_function_tests;
 #[cfg(test)]
 mod struct_update_tests;

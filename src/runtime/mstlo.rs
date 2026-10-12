@@ -23,6 +23,7 @@ use crate::{
     core::{
         FileInputValue, JsonStreamValue, OutputBatch, OutputError, OutputUpdate, OutputWriter,
         StreamData, input,
+        time::{TimeDomain, TimeInputError, TimedInput},
     },
     io::OpenedInput,
     lang::mstlo::MstloSpecification,
@@ -730,6 +731,65 @@ impl TryFrom<Value> for MstloTimedValue {
         }
         let (timestamp, value) = MstloRuntime::<(), Value>::parse_input_value(&value)?;
         Ok(TimedValue::new(timestamp, MstloValue::Float(value)))
+    }
+}
+
+/// MSTLO's own time domain: whole milliseconds since the start of a trace.
+/// It is Rust-only; no DSRV specification sees an MSTLO instant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MstloMillis;
+
+impl TimeDomain for MstloMillis {
+    type Instant = Duration;
+
+    fn label(&self) -> &str {
+        "mstlo.milliseconds"
+    }
+}
+
+impl TimedInput for MstloTimedValue {
+    type Domain = MstloMillis;
+
+    /// A missing sample has no time; its zero timestamp is a placeholder.
+    fn input_time(&self) -> Option<&Duration> {
+        (!self.is_no_val()).then_some(&self.timestamp)
+    }
+}
+
+/// The time of an MSTLO input encoded as a dynamic [`Value`]: the `time` of
+/// a `{time, value}` map or the first element of a `[time_ms, value]` list,
+/// in whole milliseconds. `None` is a missing sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MstloEncodedTime(pub Option<Duration>);
+
+impl TryFrom<&Value> for MstloEncodedTime {
+    type Error = TimeInputError;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        let (field, time) = match value {
+            Value::NoVal => return Ok(Self(None)),
+            Value::List(items) if items.len() == 2 => ("time_ms", &items[0]),
+            Value::Map(fields) => (
+                "time",
+                fields.get("time").ok_or(TimeInputError::MissingField {
+                    what: "an MSTLO input",
+                    field: "time",
+                })?,
+            ),
+            other => {
+                return Err(TimeInputError::wrong_type(
+                    "MSTLO input",
+                    other,
+                    "`[time_ms, value]` or a map with `time` and `value`",
+                ));
+            }
+        };
+        match time {
+            Value::Int(milliseconds) => u64::try_from(*milliseconds)
+                .map(|milliseconds| Self(Some(Duration::from_millis(milliseconds))))
+                .map_err(|_| TimeInputError::wrong_type(field, time, "a non-negative integer")),
+            other => Err(TimeInputError::wrong_type(field, other, "an integer")),
+        }
     }
 }
 
@@ -1992,5 +2052,49 @@ mod tests {
         assert_eq!(outputs.len(), 2);
         assert_eq!(output_value(&outputs[0], "out"), (0, 1.5));
         assert_eq!(output_value(&outputs[1], "out"), (10, -1.0));
+    }
+
+    #[test]
+    fn a_native_value_reports_its_time_and_a_missing_sample_has_none() {
+        let zero = MstloTimedValue::new(Duration::ZERO, MstloValue::Float(1.0));
+        assert_eq!(zero.input_time(), Some(&Duration::ZERO));
+        let later = MstloTimedValue::new(Duration::from_millis(250), MstloValue::Float(1.0));
+        assert_eq!(later.input_time(), Some(&Duration::from_millis(250)));
+        assert_eq!(MstloTimedValue::missing_value().input_time(), None);
+    }
+
+    #[test]
+    fn an_encoded_time_distinguishes_zero_from_absence() {
+        let map = |time: Value| {
+            Value::Map(ValueMap::from([
+                ("time".into(), time),
+                ("value".into(), Value::Float(1.0)),
+            ]))
+        };
+        assert_eq!(
+            MstloEncodedTime::try_from(&map(Value::Int(0))).unwrap(),
+            MstloEncodedTime(Some(Duration::ZERO))
+        );
+        assert_eq!(
+            MstloEncodedTime::try_from(&Value::NoVal).unwrap(),
+            MstloEncodedTime(None)
+        );
+        assert_eq!(
+            MstloEncodedTime::try_from(&Value::List(
+                vec![Value::Int(40), Value::Float(1.0)].into()
+            ))
+            .unwrap(),
+            MstloEncodedTime(Some(Duration::from_millis(40)))
+        );
+        assert!(matches!(
+            MstloEncodedTime::try_from(&Value::Map(ValueMap::new())),
+            Err(TimeInputError::MissingField { field: "time", .. })
+        ));
+        for time in [Value::Int(-1), Value::Float(1.5)] {
+            assert!(matches!(
+                MstloEncodedTime::try_from(&map(time)),
+                Err(TimeInputError::WrongType { field: "time", .. })
+            ));
+        }
     }
 }

@@ -1,0 +1,82 @@
+use experimental::{modules, functions, generics, tagged_unions, pattern_matching, newtypes}
+use std::option
+use std::option::{Option}
+
+// std::time: instants, durations and intervals in one time domain, with
+// their arithmetic and comparisons. The timing property patterns built on
+// them are in std::timing.
+//
+// `D` is the time domain, a nullary newtype such as `newtype JournalTime = Unit`
+// that the spec declares. This module never names a domain, so an
+// instant of one domain is never accepted where another is expected.
+// Instants and durations are `Float` seconds.
+
+// A position in time domain `D`, in seconds.
+newtype Instant<D> = Float
+
+// An elapsed amount of time in `D`, in seconds. It is signed: the duration
+// of a backwards interval is negative.
+newtype Duration<D> = Float
+
+// Two observed endpoints. An interval may run backwards; see `is_backwards`.
+type TimeInterval<D> = Struct<start: Instant<D>, end: Instant<D>>
+
+// One observed occurrence of a value and the instant it occurred.
+type TimedValue<T, D> = Struct<time: Instant<D>, value: T>
+
+// An observation of a clock: which clock, the instant it read, and how the
+// sample was taken (the name of the checker's sample origin, such as
+// "Periodic" or "Replay").
+type ClockSample<D> = Struct<clock: Str, time: Instant<D>, origin: Str>
+
+// The instant `seconds` seconds into `D`.
+def instant<D>(seconds: Float) -> Instant<D> = Instant::new(seconds)
+
+// A duration of `amount` seconds in `D`, as a budget or deadline is written:
+// `const budget: Duration<JournalTime> = std::time::seconds(0.2)`.
+def seconds<D>(amount: Float) -> Duration<D> = Duration::new(amount)
+
+// The time from `start` to `end`; negative when `end` precedes `start`.
+def elapsed<D>(start: Instant<D>, end: Instant<D>) -> Duration<D> =
+  Duration::new(Instant::value(end) - Instant::value(start))
+
+// The later of two instants.
+def latest<D>(a: Instant<D>, b: Instant<D>) -> Instant<D> =
+  if Instant::value(b) > Instant::value(a) then b else a
+
+// The interval from `start` to `end`. It is total: a backwards interval is
+// still an interval, and `is_backwards` reports it.
+def between<D>(start: Instant<D>, end: Instant<D>) -> TimeInterval<D> =
+  { start: start, end: end }
+
+// The signed duration of an interval.
+def duration<D>(span: TimeInterval<D>) -> Duration<D> = elapsed(span.start, span.end)
+
+// An interval whose end precedes its start.
+def is_backwards<D>(span: TimeInterval<D>) -> Bool =
+  Instant::value(span.end) < Instant::value(span.start)
+
+// A forward interval strictly longer than `limit`. A backwards interval
+// satisfies neither `exceeds` nor `shorter_than`, and an absent one neither.
+def exceeds<D>(span: Option<TimeInterval<D>>, limit: Duration<D>) -> Bool =
+  exceeds_seconds(span, Duration::value(limit))
+
+// Compare with a literal number of seconds in the interval's time domain.
+// Use exceeds when the limit is already a typed duration.
+def exceeds_seconds<D>(span: Option<TimeInterval<D>>, seconds: Float) -> Bool = match(span) {
+  Some(s) -> !is_backwards(s) && Duration::value(duration(s)) > seconds,
+  None -> false,
+}
+
+// A forward interval strictly shorter than `limit`.
+def shorter_than<D>(span: Option<TimeInterval<D>>, limit: Duration<D>) -> Bool = match(span) {
+  Some(s) -> !is_backwards(s) && Duration::value(duration(s)) < Duration::value(limit),
+  None -> false,
+}
+
+// The interval from `start` to `now`, when both are known.
+def since<D>(start: Option<Instant<D>>, now: Option<Instant<D>>) -> Option<TimeInterval<D>> =
+  match(Tuple(start, now)) {
+    (Some(s), Some(t)) -> Some(between(s, t)),
+    _ -> None,
+  }

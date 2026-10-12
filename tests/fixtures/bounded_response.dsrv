@@ -1,0 +1,29 @@
+// std::timing::bounded_response over integer keys. A key of 0 and a negative
+// instant stand for absence, so each input row reads as one line of a table.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes, constants}
+use std::option::{self, Option}
+use std::time::{self, Instant, Duration}
+use std::timing::{self, Obligation, Closure, Closing}
+
+newtype JournalTime = Unit
+const limit: Duration<JournalTime> = std::time::seconds(1.0)
+
+in trigger: Int
+in respond: Int
+in withdraw: Int
+in clock: Float
+in at: Float
+
+def key(k: Int) -> Option<Int> = if k == 0 then None else Some(k)
+def instant(t: Float) -> Option<Instant<JournalTime>> = if t < 0.0 then None else Some(std::time::instant(t))
+
+aux response = std::timing::bounded_response(key(trigger), key(respond), key(withdraw),
+  instant(clock), instant(at), limit)
+
+out overdue: List<Int> = response.overdue
+out pending: List<Int> = List.map(\o: Obligation<Int, JournalTime> -> o.key, response.pending)
+out closed: Option<Int> = std::option::map(response.closed, \c: Closure<Int, JournalTime> -> c.key)
+out withdrawn: Bool = std::option::is_some_and(response.closed,
+  \c: Closure<Int, JournalTime> -> matches(c.by, Withdrawn))
+out conflicting: Bool = response.conflicting
+out unmatched: Bool = response.unmatched

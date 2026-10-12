@@ -138,6 +138,98 @@ not currently provide `unwrap`, `or`, `map`, or `and_then`. The
 [inspection example](../developer-tools/tc-expand.md#example) shows a complete
 model using the module.
 
+### Embedded `std::time` and `std::timing`
+
+Both modules are generic in a time domain `D`, a nullary newtype that the
+specification declares, such as `newtype JournalTime = Unit`. An instant or a
+duration of one domain is a type error where another domain is expected.
+
+`std::time` holds the time values, their arithmetic and comparisons:
+
+- `Instant<D>` and `Duration<D>` are newtypes over `Float` seconds; a
+  duration is signed. `instant(seconds)` and `seconds(amount)` construct
+  them, so a budget is written
+  `const budget: Duration<JournalTime> = std::time::seconds(0.2)`.
+- `TimeInterval<D>` has `start` and `end` instants. `between(start, end)`
+  always builds one, even when it runs backwards, which `is_backwards`
+  reports. `duration`, `elapsed`, `latest` and `since` work on these values.
+- `exceeds(span, limit)` and `shorter_than(span, limit)` compare an
+  `Option<TimeInterval<D>>` with a `Duration<D>`, strictly. Both hold only on
+  a forward interval, so neither holds for a backwards or an absent one.
+- `TimedValue<T, D>` and `ClockSample<D>` pair a value or a clock reading with
+  its instant.
+
+### Timing property patterns
+
+`std::timing` holds timing property patterns: functions that keep state
+across ticks.
+
+- `while(condition, now, event)` measures how long a condition has held.
+- `bounded_response(triggered, responded, withdrawn, now, event, limit)` checks
+  the bounded-response pattern □(p → ◇[0,T] q) for each occurrence, and its
+  "response, unless withdrawn" variant.
+- `deadline(open, close, cancel, budget, clock)` is the same pattern as one
+  verdict per tick: `overdue` reports a late closing response as well as a
+  silence breach (each wait once), `completed` is the interval a response
+  closed, and `pending` counts the open waits. `clock` is a
+  `Clock<D> = Struct<now: Option<Instant<D>>, at: Option<Instant<D>>>`: waits
+  open and close at `at`, the instant of this tick's record, and age with
+  `now`. A `None` budget keeps the closed interval in `completed` for a later
+  verdict.
+
+#### Bounded response
+
+`bounded_response<K, D>` takes keys of any type `K` that supports `==`. A key in
+`triggered` creates an **obligation**, a pending occurrence that a key in
+`responded` must discharge within `limit`. A key in `withdrawn` closes the
+obligation without judgement. An obligation is created at `event`, the instant
+of the record that triggers it, or at `now` when the tick has no record
+instant. A response or a withdrawal closes it at its own record's instant in
+the same way. Distinct keys are distinct obligations, judged independently,
+so overlapping occurrences need distinct keys, such as the identity of the
+event that triggers each one.
+
+Each tick returns a `BoundedResponseTiming<K, D>`:
+
+| Field | Meaning |
+|---|---|
+| `pending: List<Obligation<K, D>>` | The obligations open after this tick, oldest first. Each has its `key`, the instant it was created (`since`), and whether it has been `reported`. |
+| `overdue: List<K>` | The obligations that breached `limit` for the first time on this tick. |
+| `closed: Option<Closure<K, D>>` | The obligation this tick closed: its `key`, its `span` from creation to closing, and `by: Responded` or `by: Withdrawn`. |
+| `conflicting: Bool` | A key was triggered while an obligation with that key was pending. The original obligation and its instant are kept. |
+| `unmatched: Bool` | A key was responded to or withdrawn while no obligation with that key was pending. |
+
+An obligation is reported in `overdue` exactly once: on the first tick where
+its age, from creation to `now`, strictly exceeds `limit`, or where a response
+closes it after a span that strictly exceeds `limit`, whichever comes first. A
+tick that carries only a later `now`, such as a clock sample, can therefore
+report a silent obligation, and a response arriving later does not report it
+again. A withdrawn obligation is never reported, and an age or a span that
+runs backwards is never a breach.
+
+Within one tick, a response is applied first, then a withdrawal, then a
+trigger. A tick that responds to a pending key and triggers the same key
+closes the old obligation and opens a fresh one. When a response and a
+withdrawal close two obligations on one tick, `closed` reports the response.
+A tick with neither `event` nor `now` leaves the obligations as they were and
+reports nothing.
+
+In this illustrative fragment, `request`, `answer` and `cancelled` are
+`Option` streams naming the emission that raised a request, and `now` and
+`event` come from `rpio::journal::timing::now(observation)` and
+`rpio::journal::timing::phase_time(observation)`:
+
+```dsrv
+use std::time::{Duration}
+use std::timing
+const answer_budget: Duration<JournalTime> = std::time::seconds(0.2)
+aux answering = std::timing::bounded_response(request, answer, cancelled, now, event, answer_budget)
+out answer_late: Bool = List.len(answering.overdue) > 0
+```
+
+`answer_late` holds on each tick where some request first breaches the
+budget.
+
 ## Tagged unions and `match`
 
 Both are experimental, so a file that uses them declares them (see

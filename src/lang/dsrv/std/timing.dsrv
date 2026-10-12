@@ -1,0 +1,243 @@
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes}
+use std::option
+use std::option::{Option}
+use std::time::{self, Instant, Duration, TimeInterval}
+
+// std::timing: timing property patterns over the std::time values of one
+// time domain `D`. Each pattern holds its own state across ticks and is
+// generic in `D`, which the spec declares.
+
+// How long `condition` has held. `now` is the current instant; a tick
+// without one retains the state and produces no span. `event` is the instant
+// of the evidence observed on this tick, if any: a condition that opens on
+// this tick starts there, and one that closes ends there. Without one, both
+// use `now`.
+//
+// `span` is the previously open condition's interval on this tick, tested
+// before the current condition is applied, so the clearing tick still
+// reports it. `since` is when the condition, as now applied, started.
+def while<D>(condition: Bool, now: Option<Instant<D>>, event: Option<Instant<D>>)
+    -> Struct<span: Option<TimeInterval<D>>, since: Option<Instant<D>>> = { span: std::time::since(previous, end), since: started }
+where {
+  previous: Option<Instant<D>> = default(started[1], None)
+  changed: Option<Instant<D>> = std::option::or_else(event, now)
+  started: Option<Instant<D>> = match(now) {
+    None -> previous,
+    Some(_) -> if condition then std::option::or_else(previous, changed) else None,
+  }
+  end: Option<Instant<D>> = match(now) {
+    None -> None,
+    Some(_) -> if condition then now else changed,
+  }
+}
+
+// An obligation: a pending occurrence of a bounded response, identified by
+// its key, with the instant it was triggered. `reported` is set once the
+// obligation has been reported overdue, so it is never reported again.
+type Obligation<K, D> = Struct<key: K, since: Instant<D>, reported: Bool>
+
+// How an obligation closed: by its response, or by a withdrawal, which
+// closes it without judgement.
+type Closing = Union<Responded, Withdrawn>
+
+// A closed obligation: its key, the interval from its trigger to the record
+// that closed it, and how it closed.
+type Closure<K, D> = Struct<key: K, span: TimeInterval<D>, by: Closing>
+
+// A start retained until a matching response selects how to judge its duration.
+// This query observes completed intervals only; it imposes no pending deadline.
+type ResponseStart<K, D> = Struct<key: K, since: Instant<D>>
+type ResponseInterval<K, D> = Struct<key: K, span: TimeInterval<D>>
+def response_time<K, D>(started: Option<K>, finished: Option<K>, at: Option<Instant<D>>)
+    -> Struct<pending: List<ResponseStart<K, D>>, completed: Option<ResponseInterval<K, D>>,
+              conflicting: Bool, unmatched: Bool> = {
+    pending: pending, completed: completed,
+    conflicting: std::option::is_some(at) && repeated,
+    unmatched: std::option::is_some(at) && std::option::is_some(finished) && std::option::is_none(response)
+  }
+where {
+  before: List<ResponseStart<K, D>> = default(pending[1], [])
+  response: Option<ResponseStart<K, D>> = match(Tuple(finished, at)) {
+    (Some(key), Some(_)) -> first(List.filter(\o: ResponseStart<K, D> -> o.key == key, before)),
+    _ -> None,
+  }
+  remaining: List<ResponseStart<K, D>> = match(Tuple(finished, at)) {
+    (Some(key), Some(_)) -> List.filter(\o: ResponseStart<K, D> -> o.key != key, before),
+    _ -> before,
+  }
+  repeated: Bool = match(started) {
+    Some(key) -> List.len(List.filter(\o: ResponseStart<K, D> -> o.key == key, remaining)) > 0,
+    None -> false,
+  }
+  created: List<ResponseStart<K, D>> = match(Tuple(started, at)) {
+    (Some(key), Some(time)) if !repeated -> [{ key, since: time }],
+    _ -> [],
+  }
+  pending: List<ResponseStart<K, D>> = List.concat(remaining, created)
+  completed: Option<ResponseInterval<K, D>> = match(Tuple(response, at)) {
+    (Some(o), Some(time)) -> Some({ key: o.key, span: std::time::between(o.since, time) }),
+    _ -> None,
+  }
+}
+
+// One tick of a bounded response. `pending` is the obligations still open
+// after the tick, oldest first. `overdue` is the keys that breached the limit
+// for the first time on this tick. `closed` is the obligation this tick
+// closed. `conflicting` reports a trigger for a key already pending, and
+// `unmatched` a response or withdrawal for a key that is not.
+type BoundedResponseTiming<K, D> = Struct<
+  pending: List<Obligation<K, D>>, overdue: List<K>, closed: Option<Closure<K, D>>,
+  conflicting: Bool, unmatched: Bool
+>
+
+// The first element of a list, if any. Only the selected arm is evaluated,
+// so an empty list is never asked for its head.
+def first<T>(xs: List<T>) -> Option<T> = match(xs) {
+  [] -> None,
+  _ -> Some(List.head(xs)),
+}
+
+// The pending obligation with this key, if any.
+def obligation<K, D>(pending: List<Obligation<K, D>>, key: Option<K>) -> Option<Obligation<K, D>> =
+  match(key) {
+    Some(k) -> first(List.filter(\o: Obligation<K, D> -> o.key == k, pending)),
+    None -> None,
+  }
+
+// The pending obligations without the one with this key.
+def without<K, D>(pending: List<Obligation<K, D>>, key: Option<K>) -> List<Obligation<K, D>> =
+  match(key) {
+    Some(k) -> List.filter(\o: Obligation<K, D> -> o.key != k, pending),
+    None -> pending,
+  }
+
+// An obligation not yet reported whose age at `now` strictly exceeds
+// `limit`. An age that runs backwards is not a breach.
+def breaches<K, D>(o: Obligation<K, D>, now: Option<Instant<D>>, limit: Duration<D>) -> Bool =
+  !o.reported && std::time::exceeds(std::time::since(std::option::some(o.since), now), limit)
+
+// Each trigger creates an obligation; a response with the same key must
+// arrive within `limit`. Withdrawal closes it without judgement. Use distinct
+// keys for overlapping occurrences.
+//
+// Open and close instants use `event`, falling back to `now`. Without either,
+// the tick retains state and reports nothing. Clock-only ticks can age waits.
+// `overdue` reports each obligation once, when its age or closing response span
+// strictly exceeds `limit`. Withdrawals and backwards spans report no breach.
+//
+// A tick applies response, withdrawal, then trigger: responding and triggering
+// the same key closes the old wait and opens a new one. A duplicate trigger
+// keeps the old wait and sets `conflicting`; an unmatched response/withdrawal
+// sets `unmatched`. If both close a wait, `closed` reports the response.
+def bounded_response<K, D>(triggered: Option<K>, responded: Option<K>, withdrawn: Option<K>,
+                               now: Option<Instant<D>>, event: Option<Instant<D>>,
+                               limit: Duration<D>) -> BoundedResponseTiming<K, D> = {
+    pending: open,
+    overdue: List.concat(late, breached),
+    closed: closed,
+    conflicting: std::option::is_some(repeated),
+    unmatched: timed && ((std::option::is_some(responded) && std::option::is_none(response))
+      || (std::option::is_some(withdrawn) && std::option::is_none(withdrawal)))
+  }
+where {
+  before: List<Obligation<K, D>> = default(open[1], [])
+  at: Option<Instant<D>> = std::option::or_else(event, now)
+  timed: Bool = std::option::is_some(at)
+  response: Option<Obligation<K, D>> = if timed then obligation(before, responded) else None
+  answered: List<Obligation<K, D>> = if timed then without(before, responded) else before
+  withdrawal: Option<Obligation<K, D>> = if timed then obligation(answered, withdrawn) else None
+  remaining: List<Obligation<K, D>> = if timed then without(answered, withdrawn) else answered
+  repeated: Option<Obligation<K, D>> = if timed then obligation(remaining, triggered) else None
+  created: List<Obligation<K, D>> = match(Tuple(triggered, at, repeated)) {
+    (Some(k), Some(t), None) -> [{ key: k, since: t, reported: false }],
+    _ -> [],
+  }
+  kept: List<Obligation<K, D>> = List.concat(remaining, created)
+  closed: Option<Closure<K, D>> = match(Tuple(response, withdrawal, at)) {
+    (Some(o), _, Some(t)) -> Some({ key: o.key, span: std::time::between(o.since, t), by: Closing::Responded }),
+    (None, Some(o), Some(t)) -> Some({ key: o.key, span: std::time::between(o.since, t), by: Closing::Withdrawn }),
+    _ -> None,
+  }
+  late: List<K> = match(Tuple(response, closed)) {
+    (Some(o), Some(c)) if !o.reported && std::time::exceeds(std::option::some(c.span), limit) -> [o.key],
+    _ -> [],
+  }
+  breached: List<K> = List.map(\o: Obligation<K, D> -> o.key,
+    List.filter(\o: Obligation<K, D> -> breaches(o, now, limit), kept))
+  // Only an obligation that breaches on this tick changes, so without one
+  // the kept obligations stand as they are.
+  open: List<Obligation<K, D>> = match(breached) {
+    [] -> kept,
+    _ -> List.map(\o: Obligation<K, D> ->
+      if breaches(o, now, limit) then { key: o.key, since: o.since, reported: true } else o, kept),
+  }
+}
+
+// A breach report on this tick; each obligation reports at most once.
+def response_overdue<K, D>(triggered: Option<K>, responded: Option<K>, withdrawn: Option<K>,
+                           now: Option<Instant<D>>, event: Option<Instant<D>>,
+                           limit: Duration<D>) -> Bool = List.len(result.overdue) > 0
+where {
+  result: BoundedResponseTiming<K, D> = bounded_response(triggered, responded, withdrawn, now, event, limit)
+}
+
+// A response deadline for each opened key. `open` opens a wait for a key at
+// the record instant `clock.at`; `close` closes it as a response, `cancel`
+// withdraws it without judgement. Close and cancel apply first, then open; a
+// duplicate open keeps the original wait. `overdue` reports each wait once:
+// when a closing response took strictly longer than `budget` (a late
+// closure), or when `clock.now` first passes the budget while it is still
+// open. A `None` budget keeps an interval for a later verdict to judge
+// through `completed`. A tick without `clock.at` opens and closes nothing,
+// and one without `clock.now` ages nothing. `pending` counts the open waits.
+type Clock<D> = Struct<now: Option<Instant<D>>, at: Option<Instant<D>>>
+type Deadline<D> = Struct<overdue: Bool, completed: Option<TimeInterval<D>>, pending: Int>
+type Wait<K, D> = Struct<key: K, since: Instant<D>, reported: Bool>
+
+internal def wait_for<K, D>(waits: List<Wait<K, D>>, key: Option<K>) -> Option<Wait<K, D>> = match(key) {
+  Some(k) -> match(List.filter(\w: Wait<K, D> -> w.key == k, waits)) { [] -> None, found -> Some(List.head(found)) },
+  _ -> None,
+}
+internal def waits_without<K, D>(waits: List<Wait<K, D>>, key: Option<K>) -> List<Wait<K, D>> = match(key) {
+  Some(k) -> List.filter(\w: Wait<K, D> -> w.key != k, waits),
+  _ -> waits,
+}
+internal def over_limit<D>(span: Option<TimeInterval<D>>, limit: Option<Duration<D>>) -> Bool = match(limit) {
+  Some(budget) -> std::time::exceeds(span, budget), _ -> false,
+}
+// Whether a wait is reported overdue once this tick is judged: already, or
+// because its age at `now` passes the limit.
+internal def reported_after<K, D>(w: Wait<K, D>, now: Option<Instant<D>>, limit: Option<Duration<D>>) -> Bool =
+  w.reported || over_limit(std::time::since(Some(w.since), now), limit)
+
+def deadline<K, D>(open: Option<K>, close: Option<K>, cancel: Option<K>,
+  budget: Option<Duration<D>>, clock: Clock<D>) -> Deadline<D> = {
+    overdue: late_close || List.len(due) > 0,
+    completed: completion,
+    pending: List.len(pending)
+  }
+where {
+  before: List<Wait<K, D>> = default(pending[1], [])
+  timed: Bool = std::option::is_some(clock.at)
+  response: Option<Wait<K, D>> = if timed then wait_for(before, close) else None
+  answered: List<Wait<K, D>> = if timed then waits_without(before, close) else before
+  remaining: List<Wait<K, D>> = if timed then waits_without(answered, cancel) else answered
+  kept: List<Wait<K, D>> = match(Tuple(open, clock.at)) {
+    (Some(key), Some(time)) if std::option::is_none(wait_for(remaining, open)) ->
+      List.append(remaining, {key, since: time, reported: false}),
+    _ -> remaining,
+  }
+  completion: Option<TimeInterval<D>> = match(Tuple(response, clock.at)) {
+    (Some(w), Some(time)) -> Some(std::time::between(w.since, time)), _ -> None,
+  }
+  late_close: Bool = std::option::is_some_and(response, \w: Wait<K, D> -> !w.reported)
+    && over_limit(completion, budget)
+  // The waits first reported overdue on this tick.
+  due: List<Wait<K, D>> = List.filter(\w: Wait<K, D> -> reported_after(w, clock.now, budget) != w.reported, kept)
+  // Only a wait in `due` changes, so without one the kept waits stand as they are.
+  pending: List<Wait<K, D>> = match(due) {
+    [] -> kept,
+    _ -> List.map(\w: Wait<K, D> ->
+      {key: w.key, since: w.since, reported: reported_after(w, clock.now, budget)}, kept),
+  }
+}

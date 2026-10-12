@@ -49,6 +49,16 @@ impl Catalogue {
         roots: &["std"],
         modules: &[
             EmbeddedModule {
+                path: &["std", "time"],
+                file: "std/time.dsrv",
+                source: include_str!("std/time.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["std", "timing"],
+                file: "std/timing.dsrv",
+                source: include_str!("std/timing.dsrv"),
+            },
+            EmbeddedModule {
                 path: &["std", "stream"],
                 file: "std/stream.dsrv",
                 source: include_str!("std/stream.dsrv"),

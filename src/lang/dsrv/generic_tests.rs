@@ -411,6 +411,22 @@ fn nested_generic_calls_take_context_from_sibling_arguments_in_either_order() {
 }
 
 #[test]
+fn contextual_generic_inference_preserves_nominal_clock_domains() {
+    let header = "use experimental::{modules, functions, generics, newtypes}\nuse std::time::{self, Duration, Instant, TimeInterval}\nnewtype ClockA = Unit\nnewtype ClockB = Unit\n";
+    for call in [
+        "std::time::exceeds(span, std::time::seconds(0.1))",
+        "reverse(std::time::seconds(0.1), span)",
+    ] {
+        parse_str(&format!(
+            "{header}use std::option::Option\ndef reverse<D>(limit: Duration<D>, span: Option<TimeInterval<D>>) -> Bool = std::time::exceeds(span, limit)\nin span: Option<TimeInterval<ClockA>>\nout late: Bool = {call}\n"
+        )).unwrap().check(TypeCheckOptions::STRICT).without_warnings().unwrap();
+    }
+    assert!(parse_str(&format!(
+        "{header}use std::option::Option\nin span: Option<TimeInterval<ClockA>>\nin limit: Duration<ClockB>\nout late: Bool = std::time::exceeds(span, limit)\n"
+    )).unwrap().check(TypeCheckOptions::STRICT).without_warnings().is_err());
+}
+
+#[test]
 fn nested_generic_identity_calls_do_not_repeat_grounded_subtrees() {
     let nested = (0..24).fold("1".to_owned(), |inner, _| format!("id({inner})"));
     for output in [
