@@ -396,6 +396,9 @@ where
             let right = evaluate_int_typed::<AC>(expression.scope(right), context);
             match operator {
                 BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
+                BinaryOperator::NotEqual => {
+                    typed::compare(left, right, |left, right| left != right)
+                }
                 BinaryOperator::LessEqual => {
                     typed::compare(left, right, |left, right| left <= right)
                 }
@@ -417,6 +420,9 @@ where
             let right = evaluate_float_typed::<AC>(expression.scope(right), context);
             match operator {
                 BinaryOperator::Equal => typed::compare(left, right, |left, right| left == right),
+                BinaryOperator::NotEqual => {
+                    typed::compare(left, right, |left, right| left != right)
+                }
                 BinaryOperator::LessEqual => {
                     typed::compare(left, right, |left, right| left <= right)
                 }

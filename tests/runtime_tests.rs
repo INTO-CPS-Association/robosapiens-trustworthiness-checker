@@ -276,6 +276,61 @@ async fn run_typed_semisync_runtime(
     .await
 }
 
+#[apply(async_test)]
+async fn typed_semisync_inequality_matches_negated_equality(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let specification = r#"
+in a: Int
+in b: Int
+in x: Float
+in y: Float
+out int_neq: Bool
+out int_not_eq: Bool
+out float_neq: Bool
+out float_not_eq: Bool
+out bool_neq: Bool
+out str_neq: Bool
+out list_neq: Bool
+int_neq = a != b
+int_not_eq = !(a == b)
+float_neq = x != y
+float_not_eq = !(x == y)
+bool_neq = true != false
+str_neq = "a" != "b"
+list_neq = List(1) != List(2)
+"#;
+    let input = BTreeMap::from([
+        (VarName::new("a"), vec![Value::Int(1), Value::Int(2)]),
+        (VarName::new("b"), vec![Value::Int(2), Value::Int(2)]),
+        (
+            VarName::new("x"),
+            vec![Value::Float(1.5), Value::Float(2.0)],
+        ),
+        (
+            VarName::new("y"),
+            vec![Value::Float(2.0), Value::Float(2.0)],
+        ),
+    ]);
+
+    let outputs = run_typed_semisync_runtime(executor, specification, input).await?;
+    assert_eq!(outputs.len(), 2);
+    for (tick, row) in outputs {
+        let expected = Value::Bool(tick == 0);
+        for name in ["int_neq", "int_not_eq", "float_neq", "float_not_eq"] {
+            assert_eq!(row[&VarName::new(name)], expected, "{name} at tick {tick}");
+        }
+        for name in ["bool_neq", "str_neq", "list_neq"] {
+            assert_eq!(
+                row[&VarName::new(name)],
+                Value::Bool(true),
+                "{name} at tick {tick}"
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn run_gradual_typed_runtime_with_spec(
     executor: Rc<LocalExecutor<'static>>,
     runtime: RuntimeSpec,
