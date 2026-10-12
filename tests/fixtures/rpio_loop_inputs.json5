@@ -1,0 +1,17 @@
+{
+  sources: {
+    journal: {
+      kind: "rpio-observation-clock-file",
+      variable: "native_observation",
+      journal_clock: "fixture.journal",
+      files: ["fixtures/rpio/nominal.jsonl"],
+      capture_checks: [
+        {
+          records: 30,
+          sha256: "759bacae7ec999729d5e83e72f942b5e4cc795c12d242f9e1080f9e93fc669d7",
+          journal_clock: "fixture.journal",
+        },
+      ],
+    },
+  },
+}

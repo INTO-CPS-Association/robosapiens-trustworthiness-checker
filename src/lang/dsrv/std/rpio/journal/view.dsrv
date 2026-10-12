@@ -1,0 +1,213 @@
+// Logical, resolved observation view over the classic two-stream journal.
+// This is a property-facing contract, not another wire format. An explicit
+// adapter supplies processing position, clock label and application message
+// projections. Knowledge references and activation tokens retain their meaning.
+// Property-facing records adapted from the classic reference journal with application-selected Knowledge
+// (`K`), sent messages (`E`) and received messages (`M`). Every record carries
+// its own admission position and time. An Event record carries the exact
+// Knowledge evidence its publication cites in named slots; Read, Write and End
+// carry the resolved tuples they name inline. Activation and emission
+// identities link records causally; rpio::journal::state checks those links.
+use experimental::{modules, generics, tagged_unions, functions, pattern_matching}
+
+use std::option::{self, Option}
+use rpio::journal::{self}
+
+type Role = Union<Monitor, Analysis, Plan, Legitimate, Execute>
+
+type CommunicationKind = Union<Event, Message>
+
+type ServiceOutcome = Union<Delivered, NotDelivered>
+
+// Where a record was admitted: its run (store epoch) and its sequence there.
+type Position = Struct<epoch: Str, seq: Int>
+
+// When a record was admitted, and the backend clock that stamped it.
+type Arrival = Struct<journal_time: Float, journal_clock: Str, ...>
+
+// An activation identity. The compatibility field start_seq holds the exact
+// classic activation token (often a UUID), never a numeric processing position.
+type ActivationId = Struct<epoch: Str, start_seq: Str>
+
+// One event published by an activation, counted from 1 within it.
+type Emission = Struct<activation: ActivationId, sequence_no: Int>
+
+// The loop path, e.g. ["robot1", "navigation"]; possibly empty.
+type LoopId = List<Str>
+
+// One phase callback. `caused_by` names the emission that woke it, or is
+// absent for a direct call or a message from outside the loop.
+type Activation = Struct<
+  epoch: Str,
+  start_seq: Str,
+  producer: Str,
+  role: Role,
+  loop: LoopId,
+  caused_by: Option<Emission>,
+  ...
+>
+
+type Version = Struct<store_epoch: Str, global_write_sequence: Int, key: Str, ...>
+
+// Who wrote a Knowledge value: a phase activation, or a node outside any
+// activation (such as its startup writes).
+type Writer = journal::Writer
+
+// A Knowledge version with its exact value and writer.
+type Resolved<K> = Struct<ref: Version, value: K, written_by: Writer, ...>
+
+// Evidence a publication cites, under the name it uses for it.
+type Slot<K> = Struct<name: Str, value: Resolved<K>>
+
+// The decision recorded at callback End. Fields cite exact evidence, so a
+// property can check the plan, evidence or applied value it names. Applied
+// and NotApplied describe recorded outcomes, not proof that the managed
+// system changed.
+type AbortReason<K> = journal::AbortReason<K>
+type Outcome<K> = journal::Outcome<K>
+
+// The message that started an activation, and where it arrived.
+type Received<M> = Struct<kind: CommunicationKind, topic: Str, message: M, ...>
+// A message an activation published, numbered from 1 within it.
+type Sent<E> = Struct<kind: CommunicationKind, topic: Str, sequence_no: Int, message: E, ...>
+
+// What an application classifies a publication by: its topic and message.
+type Posted<E> = Struct<topic: Str, message: E>
+
+// The decoder checks only what one record states about itself; the
+// coordinator checks what records state about each other.
+type Step<K, E, M> = Union<
+  Start: Received<M>,
+  Read: Struct<key: Str, value: Option<Resolved<K>>, ...>,
+  Write: Struct<key: Str, value: Resolved<K>, ...>,
+  Event: Sent<E>,
+  ServiceStarted: Struct<service: Str, request_id: Str, ...>,
+  ServiceCompleted: Struct<service: Str, request_id: Str, outcome: ServiceOutcome, ...>,
+  End: Struct<outcome: Outcome<K>, ...>,
+>
+
+type Record<K, E, M> = Union<
+  // Preserve the native record on a failed projection, for inspection.
+  Incomplete: Struct<position: Position, arrival: Arrival, activation: Activation, reason: Str, native: Any>,
+  Phase: Struct<position: Position, arrival: Arrival, activation: Activation,
+                step: Step<K, E, M>, evidence: List<Slot<K>>, ...>,
+  Knowledge: Struct<position: Position, arrival: Arrival, version: Resolved<K>, ...>,
+>
+
+// Pure queries over the record actually present on a tick.
+def is_phase<K, E, M>(record: Record<K, E, M>) -> Bool = matches(record, Phase(_))
+
+def position<K, E, M>(record: Record<K, E, M>) -> Position = match(record) {
+  Phase({ position, .. }) -> position,
+  Knowledge({ position, .. }) -> position,
+  Incomplete({ position, .. }) -> position,
+  _ -> { epoch: "", seq: 0 },
+}
+
+// Every record carries its arrival in the journal.
+def arrival<K, E, M>(record: Record<K, E, M>) -> Arrival = match(record) {
+  Phase({ arrival, .. }) -> arrival,
+  Knowledge({ arrival, .. }) -> arrival,
+  Incomplete({ arrival, .. }) -> arrival,
+  _ -> { journal_time: 0.0, journal_clock: "" },
+}
+
+// The activation of a phase record.
+def phase_activation<K, E, M>(record: Record<K, E, M>) -> Option<Activation> =
+  match(record) { Phase({ activation, .. }) -> Some(activation), _ -> None }
+
+// The identity of an activation, as other records name it.
+def identity(activation: Activation) -> ActivationId =
+  { epoch: activation.epoch, start_seq: activation.start_seq }
+
+// Two records of the same activation.
+def same(a: Activation, b: Activation) -> Bool = identity(a) == identity(b)
+
+// The Start of an activation of `role`.
+def is_start_of<K, E, M>(record: Record<K, E, M>, role: Role) -> Bool =
+  matches(record, Phase({ activation: { role: r, .. }, step: Start(_), .. }) if r == role)
+
+// The message this tick publishes.
+def sent<K, E, M>(record: Record<K, E, M>) -> Option<Sent<E>> =
+  match(record) { Phase({ step: Event(s), .. }) -> Some(s), _ -> None }
+
+// The emission this tick publishes: its activation and sequence number.
+def published<K, E, M>(record: Record<K, E, M>) -> Option<Emission> =
+  match(record) {
+    Phase({ activation, step: Event({ sequence_no, .. }), .. }) ->
+      Some({ activation: identity(activation), sequence_no }),
+    _ -> None,
+  }
+
+// The message that started this activation.
+def received<K, E, M>(record: Record<K, E, M>) -> Option<Received<M>> =
+  match(record) { Phase({ step: Start(r), .. }) -> Some(r), _ -> None }
+
+// The End this record carries, with the activation that ended.
+def end_outcome<K, E, M>(record: Record<K, E, M>) -> Option<(Activation, Outcome<K>)> =
+  match(record) {
+    Phase({ activation, step: End({ outcome, .. }), .. }) -> Some(Tuple(activation, outcome)),
+    _ -> None,
+  }
+
+// The Knowledge a Read selected or a Write committed.
+def accessed<K, E, M>(record: Record<K, E, M>) -> Option<Resolved<K>> = match(record) {
+  Phase({ step: Read({ value, .. }), .. }) -> value,
+  Phase({ step: Write({ value, .. }), .. }) -> Some(value),
+  _ -> None,
+}
+
+// The Knowledge this record writes: an activation's Write, or a write
+// outside any activation.
+def written<K, E, M>(record: Record<K, E, M>) -> Option<Resolved<K>> = match(record) {
+  Phase({ step: Write({ value, .. }), .. }) -> Some(value),
+  Knowledge({ version: v, .. }) -> match(v.written_by) {
+    Activation(_) -> None, // Phase Write retains the contextual commit boundary.
+    _ -> Some(v),
+  },
+  _ -> None,
+}
+
+// The tuple named `name` among cited evidence.
+def cited<K>(evidence: List<Slot<K>>, name: Str) -> Option<Resolved<K>> =
+  match(List.filter(\s -> s.name == name, evidence)) {
+    [] -> None,
+    found -> Some(List.head(found).value),
+  }
+
+// The evidence a phase record cites under `name`.
+def slot<K, E, M>(record: Record<K, E, M>, name: Str) -> Option<Resolved<K>> = match(record) {
+  Phase({ evidence, .. }) -> cited(evidence, name),
+  _ -> None,
+}
+
+internal def named<K>(name: Str, value: Resolved<K>) -> Slot<K> = { name, value }
+
+// The evidence an End outcome cites, under its field names.
+def outcome_evidence<K>(o: Outcome<K>) -> List<Slot<K>> = match(o) {
+  Monitored({ observation }) -> [named("observation", observation)],
+  Analysed(Anomaly({ evidence })) -> [named("evidence", evidence)],
+  Planned(Generated({ plan })) -> [named("plan", plan)],
+  Legitimised(Accepted({ plan, legitimate_result })) ->
+    [named("plan", plan), named("legitimate_result", legitimate_result)],
+  Legitimised(Rejected({ plan, legitimate_result })) ->
+    [named("plan", plan), named("legitimate_result", legitimate_result)],
+  Executed(Applied({ plan, effect })) -> [named("plan", plan), named("effect", effect)],
+  Executed(NotApplied({ plan, .. })) -> [named("plan", plan)],
+  _ -> [],
+}
+
+// Woken by an emission of the activation `id`.
+def woken_by(activation: Activation, id: ActivationId) -> Bool =
+  std::option::is_some_and(activation.caused_by, \c: Emission -> c.activation == id)
+
+// Woken by exactly the emission `e`.
+def caused_by(activation: Activation, e: Emission) -> Bool =
+  std::option::is_some_and(activation.caused_by, \c: Emission -> c == e)
+
+// A Start selected by its role and the message it received.
+def requested<K, E, M>(record: Record<K, E, M>, role: Role, select: (Received<M> -> Bool)) -> Option<Activation> =
+  match(record) {
+    Phase({ activation: a, step: Start(r), .. }) if a.role == role && select(r) -> Some(a),
+    _ -> None,
+  }

@@ -1,0 +1,183 @@
+// Executable tutorial policy; numerical limits are illustrative.
+// ANCHOR: setup
+use experimental::high_level_dsrv
+mod turtlebot
+mod native_adapter
+use native_adapter
+use rpio::journal::view::adapt
+use turtlebot::{self, Knowledge, Record, BoolLidarMask, SpinCommand, JournalTime}
+use rpio::journal::view::maplek
+use rpio::journal::{self}
+use rpio::journal::view::{Role, Activation}
+use rpio::journal::view::timing
+use rpio::journal::view::knowledge::{Access}
+use std::option::{self, Option}
+use std::time::{Duration}
+
+in native_observation: turtlebot::NativeObservation
+// Processing count includes each admitted Knowledge row and phase fact. It is
+// independent of immutable write sequence and of the activation UUID token.
+aux native_record: Option<journal::Record<turtlebot::Knowledge, turtlebot::NativeEvent, turtlebot::NativeTrigger>> =
+  match(native_observation.record) {
+    Some(r) -> Some(r.value),
+    None -> None,
+  }
+aux processing_position: Int = default(processing_position[1], 0)
+  + match(native_record) { Some(_) -> 1, None -> 0 }
+aux observation: turtlebot::ViewObservation = rpio::journal::view::adapt::observation(native_observation,
+  {epoch: "tutorial-run", seq: processing_position}, native_adapter::journal_clock,
+  \trigger: turtlebot::NativeTrigger -> native_adapter::receive(trigger),
+  \event: turtlebot::NativeEvent -> native_adapter::message(event),
+  \values: List<journal::Resolved<turtlebot::Knowledge>> -> native_adapter::cite(values))
+aux record: Option<Record> = rpio::journal::view::timing::record_of(observation)
+aux loop = rpio::journal::view::maplek::loop(observation)
+// The loop's records follow the MAPLE-K protocol.
+out protocol_followed: Bool = loop.protocol_followed
+out adaptation_in_progress: Bool = matches(loop.episode, Active(_))
+// ANCHOR_END: setup
+
+// ANCHOR: evidence
+aux tick = rpio::journal::view::timing::tick(observation)
+// The trace stays in the run its first phase record names.
+out run_unchanged: Bool = !tick.new_run || !std::option::is_some(tick.previous_phase_time)
+// Phase records arrive in time order.
+out phase_times_ordered: Bool = match(Tuple(tick.previous_phase_time, tick.record_time)) {
+  (Some(previous), Some(time)) ->
+    !tick.is_phase_record || !std::time::is_backwards(std::time::between(previous, time)),
+  _ -> true,
+}
+// A reported anomaly's masks show an occluded sector.
+out anomaly_has_occlusion: Bool = match(loop.episode_step) {
+  Moved({ by: Opened({ evidence, .. }), .. }) -> match(evidence.value) {
+    BoolLidarMasks({ masks }) -> List.fold(\found: Bool, m: BoolLidarMask ->
+      found || List.fold(\hit: Bool, bit: Bool -> hit || bit, false, m.values), false, masks),
+    _ -> false,
+  },
+  _ -> true,
+}
+// ANCHOR_END: evidence
+
+// ANCHOR: knowledge_use
+aux plan_read_masks = rpio::journal::view::knowledge::last_access::<
+  Role::Plan, Access::Read, turtlebot::masks
+>(observation)
+aux newest_masks = rpio::journal::view::knowledge::latest::<turtlebot::masks>(observation)
+// A generated plan is based on the newest LiDAR masks.
+out plan_read_newest_masks: Bool = match(loop.episode_step) {
+  Moved({ by: Generated(_), .. }) -> match(Tuple(plan_read_masks, rpio::journal::view::knowledge::version(newest_masks.latest))) {
+    (Some(read), Some(newest)) -> read.ref == newest,
+    _ -> false,
+  },
+  _ -> true,
+}
+// A generated plan is based on the current LiDAR mask values.
+out plan_read_current_mask_values: Bool = match(loop.episode_step) {
+  Moved({ by: Generated(_), .. }) -> match(Tuple(plan_read_masks, rpio::journal::view::knowledge::value(newest_masks.latest))) {
+    (Some(read), Some(newest)) -> read.value == newest,
+    _ -> false,
+  },
+  _ -> true,
+}
+aux current_activation: Option<Activation> = match(record) {
+  Some(r) -> rpio::journal::view::phase_activation(r),
+  None -> None,
+}
+// A generated plan is written by the Plan activation that generated it.
+out plan_written_by_planner: Bool = match(Tuple(loop.episode_step, current_activation)) {
+  (Moved({ by: Generated({ plan_activation, plan }), .. }), Some(a)) ->
+    matches(plan.written_by, Activation(writer) if writer.run_id == plan_activation.epoch
+      && writer.activation_id == plan_activation.start_seq),
+  _ -> true,
+}
+// ANCHOR_END: knowledge_use
+
+// ANCHOR: acceptance
+def commands_within_limits(k: Knowledge) -> Bool = match(k) {
+  Directions({ commands }) -> List.len(commands) > 0
+    && List.fold(\turns: Bool, c: SpinCommand -> turns || abs(c.angleVelocity) > 0.0,
+      false, commands)
+    && List.fold(\ok: Bool, c: SpinCommand ->
+      ok && abs(c.angleVelocity) <= 0.5 && c.duration > 0.0 && c.duration <= 10.0,
+      true, commands),
+  _ -> false,
+}
+// An accepted plan stays within the motion limits.
+out accepted_plan_within_limits: Bool = match(loop.episode_step) {
+  Moved({ from: Active({ plan: Some(p), .. }),
+          by: Accepted({ legitimate_result, .. }), .. }) ->
+    commands_within_limits(p.plan.value)
+    && matches(legitimate_result.value, VerificationInfo({ accepted: true })),
+  _ -> true,
+}
+// ANCHOR_END: acceptance
+
+// ANCHOR: execution
+// Execute starts only because a plan was accepted.
+out execution_authorised: Bool = match(record) {
+  Some(Phase({ activation: a @ { role: Execute, .. }, step: Start(_), .. })) ->
+    match(loop.episode_before) {
+      Active({ plan: Some({ accepted: Some(acc), .. }), .. }) ->
+        rpio::journal::view::woken_by(a, acc.legitimate_activation),
+      _ -> false,
+    },
+  _ -> true,
+}
+// The applied configuration is the accepted plan.
+out applied_config_matches_plan: Bool = match(loop.episode_step) {
+  Closed({ from: Active({ plan: Some(p), .. }), how: Applied({ effect }), .. }) ->
+    match(Tuple(p.plan.value, effect.value)) {
+      (Directions({ commands: planned }), SpinConfig({ commands, period })) ->
+        planned == commands && period > 0,
+      _ -> false,
+    },
+  _ -> true,
+}
+out plans_applied: Int = default(plans_applied[1], 0)
+  + match(loop.episode_step) { Closed({ how: Applied(_), .. }) -> 1, _ -> 0 }
+// ANCHOR_END: execution
+
+// ANCHOR: progress
+aux previous_rejections: Int = default(rejections[1], 0)
+aux rejections: Int = match(loop.episode_step) {
+  Moved({ by: Opened(_), .. }) -> 0,
+  Moved({ by: Rejected(_), .. }) -> previous_rejections + 1,
+  _ -> previous_rejections,
+}
+// An episode rejects at most one plan.
+out rejections_within_limit: Bool = rejections <= 1
+const planning_budget: Duration<JournalTime> = std::time::seconds(2.0)
+const validation_budget: Duration<JournalTime> = std::time::seconds(1.0)
+const execution_budget: Duration<JournalTime> = std::time::seconds(1.0)
+const episode_budget: Duration<JournalTime> = std::time::seconds(5.0)
+// Each adaptation stage, and the whole episode, finishes within its budget.
+out planning_on_time: Bool = !std::time::exceeds(loop.timing.plan, planning_budget)
+out validation_on_time: Bool = !std::time::exceeds(loop.timing.validation, validation_budget)
+out execution_on_time: Bool = !std::time::exceeds(loop.timing.execution, execution_budget)
+out episode_on_time: Bool = !std::time::exceeds(loop.timing.episode, episode_budget)
+const role_budget: Duration<JournalTime> = std::time::seconds(1.0)
+const analysis_budget: Duration<JournalTime> = std::time::seconds(2.0)
+def role_limit(role: Role) -> Duration<JournalTime> = match(role) {
+  Analysis -> analysis_budget,
+  _ -> role_budget,
+}
+// Each role is held within its budget, including the wait for its successor.
+out role_on_time: Bool = match(loop.cycle_before) {
+  Active({ role, .. }) -> !std::time::exceeds(loop.role_span, role_limit(role)),
+  _ -> true,
+}
+// An episode that closes is closed by an applied plan.
+out episode_closes_applied: Bool = match(loop.episode_step) {
+  Closed({ how: Applied(_), .. }) -> true,
+  Closed(_) -> false,
+  _ -> true,
+}
+// Every requirement above has held on every tick so far.
+out adaptation_requirements_held: Bool = default(adaptation_requirements_held[1], true)
+  && protocol_followed && plan_read_current_mask_values && plan_read_newest_masks
+  && accepted_plan_within_limits
+  && run_unchanged && phase_times_ordered
+  && anomaly_has_occlusion && plan_written_by_planner
+  && execution_authorised && applied_config_matches_plan && rejections_within_limit
+  && planning_on_time && validation_on_time && execution_on_time
+  && episode_on_time && role_on_time && episode_closes_applied
+// ANCHOR_END: progress

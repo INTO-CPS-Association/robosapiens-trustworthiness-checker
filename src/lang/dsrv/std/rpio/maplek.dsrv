@@ -1,0 +1,318 @@
+// MAPLE-K cycle and adaptation evidence from callback Start/End records.
+// One fresh ordered run of one sequential loop per instance. Protocol steps
+// retain the exact Knowledge versions named by End outcomes. Published event
+// milestones are observed separately by rpio::maplek::events.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use rpio::journal::{self, Record, Activation, ActivationId, Resolved, Outcome, AbortReason, Role}
+use rpio::journal::timing::{Observation}
+use std::option::{self, Option}
+use std::time::{self, Instant, TimeInterval}
+
+// The MAPLE-K cycle
+// Monitor → Analysis → (Plan → Legitimate)+ → Execute. A cycle opens with a
+// Monitor activation and closes after a nominal analysis, an execution, a
+// plan that could not be found, or an abort. The Monitor activation is the
+// cycle's identity, and each later role joins by the emission that woke it.
+type Cycle<D> = Union<
+  Idle,
+  Active: Struct<
+    monitor_activation: ActivationId,  // the Monitor activation that opened it
+    role: Role,                        // the role running now
+    role_activation: ActivationId,     // its activation, which wakes the next role
+    role_since: Instant<D>,            // the instant of its Start
+  >,
+>
+type CycleStep<D> = Union<
+  Stayed,
+  Moved: Cycle<D>,
+  // The record did not fit the protocol this layer reconstructs. It does not
+  // say the monitored system violated a requirement; a profile decides that.
+  OutOfProtocol: Struct<from: Cycle<D>, activation: Activation>,
+>
+// One limit per role, measured from the Start of that role's activation until
+// the next role starts, so a limit also covers the handover to the next role.
+
+def next_role(r: Role) -> Role = match(r) {
+  Monitor -> Role::Analysis,
+  Analysis -> Role::Plan,
+  Plan -> Role::Legitimate,
+  Legitimate -> Role::Execute,
+  Execute -> Role::Monitor,
+}
+
+// Roles that may start after `previous` within one cycle: the nominal order,
+// and a new Plan after Legitimate rejects a plan.
+def may_follow(previous: Role, next: Role) -> Bool =
+  matches(Tuple(previous, next), (p, n) if n == next_role(p) && n != Role::Monitor)
+  || matches(Tuple(previous, next), (Legitimate, Plan))
+
+// A tick without a record leaves the cycle where it was. A role's Start
+// keeps its own instant as `role_since`.
+def cycle_transition<K, E, M, D>(current: Cycle<D>, observation: Observation<K, E, M, D>) -> CycleStep<D> =
+  match(observation.record) {
+    Some(r) -> cycle_record(current, r.value, r.time),
+    None -> Stayed,
+  }
+
+def cycle_record<K, E, M, D>(current: Cycle<D>, record: Record<K, E, M>, now: Instant<D>) -> CycleStep<D> =
+  match(Tuple(current, record)) {
+    (Idle, Phase({ activation: { role: Monitor, activation_id, .. }, step: Start(_), .. })) ->
+      Moved(Active({
+        monitor_activation: activation_id, role: Role::Monitor,
+        role_activation: activation_id, role_since: now,
+      })),
+
+    // A role woken by the activation running now, in an order the loop allows.
+    (Active(c), Phase({ activation: a @ { role, activation_id, .. }, step: Start(_), .. }))
+        if rpio::journal::woken_by(a, c.role_activation) && may_follow(c.role, role) ->
+      Moved(Active({ monitor_activation: c.monitor_activation, role, role_activation: activation_id, role_since: now })),
+
+    // An End that closes the cycle, by the activation running now.
+    (Active(c), Phase({
+        activation: a,
+        step: End({ outcome: Analysed(Nominal) | Executed(_) | Planned(NoPlan) | Aborted(_), .. }),
+        ..
+      })) if a.activation_id == c.role_activation ->
+      Moved(Idle),
+
+    (Active(c), Phase({ activation: a, step: End(_), .. })) if a.activation_id != c.role_activation ->
+      OutOfProtocol({ from: current, activation: a }),
+    (Idle, Phase({ activation, step: End(_), .. })) -> OutOfProtocol({ from: current, activation }),
+    (from, Phase({ activation, step: Start(_), .. })) -> OutOfProtocol({ from, activation }),
+    _ -> Stayed,
+  }
+
+def cycle_after<D>(current: Cycle<D>, step: CycleStep<D>) -> Cycle<D> =
+  match(step) { Moved(c) -> c, _ -> current }
+
+
+
+// The adaptation episode
+// An anomaly opens an episode. Rejection clears the plan and permits a retry
+// woken by the rejecting activation; acceptance permits execution. Execution,
+// NoPlan or an abort closes the episode. The held plan and its acceptance
+// identify the current stage.
+type Acceptance<K> = Struct<
+  legitimate_activation: ActivationId,
+  legitimate_result: Resolved<K>,
+>
+type Plan<K> = Struct<
+  activation: ActivationId,          // the Plan activation that generated it
+  plan: Resolved<K>,                 // the plan itself
+  accepted: Option<Acceptance<K>>, // none until Legitimate accepts it
+>
+type Episode<K, D> = Union<
+  EpisodeIdle,
+  Active: Struct<
+    analysis_activation: ActivationId, // the Analysis whose anomaly opened it
+    opened: Instant<D>,                // the instant of that End
+    since: Instant<D>,                 // the instant of the End that moved it last
+    last_plan_rejection: Option<ActivationId>,
+    plan: Option<Plan<K>>,
+  >,
+>
+// A transition carries its prior state (`from`) and the evidence added by
+// this record, so properties can relate new decisions to their earlier plan.
+type Transition<K> = Union<
+  Opened:    Struct<analysis_activation: ActivationId, evidence: Resolved<K>>,
+  Generated: Struct<plan_activation: ActivationId, plan: Resolved<K>>,
+  Rejected:  Struct<legitimate_activation: ActivationId, legitimate_result: Resolved<K>>,
+  Accepted:  Struct<legitimate_activation: ActivationId, legitimate_result: Resolved<K>>,
+>
+type Closure<K> = Union<
+  Applied:    Struct<effect: Resolved<K>>,
+  NotApplied: Struct<reason: AbortReason<K>>,
+  NoPlan,
+  Aborted:    Struct<reason: AbortReason<K>>,
+>
+type EpisodeStep<K, D> = Union<
+  Stayed,
+  Moved:  Struct<from: Episode<K, D>, by: Transition<K>, to: Episode<K, D>>,
+  Closed: Struct<from: Episode<K, D>, how: Closure<K>, at: Instant<D>>,
+  OutOfProtocol: Struct<from: Episode<K, D>, activation: Activation, outcome: Outcome<K>>,
+>
+
+// Evidence added by this tick's transition; it is not held across ticks.
+def generated_plan<K, D>(step: EpisodeStep<K, D>) -> Option<Resolved<K>> = match(step) {
+  Moved({ by: Generated({ plan, .. }), .. }) -> Some(plan),
+  _ -> None,
+}
+def validation_result<K, D>(step: EpisodeStep<K, D>) -> Option<Resolved<K>> = match(step) {
+  Moved({ by: Accepted({ legitimate_result, .. }), .. }) -> Some(legitimate_result),
+  Moved({ by: Rejected({ legitimate_result, .. }), .. }) -> Some(legitimate_result),
+  _ -> None,
+}
+def applied_effect<K, D>(step: EpisodeStep<K, D>) -> Option<Resolved<K>> = match(step) {
+  Closed({ how: Applied({ effect }), .. }) -> Some(effect),
+  _ -> None,
+}
+
+// Evidence in the supplied episode state, retaining version and writer.
+def pending_plan<K, D>(episode: Episode<K, D>) -> Option<Resolved<K>> = match(episode) {
+  Active({ plan: Some({ plan, accepted: None, .. }), .. }) -> Some(plan),
+  _ -> None,
+}
+def accepted_plan<K, D>(episode: Episode<K, D>) -> Option<Resolved<K>> = match(episode) {
+  Active({ plan: Some({ plan, accepted: Some(_), .. }), .. }) -> Some(plan),
+  _ -> None,
+}
+def accepted_validation<K, D>(episode: Episode<K, D>) -> Option<Resolved<K>> = match(episode) {
+  Active({ plan: Some({ accepted: Some({ legitimate_result, .. }), .. }), .. }) -> Some(legitimate_result),
+  _ -> None,
+}
+
+// Woken by an activation this episode already holds.
+def accepted_within<K>(accepted: Option<Acceptance<K>>, activation: Activation) -> Bool =
+  match(accepted) { Some(a) -> rpio::journal::woken_by(activation, a.legitimate_activation), _ -> false }
+def plan_within<K>(plan: Option<Plan<K>>, activation: Activation) -> Bool = match(plan) {
+  Some(p) -> rpio::journal::woken_by(activation, p.activation) || accepted_within(p.accepted, activation),
+  _ -> false,
+}
+def within<K, D>(episode: Episode<K, D>, activation: Activation) -> Bool = match(episode) {
+  EpisodeIdle -> false,
+  Active(e) -> rpio::journal::woken_by(activation, e.analysis_activation)
+    || match(e.last_plan_rejection) { Some(r) -> rpio::journal::woken_by(activation, r), _ -> false }
+    || plan_within(e.plan, activation),
+}
+
+// A tick without a record leaves the episode where it was. A transition
+// keeps the instant of the End that made it.
+def episode_transition<K, E, M, D>(
+  observation: Observation<K, E, M, D>, current: Episode<K, D>,
+) -> EpisodeStep<K, D> =
+  match(observation.record) {
+    Some(r) -> episode_record(r.value, current, r.time),
+    None -> Stayed,
+  }
+
+def episode_record<K, E, M, D>(
+  record: Record<K, E, M>, current: Episode<K, D>, now: Instant<D>,
+) -> EpisodeStep<K, D> =
+  match(Tuple(current, rpio::journal::end_outcome(record))) {
+    (_, None) -> Stayed,
+    (_, Some((_, Monitored(_) | Analysed(Nominal)))) -> Stayed,
+
+    // An Analysis reporting an anomaly opens an episode and is its identity.
+    (EpisodeIdle, Some((a, Analysed(Anomaly({ evidence }))))) ->
+      Moved({
+        from: current,
+        by: Opened({ analysis_activation: a.activation_id, evidence }),
+        to: Active({
+          analysis_activation: a.activation_id, opened: now, since: now,
+          last_plan_rejection: None, plan: None,
+        }),
+      }),
+
+    // A Plan woken by the opening anomaly, or by the rejection that returned
+    // the episode to planning.
+    (Active(e @ { plan: None, .. }), Some((a, Planned(Generated({ plan })))))
+        if within(current, a) ->
+      Moved({
+        from: current,
+        by: Generated({ plan_activation: a.activation_id, plan }),
+        to: Active({ analysis_activation: e.analysis_activation, opened: e.opened, since: now, last_plan_rejection: e.last_plan_rejection,
+                     plan: Some({ activation: a.activation_id, plan, accepted: None }) }),
+      }),
+
+    (Active({ plan: None, .. }), Some((a, Planned(NoPlan)))) if within(current, a) ->
+      Closed({ from: current, how: NoPlan, at: now }),
+
+    // A Legitimate woken by the plan it legitimises, on the plan it generated.
+    (Active(e @ { plan: Some({ activation, plan: generated, accepted: None }), .. }),
+     Some((a, Legitimised(Rejected({ plan, legitimate_result })))))
+        if rpio::journal::woken_by(a, activation) && plan.ref == generated.ref ->
+      Moved({
+        from: current,
+        by: Rejected({ legitimate_activation: a.activation_id, legitimate_result }),
+        to: Active({ analysis_activation: e.analysis_activation, opened: e.opened, since: now, plan: None,
+                     last_plan_rejection: Some(a.activation_id) }),
+      }),
+
+    (Active(e @ { plan: Some(p @ { activation, plan: generated, accepted: None }), .. }),
+     Some((a, Legitimised(Accepted({ plan, legitimate_result })))))
+        if rpio::journal::woken_by(a, activation) && plan.ref == generated.ref ->
+      Moved({
+        from: current,
+        by: Accepted({ legitimate_activation: a.activation_id, legitimate_result }),
+        to: Active({ analysis_activation: e.analysis_activation, opened: e.opened, since: now, last_plan_rejection: e.last_plan_rejection, plan: Some({ activation: p.activation, plan: p.plan, accepted: Some({
+          legitimate_activation: a.activation_id, legitimate_result,
+        }) }) }),
+      }),
+
+    // An Execute woken by the acceptance it acts on, applying that plan.
+    (Active({ plan: Some({ plan: accepted_plan, accepted: Some(acc), .. }), .. }),
+     Some((a, Executed(Applied({ plan, effect })))))
+        if rpio::journal::woken_by(a, acc.legitimate_activation) && plan.ref == accepted_plan.ref ->
+      Closed({ from: current, how: Applied({ effect }), at: now }),
+
+    (Active({ plan: Some({ plan: accepted_plan, accepted: Some(acc), .. }), .. }),
+     Some((a, Executed(NotApplied({ plan, reason })))))
+        if rpio::journal::woken_by(a, acc.legitimate_activation) && plan.ref == accepted_plan.ref ->
+      Closed({ from: current, how: NotApplied({ reason }), at: now }),
+
+    // An abort by an activation the episode already holds closes it.
+    (_, Some((a, Aborted({ reason })))) if within(current, a) ->
+      Closed({ from: current, how: Aborted({ reason }), at: now }),
+
+    (from, Some((activation, outcome))) -> OutOfProtocol({ from, activation, outcome }),
+    _ -> Stayed,
+  }
+
+def episode_after<K, D>(current: Episode<K, D>, step: EpisodeStep<K, D>) -> Episode<K, D> =
+  match(step) { Moved({ to, .. }) -> to, Closed(_) -> EpisodeIdle, _ -> current }
+
+
+
+// loop: the cycle and episode layers for one sequential loop
+// `protocol_followed` describes this tick's transition; it is not a held
+// run-level verdict. Timing spans measure the state before this tick, ending
+// at a closing record's own instant or otherwise at journal `now`. Clock-only
+// ticks age unchanged state; Knowledge/Incomplete-only ticks have no spans.
+// Budgets belong to the spec. These obligations use callback End outcomes;
+// application publication milestones are tracked by maplek::events.
+type OutcomeTiming<D> = Struct<
+  plan: Option<TimeInterval<D>>, validation: Option<TimeInterval<D>>,
+  execution: Option<TimeInterval<D>>, episode: Option<TimeInterval<D>>
+>
+type LoopResult<K, D> = Struct<cycle: Cycle<D>, cycle_step: CycleStep<D>, episode: Episode<K, D>,
+  episode_step: EpisodeStep<K, D>, protocol_followed: Bool,
+  cycle_before: Cycle<D>, episode_before: Episode<K, D>,
+  timing: OutcomeTiming<D>, role_span: Option<TimeInterval<D>>>
+def loop<K, E, M, D>(observation: Observation<K, E, M, D>)
+    -> LoopResult<K, D> = {
+    cycle, cycle_step, episode, episode_step,
+    cycle_before, episode_before,
+    protocol_followed: !matches(cycle_step, OutOfProtocol(_)) && !matches(episode_step, OutOfProtocol(_)),
+    timing: { plan, validation, execution, episode: whole },
+    role_span
+  }
+where {
+  now: Option<Instant<D>> = rpio::journal::timing::now(observation)
+  cycle_before: Cycle<D> = default(cycle[1], Idle)
+  cycle_step: CycleStep<D> = cycle_transition(cycle_before, observation)
+  cycle: Cycle<D> = cycle_after(cycle_before, cycle_step)
+  episode_before: Episode<K, D> = default(episode[1], EpisodeIdle)
+  episode_step: EpisodeStep<K, D> = episode_transition(observation, episode_before)
+  episode: Episode<K, D> = episode_after(episode_before, episode_step)
+  role_end: Option<Instant<D>> =
+    rpio::journal::timing::span_end(observation, now, matches(cycle_step, Moved(_)))
+  stage_end: Option<Instant<D>> =
+    rpio::journal::timing::span_end(observation, now, matches(episode_step, Moved(_) | Closed(_)))
+  episode_end: Option<Instant<D>> =
+    rpio::journal::timing::span_end(observation, now, matches(episode_step, Closed(_)))
+  role_span: Option<TimeInterval<D>> = match(cycle_before) {
+    Active({ role_since, .. }) -> std::time::since(std::option::some(role_since), role_end), _ -> None,
+  }
+  plan: Option<TimeInterval<D>> = match(episode_before) {
+    Active({ plan: None, since, .. }) -> std::time::since(std::option::some(since), stage_end), _ -> None,
+  }
+  validation: Option<TimeInterval<D>> = match(episode_before) {
+    Active({ plan: Some({ accepted: None, .. }), since, .. }) -> std::time::since(std::option::some(since), stage_end), _ -> None,
+  }
+  execution: Option<TimeInterval<D>> = match(episode_before) {
+    Active({ plan: Some({ accepted: Some(_), .. }), since, .. }) -> std::time::since(std::option::some(since), stage_end), _ -> None,
+  }
+  whole: Option<TimeInterval<D>> = match(episode_before) {
+    Active({ opened, .. }) -> std::time::since(std::option::some(opened), episode_end), _ -> None,
+  }
+}

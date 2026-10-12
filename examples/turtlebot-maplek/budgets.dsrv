@@ -1,0 +1,8 @@
+use experimental::high_level_dsrv
+use turtlebot::{JournalTime}
+use std::time::{Duration}
+
+// Illustrative deadlines in journal seconds, comparable only within JournalTime.
+const plan_callback_budget: Duration<JournalTime> = std::time::seconds(1.0)
+const apply_spin_budget: Duration<JournalTime> = std::time::seconds(1.0)
+const handoff_budget: Duration<JournalTime> = std::time::seconds(0.5)

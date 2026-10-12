@@ -32,6 +32,8 @@ mod generic_tests;
 #[cfg(test)]
 mod lexical_tests;
 #[cfg(test)]
+mod library_coherence_tests;
+#[cfg(test)]
 mod local_stream_tests;
 #[cfg(test)]
 mod match_tests;

@@ -1,0 +1,174 @@
+// MAPLE-K progress observed through application publications.
+// Selectors interpret application payloads; this module owns causal matching,
+// protocol state and intervals. Each instance observes one sequential run.
+// A callback End and a publication are separate evidence: a successful End
+// can reveal a missing publication, but never supplies that publication.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use std::option::{self, Option}
+use std::time::{Instant, TimeInterval}
+use std::timing
+use rpio::journal::{self, Activation, ActivationKey, EmissionKey, Role, Outcome}
+use rpio::journal::timing::{Observation}
+
+// Meanings assigned to application events. An unselected event is None.
+type Milestone = Union<Observation, Analysis, Anomaly, Proposal, Rejection, Acceptance, Execution, Abort>
+internal type Publication = Struct<activation: Activation, key: EmissionKey, milestone: Milestone>
+
+internal def publication<K, E, M, D>(observation: Observation<K, E, M, D>, classify: (E -> Option<Milestone>))
+    -> Option<Publication> = match(rpio::journal::timing::record_of(observation)) {
+  Some(Phase({ activation, step: Event({ emission, payload, .. }), .. })) ->
+    std::option::map(classify(payload), \milestone: Milestone ->
+      { activation, key: rpio::journal::emission_key(activation, emission), milestone }),
+  _ -> None,
+}
+
+internal def ending<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<(Activation, Outcome<K>)> =
+  std::option::and_then(rpio::journal::timing::record_of(observation),
+    \record: journal::Record<K, E, M> -> rpio::journal::end_outcome(record))
+
+type SensingState = Union<Idle, AwaitingObservation: ActivationKey, AwaitingAnalysis: EmissionKey>
+type SensingTiming<D> = Struct<observation: Option<TimeInterval<D>>, analysis: Option<TimeInterval<D>>>
+type SensingResult<D> = Struct<state: SensingState, timing: SensingTiming<D>,
+  observed: Bool, analysed: Bool, missing_publication: Option<Milestone>, overlapping_request: Bool>
+
+// End of the activation that currently owes the observation or analysis.
+internal def sensing_ended<K>(before: SensingState, ended: Option<(Activation, Outcome<K>)>) -> Bool =
+  match(Tuple(before, ended)) {
+    (AwaitingObservation(owner), Some((a, _))) -> rpio::journal::activation_key(a) == owner,
+    (AwaitingAnalysis(wake), Some((a @ { role: Analysis, .. }, _))) -> rpio::journal::caused_by(a, wake),
+    _ -> false,
+  }
+
+internal def sensing_after(before: SensingState, request: Option<ActivationKey>, published: Option<Publication>, ended: Bool)
+    -> SensingState = match(Tuple(before, request, published)) {
+  (Idle, Some(owner), _) -> SensingState::AwaitingObservation(owner),
+  (AwaitingObservation(owner), _, Some({ activation, key, milestone: Observation }))
+      if rpio::journal::activation_key(activation) == owner -> SensingState::AwaitingAnalysis(key),
+  (AwaitingAnalysis(wake), _, Some({ activation, milestone: Analysis, .. }))
+      if rpio::journal::caused_by(activation, wake) -> SensingState::Idle,
+  _ if ended -> SensingState::Idle,
+  _ -> before,
+}
+
+// A selected Monitor request owes an observation, whose waking emission then
+// identifies the analysis. An owner End retires the pending request; required
+// selects which successful outcomes must also have published a milestone.
+def sensing<K, E, M, D, request: (M -> Bool), classify: (E -> Option<Milestone>),
+                 required: (Outcome<K> -> Option<Milestone>)>(observation: Observation<K, E, M, D>) -> SensingResult<D> = {
+    state,
+    timing: { observation: capture.span, analysis: analysis.span },
+    observed: matches(Tuple(before, state), (AwaitingObservation(_), AwaitingAnalysis(_))),
+    analysed: matches(Tuple(before, state, published),
+      (AwaitingAnalysis(_), Idle, Some({ milestone: Analysis, .. }))) && !owner_ended,
+    missing_publication: missing,
+    overlapping_request: std::option::is_some(requested) && !matches(before, Idle)
+  }
+where {
+  before: SensingState = default(state[1], SensingState::Idle)
+  requested: Option<ActivationKey> = match(rpio::journal::timing::record_of(observation)) {
+    Some(record) -> std::option::map(rpio::journal::requested(record, Role::Monitor, request),
+      \a: Activation -> rpio::journal::activation_key(a)),
+    None -> None,
+  }
+  published: Option<Publication> = publication(observation, classify)
+  ended: Option<(Activation, Outcome<K>)> = ending(observation)
+  owner_ended: Bool = sensing_ended(before, ended)
+  state: SensingState = sensing_after(before, requested, published, owner_ended)
+  now: Option<Instant<D>> = rpio::journal::timing::now(observation)
+  at: Option<Instant<D>> = rpio::journal::timing::phase_time(observation)
+  capture = std::timing::while(matches(state, AwaitingObservation(_)), now, at)
+  analysis = std::timing::while(matches(state, AwaitingAnalysis(_)), now, at)
+  missing: Option<Milestone> = match(Tuple(before, ended)) {
+    (AwaitingObservation(_), Some((_, outcome))) if owner_ended
+        && matches(required(outcome), Some(Observation)) -> Some(Milestone::Observation),
+    (AwaitingAnalysis(_), Some((_, outcome))) if owner_ended
+        && matches(required(outcome), Some(Analysis)) -> Some(Milestone::Analysis),
+    _ -> None,
+  }
+}
+
+// The next milestone must come from the successor of the named emission.
+// Rejection permits another plan; the whole episode deadline keeps running.
+type AdaptationState = Union<Idle, AwaitingPlan: EmissionKey,
+                            AwaitingValidation: EmissionKey, AwaitingExecution: EmissionKey>
+type AdaptationTiming<D> = Struct<plan: Option<TimeInterval<D>>, validation: Option<TimeInterval<D>>,
+  execution: Option<TimeInterval<D>>, episode: Option<TimeInterval<D>>>
+type AdaptationResult<D> = Struct<state: AdaptationState, timing: AdaptationTiming<D>,
+  executed: Bool, missing_publication: Option<Milestone>, protocol_followed: Bool>
+
+internal def pending(state: AdaptationState) -> Option<EmissionKey> = match(state) {
+  Idle -> None,
+  AwaitingPlan(wake) -> Some(wake),
+  AwaitingValidation(wake) -> Some(wake),
+  AwaitingExecution(wake) -> Some(wake),
+}
+
+internal def adaptation_after<K>(before: AdaptationState, published: Option<Publication>,
+                        ended: Option<(Activation, Outcome<K>)>, closes: (Outcome<K> -> Bool)) -> AdaptationState =
+  match(Tuple(before, published)) {
+    (Idle, Some({ activation: { role: Analysis, .. }, key, milestone: Anomaly })) ->
+      AdaptationState::AwaitingPlan(key),
+    (AwaitingPlan(wake), Some({ activation: a @ { role: Plan, .. }, key, milestone: Proposal }))
+        if rpio::journal::caused_by(a, wake) -> AdaptationState::AwaitingValidation(key),
+    (AwaitingValidation(wake), Some({ activation: a @ { role: Legitimate, .. }, key, milestone: Rejection }))
+        if rpio::journal::caused_by(a, wake) -> AdaptationState::AwaitingPlan(key),
+    (AwaitingValidation(wake), Some({ activation: a @ { role: Legitimate, .. }, key, milestone: Acceptance }))
+        if rpio::journal::caused_by(a, wake) -> AdaptationState::AwaitingExecution(key),
+    (AwaitingExecution(wake), Some({ activation: a @ { role: Execute, .. }, milestone: Execution, .. }))
+        if rpio::journal::caused_by(a, wake) -> AdaptationState::Idle,
+    (_, Some({ activation, milestone: Abort, .. }))
+        if std::option::is_some_and(pending(before), \wake: EmissionKey -> rpio::journal::caused_by(activation, wake)) ->
+      AdaptationState::Idle,
+    _ -> match(ended) {
+      Some((a, outcome)) if closes(outcome)
+          && std::option::is_some_and(pending(before), \wake: EmissionKey -> rpio::journal::caused_by(a, wake)) ->
+        AdaptationState::Idle,
+      _ -> before,
+    },
+  }
+
+internal def allowed(before: AdaptationState, published: Option<Publication>) -> Bool =
+  match(Tuple(before, published)) {
+    (Idle, Some({ activation: { role: Analysis, .. }, milestone: Anomaly, .. })) -> true,
+    (AwaitingPlan(wake), Some({ activation: a @ { role: Plan, .. }, milestone: Proposal, .. }))
+        if rpio::journal::caused_by(a, wake) -> true,
+    (AwaitingValidation(wake), Some({ activation: a @ { role: Legitimate, .. }, milestone: Rejection | Acceptance, .. }))
+        if rpio::journal::caused_by(a, wake) -> true,
+    (AwaitingExecution(wake), Some({ activation: a @ { role: Execute, .. }, milestone: Execution, .. }))
+        if rpio::journal::caused_by(a, wake) -> true,
+    (_, Some({ milestone: Anomaly | Proposal | Rejection | Acceptance | Execution, .. })) -> false,
+    _ -> true,
+  }
+
+// Completion is a selected publication. An unrelated, repeated or misplaced
+// milestone cannot move progress or reset a deadline. Explicit failure outcomes
+// selected by closes retire it; Incomplete and EOF never do.
+def adaptation<K, E, M, D, classify: (E -> Option<Milestone>),
+                    required: (Outcome<K> -> Option<Milestone>), closes: (Outcome<K> -> Bool)>(
+                    observation: Observation<K, E, M, D>) -> AdaptationResult<D> = {
+    state,
+    timing: { plan: plan.span, validation: validation.span, execution: execution.span, episode: episode.span },
+    executed: matches(Tuple(before, state, published),
+      (AwaitingExecution(_), Idle, Some({ milestone: Execution, .. }))),
+    missing_publication: missing,
+    protocol_followed: allowed(before, published)
+  }
+where {
+  before: AdaptationState = default(state[1], AdaptationState::Idle)
+  published: Option<Publication> = publication(observation, classify)
+  ended: Option<(Activation, Outcome<K>)> = ending(observation)
+  state: AdaptationState = adaptation_after(before, published, ended, closes)
+  now: Option<Instant<D>> = rpio::journal::timing::now(observation)
+  at: Option<Instant<D>> = rpio::journal::timing::phase_time(observation)
+  plan = std::timing::while(matches(state, AwaitingPlan(_)), now, at)
+  validation = std::timing::while(matches(state, AwaitingValidation(_)), now, at)
+  execution = std::timing::while(matches(state, AwaitingExecution(_)), now, at)
+  episode = std::timing::while(!matches(state, Idle), now, at)
+  missing: Option<Milestone> = match(Tuple(state, ended)) {
+    (AwaitingPlan(wake), Some((a @ { role: Plan, .. }, outcome)))
+        if rpio::journal::caused_by(a, wake) && matches(required(outcome), Some(Proposal)) -> Some(Milestone::Proposal),
+    (AwaitingExecution(wake), Some((a @ { role: Execute, .. }, outcome)))
+        if rpio::journal::caused_by(a, wake) && matches(required(outcome), Some(Execution)) -> Some(Milestone::Execution),
+    _ -> None,
+  }
+}

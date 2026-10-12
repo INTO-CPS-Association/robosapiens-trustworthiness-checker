@@ -49,19 +49,9 @@ impl Catalogue {
         roots: &["std", "rpio"],
         modules: &[
             EmbeddedModule {
-                path: &["rpio", "journal"],
-                file: "rpio/journal.dsrv",
-                source: include_str!("std/rpio/journal.dsrv"),
-            },
-            EmbeddedModule {
-                path: &["rpio", "journal", "knowledge"],
-                file: "rpio/journal/knowledge.dsrv",
-                source: include_str!("std/rpio/journal/knowledge.dsrv"),
-            },
-            EmbeddedModule {
-                path: &["rpio", "journal", "timing"],
-                file: "rpio/journal/timing.dsrv",
-                source: include_str!("std/rpio/journal/timing.dsrv"),
+                path: &["std", "option"],
+                file: "std/option.dsrv",
+                source: include_str!("std/option.dsrv"),
             },
             EmbeddedModule {
                 path: &["std", "time"],
@@ -69,19 +59,74 @@ impl Catalogue {
                 source: include_str!("std/time.dsrv"),
             },
             EmbeddedModule {
-                path: &["std", "timing"],
-                file: "std/timing.dsrv",
-                source: include_str!("std/timing.dsrv"),
-            },
-            EmbeddedModule {
                 path: &["std", "stream"],
                 file: "std/stream.dsrv",
                 source: include_str!("std/stream.dsrv"),
             },
             EmbeddedModule {
-                path: &["std", "option"],
-                file: "std/option.dsrv",
-                source: include_str!("std/option.dsrv"),
+                path: &["std", "timing"],
+                file: "std/timing.dsrv",
+                source: include_str!("std/timing.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal"],
+                file: "rpio/journal.dsrv",
+                source: include_str!("std/rpio/journal.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "timing"],
+                file: "rpio/journal/timing.dsrv",
+                source: include_str!("std/rpio/journal/timing.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view"],
+                file: "rpio/journal/view.dsrv",
+                source: include_str!("std/rpio/journal/view.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view", "timing"],
+                file: "rpio/journal/view/timing.dsrv",
+                source: include_str!("std/rpio/journal/view/timing.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view", "knowledge"],
+                file: "rpio/journal/view/knowledge.dsrv",
+                source: include_str!("std/rpio/journal/view/knowledge.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view", "maplek"],
+                file: "rpio/journal/view/maplek.dsrv",
+                source: include_str!("std/rpio/journal/view/maplek.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view", "maplek", "events"],
+                file: "rpio/journal/view/maplek/events.dsrv",
+                source: include_str!("std/rpio/journal/view/maplek/events.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "view", "adapt"],
+                file: "rpio/journal/view/adapt.dsrv",
+                source: include_str!("std/rpio/journal/view/adapt.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "state"],
+                file: "rpio/journal/state.dsrv",
+                source: include_str!("std/rpio/journal/state.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "journal", "knowledge"],
+                file: "rpio/journal/knowledge.dsrv",
+                source: include_str!("std/rpio/journal/knowledge.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "maplek", "events"],
+                file: "rpio/maplek/events.dsrv",
+                source: include_str!("std/rpio/maplek/events.dsrv"),
+            },
+            EmbeddedModule {
+                path: &["rpio", "maplek"],
+                file: "rpio/maplek.dsrv",
+                source: include_str!("std/rpio/maplek.dsrv"),
             },
         ],
     };

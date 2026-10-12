@@ -1,0 +1,66 @@
+use experimental::high_level_dsrv
+use experimental::{newtypes}
+
+mod rpio_loop_nominal
+use rpio_loop_nominal::{Knowledge, Emitted, Trigger}
+// The native wire stream and the shared property view are distinct: the
+// native observation and its record are imported by name, the view's
+// libraries by module.
+use rpio::journal::{self}
+use rpio::journal::timing::{Observation}
+use rpio::journal::view::{self, Role, ServiceOutcome}
+use rpio::journal::view::adapt
+use rpio::journal::view::maplek
+use rpio::journal::view::timing
+use std::option::{self, Option}
+
+newtype JournalTime = Unit
+
+in native_observation: Observation<Knowledge, Emitted, Trigger, JournalTime>
+// One processing position per admitted journal line, independent of the
+// store's write sequence and of the activation tokens.
+aux native_record: Option<journal::Record<Knowledge, Emitted, Trigger>> =
+  match(native_observation.record) {
+    Some(r) -> Some(r.value),
+    None -> None,
+  }
+aux processing_position: Int = default(processing_position[1], 0)
+  + match(native_record) { Some(_) -> 1, None -> 0 }
+aux observation: timing::Observation<Knowledge, Emitted, Trigger, JournalTime> =
+  rpio::journal::view::adapt::observation(native_observation,
+    {epoch: "nominal.jsonl", seq: processing_position}, rpio_loop_nominal::journal_clock,
+    \trigger: Trigger -> rpio_loop_nominal::receive(trigger),
+    \event: Emitted -> event,
+    \values: List<journal::Resolved<Knowledge>> -> rpio_loop_nominal::cite(values))
+
+aux loop = rpio::journal::view::maplek::loop(observation)
+aux plan_timing = rpio::journal::view::timing::activation_timing::<Role::Plan>(observation)
+aux swap_timing = rpio::journal::view::timing::service_timing::<"swap_model">(observation)
+aux selected_handoff: Option<timing::Transfer> = match(rpio::journal::view::timing::record_of(observation)) {
+  Some(Phase({ activation, step: Event({ topic: "plan_generated", sequence_no, .. }), .. })) ->
+    Some({ predecessor: activation, successor: Role::Legitimate,
+           wake: { activation: rpio::journal::view::identity(activation), sequence_no } }),
+  _ -> None,
+}
+aux plan_handoff = rpio::journal::view::timing::handoff(observation, selected_handoff, None)
+
+out cycle_active: Bool = matches(loop.cycle, Active(_))
+out episode_active: Bool = matches(loop.episode, Active(_))
+out moved: Bool = matches(loop.cycle_step, Moved(_))
+out episode_moved: Bool = matches(loop.episode_step, Moved(_))
+out episode_closed: Bool = matches(loop.episode_step, Closed(_))
+out protocol_followed: Bool = loop.protocol_followed
+out plan_pending: Bool = plan_timing.pending
+out plan_ended: Bool = plan_timing.ended
+out plan_overlapping_start: Bool = plan_timing.overlapping_start
+out plan_has_span: Bool = std::option::is_some(plan_timing.span)
+out swap_pending: Bool = swap_timing.pending
+out swap_completed: Bool = match(swap_timing.ended) {
+  Some(Completed(Delivered)) -> true,
+  _ -> false,
+}
+out swap_has_span: Bool = std::option::is_some(swap_timing.span)
+out handoff_pending: Bool = plan_handoff.pending
+out handoff_gap: Bool = match(plan_handoff.terminal) { Some(Gap(_)) -> true, _ -> false }
+out handoff_overlap: Bool = match(plan_handoff.terminal) { Some(Overlap) -> true, _ -> false }
+out handoff_has_span: Bool = std::option::is_some(plan_handoff.span)

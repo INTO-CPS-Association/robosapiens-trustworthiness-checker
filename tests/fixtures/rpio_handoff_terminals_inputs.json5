@@ -1,0 +1,17 @@
+{
+  sources: {
+    journal: {
+      kind: "rpio-observation-clock-file",
+      variable: "observation",
+      journal_clock: "fixture.journal",
+      files: ["fixtures/rpio/handoff-terminals.jsonl"],
+      capture_checks: [
+        {
+          records: 8,
+          sha256: "4095e3253867554c44f3cdac4c2b929cb1bcd6f4472afa4721fc9a97e3b4787b",
+          journal_clock: "fixture.journal",
+        },
+      ],
+    },
+  },
+}

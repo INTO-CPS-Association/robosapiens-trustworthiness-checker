@@ -1,0 +1,19 @@
+{
+  "sources": {
+    "journal": {
+      "kind": "rpio-observation-clock-file",
+      "variable": "native_observation",
+      "journal_clock": "turtlebot.journal",
+      "files": [
+        "examples/turtlebot-maplek/native/missing-read.jsonl"
+      ],
+      "capture_checks": [
+        {
+          "records": 31,
+          "sha256": "2a47c7cb3cd503f85a22db0a0baaa6dabd8c1f93d7e4dbec1442d4cc047ac2fd",
+          "journal_clock": "turtlebot.journal"
+        }
+      ]
+    }
+  }
+}

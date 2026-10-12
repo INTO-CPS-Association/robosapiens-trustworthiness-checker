@@ -1,0 +1,94 @@
+// Journal lifecycle properties for the same TurtleBot tutorial schema.
+// ANCHOR: lifecycle_setup
+use experimental::high_level_dsrv
+mod turtlebot
+mod native_adapter
+mod budgets
+use native_adapter
+use rpio::journal::view::adapt
+use turtlebot
+use rpio::journal::{self}
+use rpio::journal::view::{Role}
+use rpio::journal::view::timing
+use std::option::{self, Option}
+use std::time::{Duration}
+use budgets
+
+in native_observation: turtlebot::NativeObservation
+// Processing count includes each admitted Knowledge row and phase fact. It is
+// independent of immutable write sequence and of the activation UUID token.
+aux native_record: Option<journal::Record<turtlebot::Knowledge, turtlebot::NativeEvent, turtlebot::NativeTrigger>> =
+  match(native_observation.record) {
+    Some(r) -> Some(r.value),
+    None -> None,
+  }
+aux processing_position: Int = default(processing_position[1], 0)
+  + match(native_record) { Some(_) -> 1, None -> 0 }
+aux observation: turtlebot::ViewObservation = rpio::journal::view::adapt::observation(native_observation,
+  {epoch: "tutorial-run", seq: processing_position}, native_adapter::journal_clock,
+  \trigger: turtlebot::NativeTrigger -> native_adapter::receive(trigger),
+  \event: turtlebot::NativeEvent -> native_adapter::message(event),
+  \values: List<journal::Resolved<turtlebot::Knowledge>> -> native_adapter::cite(values))
+// ANCHOR_END: lifecycle_setup
+
+// ANCHOR: callback
+aux plan_callback = rpio::journal::view::timing::activation_timing::<Role::Plan>(observation)
+out plan_callback_pending: Bool = plan_callback.pending
+out plan_callback_ended: Bool = plan_callback.ended
+// A Plan callback ends within its budget.
+out plan_callback_on_time: Bool =
+  !std::time::exceeds(plan_callback.span, budgets::plan_callback_budget)
+// No Plan callback starts while another is running.
+out plan_callback_single_activation: Bool = !plan_callback.overlapping_start
+// ANCHOR_END: callback
+
+// ANCHOR: service
+aux apply_spin = rpio::journal::view::timing::service_timing::<"apply_spin_config">(observation)
+out apply_spin_pending: Bool = apply_spin.pending
+out apply_spin_ended: Bool = std::option::is_some(apply_spin.ended)
+// A request is not overdue against its budget.
+out apply_spin_on_time: Bool =
+  !std::time::exceeds(apply_spin.span, budgets::apply_spin_budget)
+// No request starts while another is open.
+out apply_spin_single_request: Bool = !apply_spin.overlapping_start
+// A request that finishes is delivered.
+out apply_spin_delivered: Bool = match(apply_spin.ended) {
+  Some(Completed(Delivered)) -> true,
+  Some(_) -> false,
+  None -> true,
+}
+// ANCHOR_END: service
+
+// ANCHOR: handoff
+aux record: Option<turtlebot::Record> = rpio::journal::view::timing::record_of(observation)
+aux selected: Option<timing::Transfer> = match(record) {
+  Some(Phase({ activation: a @ { role: Plan, .. },
+    step: Event({ topic: "planning_completed", sequence_no, .. }), .. })) ->
+    Some({ predecessor: a, successor: Role::Legitimate,
+           wake: { activation: rpio::journal::view::identity(a), sequence_no } }),
+  _ -> None,
+}
+aux retained_transfer: Option<timing::Transfer> =
+  std::option::or_else(selected, default(retained_transfer[1], None))
+aux withdrawn: Option<timing::TransferWithdrawal> =
+  match(Tuple(record, retained_transfer)) {
+  (Some(Phase({ activation: a, step: End({ outcome: Aborted(_), .. }), .. })), Some(t))
+    if rpio::journal::view::timing::same(a, t.predecessor) ->
+      Some({ transfer: t, reason: "planner aborted" }),
+  _ -> None,
+}
+aux handoff = rpio::journal::view::timing::handoff(observation, selected, withdrawn)
+out handoff_pending: Bool = handoff.pending
+out handoff_resolved: Bool = std::option::is_some(handoff.terminal)
+// Legitimate starts within its budget after the selected Plan ends.
+out handoff_on_time: Bool = !std::time::exceeds(handoff.span, budgets::handoff_budget)
+// No transfer is selected while another is waiting.
+out handoff_single_transfer: Bool = !handoff.conflict
+// A resolved handoff is sequential: Legitimate starts after Plan ends.
+out handoff_sequential: Bool = match(handoff.terminal) {
+  Some(Gap(_)) -> true,
+  Some(_) -> false,
+  None -> true,
+}
+out handoff_withdrawn: Bool = matches(handoff.terminal, Some(Withdrawn(_)))
+// ANCHOR_END: handoff

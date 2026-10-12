@@ -42,12 +42,30 @@ fn every_shipped_specification_parses_checks_and_elaborates() {
         paths.len()
     );
 
-    // Two shipped files are not specifications this entry point accepts:
-    // one carries distribution constraints, parsed elsewhere, and one is a
-    // fixture whose literal is deliberately invalid.
-    const NOT_ACCEPTED: [&str; 2] = [
+    // This string-only entry point does not accept distribution constraints,
+    // the deliberately invalid literal fixture, roots with filesystem
+    // modules, or modules that import a sibling. File-backed runtime tests
+    // cover those modules, including the TurtleBot tutorial's executable
+    // models and the ScrewDetection roots (`tests/screw_detection_roots.rs`).
+    // Their adapters are modules, requiring the root's declared domain/clock
+    // peers; the same complete roots exercise them through actual native input.
+    const NOT_ACCEPTED: [&str; 16] = [
+        "examples/screw-detection/evidence.dsrv",
+        "examples/screw-detection/pv-a.dsrv",
+        "examples/screw-detection/pv-b.dsrv",
+        "examples/screw-detection/sahar.dsrv",
+        "examples/screw-detection/strengthened.dsrv",
+        "examples/screw-detection/v2_adapter.dsrv",
         "examples/simple_add_distributable_dist_constraints.dsrv",
+        "examples/turtlebot-maplek/budgets.dsrv",
+        "examples/turtlebot-maplek/lifecycle.dsrv",
+        "examples/turtlebot-maplek/properties.dsrv",
+        "examples/turtlebot-maplek/native_adapter.dsrv",
         "tests/fixtures/dsrv_syntax_revision_invalid_literal.dsrv",
+        "tests/fixtures/maplek_stream_function_slice.dsrv",
+        "tests/fixtures/rpio_loop.dsrv",
+        "tests/fixtures/rpio_presence_gate.dsrv",
+        "tests/fixtures/stream_function.dsrv",
     ];
 
     // Fixtures that are ill-typed on purpose, to test that checking rejects

@@ -1,0 +1,20 @@
+use experimental::{modules, functions, local_streams}
+mod maplek_timing_primitives
+mod maplek_timing_views
+use maplek_timing_primitives
+use maplek_timing_views
+
+def nonnegative(sample: Int) -> Bool = sample >= 0
+
+in sample: Int
+aux pair = maplek_timing_views::pair::<2, nonnegative>(sample)
+aux independent = maplek_timing_primitives::accumulate::<3, nonnegative>(sample)
+out raw_accepted: Bool = pair.raw.accepted
+out raw_count: Int = pair.raw.count
+out raw_total: Int = pair.raw.weighted_total
+out shifted_accepted: Bool = pair.shifted.accepted
+out shifted_count: Int = pair.shifted.count
+out shifted_total: Int = pair.shifted.weighted_total
+out independent_accepted: Bool = independent.accepted
+out independent_count: Int = independent.count
+out independent_total: Int = independent.weighted_total

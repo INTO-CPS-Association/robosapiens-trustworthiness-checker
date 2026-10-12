@@ -1,0 +1,69 @@
+// Classic native observations -> resolved logical view used by the coordinator.
+// Application functions select message meaning and named evidence. Processing
+// position and the clock label are supplied independently of Knowledge's write
+// sequence; activation UUIDs are never replaced by processing indices.
+use experimental::{modules, functions, generics, tagged_unions, pattern_matching}
+use rpio::journal::{self}
+use rpio::journal::timing
+use rpio::journal::view::{self, Activation, Position, Arrival, Received, Slot, Record, Step}
+use rpio::journal::view::timing::{Observation}
+use std::option::{self, Option}
+
+def activation(a: journal::Activation) -> Activation = {
+  epoch: a.run_id, start_seq: a.activation_id, producer: a.producer,
+  role: a.role, loop: a.loop,
+  caused_by: std::option::map(a.caused_by, \e: journal::Emission -> {
+    activation: {epoch: a.run_id, start_seq: e.activation_id}, sequence_no: e.ordinal }),
+}
+
+def named<K>(references: journal::KnowledgeRefs<K>) -> List<journal::Resolved<K>> = match(references) {
+  Nothing -> [], One(value) -> [value], Several(values) -> values,
+}
+
+def record<K, E, M, P, R>(
+  input: journal::Record<K, E, M>, position: Position, clock: Str,
+  receive: (M -> Received<R>), message: (E -> P),
+  cite: (List<journal::Resolved<K>> -> List<Slot<K>>)) -> Record<K, P, R> = match(input) {
+  Knowledge(k) -> Knowledge({position,
+    arrival: {journal_time: k.arrival.journal_time, journal_clock: clock}, version: k.version}),
+  Incomplete(p) -> Incomplete({position,
+    arrival: {journal_time: p.arrival.journal_time, journal_clock: clock}, activation: activation(p.activation),
+    native: input, reason: "unresolved native Knowledge evidence"}),
+  Phase(p) if matches(p.step, Read(_)) && matches(p.knowledge, Several(_)) -> Incomplete({position,
+    arrival: {journal_time: p.arrival.journal_time, journal_clock: clock}, activation: activation(p.activation),
+    native: input, reason: "one Read names multiple Knowledge values"}),
+  Phase(p) if matches(p.step, Write(_)) && !matches(p.knowledge, One(_)) -> Incomplete({position,
+    arrival: {journal_time: p.arrival.journal_time, journal_clock: clock}, activation: activation(p.activation),
+    native: input, reason: "one Write must name one Knowledge commit"}),
+  Phase(p) -> Phase({
+    position, arrival: {journal_time: p.arrival.journal_time, journal_clock: clock},
+    activation: activation(p.activation),
+    evidence: if matches(p.step, Event(_)) then cite(named(p.knowledge)) else [],
+    step: converted_step(p.step, p.knowledge, receive, message),
+  }),
+}
+
+def converted_step<K, E, M, P, R>(input: journal::Step<K, E, M>,
+  knowledge: journal::KnowledgeRefs<K>, receive: (M -> Received<R>), message: (E -> P)) -> Step<K, P, R> = match(input) {
+  Start(s) -> Start(receive(s.trigger)),
+  Read(s) -> Read({key: s.key, value: match(knowledge) { One(value) -> Some(value), _ -> None }}),
+  Write(s) -> Write({key: s.key, value: List.head(named(knowledge))}),
+  Event(s) -> Event({kind: Event, topic: s.name, sequence_no: s.emission.ordinal, message: message(s.payload)}),
+  ServiceStarted(s) -> ServiceStarted({service: s.service, request_id: s.request_id}),
+  ServiceCompleted(s) -> ServiceCompleted({service: s.service, request_id: s.request_id, outcome: s.outcome}),
+  End(s) -> End({outcome: s.outcome}),
+}
+
+// No native record is discarded. Clock-only ticks remain record-free; each
+// Knowledge history notice remains visible even when its matching Phase Write
+// is the coordinator's contextual commit boundary. Selectors are pure functions.
+def observation<K, E, M, P, R, D>(
+  input: timing::Observation<K, E, M, D>, position: Position, clock: Str,
+  receive: (M -> Received<R>), message: (E -> P),
+  cite: (List<journal::Resolved<K>> -> List<Slot<K>>)) -> Observation<K, P, R, D> = {
+  record: match(input.record) {
+    Some(r) -> Some({time: r.time, value: record(r.value, position, clock, receive, message, cite)}),
+    None -> None,
+  },
+  clock: input.clock,
+}

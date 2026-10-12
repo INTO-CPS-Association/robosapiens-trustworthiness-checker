@@ -1,0 +1,33 @@
+{
+  "records": 28,
+  "sha256": "44c2e3be55045318f13c33e383c197f99e72e73728fdb0031dfcc4eb2764accb",
+  "journal_clock": "turtlebot.journal",
+  "semantic_record_ticks": [
+    0,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    10,
+    11,
+    12,
+    13,
+    14,
+    16,
+    17,
+    18,
+    19,
+    20,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27
+  ],
+  "archived_sha256": "d9a0ca15650f8f4622d167915420989438de6c53e5213c860026252d7de6b382",
+  "run_id": "tutorial-run",
+  "store_epoch": "tutorial-epoch"
+}

@@ -1,0 +1,72 @@
+// The AC-TS-5 (G1) presence gate over the shipped RPIO libraries: each
+// output is either retained state, which a tick without a record must leave
+// as it was, or what this tick observed. The native journal is read through
+// the shared property view, where any record's admission advances "now".
+use experimental::high_level_dsrv
+use experimental::{newtypes}
+
+mod rpio_loop_nominal
+use rpio_loop_nominal::{Knowledge, Emitted, Trigger, EntropyHistory}
+// The native wire stream and the shared property view are distinct: the
+// native observation and its record are imported by name, the view's
+// libraries by module.
+use rpio::journal::{self}
+use rpio::journal::timing::{Observation}
+use rpio::journal::view::adapt
+use rpio::journal::view::maplek::{self, Cycle, Episode, CycleStep, EpisodeStep}
+use rpio::journal::view::knowledge::{self, Access}
+use rpio::journal::view::{Role, Version, Resolved, Record}
+use rpio::journal::view::timing
+use std::option::{self, Option}
+use std::time::{Instant, TimeInterval, ClockSample}
+
+newtype JournalTime = Unit
+
+def project_window(k: Knowledge) -> Option<EntropyHistory> = match(k) { EntropyHistory(v) -> Some(v), _ -> None }
+
+in native_observation: Observation<Knowledge, Emitted, Trigger, JournalTime>
+// One processing position per admitted journal line, independent of the
+// store's write sequence and of the activation tokens.
+aux native_record: Option<journal::Record<Knowledge, Emitted, Trigger>> =
+  match(native_observation.record) {
+    Some(r) -> Some(r.value),
+    None -> None,
+  }
+aux processing_position: Int = default(processing_position[1], 0)
+  + match(native_record) { Some(_) -> 1, None -> 0 }
+aux observation: timing::Observation<Knowledge, Emitted, Trigger, JournalTime> =
+  rpio::journal::view::adapt::observation(native_observation,
+    {epoch: "nominal.jsonl", seq: processing_position}, rpio_loop_nominal::journal_clock,
+    \trigger: Trigger -> rpio_loop_nominal::receive(trigger),
+    \event: Emitted -> event,
+    \values: List<journal::Resolved<Knowledge>> -> rpio_loop_nominal::cite(values))
+
+aux loop = rpio::journal::view::maplek::loop(observation)
+aux tick = rpio::journal::view::timing::tick(observation)
+// The capture's Analysis Read names two versions at once, which the view
+// keeps as an Incomplete record; the Monitor's Read of the entropy window is
+// its single-version Read.
+aux window_read = rpio::journal::view::knowledge::last_access::<Role::Monitor, Access::Read, project_window>(observation)
+aux window = rpio::journal::view::knowledge::latest::<project_window>(observation)
+aux plan = rpio::journal::view::timing::activation_timing::<Role::Plan>(observation)
+
+// Retained state.
+out cycle: Cycle<JournalTime> = loop.cycle
+out episode: Episode<Knowledge, JournalTime> = loop.episode
+out run: Option<Str> = tick.run
+out previous_phase_time: Option<Instant<JournalTime>> = tick.previous_phase_time
+out monitor_window: Option<Resolved<EntropyHistory>> = window_read
+out window_ref: Option<Version> = rpio::journal::view::knowledge::version(window.latest)
+out plan_pending: Bool = plan.pending
+out records: Int = default(records[1], 0) + match(observation.record) { Some(_) -> 1, None -> 0 }
+
+// What this tick observed.
+out record: Option<Record<Knowledge, Emitted, Trigger>> = rpio::journal::view::timing::record_of(observation)
+out clock: Option<ClockSample<JournalTime>> = observation.clock
+out now: Option<Instant<JournalTime>> = rpio::journal::view::timing::now(observation)
+out cycle_step: CycleStep<JournalTime> = loop.cycle_step
+out episode_step: EpisodeStep<Knowledge, JournalTime> = loop.episode_step
+out plan_span: Option<TimeInterval<JournalTime>> = plan.span
+out plan_ended: Bool = plan.ended
+out role_span: Option<TimeInterval<JournalTime>> = loop.role_span
+out validation_span: Option<TimeInterval<JournalTime>> = loop.timing.validation

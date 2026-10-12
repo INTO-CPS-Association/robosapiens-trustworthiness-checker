@@ -1,0 +1,44 @@
+// Tutorial schema adapted from Baxter et al. (FASE 2025), Fig. 5.
+// VerificationInfo and the execution acknowledgement are tutorial additions.
+use experimental::high_level_dsrv
+use rpio::journal::{self}
+use rpio::journal::view
+use rpio::journal::timing
+use rpio::journal::view::timing::{Observation}
+use std::option::Option
+
+// ANCHOR: domain_types
+type SpinCommand = Struct<angleVelocity: Float, duration: Float>
+type SpinConfig = Struct<commands: List<SpinCommand>, period: Int, ...>
+type BoolLidarMask = Struct<values: List<Bool>, baseAngle: Float>
+// Every key is open: a value may carry further fields.
+type Knowledge = Union<
+  LidarScans: Struct<scans: List<List<Float>>, ...>,
+  BoolLidarMasks: Struct<masks: List<BoolLidarMask>, ...>,
+  Directions: Struct<commands: List<SpinCommand>, ...>,
+  VerificationInfo: Struct<accepted: Bool, ...>,
+  SpinConfig: SpinConfig,
+>
+// ANCHOR_END: domain_types
+
+// ANCHOR: journal_types
+// Messages are plain JSON: each event names the stage it completes; the scan
+// message that starts Monitor names none.
+type Emitted = Struct<stage: Str, ...>
+type Trigger = Struct<stage: Option<Str>, ...>
+type Record = view::Record<Knowledge, Emitted, Trigger>
+// Journal admission time: the time domain of every instant the monitor sees.
+newtype JournalTime = Unit
+type ViewObservation = Observation<Knowledge, Emitted, Trigger, JournalTime>
+// Native wire admission is declared separately from the logical property view.
+type NativeTrigger = Union<LidarData, ProcessedData, AnomalyFound,
+  PlanningCompleted, PlanAccepted, PlanRejected>
+type NativeEvent = Struct<detail: NativeTrigger, stage: Str, ...>
+type NativeObservation = timing::Observation<
+  Knowledge, NativeEvent, NativeTrigger, JournalTime>
+// ANCHOR_END: journal_types
+
+// ANCHOR: mask_projection
+def masks(k: Knowledge) -> Option<List<BoolLidarMask>> =
+  match(k) { BoolLidarMasks({ masks }) -> Some(masks), _ -> None }
+// ANCHOR_END: mask_projection

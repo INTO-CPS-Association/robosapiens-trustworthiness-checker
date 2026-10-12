@@ -1,0 +1,118 @@
+<svg class="tc-figure" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 480" width="100%" role="img" aria-labelledby="turtlebot-planning-traces-title turtlebot-planning-traces-desc" style="width:100%; max-width:660px; height:auto;">
+  <title id="turtlebot-planning-traces-title">A fast callback can follow a slow planning response</title>
+  <desc id="turtlebot-planning-traces-desc">Two traces share the same journal-time scale. In accepted, planning runs from anomaly at 0.9 seconds to Generated at 1.4, while the Plan callback runs from 1 to 1.4. In slow, planning runs from 0.9 to 4.4, while the callback runs from 4 to 4.4. Dashed marks are deadlines: 2 seconds after anomaly, or 1 second after callback Start. Only the slow planning outcome exceeds its budget.</desc>
+  <style>
+    .tc-figure {
+      --fig-bg: #ffffff;
+      --fig-edge: #d0d7de;
+      --fig-ink: #17212b;
+      --fig-ink-2: #52606d;
+      --fig-line: #65758b;
+      --fig-panel: #f7f9fb;
+      --fig-panel-line: #a8b3bf;
+      --fig-blue: #e8f1fb;
+      --fig-blue-line: #2563a6;
+      --fig-green: #e6f5f0;
+      --fig-green-line: #147d64;
+      --fig-orange: #fff1e6;
+      --fig-orange-line: #b54708;
+      --fig-purple: #f3ebf8;
+      --fig-purple-line: #8055a3;
+      --fig-source: #eef6ff;
+      --fig-source-line: #3478b8;
+      --fig-redis: #fff5e8;
+      --fig-redis-line: #bc6b16;
+      --fig-checker: #f1ecff;
+      --fig-checker-line: #7254b3;
+      --fig-knowledge: #eaf8ee;
+      --fig-knowledge-line: #39834d;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tc-figure {
+        --fig-bg: #171b26;
+        --fig-edge: #333a4d;
+        --fig-ink: #e6e9f0;
+        --fig-ink-2: #a2acbd;
+        --fig-line: #8492a6;
+        --fig-panel: #1e2432;
+        --fig-panel-line: #3d465c;
+        --fig-blue: #16283d;
+        --fig-blue-line: #6aa9e0;
+        --fig-green: #123029;
+        --fig-green-line: #4fbfa0;
+        --fig-orange: #33240f;
+        --fig-orange-line: #e0a44e;
+        --fig-purple: #241c33;
+        --fig-purple-line: #b18fd4;
+        --fig-source: #14283c;
+        --fig-source-line: #6fa8db;
+        --fig-redis: #33260f;
+        --fig-redis-line: #d99a3f;
+        --fig-checker: #241d34;
+        --fig-checker-line: #a892d6;
+        --fig-knowledge: #132c1c;
+        --fig-knowledge-line: #5fae74;
+      }
+    }
+  </style>
+  <rect x="0.75" y="0.75" width="658.5" height="478.5" rx="6" fill="var(--fig-bg)" stroke="var(--fig-edge)" stroke-width="1.5" />
+  <text x="20.00" y="30" text-anchor="start" font-family="system-ui, sans-serif" font-size="15" font-weight="600" fill="var(--fig-ink)">A fast callback can follow a slow planning response</text>
+  <text x="20.00" y="53" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">Solid span: observed interval · dashed mark: deadline</text>
+  <text x="20.00" y="94" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Accepted adaptation</text>
+  <path d="M 200.00 119 L 636.50 119" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <path d="M 248.50 115 L 248.50 123" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="248.50" y="111" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">1</text>
+  <path d="M 345.50 115 L 345.50 123" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="345.50" y="111" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">2</text>
+  <path d="M 442.50 115 L 442.50 123" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="442.50" y="111" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">3</text>
+  <path d="M 539.50 115 L 539.50 123" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="539.50" y="111" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">4</text>
+  <path d="M 636.50 115 L 636.50 123" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="636.50" y="111" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">5</text>
+  <text x="20.00" y="155" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="var(--fig-ink)">Planning outcome</text>
+  <text x="20.00" y="175" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">0.5 s / 2 s budget</text>
+  <path d="M 238.80 159 L 287.30 159" stroke="var(--fig-blue-line)" stroke-width="3" fill="none" />
+  <circle cx="238.80" cy="159" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-bg)" stroke-width="1.5" />
+  <circle cx="287.30" cy="159" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-blue-line)" stroke-width="1.5" />
+  <path d="M 432.80 144 L 432.80 174" stroke="var(--fig-line)" stroke-width="1.5" stroke-dasharray="5 4" fill="none" />
+  <text x="238.80" y="188" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">0.9</text>
+  <text x="287.30" y="146" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">1.4</text>
+  <text x="20.00" y="225" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="var(--fig-ink)">Plan callback</text>
+  <text x="20.00" y="245" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">0.4 s / 1 s budget</text>
+  <path d="M 248.50 229 L 287.30 229" stroke="var(--fig-blue-line)" stroke-width="3" fill="none" />
+  <circle cx="248.50" cy="229" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-bg)" stroke-width="1.5" />
+  <circle cx="287.30" cy="229" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-blue-line)" stroke-width="1.5" />
+  <path d="M 345.50 214 L 345.50 244" stroke="var(--fig-line)" stroke-width="1.5" stroke-dasharray="5 4" fill="none" />
+  <text x="248.50" y="258" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">1</text>
+  <text x="287.30" y="216" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">1.4</text>
+  <text x="20.00" y="296" text-anchor="start" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="var(--fig-ink)">Delayed planning</text>
+  <path d="M 200.00 321 L 636.50 321" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <path d="M 248.50 317 L 248.50 325" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="248.50" y="313" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">1</text>
+  <path d="M 345.50 317 L 345.50 325" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="345.50" y="313" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">2</text>
+  <path d="M 442.50 317 L 442.50 325" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="442.50" y="313" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">3</text>
+  <path d="M 539.50 317 L 539.50 325" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="539.50" y="313" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">4</text>
+  <path d="M 636.50 317 L 636.50 325" stroke="var(--fig-line)" stroke-width="1.5" fill="none" />
+  <text x="636.50" y="313" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">5</text>
+  <text x="20.00" y="357" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="var(--fig-ink)">Planning outcome</text>
+  <text x="20.00" y="377" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">3.5 s / 2 s budget</text>
+  <path d="M 238.80 361 L 578.30 361" stroke="var(--fig-orange-line)" stroke-width="3" fill="none" />
+  <circle cx="238.80" cy="361" r="4" stroke="var(--fig-orange-line)" fill="var(--fig-bg)" stroke-width="1.5" />
+  <circle cx="578.30" cy="361" r="4" stroke="var(--fig-orange-line)" fill="var(--fig-orange-line)" stroke-width="1.5" />
+  <path d="M 432.80 346 L 432.80 376" stroke="var(--fig-line)" stroke-width="1.5" stroke-dasharray="5 4" fill="none" />
+  <text x="238.80" y="390" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">0.9</text>
+  <text x="578.30" y="348" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">4.4</text>
+  <text x="20.00" y="427" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="var(--fig-ink)">Plan callback</text>
+  <text x="20.00" y="447" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">0.4 s / 1 s budget</text>
+  <path d="M 539.50 431 L 578.30 431" stroke="var(--fig-blue-line)" stroke-width="3" fill="none" />
+  <circle cx="539.50" cy="431" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-bg)" stroke-width="1.5" />
+  <circle cx="578.30" cy="431" r="4" stroke="var(--fig-blue-line)" fill="var(--fig-blue-line)" stroke-width="1.5" />
+  <path d="M 636.50 416 L 636.50 446" stroke="var(--fig-line)" stroke-width="1.5" stroke-dasharray="5 4" fill="none" />
+  <text x="539.50" y="460" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">4</text>
+  <text x="578.30" y="418" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">4.4</text>
+  <text x="200.00" y="465" text-anchor="start" font-family="system-ui, sans-serif" font-size="12" fill="var(--fig-ink-2)">Supplied journal time (seconds)</text>
+</svg>

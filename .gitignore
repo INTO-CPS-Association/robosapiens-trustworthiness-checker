@@ -13,6 +13,8 @@ __pycache__/
 scripts/env/*
 .ropeproject/
 /build/
+# Durable developer-local architecture working records.
+/.local-design/
 integrations/fmu/build/
 integrations/fmu/dist/
 integrations/fmu/tools/

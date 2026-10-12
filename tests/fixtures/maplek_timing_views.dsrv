@@ -1,0 +1,10 @@
+use experimental::{modules, functions, local_streams}
+use maplek_timing_primitives
+
+def pair<weight: Int, select: (Int -> Bool)>(sample: Int)
+    -> Struct<raw: Struct<accepted: Bool, count: Int, weighted_total: Int>,
+              shifted: Struct<accepted: Bool, count: Int, weighted_total: Int>> = { raw: raw, shifted: shifted }
+where {
+  raw = maplek_timing_primitives::accumulate::<weight, select>(sample)
+  shifted = maplek_timing_primitives::accumulate::<weight, select>(sample + 1)
+}

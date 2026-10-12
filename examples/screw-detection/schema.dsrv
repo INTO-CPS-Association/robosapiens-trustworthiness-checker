@@ -1,0 +1,18 @@
+// Property-facing identities of the ScrewDetection loop. The Knowledge
+// values and messages themselves are the generated declarations
+// (`declarations.dsrv`, from the application's observation schema).
+// Owner is an activation identity (run, opaque callback token); a Publication key
+// is its owner and per-activation emission number, not a journal position.
+use experimental::high_level_dsrv
+use rpio::journal::view::{self, Activation, Emission}
+
+newtype JournalTime = Unit
+
+type Owner = Struct<epoch: Str, activation: Str>
+type Key = Union<Callback: Owner, Publication: Struct<owner: Owner, ordinal: Int>>
+
+def owner(a: Activation) -> Owner = { epoch: a.epoch, activation: a.start_seq }
+def callback(a: Activation) -> Key = Key::Callback(owner(a))
+def publication(e: Emission) -> Key =
+  Key::Publication({ owner: { epoch: e.activation.epoch, activation: e.activation.start_seq },
+                     ordinal: e.sequence_no })

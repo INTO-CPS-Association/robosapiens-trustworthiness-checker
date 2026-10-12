@@ -1,0 +1,288 @@
+// The strengthened ScrewDetection properties over the recorded journal: every
+// finding family of the strengthened specification, including the ten MF-03
+// responsibility budgets, evidence starvation, reproposal, budget abort,
+// fresh deployed-model effectiveness and stability. README.md maps each
+// original finding to the family here and lists the deliberate differences.
+use experimental::high_level_dsrv
+mod v2_adapter
+mod observation_clock
+mod declarations
+mod schema
+mod evidence
+use v2_adapter::{self, Input}
+use declarations::*
+use schema::*
+use evidence::{self, Tick, LoopState, Window, Sample, Verdict, Swap}
+use rpio::journal::view::{Version, Role}
+use rpio::journal::view::timing::{Observation}
+use std::option::{self, Option}
+use std::time::Instant
+use std::timing::{self, Clock}
+use std::stream
+
+in journal_input: v2_adapter::Input
+aux journal: Observation<Knowledge, Message, Trigger, JournalTime> = v2_adapter::adapt(journal_input)
+out journal_incomplete: Bool = v2_adapter::incomplete(journal_input)
+aux tick: Tick<JournalTime> = evidence::tick(journal)
+// The held "now" and this record's own instant, for every deadline.
+aux clock: Clock<JournalTime> = tick.clock
+const n: Int = 10
+const threshold: Float = 0.35
+const tolerance: Float = 0.000001
+const retries: Int = 3
+def approved(model: Int) -> Bool = model == 1 || model == 2
+aux observed: Bool = matches(tick.event, Some(ObservationRecorded))
+aux detected: Bool = matches(tick.event, Some(DetectionCompleted))
+aux anomaly: Bool = matches(tick.event, Some(AnomalyDetected))
+aux proposed: Bool = matches(tick.event, Some(PlanGenerated))
+aux accepted: Bool = matches(tick.event, Some(PlanValidated))
+aux rejected: Bool = matches(tick.event, Some(PlanRejected))
+aux executed: Bool = matches(tick.event, Some(PlanExecuted))
+aux aborted: Bool = std::option::is_some(tick.abort)
+aux closed: Bool = executed || aborted || tick.not_applied
+aux sv05_failed: Bool = matches(tick.service, Some({name: "SV-05", outcome: "NotDelivered"}))
+aux sv06_done: Bool = matches(tick.service, Some({name: "SV-06", ..}))
+aux command_written: Bool = matches(tick.written, Some(ActionCommand(_)))
+aux budget_exhausted: Bool = matches(tick.role, Some(Legitimate))
+  && matches(tick.written, Some(ReplanningCounter(r)) if r.count > retries)
+
+aux request: Option<Key> = std::option::only_if(matches(tick.started, Some(Monitor)), tick.owner)
+aux observation: Option<Key> = std::option::only_if(observed, tick.emission)
+aux plan_request: Option<Key> = std::option::only_if(anomaly || rejected, tick.emission)
+aux proposal_event: Option<Key> = std::option::only_if(proposed, tick.emission)
+aux acceptance_event: Option<Key> = std::option::only_if(accepted, tick.emission)
+aux episode_start: Option<Key> = std::option::only_if(anomaly, tick.episode)
+aux degraded_write: Option<Key> = std::option::only_if(matches(tick.written, Some(EntropyHistory(w)) if List.len(w.values) >= n
+    && std::option::is_some_and(evidence::mean(w.values), \v: Float -> v > threshold)), tick.owner)
+aux reassessment_end: Option<Key> = std::option::only_if(sv06_done, tick.owner)
+aux command_write: Option<Key> = std::option::only_if(command_written, tick.owner)
+aux failure_decision: Option<Key> = std::option::only_if(sv05_failed || budget_exhausted, tick.owner)
+
+// TW-C01: six deadlines, including late responses and explicit closing aborts.
+aux capture_wait = std::timing::deadline(
+  request,
+  std::option::only_if(observed, tick.owner), None, Some(5 s), clock)
+aux detection_wait = std::timing::deadline(
+  observation,
+  std::option::only_if(detected, tick.wake), None, Some(20 s), clock)
+aux plan_wait = std::timing::deadline(
+  plan_request,
+  std::option::only_if(proposed || (aborted && matches(tick.role, Some(Plan))), tick.wake), None, Some(10 s), clock)
+aux validation_wait = std::timing::deadline(
+  proposal_event,
+  std::option::only_if(accepted || rejected || (aborted && matches(tick.role, Some(Legitimate))), tick.wake), None, Some(60 s), clock)
+aux execution_wait = std::timing::deadline(
+  acceptance_event,
+  std::option::only_if(executed || tick.not_applied || (aborted && matches(tick.role, Some(Execute))), tick.wake), None, Some(10 s), clock)
+aux episode_wait = std::timing::deadline(
+  episode_start,
+  std::option::only_if(closed, tick.episode), None, Some(120 s), clock)
+out response_late: Bool = capture_wait.overdue || detection_wait.overdue || plan_wait.overdue
+  || validation_wait.overdue || execution_wait.overdue || episode_wait.overdue
+
+// MF-03: all ten responsibility budgets. Generic matching uses activation or
+// cause identity, never a domain-value agreement.
+aux mf01 = std::timing::deadline(
+  request,
+  std::option::only_if(observed, tick.owner), None, Some(500 ms), clock)
+aux mf02 = std::timing::deadline(
+  observation,
+  std::option::only_if(matches(tick.written, Some(Detections(_))), tick.wake), None, Some(500 ms), clock)
+aux mf03 = std::timing::deadline(
+  observation,
+  std::option::only_if(detected, tick.wake), None, Some(100 ms), clock)
+aux mf04 = std::timing::deadline(
+  degraded_write,
+  std::option::only_if(anomaly, tick.owner), None, Some(200 ms), clock)
+aux mf05 = std::timing::deadline(
+  plan_request,
+  std::option::only_if(proposed || sv05_failed, tick.wake), None, Some(200 ms), clock)
+aux mf06 = std::timing::deadline(
+  proposal_event,
+  std::option::only_if(sv06_done, tick.wake), None, Some(5 s), clock)
+aux reassessment = std::timing::deadline(
+  reassessment_end,
+  std::option::only_if(accepted || rejected || budget_exhausted || aborted, tick.owner), std::option::only_if(tick.ended, tick.owner), None, clock)
+aux mf07: Bool = accepted && std::time::exceeds(reassessment.completed, 100 ms)
+aux mf08: Bool = rejected && std::time::exceeds(reassessment.completed, 200 ms)
+aux mf09 = std::timing::deadline(
+  acceptance_event,
+  std::option::only_if(command_written, tick.wake), None, Some(200 ms), clock)
+aux mf10_execution = std::timing::deadline(
+  command_write,
+  std::option::only_if(executed, tick.owner), std::option::only_if(aborted, tick.owner), Some(200 ms), clock)
+aux mf10_abort = std::timing::deadline(
+  failure_decision,
+  std::option::only_if(aborted, tick.owner), None, Some(200 ms), clock)
+out responsibility_late: Bool = mf01.overdue || mf02.overdue || mf03.overdue
+  || mf04.overdue || mf05.overdue || mf06.overdue || mf07 || mf08 || mf09.overdue
+  || mf10_execution.overdue || mf10_abort.overdue
+out pending_checks: Int = capture_wait.pending + detection_wait.pending + plan_wait.pending
+  + validation_wait.pending + execution_wait.pending + episode_wait.pending
+  + mf01.pending + mf02.pending + mf03.pending + mf04.pending + mf05.pending
+  + mf06.pending + reassessment.pending + mf09.pending + mf10_execution.pending + mf10_abort.pending
+out startup_incomplete: Bool = tick.status.startup_incomplete
+out journal_invalid: Bool = tick.status.journal_invalid
+
+// TW-K02/K04 and M05: observations and missing values remain visible.
+out observation_warning: Bool = startup_incomplete || tick.status.backwards_clock
+  || matches(tick.window, Some(w) if !evidence::same_cycle(w))
+out lighting_warning: Bool = match(tick.capture) {
+  Some(c) -> !std::option::is_some_and(c.frame.brightness, \v: Float -> v >= 5.0 && v <= 250.0),
+  _ -> false,
+}
+// TW-I01/M01/M03: provenance facts plus explicit domain comparisons.
+out fabricated_observation: Bool = matches(tick.capture, Some(c) if !c.matches_request)
+out bad_association: Bool = match(tick.detection) {
+  Some(d) -> !d.matches_observation || !matches(d.frame.detection_type,
+    Some(task) if task == d.result.detection_type),
+  _ -> false,
+}
+out wrong_model: Bool = matches(tick.detection, Some(d) if d.result.adaptive_cycle
+  && (!approved(d.result.model_id) || d.result.model_id != d.active.model_id))
+
+// TW-M02: check every Write, including startup. Missing != invalid numeric value.
+out bad_uncertainty: Bool = std::option::is_some_and(tick.written, \k: Knowledge -> evidence::invalid_entropy(k))
+aux sample: Bool = matches(tick.sample, Some(s) if s.first && s.result.adaptive_cycle)
+out missing_entropy: Bool = sample && matches(tick.sample, Some(s) if std::option::is_none(s.result.screw_entropy))
+aux previous_streak: Int = default(missing_streak[1], 0)
+aux missing_streak: Int = if tick.new_run || (sample && !missing_entropy) then 0
+  else if missing_entropy then evidence::increment(previous_streak, n)
+  else previous_streak
+out evidence_starvation: Bool = sample && missing_streak >= n
+
+// TW-I02: paired window at average Write, anomaly at publication; no End join.
+out bad_window: Bool = matches(tick.window, Some(w) if evidence::same_cycle(w)
+  && (List.len(w.history.values) > n || evidence::incoherent_mean(w, tolerance)))
+aux degraded: Bool = std::option::is_some_and(tick.state,
+  \s: LoopState -> evidence::degraded(s, n, threshold) && !s.planning.in_planning)
+aux now: Option<Instant<JournalTime>> = clock.now
+aux at: Option<Instant<JournalTime>> = clock.at
+aux degradation = std::timing::while(degraded, now, at)
+out bad_anomaly: Bool = matches(tick.anomaly, Some(a) if !evidence::full_degraded(a.window, n, threshold))
+  || std::time::exceeds(degradation.span, 10 s)
+
+// TW-I03: approved/different candidate; remember only the last rejected proposal.
+out bad_proposal: Bool = match(tick.proposal) {
+  Some(p) -> !matches(p.plan.value.model_id, Some(model) if approved(model) && model != p.active.model_id),
+  _ -> false,
+}
+type Rejection = Struct<episode: Option<Key>, model: Option<Int>, window: Version>
+aux previous_rejection: Option<Rejection> = default(last_rejection[1], None)
+aux last_rejection: Option<Rejection> = if tick.new_run || anomaly || closed then None else match(tick.verdict) {
+  Some(v) if matches(v.decision, Reject) -> Some({episode: v.episode, model: v.plan.value.model_id, window: v.current_window}),
+  _ -> previous_rejection,
+}
+out repeated_proposal: Bool = match(Tuple(tick.proposal, previous_rejection)) {
+  (Some(p), Some(r)) -> std::option::known_eq(p.episode, r.episode)
+    && std::option::known_eq(p.plan.value.model_id, r.model) && p.current_window == r.window,
+  _ -> false,
+}
+
+// TW-I04/I05: include the budget-exhausting rejection. Exact wrong plan refs and
+// semantically faulty but well-shaped values are evaluated, not filtered away.
+out bad_validation_evidence: Bool = match(tick.verdict) {
+  Some(v) -> !std::option::known_eq(v.result.candidate_model_id, v.plan.value.model_id)
+    || !matches(v.proposed, Some(p) if p.version == v.plan.version)
+    || (matches(v.decision, Accept) && !(v.result.evidence_count >= n
+      && v.result.evidence_complete && v.result.evidence_matches_window && v.result.evidence_unique)),
+  _ -> false,
+}
+out not_better: Bool = matches(tick.verdict, Some(v)
+  if matches(v.decision, Accept) && !evidence::improves(v.result))
+out bad_gate: Bool = matches(tick.verdict, Some(v)
+  if v.result.is_legit != evidence::relaxed_gate(v.result, threshold)
+    || v.result.is_legit != matches(v.decision, Accept))
+aux previous_rejections: Int = default(rejections[1], 0)
+aux rejections: Int = if tick.new_run || anomaly || closed then 0 else if rejected
+  then evidence::increment(previous_rejections, retries + 1) else previous_rejections
+out retry_budget: Bool = matches(tick.anomaly, Some(a) if a.counter.count != 0)
+  || match(tick.verdict) {
+    Some(v) -> match(v.decision) {
+      Reject -> rejections > retries || v.counter.count != rejections,
+      BudgetAbort -> v.counter.count != previous_rejections + 1,
+      _ -> false,
+    },
+    _ -> false,
+  }
+
+// TW-I06/I07: exact accepted plan, actual acquired execution plan, command,
+// effect acknowledgement, active write and reset state all remain separate facts.
+out bad_effect: Bool = tick.not_applied || match(tick.execution) {
+  Some(e) -> match(e.accepted) {
+    Some(a) -> a.plan.version != e.used_plan.version || !matches(a.plan.value.model_id,
+      Some(model) if e.command.command == Some("swap_model")
+        && e.command.model_id == Some(model) && e.command.effect_model_id == Some(model)
+        && e.command.effect_acknowledged && e.active.model_id == model),
+    _ -> true,
+  },
+  _ -> false,
+}
+out bad_reset: Bool = matches(tick.execution, Some(e) if List.len(e.reset.window.values) != 0
+  || std::option::is_some(e.reset.average.value) || e.reset.planning.in_planning || e.reset.replans.count != 0)
+
+// TW-C01: generic order/missing-publication facts plus the actual abort policy.
+out protocol_bad: Bool = !tick.protocol.sensing_ok || !tick.protocol.adaptation_ok
+  || tick.protocol.missing_publication || match(tick.abort) {
+    Some(a) -> !(a.reason == "no_distinct_candidate" && matches(a.role, Plan))
+      && !(a.reason == "replan_budget_exhausted" && matches(a.role, Legitimate)
+        && a.counter.count == retries + 1
+        && matches(tick.verdict, Some(v) if matches(v.decision, BudgetAbort) && !v.result.is_legit)),
+    _ -> false,
+  }
+
+// TW-C02: evaluate at CycleCompleted using original acquisition positions.
+// The tenth sample may complete after its window Write. The outer, pre-swap
+// Analysis may also complete after a nested Execute; its old sample cannot count.
+type Recovery = Struct<model: Int, after: Int, samples: Int>
+aux previous_recovery: Option<Recovery> = default(recovery[1], None)
+aux fresh: Bool = match(Tuple(previous_recovery, tick.sample)) {
+  (Some(r), Some(s)) -> s.first && s.result.adaptive_cycle && s.detection_sequence > r.after
+    && s.result.model_id == r.model
+    && std::option::is_some_and(s.result.screw_entropy, \v: Float -> evidence::entropy(v)),
+  _ -> false,
+}
+aux fresh_count: Int = match(previous_recovery) {
+  Some(r) -> if fresh then evidence::increment(r.samples, n) else r.samples, _ -> 0,
+}
+aux recovery_ready: Bool = fresh && fresh_count >= n && match(Tuple(previous_recovery, tick.sample)) {
+  (Some(r), Some(s)) -> match(s.window) {
+    Some(w) -> List.len(w.history.values) == n && w.history.model_id == Some(r.model)
+      && std::option::known_eq(w.history_cycle, s.cycle) && std::option::known_eq(w.average_cycle, s.cycle)
+      && w.history_sequence > r.after && w.average_sequence > r.after
+      && List.fold(\valid: Bool, v: Float -> valid && evidence::entropy(v), true, w.history.values)
+      && !evidence::incoherent_mean(w, tolerance),
+    _ -> false,
+  },
+  _ -> false,
+}
+aux recovery: Option<Recovery> = if tick.new_run then None else match(tick.execution) {
+  Some(e) -> std::option::map(e.command.effect_model_id, \model: Int -> {model, after: e.command_version.global_write_sequence, samples: 0}),
+  _ if recovery_ready -> None,
+  _ -> std::option::map(previous_recovery, \r: Recovery -> {model: r.model, after: r.after, samples: fresh_count}),
+}
+out recovery_pending: Bool = std::option::is_some(recovery)
+out unresolved_degradation: Bool = recovery_ready && matches(tick.sample, Some(s)
+  if matches(s.window, Some(w) if std::option::is_some_and(w.average.value, \v: Float -> v > threshold)))
+out bounded_abort: Bool = aborted && !protocol_bad && !retry_budget && !bad_gate
+
+// TW-C03: a ping-pong within 600 s is already a third swap within 600 s.
+// Merge the two warnings without dropping a violating trace.
+aux swaps = std::stream::recent::<2>(swap, tick.new_run)
+where {
+  swap: Option<Swap<JournalTime>> = match(Tuple(tick.execution, tick.clock.at)) {
+    (Some(e), Some(time)) -> Some({time, model: e.active.model_id}), _ -> None,
+  }
+}
+out stability_warning: Bool = matches(Tuple(tick.execution, swaps.before),
+  (Some(_), [_, older]) if std::time::shorter_than(std::time::since(Some(older.time), tick.clock.at), 600 s))
+
+out safety_violation: Bool = fabricated_observation || bad_association || bad_uncertainty
+  || bad_proposal || bad_validation_evidence || not_better || bad_effect || protocol_bad
+  || unresolved_degradation || bounded_abort || evidence_starvation
+out conformance_violation: Bool = wrong_model || bad_window || bad_anomaly || repeated_proposal
+  || bad_gate || retry_budget || bad_reset || response_late || responsibility_late
+out violation: Bool = safety_violation || conformance_violation
+out warning: Bool = observation_warning || lighting_warning || missing_entropy || stability_warning
+out ever_violation: Bool = violation || default(ever_violation[1], false)
+out ever_warning: Bool = warning || default(ever_warning[1], false)

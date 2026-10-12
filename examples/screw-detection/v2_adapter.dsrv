@@ -1,0 +1,63 @@
+// Native two-stream observations -> current application property facts.
+// Application payloads select named evidence; UUID/string activation tokens,
+// immutable Knowledge references and physical clock labels remain distinct
+// from the observation's local processing sequence. No raw record is hidden.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes}
+use rpio::journal::{self}
+use rpio::journal::timing
+use rpio::journal::view::{Received, Slot}
+use rpio::journal::view::timing::{Observation}
+use rpio::journal::view::adapt
+use observation_clock
+use declarations::{Knowledge, Message, Trigger}
+use schema::JournalTime
+use std::option::{self, Option}
+
+type LoopEvent = Union<ObservationRecorded, DetectionCompleted, CycleCompleted,
+  AnomalyDetected, PlanGenerated, PlanValidated, PlanRejected, PlanExecuted,
+  AdaptationAborted: Struct<reason: Str>>
+type Emitted = Struct<detail: LoopEvent, message: Message, ...>
+type WireTrigger = Union<SensorDataReceived: Trigger, ObservationRecorded: Emitted,
+  DetectionCompleted: Emitted, CycleCompleted: Emitted, AnomalyDetected: Emitted,
+  PlanGenerated: Emitted, PlanValidated: Emitted, PlanRejected: Emitted,
+  PlanExecuted: Emitted, AdaptationAborted: Emitted, Unrecognized: Str>
+type Input = timing::Observation<Knowledge, Emitted, WireTrigger, JournalTime>
+
+def empty_trigger() -> Trigger = {attempt_id: None, cycle_id: None, detection_type: None,
+  episode_id: None, run_id: None, tcp_pose: None}
+def from_message(m: Message) -> Trigger = {attempt_id: m.attempt_id, cycle_id: m.cycle_id,
+  detection_type: None, episode_id: m.episode_id, run_id: m.run_id, tcp_pose: None}
+def received(t: WireTrigger) -> Received<Trigger> = match(t) {
+  SensorDataReceived(m) -> {kind: Event, topic: "sensor_data_received", message: m},
+  ObservationRecorded(m) -> {kind: Event, topic: "observation_recorded", message: from_message(m.message)},
+  DetectionCompleted(m) -> {kind: Event, topic: "detection_completed", message: from_message(m.message)},
+  CycleCompleted(m) -> {kind: Event, topic: "cycle_completed", message: from_message(m.message)},
+  AnomalyDetected(m) -> {kind: Event, topic: "anomaly_detected", message: from_message(m.message)},
+  PlanGenerated(m) -> {kind: Event, topic: "plan_generated", message: from_message(m.message)},
+  PlanValidated(m) -> {kind: Event, topic: "plan_validated", message: from_message(m.message)},
+  PlanRejected(m) -> {kind: Event, topic: "plan_rejected", message: from_message(m.message)},
+  PlanExecuted(m) -> {kind: Event, topic: "plan_executed", message: from_message(m.message)},
+  AdaptationAborted(m) -> {kind: Event, topic: "adaptation_aborted", message: from_message(m.message)},
+  Unrecognized(_) -> {kind: Event, topic: "unrecognized", message: empty_trigger()},
+}
+def slot_name(k: Knowledge) -> Str = match(k) {
+  FrameRef(_) -> "frame", Detections(_) -> "result", ActiveModel(_) -> "active",
+  EntropyHistory(_) -> "history", RunningAvgEntropy(_) -> "average",
+  InPlanning(_) -> "planning", ReplanningCounter(_) -> "counter",
+  CandidateModel(_) -> "plan", LegitResult(_) -> "result", ActionCommand(_) -> "command",
+}
+def slots(rs: List<journal::Resolved<Knowledge>>) -> List<Slot<Knowledge>> =
+  List.map(\r: journal::Resolved<Knowledge> -> {name: slot_name(r.value), value: r}, rs)
+def record_epoch(r: journal::Record<Knowledge, Emitted, WireTrigger>) -> Str = match(r) {
+  Knowledge(k) -> k.version.ref.store_epoch,
+  Phase(p) -> p.activation.run_id,
+  Incomplete(p) -> p.activation.run_id,
+}
+def adapt(input: Input) -> Observation<Knowledge, Message, Trigger, JournalTime> =
+  rpio::journal::view::adapt::observation(input, {epoch: match(input.record) { Some(r) -> record_epoch(r.value), None -> "clock-only" }, seq},
+    observation_clock::label(), \t: WireTrigger -> received(t),
+    \m: Emitted -> m.message, \rs: List<journal::Resolved<Knowledge>> -> slots(rs))
+where {
+  seq: Int = default(seq[1], 0) + (if std::option::is_some(input.record) then 1 else 0)
+}
+def incomplete(input: Input) -> Bool = matches(input.record, Some({value: Incomplete(_), ..}))

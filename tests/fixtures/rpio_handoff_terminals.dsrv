@@ -1,0 +1,39 @@
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes}
+
+use rpio::journal::{Role, Record}
+use rpio::journal::timing
+use std::option::{self, Option}
+
+newtype JournalTime = Unit
+
+// The native journal names no Knowledge. Plan publishes plan_generated, which
+// wakes Legitimate; every other callback is started directly.
+type Detail = Union<PlanGenerated>
+type Emitted = Struct<detail: Detail, ...>
+type Trigger = Union<PlanGenerated: Emitted, Unrecognized: Str>
+
+in observation: timing::Observation<Int, Emitted, Trigger, JournalTime>
+aux record: Option<Record<Int, Emitted, Trigger>> = rpio::journal::timing::record_of(observation)
+aux selected: Option<timing::Transfer> = match(record) {
+  Some(Phase({ activation, step: Event({ name: "plan_generated", emission, .. }), .. })) ->
+    Some({ predecessor: activation, successor: Role::Legitimate, wake: emission }),
+  _ -> None,
+}
+aux withdrawn: Option<timing::TransferWithdrawal> = match(record) {
+  // The second Plan callback, activation a3.
+  Some(Phase({ activation: a @ { activation_id: "a3", .. }, step: End(_), .. })) -> Some({
+    transfer: {
+      predecessor: a,
+      successor: Role::Legitimate,
+      wake: { activation_id: a.activation_id, ordinal: 1 },
+    },
+    reason: "planning superseded",
+  }),
+  _ -> None,
+}
+aux handoff = rpio::journal::timing::handoff(observation, selected, withdrawn)
+
+out pending: Bool = handoff.pending
+out overlap: Bool = match(handoff.terminal) { Some(Overlap) -> true, _ -> false }
+out withdrawn_terminal: Bool = match(handoff.terminal) { Some(Withdrawn(_)) -> true, _ -> false }
+out has_span: Bool = std::option::is_some(handoff.span)

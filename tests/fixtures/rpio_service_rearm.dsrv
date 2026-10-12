@@ -1,0 +1,24 @@
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes}
+
+use rpio::journal::timing
+use std::option
+
+newtype JournalTime = Unit
+
+// The native service journals name no Knowledge and publish no event; each
+// Execute callback starts on a bare PlanValidated trigger.
+type Trigger = Union<PlanValidated>
+
+in observation: timing::Observation<Int, Int, Trigger, JournalTime>
+aux swap = rpio::journal::timing::service_timing::<"swap_model">(observation)
+
+out pending: Bool = swap.pending
+out has_span: Bool = std::option::is_some(swap.span)
+out abandoned: Bool = match(swap.ended) {
+  Some(Abandoned) -> true,
+  _ -> false,
+}
+out completed: Bool = match(swap.ended) {
+  Some(Completed(Delivered)) -> true,
+  _ -> false,
+}

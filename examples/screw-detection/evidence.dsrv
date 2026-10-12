@@ -1,0 +1,486 @@
+// The typed facts the ScrewDetection property roots read, one Tick per input
+// tick, projected from the journal coordinator's output. Facts are values,
+// not verdicts: every domain comparison, threshold and severity stays in the
+// roots. A fact is None when no such occurrence is on this tick.
+//
+// The coordinator is the one historical owner: activations with their exact
+// acquisitions and the publication that woke them, pending publications, and
+// the latest write of every key. This module adds the per-activation
+// application context below, the application's own protocol checks (the
+// evidence each publication must cite and the publications each End outcome
+// requires) and O(1) startup state.
+use experimental::high_level_dsrv
+use declarations::*
+use schema::*
+use rpio::journal::view::{self, Record, Activation, Resolved, Outcome, Emission, Slot, ServiceOutcome,
+                    Role, Version, Received, Posted}
+use rpio::journal::view::timing::{self, Observation}
+use rpio::journal::state::{self, JournalState, Started, Stepped, Write, Witness, Active}
+use rpio::journal::view::maplek::events::{self, Milestone}
+use std::option::{self, Option}
+use std::time::{self, Instant}
+use std::timing::{Clock}
+
+// What the loop publishes, named by the topic it publishes on. An abort
+// carries the reason its message gives.
+type Event = Union<AdaptationAborted: Struct<reason: Str>, AnomalyDetected, CycleCompleted,
+  DetectionCompleted, ObservationRecorded, PlanExecuted, PlanGenerated, PlanRejected, PlanValidated>
+
+def event_of(topic: Str, message: Message) -> Option<Event> = match(topic) {
+  "adaptation_aborted" -> Some(Event::AdaptationAborted({ reason: std::option::unwrap_or(message.reason, "") })),
+  "anomaly_detected" -> Some(Event::AnomalyDetected),
+  "cycle_completed" -> Some(Event::CycleCompleted),
+  "detection_completed" -> Some(Event::DetectionCompleted),
+  "observation_recorded" -> Some(Event::ObservationRecorded),
+  "plan_executed" -> Some(Event::PlanExecuted),
+  "plan_generated" -> Some(Event::PlanGenerated),
+  "plan_rejected" -> Some(Event::PlanRejected),
+  "plan_validated" -> Some(Event::PlanValidated),
+  _ -> None,
+}
+
+// The topic a request from outside the loop arrives on.
+def request_topic() -> Str = "sensor_data_received"
+
+// The store pair an average Write is checked against: that average and the
+// latest admitted EntropyHistory write, with each writer's cycle and the
+// positions at which they were admitted. It is not a claim about which
+// object computed the average.
+type Window = Struct<history: EntropyHistory, average: RunningAvgEntropy,
+  history_ref: Version, history_cycle: Option<Owner>, average_cycle: Option<Owner>,
+  history_sequence: Int, average_sequence: Int>
+// What the coordinator keeps per activation for this application: the
+// Monitor cycle that caused it, the anomaly that opened its episode, the
+// window its own average Write paired, how often it completed its cycle, and
+// the request it started from at the external request boundary.
+type Context = Struct<cycle: Option<Owner>, episode: Option<Key>, window: Option<Window>,
+  completions: Int, request: Option<Trigger>>
+
+type LoopState = Struct<window: EntropyHistory, average: RunningAvgEntropy,
+  planning: InPlanning, replans: ReplanningCounter>
+type Plan = Struct<version: Version, value: CandidateModel>
+type Acceptance = Struct<plan: Plan, result: LegitResult>
+// `request` is the message the capturing Monitor started from, as recorded,
+// including what it asked for; comparing that with the frame is a property's.
+type Capture = Struct<frame: FrameRef, matches_request: Bool, request: Option<Trigger>>
+type Detection = Struct<frame: FrameRef, result: Detections, active: ActiveModel,
+  matches_observation: Bool>
+type Anomaly = Struct<window: Window, counter: ReplanningCounter>
+type Proposal = Struct<plan: Plan, active: ActiveModel,
+  current_window: Version, episode: Option<Key>>
+type Decision = Union<Accept, Reject, BudgetAbort>
+type Verdict = Struct<decision: Decision, plan: Plan, result: LegitResult,
+  counter: ReplanningCounter, proposed: Option<Plan>,
+  current_window: Version, episode: Option<Key>>
+type Execution = Struct<accepted: Option<Acceptance>, used_plan: Plan,
+  command: ActionCommand, command_version: Version, active: ActiveModel, reset: LoopState>
+type Abort = Struct<reason: Str, role: Role, counter: ReplanningCounter>
+// `first` de-duplicates this Analysis's cycle publication; it is not entropy
+// or model validation. Original write positions survive a delayed completion.
+type Sample = Struct<cycle: Option<Owner>, first: Bool, result: Detections,
+  detection_sequence: Int, window: Option<Window>>
+type Service = Struct<name: Str, outcome: Str>
+type Status = Struct<journal_invalid: Bool, startup_incomplete: Bool, backwards_clock: Bool>
+// `missing_evidence`: a publication without the evidence slots its event
+// requires; `missing_publication`: a successful End whose activation did not
+// publish what its outcome requires.
+type Protocol = Struct<sensing_ok: Bool, adaptation_ok: Bool, missing_publication: Bool,
+  missing_evidence: Bool>
+type Tick<D> = Struct<
+  clock: Clock<D>, sequence: Option<Int>, new_run: Bool,
+  status: Status, protocol: Protocol,
+  // Raw occurrences remain present on protocol or semantic mismatch.
+  event: Option<Event>, role: Option<Role>, started: Option<Role>, ended: Bool,
+  owner: Option<Key>, wake: Option<Key>, emission: Option<Key>, episode: Option<Key>,
+  service: Option<Service>, written: Option<Knowledge>,
+  state: Option<LoopState>, window: Option<Window>,
+  capture: Option<Capture>, detection: Option<Detection>, anomaly: Option<Anomaly>,
+  proposal: Option<Proposal>, verdict: Option<Verdict>, execution: Option<Execution>,
+  abort: Option<Abort>, not_applied: Bool, sample: Option<Sample>
+>
+type Swap<D> = Struct<time: Instant<D>, model: Int>
+
+type Journal = JournalState<Knowledge, Message, Trigger, Context>
+type Latest = Write<Knowledge, Context>
+
+// Pure value helpers the roots share.
+def mean(xs: List<Float>) -> Option<Float> = match(xs) {
+  [] -> None,
+  _ -> Some(List.fold(\total: Float, x: Float -> total + x, 0.0, xs) / (List.len(xs) as Float)),
+}
+def entropy(v: Float) -> Bool = v >= 0.0 && v <= 1.0
+def invalid_entropy(k: Knowledge) -> Bool = match(k) {
+  Detections({screw_entropy: value, ..}) | RunningAvgEntropy({value, ..}) ->
+    std::option::is_some_and(value, \v: Float -> !entropy(v)),
+  EntropyHistory({values, ..}) -> List.fold(\bad: Bool, v: Float -> bad || !entropy(v), false, values),
+  LegitResult({candidate_avg_entropy: c, current_avg_entropy: p, ..}) ->
+    std::option::is_some_and(c, \v: Float -> !entropy(v))
+    || std::option::is_some_and(p, \v: Float -> !entropy(v)),
+  _ -> false,
+}
+def improves(j: LegitResult) -> Bool =
+  matches(Tuple(j.candidate_avg_entropy, j.current_avg_entropy), (Some(c), Some(p)) if c < p)
+def relaxed_gate(j: LegitResult, threshold: Float) -> Bool = improves(j)
+  || std::option::is_some_and(j.candidate_avg_entropy, \v: Float -> v < threshold)
+def degraded(s: LoopState, n: Int, threshold: Float) -> Bool = List.len(s.window.values) >= n
+  && std::option::is_some_and(s.average.value, \v: Float -> v > threshold)
+def full_degraded(w: Window, n: Int, threshold: Float) -> Bool = List.len(w.history.values) >= n
+  && std::option::is_some_and(w.average.value, \v: Float -> v > threshold)
+def same_cycle(w: Window) -> Bool = w.history_cycle == w.average_cycle
+def incoherent_mean(w: Window, tolerance: Float) -> Bool = match(Tuple(mean(w.history.values), w.average.value)) {
+  (Some(expected), Some(actual)) -> abs(expected - actual) > tolerance,
+  (Some(_), None) -> true,
+  _ -> false,
+}
+def increment(count: Int, limit: Int) -> Int = if count >= limit then limit else count + 1
+
+// The latest write of `key` the coordinator holds.
+def latest(writes: List<Latest>, key: Str) -> Option<Latest> =
+  match(List.filter(\w: Latest -> w.value.ref.key == key, writes)) {
+    [] -> None,
+    found -> Some(List.head(found)),
+  }
+def writer_cycle(write: Option<Latest>) -> Option<Owner> = match(write) {
+  Some({ context: Some(c), .. }) -> c.cycle,
+  _ -> None,
+}
+
+// The window an average write forms with the latest admitted history write.
+def window_with(average: Resolved<Knowledge>, average_cycle: Option<Owner>, writes: List<Latest>) -> Option<Window> =
+  match(Tuple(average.value, latest(writes, "EntropyHistory"))) {
+    (RunningAvgEntropy(a), Some(h @ { value: { value: EntropyHistory(history), ref: history_ref, .. }, .. })) ->
+      Some({ history, average: a, history_ref, history_cycle: writer_cycle(Some(h)), average_cycle,
+             history_sequence: history_ref.global_write_sequence,
+             average_sequence: average.ref.global_write_sequence }),
+    _ -> None,
+  }
+
+// The four latest store values the loop's state consists of, once all exist.
+def loop_state(writes: List<Latest>) -> Option<LoopState> =
+  match(Tuple(latest(writes, "EntropyHistory"), latest(writes, "RunningAvgEntropy"),
+              latest(writes, "InPlanning"), latest(writes, "ReplanningCounter"))) {
+    (Some({ value: { value: EntropyHistory(window), .. }, .. }), Some({ value: { value: RunningAvgEntropy(average), .. }, .. }),
+     Some({ value: { value: InPlanning(planning), .. }, .. }), Some({ value: { value: ReplanningCounter(replans), .. }, .. })) ->
+      Some({ window, average, planning, replans }),
+    _ -> None,
+  }
+
+def detail(record: Record<Knowledge, Message, Trigger>) -> Option<Event> = match(record) {
+  Phase({ step: Event({ topic, message, .. }), .. }) -> event_of(topic, message),
+  _ -> None,
+}
+
+// A Monitor started by a request from outside the loop, with no publication
+// waking it: the request it started from. This links a capture to its
+// callback and request boundary only; it says nothing about the image, its
+// authenticity, or whether it is what was asked for.
+def external_request(s: Started<Knowledge, Message, Trigger, Context>) -> Option<Trigger> =
+  if s.activation.role == Role::Monitor && std::option::is_none(s.activation.caused_by)
+    && s.received.topic == request_topic()
+  then Some(s.received.message) else None
+
+// Coordinator hooks: the context an activation starts with, and its update.
+def start(s: Started<Knowledge, Message, Trigger, Context>) -> Context = {
+  cycle: match(s.cause) {
+    Some(w) -> w.context.cycle,
+    None -> if s.activation.role == Role::Monitor then Some(owner(s.activation)) else None,
+  },
+  episode: match(s.cause) {
+    Some(w) -> if w.topic == "anomaly_detected" then Some(callback(w.publisher)) else w.context.episode,
+    None -> None,
+  },
+  window: None,
+  completions: 0,
+  request: external_request(s),
+}
+def step(s: Stepped<Knowledge, Message, Trigger, Context>) -> Context = {
+  window: match(s.record) {
+    Phase({ step: Write({ value: v @ { value: RunningAvgEntropy(_), .. }, .. }), .. }) ->
+      window_with(v, s.context.cycle, s.latest),
+    _ -> s.context.window,
+  },
+  completions: if matches(detail(s.record), Some(CycleCompleted)) then increment(s.context.completions, 2)
+    else s.context.completions,
+  ..s.context,
+}
+
+// Publication progress through the shared MAPLE-K machines. Required
+// publications are checked below, so these require none themselves.
+def classify(p: Posted<Message>) -> Option<Milestone> = match(event_of(p.topic, p.message)) {
+  Some(ObservationRecorded) -> Some(Milestone::Observation),
+  Some(DetectionCompleted) -> Some(Milestone::Analysis),
+  Some(AnomalyDetected) -> Some(Milestone::Anomaly),
+  Some(PlanGenerated) -> Some(Milestone::Proposal),
+  Some(PlanRejected) -> Some(Milestone::Rejection),
+  Some(PlanValidated) -> Some(Milestone::Acceptance),
+  Some(PlanExecuted) -> Some(Milestone::Execution),
+  Some(AdaptationAborted(_)) -> Some(Milestone::Abort),
+  _ -> None,
+}
+// The external request, which opens a sensing cycle.
+def is_request(r: Received<Trigger>) -> Bool = r.topic == request_topic()
+def requires_none(o: Outcome<Knowledge>) -> Option<Milestone> = None
+def closes(o: Outcome<Knowledge>) -> Bool = matches(o, Planned(NoPlan) | Executed(NotApplied(_)) | Aborted(_))
+
+// The tuple a publication's witness cites under `name`.
+def witnessed(w: Witness<Knowledge, Message, Context>, name: Str) -> Option<Resolved<Knowledge>> =
+  rpio::journal::view::cited(w.evidence, name)
+def plan_of(r: Option<Resolved<Knowledge>>) -> Option<Plan> = match(r) {
+  Some({ ref, value: CandidateModel(value), .. }) -> Some({ version: ref, value }),
+  _ -> None,
+}
+// The exact FrameRef tuple a detection acquired is the one the observation
+// that woke its Analysis cited: same version, value and writer.
+def same_frame(journal: Journal, record: Record<Knowledge, Message, Trigger>) -> Bool =
+  match(Tuple(journal.entry, rpio::journal::view::slot(record, "frame"))) {
+    (Some({ cause: Some(w), .. }), Some(frame)) ->
+      w.topic == "observation_recorded"
+      && std::option::is_some_and(witnessed(w, "frame"), \f: Resolved<Knowledge> -> f == frame),
+    _ -> false,
+  }
+
+// The window an anomaly publication cites: its own history and average
+// slots, with writer cycles where they are still the latest writes.
+def cited_window(record: Record<Knowledge, Message, Trigger>, writes: List<Latest>) -> Option<Window> =
+  match(Tuple(rpio::journal::view::slot(record, "history"), rpio::journal::view::slot(record, "average"))) {
+    (Some(h @ { value: EntropyHistory(history), .. }), Some(a @ { value: RunningAvgEntropy(average), .. })) ->
+      Some({ history, average, history_ref: h.ref,
+             history_cycle: if std::option::is_some_and(latest(writes, "EntropyHistory"), \w: Latest -> w.value == h)
+               then writer_cycle(latest(writes, "EntropyHistory")) else None,
+             average_cycle: if std::option::is_some_and(latest(writes, "RunningAvgEntropy"), \w: Latest -> w.value == a)
+               then writer_cycle(latest(writes, "RunningAvgEntropy")) else None,
+             history_sequence: h.ref.global_write_sequence, average_sequence: a.ref.global_write_sequence }),
+    _ -> None,
+  }
+
+def history_version(writes: List<Latest>) -> Option<Version> =
+  std::option::map(latest(writes, "EntropyHistory"), \w: Latest -> w.value.ref)
+
+// Every Tick fact, from the coordinator's output and this tick's record.
+def decision_of(record: Record<Knowledge, Message, Trigger>) -> Option<Decision> =
+  match(Tuple(detail(record), rpio::journal::view::phase_activation(record))) {
+    (Some(PlanValidated), _) -> Some(Decision::Accept),
+    (Some(PlanRejected), _) -> Some(Decision::Reject),
+    (Some(AdaptationAborted(_)), Some({ role: Legitimate, .. })) -> Some(Decision::BudgetAbort),
+    _ -> None,
+  }
+
+// The facts that hold on every tick, whether or not it carries a record.
+type Head<D> = Struct<clock: Clock<D>, new_run: Bool, status: Status, protocol: Protocol,
+  started: Option<Role>, state: Option<LoopState>>
+
+// A tick without a record: its head facts, and no occurrence.
+def facts_absent(head: Head<JournalTime>) -> Tick<JournalTime> = {
+  clock: head.clock, sequence: None, new_run: head.new_run, status: head.status, protocol: head.protocol,
+  event: None, role: None, started: head.started, ended: false, owner: None, wake: None, emission: None,
+  episode: None, service: None, written: None, state: head.state, window: None, capture: None,
+  detection: None, anomaly: None, proposal: None, verdict: None, execution: None,
+  abort: None, not_applied: false, sample: None,
+}
+
+def facts(journal: Journal, record: Record<Knowledge, Message, Trigger>, head: Head<JournalTime>) -> Tick<JournalTime> =
+  facts_of(journal, record, detail(record), rpio::journal::view::phase_activation(record), decision_of(record), head)
+
+def facts_of(journal: Journal, record: Record<Knowledge, Message, Trigger>, event: Option<Event>,
+             activation: Option<Activation>, decision: Option<Decision>, head: Head<JournalTime>) -> Tick<JournalTime> = {
+  sequence: Some(rpio::journal::view::position(record).seq),
+  event, role: std::option::map(activation, \a: Activation -> a.role),
+  ended: matches(record, Phase({ step: End(_), .. })),
+  owner: std::option::map(activation, \a: Activation -> callback(a)),
+  wake: match(activation) { Some({ caused_by: Some(e), .. }) -> Some(publication(e)), _ -> None },
+  emission: std::option::map(rpio::journal::view::published(record), \e: Emission -> publication(e)),
+  episode: if matches(event, Some(AnomalyDetected)) then std::option::map(activation, \a: Activation -> callback(a))
+    else match(journal.entry) { Some(e) -> e.context.episode, None -> None },
+  service: match(record) {
+    Phase({ step: ServiceCompleted({ service, outcome, .. }), .. }) ->
+      Some({ name: service, outcome: if outcome == ServiceOutcome::Delivered then "Delivered" else "NotDelivered" }),
+    _ -> None,
+  },
+  written: std::option::map(rpio::journal::view::written(record), \r: Resolved<Knowledge> -> r.value),
+  window: match(record) {
+    Phase({ step: Write({ value: v @ { value: RunningAvgEntropy(_), .. }, .. }), .. }) ->
+      window_with(v, match(journal.entry) { Some(e) -> e.context.cycle, None -> None }, journal.latest),
+    // An Activation-owned history notice is the immutable definition, not
+    // another contextual Write; its matching Phase Write forms the window.
+    Knowledge({ version: v @ { value: RunningAvgEntropy(_), .. }, .. })
+      if !matches(v.written_by, Activation(_)) -> window_with(v, None, journal.latest),
+    _ -> None,
+  },
+  capture: match(Tuple(event, declarations::frame_ref(rpio::journal::view::slot(record, "frame")))) {
+    (Some(ObservationRecorded), Some(frame)) -> Some({ frame,
+      matches_request: matches(journal.entry, Some({ context: { request: Some(_), .. }, .. })),
+      request: match(journal.entry) { Some(e) -> e.context.request, None -> None } }),
+    _ -> None,
+  },
+  detection: match(Tuple(event, declarations::frame_ref(rpio::journal::view::slot(record, "frame")),
+                         declarations::detections(rpio::journal::view::slot(record, "result")), declarations::active_model(rpio::journal::view::slot(record, "active")))) {
+    (Some(DetectionCompleted), Some(frame), Some(result), Some(active)) -> Some({ frame, result, active,
+      matches_observation: same_frame(journal, record) }),
+    _ -> None,
+  },
+  anomaly: match(Tuple(event, cited_window(record, journal.latest), declarations::replanning_counter(rpio::journal::view::slot(record, "counter")))) {
+    (Some(AnomalyDetected), Some(window), Some(counter)) -> Some({ window, counter }),
+    _ -> None,
+  },
+  proposal: match(Tuple(event, plan_of(rpio::journal::view::slot(record, "plan")), declarations::active_model(rpio::journal::view::slot(record, "active")), history_version(journal.latest))) {
+    (Some(PlanGenerated), Some(plan), Some(active), Some(current_window)) ->
+      Some({ plan, active, current_window, episode: match(journal.entry) { Some(e) -> e.context.episode, None -> None } }),
+    _ -> None,
+  },
+  verdict: match(Tuple(decision, plan_of(rpio::journal::view::slot(record, "plan")), declarations::legit_result(rpio::journal::view::slot(record, "result")),
+                       declarations::replanning_counter(rpio::journal::view::slot(record, "counter")), history_version(journal.latest))) {
+    (Some(decision), Some(plan), Some(result), Some(counter), Some(current_window)) -> Some({
+      decision, plan, result, counter, current_window,
+      proposed: match(journal.entry) {
+        Some({ cause: Some(w), .. }) if w.topic == "plan_generated" -> plan_of(witnessed(w, "plan")),
+        _ -> None,
+      },
+      episode: match(journal.entry) { Some(e) -> e.context.episode, None -> None } }),
+    _ -> None,
+  },
+  execution: match(Tuple(event, plan_of(rpio::journal::view::slot(record, "plan")), declarations::action_command(rpio::journal::view::slot(record, "command")),
+                         declarations::active_model(rpio::journal::view::slot(record, "active")), loop_state(journal.latest), rpio::journal::view::slot(record, "command"))) {
+    (Some(PlanExecuted), Some(used_plan), Some(command), Some(active), Some(reset), Some(command_ref)) -> Some({
+      used_plan, command, command_version: command_ref.ref, active, reset,
+      accepted: match(journal.entry) {
+        Some({ cause: Some(w), .. }) if w.topic == "plan_validated" ->
+          match(Tuple(plan_of(witnessed(w, "plan")), declarations::legit_result(witnessed(w, "result")))) {
+            (Some(plan), Some(result)) -> Some({ plan, result }),
+            _ -> None,
+          },
+        _ -> None,
+      } }),
+    _ -> None,
+  },
+  abort: match(Tuple(event, activation, declarations::replanning_counter(rpio::journal::view::slot(record, "counter")))) {
+    (Some(AdaptationAborted({ reason, .. })), Some(a), Some(counter)) -> Some({ reason, role: a.role, counter }),
+    _ -> None,
+  },
+  not_applied: matches(record, Phase({ step: End({ outcome: Executed(NotApplied(_)), .. }), .. })),
+  sample: match(Tuple(event, rpio::journal::view::slot(record, "result"), journal.entry)) {
+    (Some(CycleCompleted), Some(r @ { value: Detections(result), .. }), Some(e)) -> Some({
+      cycle: e.context.cycle, first: e.context.completions == 1, result,
+      detection_sequence: r.ref.global_write_sequence, window: e.context.window }),
+    _ -> None,
+  },
+  ..facts_absent(head),
+}
+
+// The evidence each publication must cite, by the publishing role and topic:
+// a slot of that name holding a version of that key.
+type Requirement = Struct<name: Str, key: Str>
+def need(name: Str, key: Str) -> Requirement = { name, key }
+def required_slots(role: Role, topic: Str) -> List<Requirement> = match(Tuple(role, topic)) {
+  (Monitor, "observation_recorded") -> [need("frame", "FrameRef")],
+  (Analysis, "detection_completed") ->
+    [need("active", "ActiveModel"), need("frame", "FrameRef"), need("result", "Detections")],
+  (Analysis, "anomaly_detected") ->
+    [need("average", "RunningAvgEntropy"), need("counter", "ReplanningCounter"), need("history", "EntropyHistory")],
+  (Analysis, "cycle_completed") -> [need("result", "Detections")],
+  (Plan, "plan_generated") -> [need("active", "ActiveModel"), need("plan", "CandidateModel")],
+  (Plan, "adaptation_aborted") -> [need("counter", "ReplanningCounter")],
+  (Legitimate, t) if t == "plan_validated" || t == "plan_rejected" || t == "adaptation_aborted" ->
+    [need("counter", "ReplanningCounter"), need("plan", "CandidateModel"), need("result", "LegitResult")],
+  (Execute, "plan_executed") ->
+    [need("active", "ActiveModel"), need("command", "ActionCommand"), need("plan", "CandidateModel")],
+  _ -> [],
+}
+// The key each evidence field of an End outcome must hold.
+def required_outcome_slots(outcome: Outcome<Knowledge>) -> List<Requirement> = match(outcome) {
+  Monitored(_) -> [need("observation", "FrameRef")],
+  Analysed(Anomaly(_)) -> [need("evidence", "RunningAvgEntropy")],
+  Planned(Generated(_)) -> [need("plan", "CandidateModel")],
+  Legitimised(_) -> [need("plan", "CandidateModel"), need("legitimate_result", "LegitResult")],
+  Executed(Applied(_)) -> [need("plan", "CandidateModel"), need("effect", "ActionCommand")],
+  Executed(NotApplied(_)) -> [need("plan", "CandidateModel")],
+  _ -> [],
+}
+def cites(evidence: List<Slot<Knowledge>>, r: Requirement) -> Bool =
+  List.len(List.filter(\s: Slot<Knowledge> -> s.name == r.name && s.value.ref.key == r.key, evidence)) > 0
+def lacks(evidence: List<Slot<Knowledge>>, required: List<Requirement>) -> Bool =
+  List.len(List.filter(\r: Requirement -> !cites(evidence, r), required)) > 0
+// An Event without the evidence its role and topic require, or an End whose
+// outcome names a version of another key than its field requires.
+def missing_evidence(record: Option<Record<Knowledge, Message, Trigger>>) -> Bool = match(record) {
+  Some(Phase({ activation, step: Event({ topic, .. }), evidence, .. })) ->
+    lacks(evidence, required_slots(activation.role, topic)),
+  Some(Phase({ step: End({ outcome, .. }), .. })) ->
+    lacks(rpio::journal::view::outcome_evidence(outcome), required_outcome_slots(outcome)),
+  _ -> false,
+}
+// Whether some record so far lacked its required evidence: it makes the
+// journal invalid from then on, as an integrity finding of the coordinator
+// does.
+def evidence_missed(observation: Observation<Knowledge, Message, Trigger, JournalTime>) -> Bool = missed
+where {
+  missed: Bool = default(missed[1], false) || missing_evidence(rpio::journal::view::timing::record_of(observation))
+}
+
+// The topics a callback of the loop is registered for: only a publication on
+// one of them is kept until the Start it wakes.
+def consumed(topic: Str) -> Bool = topic == "observation_recorded" || topic == "anomaly_detected"
+  || topic == "plan_rejected" || topic == "plan_generated" || topic == "plan_validated"
+
+// The topics an End outcome requires its own activation to have published.
+def required_publications(role: Role, outcome: Outcome<Knowledge>) -> List<Str> = match(Tuple(role, outcome)) {
+  (Monitor, Monitored(_)) -> ["observation_recorded"],
+  (Analysis, Analysed(Nominal)) -> ["detection_completed", "cycle_completed"],
+  (Analysis, Analysed(Anomaly(_))) -> ["detection_completed", "anomaly_detected", "cycle_completed"],
+  (Plan, Planned(Generated(_))) -> ["plan_generated"],
+  (Plan, Planned(NoPlan)) -> ["adaptation_aborted"],
+  (Legitimate, Legitimised(Accepted(_))) -> ["plan_validated"],
+  (Legitimate, Legitimised(Rejected(_))) -> ["plan_rejected"],
+  (Legitimate, Aborted({ reason: BudgetExhausted })) -> ["adaptation_aborted"],
+  (Execute, Executed(Applied(_))) -> ["plan_executed"],
+  _ -> [],
+}
+// An End whose activation did not publish what its outcome requires.
+def missing_publication(journal: Journal) -> Bool = match(Tuple(journal.entry, journal.record)) {
+  (Some(e), Some(Phase({ step: End({ outcome, .. }), .. }))) ->
+    List.len(List.filter(\t: Str -> List.len(List.filter(\p: Str -> p == t, e.published)) == 0,
+      required_publications(e.activation.role, outcome))) > 0,
+  _ -> false,
+}
+
+// The Tick stream. Startup adequacy is judged at the first workload Start:
+// the four loop-state keys and the active model must have been written by
+// then, or the trial's evaluation is incomplete; no default stands in.
+def tick(observation: Observation<Knowledge, Message, Trigger, JournalTime>) -> Tick<JournalTime> =
+  match(record) {
+    Some(r) -> facts(journal, r, head),
+    None -> facts_absent(head),
+  }
+where {
+  journal: Journal = rpio::journal::state::track::<start, step, consumed>(observation)
+  sensing = rpio::journal::view::maplek::events::sensing::<is_request, classify, requires_none>(observation)
+  adaptation = rpio::journal::view::maplek::events::adaptation::<classify, requires_none, closes>(observation)
+  summary = rpio::journal::view::timing::tick(observation)
+  missed: Bool = evidence_missed(observation)
+  now: Option<Instant<JournalTime>> = rpio::journal::view::timing::now(observation)
+  record: Option<Record<Knowledge, Message, Trigger>> = rpio::journal::view::timing::record_of(observation)
+  started: Option<Role> = match(record) { Some(Phase({ activation: a, step: Start(_), .. })) -> Some(a.role), _ -> None }
+  head: Head<JournalTime> = {
+    clock: { now, at: rpio::journal::view::timing::record_time(observation) },
+    new_run: journal.new_run,
+    status: { journal_invalid: rpio::journal::state::invalid(journal.report) || missed,
+              startup_incomplete: inadequate,
+              backwards_clock: match(Tuple(rpio::journal::view::timing::phase_time(observation), summary.previous_phase_time)) {
+                (Some(t), Some(p)) -> std::time::is_backwards(std::time::between(p, t)), _ -> false,
+              } },
+    // An unsolicited Start of an analysing or adapting role breaks the
+    // sensing or adaptation protocol, whether or not it later publishes.
+    protocol: { sensing_ok: !sensing.overlapping_request
+                  && !(journal.unsolicited && matches(started, Some(Analysis))),
+                adaptation_ok: adaptation.protocol_followed
+                  && !(journal.unsolicited && matches(started, Some(Plan) | Some(Legitimate) | Some(Execute))),
+                missing_publication: missing_publication(journal),
+                missing_evidence: missing_evidence(record) },
+    started,
+    state: loop_state(journal.latest),
+  }
+  workload: Bool = default(workload[1], false) || matches(record, Some(Phase({ step: Start(_), .. })))
+  first_workload: Bool = workload && !default(workload[1], false)
+  adequate: Bool = std::option::is_some(loop_state(journal.latest))
+    && std::option::is_some(latest(journal.latest, "ActiveModel"))
+  inadequate: Bool = default(inadequate[1], false) || (first_workload && !adequate)
+}

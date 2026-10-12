@@ -1,0 +1,22 @@
+// Application interpretation of native trigger/detail tags. The shared adapter
+// retains all Knowledge notices, phase facts, exact references and UUID tokens.
+use experimental::high_level_dsrv
+use turtlebot::{Knowledge, NativeTrigger, NativeEvent, Trigger, Emitted}
+use rpio::journal::{Resolved}
+use rpio::journal::view::{Received, Slot}
+use std::option::{Option}
+
+const journal_clock: Str = "turtlebot.journal"
+def stage(trigger: NativeTrigger) -> Str = match(trigger) {
+  LidarData -> "scan", ProcessedData -> "processed_data",
+  AnomalyFound -> "anomaly_found", PlanningCompleted -> "planning_completed",
+  PlanAccepted -> "plan_accepted", PlanRejected -> "plan_rejected",
+}
+def receive(trigger: NativeTrigger) -> Received<Trigger> = match(trigger) {
+  LidarData -> {kind: Message, topic: "scan", message: {stage: None}},
+  _ -> {kind: Event, topic: stage(trigger), message: {stage: Some(stage(trigger))}},
+}
+def message(event: NativeEvent) -> Emitted = {stage: event.stage}
+// Tutorial publications carry no additional citation slots; End outcomes retain
+// their exact references independently, and reads/writes retain their commits.
+def cite(knowledge: List<Resolved<Knowledge>>) -> List<Slot<Knowledge>> = []

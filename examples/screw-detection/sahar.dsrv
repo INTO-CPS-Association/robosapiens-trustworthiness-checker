@@ -1,0 +1,166 @@
+// Sahar's MAPLE-K properties P1–P15 over the recorded journal of the
+// ScrewDetection loop. Every finding family of the original specification is
+// kept; README.md maps each original finding to the family here and lists the
+// deliberate differences. Input is the ordered journal with its sampled clock.
+use experimental::high_level_dsrv
+mod v2_adapter
+mod observation_clock
+mod declarations
+mod schema
+mod evidence
+use v2_adapter::{self, Input}
+use declarations::*
+use schema::*
+use evidence::{self, Tick, LoopState, Window, Swap}
+use rpio::journal::view::timing::{Observation}
+use std::option::{self, Option}
+use std::time::Instant
+use std::timing::{self, Clock}
+use std::stream
+
+in journal_input: v2_adapter::Input
+aux journal: Observation<Knowledge, Message, Trigger, JournalTime> = v2_adapter::adapt(journal_input)
+out journal_incomplete: Bool = v2_adapter::incomplete(journal_input)
+aux tick: Tick<JournalTime> = evidence::tick(journal)
+// The held "now" and this record's own instant, for every deadline.
+aux clock: Clock<JournalTime> = tick.clock
+const n: Int = 10
+const threshold: Float = 0.35
+const retries: Int = 3
+const tolerance: Float = 0.000001
+aux accepted: Bool = matches(tick.event, Some(PlanValidated))
+aux rejected: Bool = matches(tick.event, Some(PlanRejected))
+aux executed: Bool = matches(tick.event, Some(PlanExecuted))
+aux aborted: Bool = std::option::is_some(tick.abort)
+aux anomaly: Bool = matches(tick.event, Some(AnomalyDetected))
+aux closed: Bool = executed || aborted || tick.not_applied
+
+aux request: Option<Key> = std::option::only_if(matches(tick.started, Some(Monitor)), tick.owner)
+aux observation: Option<Key> = std::option::only_if(matches(tick.event, Some(ObservationRecorded)), tick.emission)
+aux plan_request: Option<Key> = std::option::only_if(anomaly || rejected, tick.emission)
+aux proposal_event: Option<Key> = std::option::only_if(matches(tick.event, Some(PlanGenerated)), tick.emission)
+aux acceptance_event: Option<Key> = std::option::only_if(accepted, tick.emission)
+aux episode_start: Option<Key> = std::option::only_if(anomaly, tick.episode)
+
+// P1/P7/P8. Matching keys close waits, including a late closing publication.
+// Callbacks may end while their response waits remain open.
+aux capture = std::timing::deadline(
+  request,
+  std::option::only_if(matches(tick.event, Some(ObservationRecorded)), tick.owner), None, Some(5 s), clock)
+aux detection = std::timing::deadline(
+  observation,
+  std::option::only_if(matches(tick.event, Some(DetectionCompleted)), tick.wake), None, Some(20 s), clock)
+aux plan = std::timing::deadline(
+  plan_request,
+  std::option::only_if(matches(tick.event, Some(PlanGenerated))
+    || (aborted && matches(tick.role, Some(Plan))), tick.wake), None, Some(10 s), clock)
+aux validation = std::timing::deadline(
+  proposal_event,
+  std::option::only_if(accepted || rejected || (aborted && matches(tick.role, Some(Legitimate))), tick.wake), None, Some(60 s), clock)
+aux execution = std::timing::deadline(
+  acceptance_event,
+  std::option::only_if(executed || tick.not_applied || (aborted && matches(tick.role, Some(Execute))), tick.wake), None, Some(10 s), clock)
+aux episode = std::timing::deadline(
+  episode_start,
+  std::option::only_if(closed, tick.episode), None, Some(120 s), clock)
+out response_late: Bool = capture.overdue || detection.overdue || plan.overdue
+  || validation.overdue || execution.overdue || episode.overdue
+out pending_checks: Int = capture.pending + detection.pending + plan.pending
+  + validation.pending + execution.pending + episode.pending
+out startup_incomplete: Bool = tick.status.startup_incomplete
+out journal_invalid: Bool = tick.status.journal_invalid
+
+// P2. Missing averages remain absent; the original lower-range omission remains.
+out bad_window: Bool = std::option::is_some_and(tick.state, \s: LoopState ->
+    List.len(s.window.values) > n
+    || List.fold(\bad: Bool, v: Float -> bad || !evidence::entropy(v), false, s.window.values)
+    || std::option::is_some_and(s.average.value, \v: Float -> v > 1.0))
+  || match(tick.window) {
+    Some(w) -> matches(Tuple(evidence::mean(w.history.values), w.average.value),
+      (Some(expected), Some(actual)) if actual >= 0.0 && abs(expected - actual) > tolerance),
+    _ -> false,
+  }
+// P3: actual absence is now visible as a lighting warning.
+out lighting_warning: Bool = match(tick.capture) {
+  Some(c) -> !std::option::is_some_and(c.frame.brightness, \v: Float -> v >= 5.0 && v <= 250.0),
+  _ -> false,
+}
+// P4/P5: evidence at anomaly publication; current store state for missed anomaly.
+out anomaly_unsound: Bool = match(tick.anomaly) {
+  Some(a) -> !evidence::full_degraded(a.window, n, threshold), _ -> false,
+}
+aux degraded: Bool = std::option::is_some_and(tick.state,
+  \s: LoopState -> evidence::degraded(s, n, threshold) && !s.planning.in_planning)
+aux now: Option<Instant<JournalTime>> = clock.now
+aux at: Option<Instant<JournalTime>> = clock.at
+aux degradation = std::timing::while(degraded, now, at)
+out anomaly_missing: Bool = std::time::exceeds(degradation.span, 10 s)
+
+// P6 merged; generic protocol facts do not enforce candidate/model agreement.
+// Also diagnose successful callbacks that omit their required publication.
+out protocol_bad: Bool = !tick.protocol.adaptation_ok || tick.protocol.missing_publication
+
+// P9: preserve Sahar's candidate range 1..4.
+out bad_candidate: Bool = match(tick.proposal) {
+  Some(p) -> !matches(p.plan.value.model_id,
+    Some(id) if id >= 1 && id <= 4 && id != p.active.model_id),
+  _ -> false,
+}
+// P10: the original nonnegative candidate guard and relaxed gate.
+out bad_verdict: Bool = match(tick.verdict) {
+  Some(v) if !matches(v.decision, BudgetAbort) ->
+    matches(v.decision, Accept) != (std::option::is_some_and(v.result.candidate_avg_entropy,
+      \c: Float -> c >= 0.0) && evidence::relaxed_gate(v.result, threshold))
+    || v.result.is_legit != matches(v.decision, Accept),
+  _ -> false,
+}
+// P11: saturate after the first excessive rejection.
+aux previous_rejections: Int = default(rejections[1], 0)
+aux rejections: Int = if tick.new_run || anomaly then 0 else if rejected
+  then evidence::increment(previous_rejections, retries + 1) else previous_rejections
+out retry_budget: Bool = (rejected && rejections > retries)
+  || matches(tick.anomaly, Some(a) if a.counter.count != 0)
+
+// P12/P13: compare the accepted result with the actual command and reset values.
+// A raw execution with no accepted witness stays visible and fails.
+out bad_execution: Bool = match(tick.execution) {
+  Some(e) -> match(e.accepted) {
+    Some(a) -> !a.result.is_legit || !matches(Tuple(a.result.candidate_model_id, e.command.model_id),
+      (Some(model), Some(command)) if model == command && command == e.active.model_id),
+    _ -> true,
+  },
+  _ -> false,
+}
+out bad_reset: Bool = matches(tick.execution, Some(e)
+  if List.len(e.reset.window.values) != 0 || e.reset.planning.in_planning || e.reset.replans.count != 0)
+
+// P14: first subsequent full window; this variant deliberately does not require
+// ten fresh deployed-model samples. Window facts occur at average Write.
+aux was_assessing: Bool = default(assessing[1], false)
+aux ready: Bool = was_assessing && matches(tick.window, Some(w) if List.len(w.history.values) >= n)
+out assessing: Bool = if tick.new_run then false else if executed then true
+  else if ready then false else was_assessing
+out ineffective: Bool = ready && matches(tick.window, Some(w)
+  if std::option::is_some_and(w.average.value, \v: Float -> v > threshold))
+out effect_inconclusive: Bool = ready && matches(tick.window, Some(w)
+  if std::option::is_none(w.average.value))
+
+// P15: two previous swaps, preserving violation severity and 600 seconds.
+aux swaps = std::stream::recent::<2>(swap, tick.new_run)
+where {
+  swap: Option<Swap<JournalTime>> = match(Tuple(tick.execution, tick.clock.at)) {
+    (Some(e), Some(time)) -> Some({time, model: e.active.model_id}), _ -> None,
+  }
+}
+out unstable: Bool = match(Tuple(tick.execution, swaps.before)) {
+  (Some(_), [_, older]) -> std::time::shorter_than(std::time::since(Some(older.time), tick.clock.at), 600 s),
+  _ -> false,
+}
+// A third swap within 600 s already includes every 600 s ping-pong trace.
+// No separate compatibility output is needed for that strict subset.
+out violation: Bool = response_late || bad_window || anomaly_unsound || anomaly_missing
+  || protocol_bad || bad_candidate || bad_verdict || retry_budget || bad_execution
+  || bad_reset || ineffective || unstable
+out warning: Bool = lighting_warning
+out ever_violation: Bool = violation || default(ever_violation[1], false)
+out ever_warning: Bool = warning || default(ever_warning[1], false)

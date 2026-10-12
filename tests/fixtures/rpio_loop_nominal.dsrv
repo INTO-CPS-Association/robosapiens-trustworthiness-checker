@@ -1,0 +1,49 @@
+// The application vocabulary of the hand-written native journal
+// `fixtures/rpio/nominal.jsonl`, one complete MAPLE-K loop, and the explicit
+// functions that adapt it to the shared property view. Knowledge values are
+// open: the fixture writes only the fields a protocol example needs.
+use experimental::high_level_dsrv
+use rpio::journal::{Resolved}
+use rpio::journal::view::{Received, Slot}
+use std::option::Option
+
+type FrameRef = Struct<brightness: Option<Float>, detection_type: Option<Str>, ...>
+type EntropyHistory = Struct<model_id: Option<Int>, values: List<Float>, ...>
+type Command = Union<SwapModel>
+type Knowledge = Union<
+  Detections: Struct<boxes: List<Any>, ...>,
+  EntropyHistory: EntropyHistory,
+  FrameRef: FrameRef,
+  RunningAvgEntropy: Struct<value: Option<Float>, ...>,
+  CandidateModel: Struct<model_id: Option<Int>, ...>,
+  LegitResult: Struct<is_legit: Bool, ...>,
+  ActionCommand: Struct<command: Option<Command>, effect_acknowledged: Bool, ...>,
+>
+
+// An event's payload names its detail. A Start's trigger is tagged with the
+// event that woke it, or is the sensor message from outside the loop.
+type Detail = Union<ObservationRecorded, AnomalyDetected, PlanGenerated, PlanValidated>
+type Emitted = Struct<detail: Detail, ...>
+type Trigger = Union<
+  SensorDataReceived: Struct<detection_type: Option<Str>, ...>,
+  ObservationRecorded: Emitted,
+  AnomalyDetected: Emitted,
+  PlanGenerated: Emitted,
+  PlanValidated: Emitted,
+>
+
+// The clock label the replay binds to the journal's arrival times.
+const journal_clock: Str = "fixture.journal"
+
+def topic(trigger: Trigger) -> Str = match(trigger) {
+  SensorDataReceived(_) -> "sensor_data_received",
+  ObservationRecorded(_) -> "observation_recorded",
+  AnomalyDetected(_) -> "anomaly_detected",
+  PlanGenerated(_) -> "plan_generated",
+  PlanValidated(_) -> "plan_validated",
+}
+// The view receives the whole native trigger under its event's topic.
+def receive(trigger: Trigger) -> Received<Trigger> = {kind: Event, topic: topic(trigger), message: trigger}
+// The fixture's publications name no Knowledge. End outcomes, Reads and
+// Writes keep their exact references independently.
+def cite(knowledge: List<Resolved<Knowledge>>) -> List<Slot<Knowledge>> = []

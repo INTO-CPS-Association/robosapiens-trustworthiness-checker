@@ -1,0 +1,17 @@
+{
+  sources: {
+    journal: {
+      kind: "rpio-observation-clock-file",
+      variable: "observation",
+      journal_clock: "fixture.journal",
+      files: ["fixtures/rpio/service-rearm.jsonl"],
+      capture_checks: [
+        {
+          records: 8,
+          sha256: "468f8250dcbe61efbda9b3fbfff5435631508958eca5e6933fc060f4d5802fb8",
+          journal_clock: "fixture.journal",
+        },
+      ],
+    },
+  },
+}

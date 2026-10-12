@@ -1,0 +1,23 @@
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes, constants}
+
+use rpio::journal::timing
+use std::option
+use std::time::{Duration}
+
+// The journal's time domain. The source binds the observation's instants to
+// it from this declaration, so its configuration names no domain.
+newtype JournalTime = Unit
+const limit: Duration<JournalTime> = std::time::seconds(2.0)
+
+// The native service journals name no Knowledge and publish no event; each
+// Execute callback starts on a bare PlanValidated trigger.
+type Trigger = Union<PlanValidated>
+
+in observation: timing::Observation<Int, Int, Trigger, JournalTime>
+aux swap = rpio::journal::timing::service_timing::<"swap_model">(observation)
+
+out has_record: Bool = std::option::is_some(observation.record)
+out has_clock: Bool = std::option::is_some(observation.clock)
+out pending: Bool = swap.pending
+out has_span: Bool = std::option::is_some(swap.span)
+out overdue: Bool = std::time::exceeds(swap.span, limit)

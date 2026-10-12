@@ -1,0 +1,24 @@
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching, newtypes, constants}
+
+use rpio::journal::timing
+use std::option::{self, Option}
+use std::time::{Duration, Instant}
+
+newtype JournalTime = Unit
+const limit: Duration<JournalTime> = std::time::seconds(2.0)
+
+// The native callback starts on a bare application trigger and names no Knowledge.
+type Trigger = Union<PlanValidated>
+
+in observation: timing::Observation<Int, Int, Trigger, JournalTime>
+aux swap = rpio::journal::timing::service_timing::<"swap_model">(observation)
+
+out has_record: Bool = std::option::is_some(observation.record)
+out has_clock: Bool = std::option::is_some(observation.clock)
+out pending: Bool = swap.pending
+out completed: Bool = match(swap.ended) {
+  Some(Completed(Delivered)) -> true,
+  _ -> false,
+}
+out span_end: Option<Instant<JournalTime>> = match(swap.span) { Some(span) -> Some(span.end), None -> None }
+out overdue: Bool = std::time::exceeds(swap.span, limit)

@@ -1,0 +1,3 @@
+// Stage this physical clock label from the capture manifest for replay.
+use experimental::{modules, functions}
+def label() -> Str = "redis.server.time"

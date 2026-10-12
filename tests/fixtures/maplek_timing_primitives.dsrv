@@ -1,0 +1,10 @@
+use experimental::{functions, local_streams}
+
+def accumulate<weight: Int, select: (Int -> Bool)>(sample: Int)
+    -> Struct<accepted: Bool, count: Int, weighted_total: Int> = { accepted: accepted, count: count, weighted_total: weighted_total }
+where {
+  accepted: Bool = select(sample)
+  count: Int = default(count[1], 0) + (if accepted then 1 else 0)
+  weighted_total: Int = default(weighted_total[1], 0)
+    + (if accepted then weight * sample else 0)
+}

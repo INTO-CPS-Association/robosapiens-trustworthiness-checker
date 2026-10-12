@@ -6,6 +6,7 @@
 # Tutorials
 
 - [Write and run DSRV models](./tutorials/write-dsrv-monitor.md)
+- [Monitor a TurtleBot's MAPLE-K loop](./tutorials/turtlebot-maplek.md)
 - [Monitor timed signals with MSTLO](./tutorials/mstlo-monitor.md)
 - [Monitor live MQTT input](./tutorials/live-mqtt.md)
 - [Redis knowledge-state input](./redis-knowledge-input.md)
@@ -20,6 +21,7 @@
 
 - [Capabilities](./features/capabilities.md)
 - [Languages and runtimes](./features/languages-and-runtimes.md)
+- [MAPLE-K loop properties (draft)](./features/maplek.md)
 - [Inputs](./features/inputs.md)
 - [Outputs](./features/outputs.md)
 - [Integrations and deployment](./features/integrations-and-deployment.md)

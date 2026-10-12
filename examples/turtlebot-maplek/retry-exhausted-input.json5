@@ -1,0 +1,19 @@
+{
+  "sources": {
+    "journal": {
+      "kind": "rpio-observation-clock-file",
+      "variable": "native_observation",
+      "journal_clock": "turtlebot.journal",
+      "files": [
+        "examples/turtlebot-maplek/native/retry-exhausted.jsonl"
+      ],
+      "capture_checks": [
+        {
+          "records": 56,
+          "sha256": "8db8e8899084ba73d15eaecec4bcee45a9a39a1fd1fa6867c829a4915e6ff051",
+          "journal_clock": "turtlebot.journal"
+        }
+      ]
+    }
+  }
+}

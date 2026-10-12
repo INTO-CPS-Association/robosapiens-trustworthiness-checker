@@ -1,0 +1,18 @@
+// Typed intervals (AC-TS-3d): `between` is total, `duration` is signed, and
+// `exceeds` and `shorter_than` hold only on forward intervals.
+use experimental::{modules, functions, generics, tagged_unions, pattern_matching, newtypes, constants}
+use std::option::{self, Option}
+use std::time::{Instant, Duration, TimeInterval}
+
+newtype JournalTime = Unit
+const limit: Duration<JournalTime> = std::time::seconds(1.0)
+
+in start: Float
+in end: Float
+aux from: Instant<JournalTime> = std::time::instant(start)
+aux to: Instant<JournalTime> = std::time::instant(end)
+aux span: TimeInterval<JournalTime> = std::time::between(from, to)
+out backwards: Bool = std::time::is_backwards(span)
+out exceeds: Bool = std::time::exceeds(std::option::some(span), limit)
+out shorter: Bool = std::time::shorter_than(std::option::some(span), limit)
+out duration: Duration<JournalTime> = std::time::duration(span)

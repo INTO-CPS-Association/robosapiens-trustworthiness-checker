@@ -1,0 +1,47 @@
+// PV-B: the same outputs as PV-A from the separate components: publication
+// progress and callback outcomes, each read from the one coordinator, and the
+// application's publication requirements. Neither replaces a publication with
+// an End.
+use experimental::high_level_dsrv
+mod v2_adapter
+mod observation_clock
+mod declarations
+mod schema
+mod evidence
+use v2_adapter::{self, Input}
+use declarations::*
+use schema::*
+use evidence
+use rpio::journal::view::timing::{Observation}
+use rpio::journal::state::{JournalState}
+use rpio::journal::view::maplek::{self, EvidenceSlots, PublicationView, CallbackView}
+use std::option::{self, Option}
+
+in journal_input: v2_adapter::Input
+aux journal: Observation<Knowledge, Message, Trigger, JournalTime> = v2_adapter::adapt(journal_input)
+out journal_incomplete: Bool = v2_adapter::incomplete(journal_input)
+
+// The slots that carry the accepted plan, the executed plan and its effect.
+def slots() -> EvidenceSlots = { acceptance_plan: "plan", execution_effect: "command", execution_plan: "plan" }
+
+aux state: JournalState<Knowledge, Message, Trigger, evidence::Context> =
+  rpio::journal::state::track::<evidence::start, evidence::step, evidence::consumed>(journal)
+aux publications: PublicationView<Knowledge, JournalTime> =
+  rpio::journal::view::maplek::publications::<evidence::is_request, evidence::classify, evidence::requires_none, evidence::closes>(
+    journal, state, slots())
+aux callbacks: CallbackView<Knowledge> = rpio::journal::view::maplek::callback_outcomes(state)
+
+// A record without its required evidence makes the journal invalid too.
+aux evidence_missed: Bool = evidence::evidence_missed(journal)
+out journal_invalid: Bool = state.report.invalid || evidence_missed
+out protocol_violated: Bool = !publications.protocol_followed
+out required_publication_missing: Bool = evidence::missing_publication(state)
+// Both resolved plans are kept when their references disagree.
+out executed_plan_mismatch: Bool = match(publications.execution) {
+  Some(e) -> e.accepted_plan.ref != e.executed_plan.ref,
+  None -> false,
+}
+out callback_ended: Bool = std::option::is_some(callbacks.ended)
+// The harness reads these at the declared final position.
+out active_activations: Int = state.report.active_activations
+out pending_publications: Int = state.report.pending_publications

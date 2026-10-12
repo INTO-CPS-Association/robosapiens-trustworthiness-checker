@@ -1,0 +1,289 @@
+// rpio::journal::state: the one historical owner of a resolved observation view.
+//
+// The decoder reads each record on its own. What records claim about each
+// other is checked here, with three tables and no contract:
+//
+// - active activations, each with the publication that woke it, the exact
+//   tuples it acquired (every Read that found a value and every Write; an
+//   identical tuple is kept once), its last emission number, the topics it
+//   published and an application context `T`. An activation leaves the table
+//   at its End;
+// - pending publications, each the witness its consumer starts from. Only a
+//   publication on a topic the application says is consumed is kept, and it
+//   leaves the table at the first Start it wakes;
+// - the latest write of every Knowledge key.
+//
+// Every tick exports the raw record, the current activation's entry, the
+// publication it created and the finding it raised. Raw records are never
+// filtered: a record that breaks the journal's integrity, or carries values a
+// domain property rejects, is still exported. Every finding makes the journal
+// invalid from then on, and the first one is kept as the diagnostic.
+//
+// The application supplies, as fixed functions, its context at Start
+// (`Started`), its update on later records of the activation (`Stepped`),
+// and which publication topics have a consumer (`consumed`).
+// Which evidence a publication must cite and which publications an outcome
+// requires are application checks, made by the specification itself.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use rpio::journal::view::{self, Record, Activation, ActivationId, Emission, Role, Position, Resolved, Slot,
+                    Outcome, Received, Sent}
+use rpio::journal::view::timing::{self, Observation}
+use std::option::{self, Option}
+
+// What a consumer starts from: the published message as recorded, the
+// evidence it cited, and the publisher with its context at publication.
+type Witness<K, E, T> = Struct<
+  emission: Emission, topic: Str, message: E,
+  evidence: List<Slot<K>>, publisher: Activation, context: T, position: Position,
+>
+type Active<K, E, T> = Struct<
+  activation: Activation,
+  cause: Option<Witness<K, E, T>>,
+  acquired: List<Resolved<K>>,
+  emitted: Int,
+  published: List<Str>,
+  context: T,
+>
+// The latest write of a key, where it was admitted, and the writing
+// activation's context (None for a write outside any activation).
+type Write<K, T> = Struct<value: Resolved<K>, position: Position, context: Option<T>>
+
+type Finding = Union<
+  // lifecycle
+  UnknownActivation, ActivationChanged, OutcomeNotOfRole, IncompleteEvidence,
+  // causality
+  CauseNotPending, TopicMismatch, EmissionOutOfOrder,
+  // evidence
+  NotAcquired, ConflictingEvidence,
+>
+// What the application's hooks see. A Start sees its activation, the message
+// it received and the publication that woke it, if pending; a later record
+// sees the activation's context before it, the record and the latest writes
+// before it.
+type Started<K, E, M, T> = Struct<activation: Activation, received: Received<M>,
+  cause: Option<Witness<K, E, T>>>
+type Stepped<K, E, M, T> = Struct<context: T, record: Record<K, E, M>, latest: List<Write<K, T>>>
+
+type Diagnostic = Struct<position: Position, finding: Finding, activation: Option<ActivationId>>
+// `invalid` is sticky; `diagnostic` is the first finding of the run.
+type Report = Struct<
+  invalid: Bool, diagnostic: Option<Diagnostic>,
+  active_activations: Int, pending_publications: Int,
+>
+type JournalState<K, E, M, T> = Struct<
+  record: Option<Record<K, E, M>>,
+  // The record's activation, as this record leaves it. For End it is the
+  // final state, before the entry is released.
+  entry: Option<Active<K, E, T>>,
+  // The publication an Event record created.
+  published: Option<Witness<K, E, T>>,
+  latest: List<Write<K, T>>,
+  // The finding this record raises, if any; the first applicable one when
+  // several apply.
+  finding: Option<Finding>,
+  report: Report,
+  // A Start of a role other than Monitor that no emission woke: a message
+  // from outside the loop. It is a fact about the deployment's protocol, not
+  // about the recording, so it is not a journal finding.
+  unsolicited: Bool,
+  new_run: Bool,
+>
+
+// The journal is invalid as a premise for domain conclusions.
+def invalid(report: Report) -> Bool = report.invalid
+
+internal def contains<X>(xs: List<X>, x: X) -> Bool = List.len(List.filter(\y -> y == x, xs)) > 0
+internal def first<X>(xs: List<X>) -> Option<X> = match(xs) { [] -> None, _ -> Some(List.head(xs)) }
+
+// Which outcome each role ends with; any role may abort.
+def outcome_of_role<K>(role: Role, outcome: Outcome<K>) -> Bool = match(Tuple(role, outcome)) {
+  (_, Aborted(_)) -> true,
+  (Monitor, Monitored(_)) -> true,
+  (Analysis, Analysed(_)) -> true,
+  (Plan, Planned(_)) -> true,
+  (Legitimate, Legitimised(_)) -> true,
+  (Execute, Executed(_)) -> true,
+  _ -> false,
+}
+
+internal def find_active<K, E, T>(active: List<Active<K, E, T>>, id: ActivationId) -> Option<Active<K, E, T>> =
+  first(List.filter(\e: Active<K, E, T> -> rpio::journal::view::identity(e.activation) == id, active))
+internal def find_pending<K, E, T>(pending: List<Witness<K, E, T>>, emission: Option<Emission>) -> Option<Witness<K, E, T>> =
+  match(emission) {
+    Some(e) -> first(List.filter(\w: Witness<K, E, T> -> w.emission == e, pending)),
+    None -> None,
+  }
+
+// How evidence a record cites stands against what its activation acquired:
+// the exact tuple, the same version with another value or writer, or neither.
+// An identical tuple has the same version, so only tuples of that version are
+// compared whole.
+type Acquisition = Union<Held, Conflicting, Absent>
+internal def acquisition<K>(acquired: List<Resolved<K>>, r: Resolved<K>) -> Acquisition =
+  match(List.filter(\a: Resolved<K> -> a.ref == r.ref, acquired)) {
+    [] -> Acquisition::Absent,
+    same_version -> if contains(same_version, r) then Acquisition::Held else Acquisition::Conflicting,
+  }
+
+// How each cited slot stands against what its activation acquired.
+internal def standings<K>(acquired: List<Resolved<K>>, evidence: List<Slot<K>>) -> List<Acquisition> =
+  List.map(\s: Slot<K> -> acquisition(acquired, s.value), evidence)
+
+// Immutable repeated or older definitions do not constitute a new commit:
+// preserve the first admission position/context and the newest version. A new
+// store epoch begins a new history. Every receipt remains in the raw record.
+internal def record_write<K, T>(latest: List<Write<K, T>>, w: Option<Write<K, T>>) -> List<Write<K, T>> =
+  match(w) {
+    Some(x) if std::option::is_some_and(
+      first(List.filter(\l: Write<K, T> -> l.value.ref.key == x.value.ref.key, latest)),
+      \l: Write<K, T> -> l.value.ref.store_epoch == x.value.ref.store_epoch
+        && l.value.ref.global_write_sequence >= x.value.ref.global_write_sequence) -> latest,
+    Some(x) -> List.append(List.filter(\l: Write<K, T> -> l.value.ref.key != x.value.ref.key, latest), x),
+    None -> latest,
+  }
+
+def track<K, E, M, D, T,
+          start: (Started<K, E, M, T> -> T),
+          step: (Stepped<K, E, M, T> -> T),
+          consumed: (Str -> Bool)>(
+    observation: Observation<K, E, M, D>) -> JournalState<K, E, M, T> = {
+    record, entry, published, latest, finding,
+    report: {
+      invalid: invalid_so_far,
+      diagnostic,
+      active_activations: List.len(active), pending_publications: List.len(pending),
+    },
+    unsolicited,
+    new_run
+  }
+where {
+  new_run: Bool = !default(started[1], false)
+  started: Bool = true
+  record: Option<Record<K, E, M>> = rpio::journal::view::timing::record_of(observation)
+  active_before: List<Active<K, E, T>> = default(active[1], [])
+  pending_before: List<Witness<K, E, T>> = default(pending[1], [])
+  latest_before: List<Write<K, T>> = default(latest[1], [])
+
+  activation: Option<Activation> = match(record) { Some(Phase({ activation: a, .. })) -> Some(a), _ -> None }
+  known: Option<Active<K, E, T>> = match(activation) {
+    Some(a) -> find_active(active_before, rpio::journal::view::identity(a)),
+    None -> None,
+  }
+  received: Option<Received<M>> = match(record) { Some(Phase({ step: Start(r), .. })) -> Some(r), _ -> None }
+  is_start: Bool = std::option::is_some(received)
+
+  // Start: the publication it consumes, and the activation it opens.
+  cause: Option<Emission> = if is_start then std::option::and_then(activation, \a: Activation -> a.caused_by) else None
+  woke: Option<Witness<K, E, T>> = find_pending(pending_before, cause)
+  cause_not_pending: Bool = std::option::is_some(cause) && std::option::is_none(woke)
+  topic_mismatch: Bool = match(Tuple(woke, received)) { (Some(w), Some(r)) -> w.topic != r.topic, _ -> false }
+  unsolicited: Bool = is_start && std::option::is_none(cause)
+    && std::option::is_some_and(activation, \a: Activation -> a.role != Role::Monitor)
+  opened: Option<Active<K, E, T>> = match(Tuple(activation, received, known)) {
+    (Some(a), Some(r), None) ->
+      Some({ activation: a, cause: woke, acquired: [], emitted: 0, published: [],
+             context: start({ activation: a, received: r, cause: woke }) }),
+    _ -> None,
+  }
+
+  // Later records of a known activation.
+  continuing: Option<Active<K, E, T>> = if is_start then None else known
+  unknown: Bool = !is_start && std::option::is_some(activation) && std::option::is_none(known)
+  changed: Bool = match(Tuple(continuing, activation)) { (Some(e), Some(a)) -> e.activation != a, _ -> false }
+  accessed: Option<Resolved<K>> = match(record) { Some(r) -> rpio::journal::view::accessed(r), None -> None }
+  // How the tuple this record reads or writes stands against its activation's.
+  access: Option<Acquisition> = match(Tuple(continuing, accessed)) {
+    (Some(e), Some(r)) -> Some(acquisition(e.acquired, r)), _ -> None }
+  sent: Option<Sent<E>> = match(record) { Some(r) -> rpio::journal::view::sent(r), None -> None }
+  outcome: Option<Outcome<K>> = match(record) { Some(Phase({ step: End({ outcome, .. }), .. })) -> Some(outcome), _ -> None }
+  // The evidence an Event or End cites.
+  cited: List<Slot<K>> = match(Tuple(continuing, record, outcome)) {
+    (Some(_), Some(Phase({ step: Event(_), evidence, .. })), _) -> evidence,
+    (Some(_), _, Some(o)) -> rpio::journal::view::outcome_evidence(o),
+    _ -> [],
+  }
+  standing: List<Acquisition> = match(continuing) {
+    Some(e) -> match(cited) { [] -> [], _ -> standings(e.acquired, cited) },
+    None -> [],
+  }
+  conflicting: Bool = matches(access, Some(Conflicting)) || contains(standing, Acquisition::Conflicting)
+  not_acquired: Bool = contains(standing, Acquisition::Absent)
+  out_of_order: Bool = match(Tuple(continuing, sent)) {
+    (Some(e), Some(s)) -> s.sequence_no != e.emitted + 1, _ -> false }
+  wrong_outcome: Bool = match(Tuple(continuing, outcome)) {
+    (Some(e), Some(o)) -> !outcome_of_role(e.activation.role, o), _ -> false }
+
+  finding: Option<Finding> =
+    if matches(record, Some(Incomplete(_))) then Some(Finding::IncompleteEvidence)
+    else if unknown then Some(Finding::UnknownActivation)
+    else if changed then Some(Finding::ActivationChanged)
+    else if wrong_outcome then Some(Finding::OutcomeNotOfRole)
+    else if cause_not_pending then Some(Finding::CauseNotPending)
+    else if topic_mismatch then Some(Finding::TopicMismatch)
+    else if out_of_order then Some(Finding::EmissionOutOfOrder)
+    else if not_acquired then Some(Finding::NotAcquired)
+    else if conflicting then Some(Finding::ConflictingEvidence)
+    else None
+
+  // The entry as this record leaves it.
+  updated: Option<Active<K, E, T>> = match(Tuple(continuing, record)) {
+    (Some(e), Some(r)) -> Some({
+      activation: e.activation, cause: e.cause,
+      acquired: match(Tuple(accessed, access)) {
+        (Some(x), Some(Absent)) -> List.append(e.acquired, x),
+        _ -> e.acquired,
+      },
+      emitted: match(sent) { Some(s) if s.sequence_no == e.emitted + 1 -> s.sequence_no, _ -> e.emitted },
+      published: match(sent) {
+        Some(s) if !contains(e.published, s.topic) -> List.append(e.published, s.topic),
+        _ -> e.published,
+      },
+      context: step({ context: e.context, record: r, latest: latest_before }),
+    }),
+    _ -> None,
+  }
+  entry: Option<Active<K, E, T>> = std::option::or_else(opened, updated)
+  published: Option<Witness<K, E, T>> = match(Tuple(updated, record, sent)) {
+    (Some(e), Some(Phase({ position: p, evidence, .. })), Some(s)) ->
+      Some({ emission: { activation: rpio::journal::view::identity(e.activation), sequence_no: s.sequence_no },
+             topic: s.topic, message: s.message, evidence, publisher: e.activation,
+             context: e.context, position: p }),
+    _ -> None,
+  }
+  // A woken Start consumes its publication; an Event on a consumed topic
+  // adds one.
+  retained: Option<Witness<K, E, T>> = match(published) { Some(p) if consumed(p.topic) -> published, _ -> None }
+  pending: List<Witness<K, E, T>> = match(Tuple(woke, retained)) {
+    (None, None) -> pending_before,
+    (Some(w), _) -> List.filter(\x: Witness<K, E, T> -> x.emission != w.emission, pending_before),
+    (None, Some(p)) -> List.append(pending_before, p),
+    _ -> pending_before,
+  }
+  active: List<Active<K, E, T>> = match(Tuple(opened, updated)) {
+    (Some(o), _) -> List.append(active_before, o),
+    (None, Some(u)) -> if std::option::is_some(outcome)
+      then List.filter(\x: Active<K, E, T> -> !rpio::journal::view::same(x.activation, u.activation), active_before)
+      else List.map(\x: Active<K, E, T> -> if rpio::journal::view::same(x.activation, u.activation) then u else x, active_before),
+    _ -> active_before,
+  }
+  written_now: Option<Write<K, T>> = match(Tuple(record, std::option::and_then(record, \r: Record<K, E, M> -> rpio::journal::view::written(r)))) {
+    (Some(r), Some(w)) -> Some({ value: w, position: rpio::journal::view::position(r),
+                                 context: std::option::map(updated, \u: Active<K, E, T> -> u.context) }),
+    _ -> None,
+  }
+  latest: List<Write<K, T>> = record_write(latest_before, written_now)
+
+  invalid_so_far: Bool = default(invalid_so_far[1], false) || std::option::is_some(finding)
+  // The previous value is bound on its own: the semi-sync runtime does not
+  // resolve a past value nested in a match's scrutinee.
+  diagnostic_before: Option<Diagnostic> = default(diagnostic[1], None)
+  diagnostic: Option<Diagnostic> = match(Tuple(diagnostic_before, finding, record)) {
+    (Some(d), _, _) -> Some(d),
+    (None, Some(f), Some(r)) -> Some({ position: rpio::journal::view::position(r), finding: f,
+      activation: match(r) {
+        Incomplete({ activation: a, .. }) -> Some(rpio::journal::view::identity(a)),
+        _ -> std::option::map(activation, \a: Activation -> rpio::journal::view::identity(a)),
+      } }),
+    _ -> None,
+  }
+}

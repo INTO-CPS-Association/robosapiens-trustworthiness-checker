@@ -1,0 +1,261 @@
+// Journal observations, clock history and lifecycle intervals.
+// Owns RPIO identity matching, not MAPLE-K successor policy or app milestones.
+// One matching activation/service in flight per instance. An overlapping
+// opener is reported and cannot replace the existing obligation.
+// Clock-only evaluations assess pending age without replaying a journal record.
+// Times are std::time instants in the spec's domain `D`.
+use experimental::{modules, functions, generics, local_streams, tagged_unions, pattern_matching}
+use rpio::journal::view::{Record, Activation, Emission, Role, ServiceOutcome}
+use std::option::{self, Option}
+use std::time::{self, Instant, TimeInterval, TimedValue, ClockSample}
+
+// This tick's journal record and clock sample; either may be absent.
+// `record.time` is its admission time (`arrival.journal_time`) in domain `D`.
+// None means absent on this tick, not a previously held value.
+type Observation<K, E, M, D> = Struct<
+  record: Option<TimedValue<Record<K, E, M>, D>>,
+  clock: Option<ClockSample<D>>,
+>
+
+type OpenActivation<D> = Struct<activation: Activation, since: Instant<D>>
+type OpenService<D> = Struct<activation: Activation, request: Str, since: Instant<D>>
+// How a service request ended: completed with an outcome, or abandoned when
+// its owning callback ended without completing it.
+type ServiceEnd = Union<Completed: ServiceOutcome, Abandoned>
+type Transfer = Struct<predecessor: Activation, successor: Role, wake: Emission>
+type TransferWithdrawal = Struct<transfer: Transfer, reason: Str>
+type HandoffResult<D> = Union<Gap: TimeInterval<D>, Overlap, Withdrawn: Str>
+type AwaitingHandoff<D> = Struct<transfer: Transfer, predecessor_end: Option<Instant<D>>>
+
+// The record this tick carries, without its instant.
+def record_of<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Record<K, E, M>> =
+  match(observation.record) {
+    Some(r) -> Some(r.value),
+    None -> None,
+  }
+
+// The instant of the Phase record this tick carries. A Knowledge record has
+// an instant too, but it is not phase time.
+def phase_time<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Instant<D>> =
+  match(observation.record) {
+    Some({ time, value: Phase(_) }) -> Some(time),
+    _ -> None,
+  }
+
+// The instant of any record on this tick, absent on clock-only ticks.
+def record_time<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Instant<D>> =
+  match(observation.record) { Some(r) -> Some(r.time), None -> None }
+
+// The instant this tick advances "now" to: the later of its record's
+// admission instant, whatever the record, and its clock sample's.
+def advance<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Instant<D>> =
+  match(Tuple(record_time(observation), observation.clock)) {
+    (Some(r), Some(c)) -> Some(std::time::latest(r, c.time)),
+    (Some(r), None) -> Some(r),
+    (None, Some(c)) -> Some(c.time),
+    _ -> None,
+  }
+
+// "now" after a tick, from "now" before it and the instant the tick shows.
+def hold<D>(previous: Option<Instant<D>>, shown: Option<Instant<D>>) -> Option<Instant<D>> =
+  match(Tuple(previous, shown)) {
+    (Some(p), Some(s)) -> Some(std::time::latest(p, s)),
+    (None, s) -> s,
+    (p, None) -> p,
+    _ -> None,
+  }
+
+// The held "now" on a tick that observes time, and None on one that does not.
+def current<K, E, M, D>(held: Option<Instant<D>>, observation: Observation<K, E, M, D>) -> Option<Instant<D>> =
+  match(advance(observation)) { Some(_) -> held, None -> None }
+
+// The latest record or clock instant seen; it never regresses. A source
+// releases a clock only after the records it covers, so a held "now" never
+// runs ahead of unread evidence. Every tick carrying a record or a clock
+// reports it. Older records retain their own instants; pending ages use the
+// held `now`.
+def now<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Instant<D>> = current(held, observation)
+where {
+  held: Option<Instant<D>> = hold(default(held[1], None), advance(observation))
+}
+
+// Where an interval measured on this tick ends: at the record that closes
+// it, which keeps its own instant, or else at "now".
+def span_end<K, E, M, D>(observation: Observation<K, E, M, D>, now: Option<Instant<D>>,
+                         closing: Bool) -> Option<Instant<D>> =
+  if closing then std::option::or_else(phase_time(observation), now) else now
+
+def ending<K, E, M, D>(observation: Observation<K, E, M, D>) -> Option<Activation> =
+  match(observation.record) {
+    Some({ value: Phase({ activation, step: End(_), .. }), .. }) -> Some(activation),
+    _ -> None,
+  }
+def started<K, E, M, D>(observation: Observation<K, E, M, D>, role: Role) -> Option<OpenActivation<D>> =
+  match(observation.record) {
+    Some({ time, value: Phase({ activation: a, step: Start(_), .. }) }) if a.role == role ->
+      Some({ activation: a, since: time }),
+    _ -> None,
+  }
+def transfer_matches(a: Activation, transfer: Transfer) -> Bool =
+  a.epoch == transfer.predecessor.epoch
+  && a.role == transfer.successor
+  && match(a.caused_by) { Some(wake) -> wake == transfer.wake, None -> false }
+def end_matches(a: Activation, transfer: Transfer) -> Bool =
+  same(a, transfer.predecessor)
+def gap_start<D>(wait: AwaitingHandoff<D>) -> Option<Instant<D>> = wait.predecessor_end
+def handoff_result<K, E, M, D>(wait: Option<AwaitingHandoff<D>>, observation: Observation<K, E, M, D>,
+                               withdrawn: Option<TransferWithdrawal>) -> Option<HandoffResult<D>> =
+  match(Tuple(wait, withdrawn, observation.record)) {
+    (Some(w), Some({ transfer, reason }), _)
+        if same(w.transfer.predecessor, transfer.predecessor)
+           && w.transfer.wake == transfer.wake
+           && w.transfer.successor == transfer.successor ->
+      Some(Withdrawn(reason)),
+    (Some(w), None, Some({ time, value: Phase({ activation: a, step: Start(_), .. }) }))
+        if transfer_matches(a, w.transfer) ->
+      match(w.predecessor_end) {
+        Some(t) -> Some(Gap(std::time::between(t, time))),
+        None -> Some(Overlap),
+      },
+    _ -> None,
+  }
+def handoff_end<K, E, M, D>(wait: Option<AwaitingHandoff<D>>,
+                           observation: Observation<K, E, M, D>) -> Option<Instant<D>> =
+  match(Tuple(wait, ending(observation))) {
+    (Some(w), Some(a)) if end_matches(a, w.transfer) -> phase_time(observation),
+    _ -> None,
+  }
+def handoff_conflict<D>(wait: Option<AwaitingHandoff<D>>, transfer: Option<Transfer>)
+    -> Bool = std::option::is_some(wait) && std::option::is_some(transfer)
+def handoff_open<D>(wait: Option<AwaitingHandoff<D>>, transfer: Option<Transfer>,
+                    result: Option<HandoffResult<D>>, predecessor_end: Option<Instant<D>>)
+    -> Option<AwaitingHandoff<D>> =
+  match(Tuple(wait, result, predecessor_end, transfer)) {
+    (Some(_), Some(_), _, _) -> None,
+    (Some(w), None, Some(t), _) ->
+      Some({ transfer: w.transfer, predecessor_end: Some(t) }),
+    (Some(w), None, None, _) -> Some(w),
+    (None, _, _, Some(selected)) ->
+      Some({ transfer: selected, predecessor_end: None }),
+    _ -> None,
+  }
+def handoff_age<D>(wait: Option<AwaitingHandoff<D>>, end: Option<Instant<D>>) -> Option<TimeInterval<D>> =
+  match(wait) {
+    Some(w) -> std::time::since(gap_start(w), end),
+    None -> None,
+  }
+def same(a: Activation, b: Activation) -> Bool = rpio::journal::view::same(a, b)
+
+// span is the old activation's age on this tick: up to its End, at the End's
+// own instant, or else up to "now". After that End the pending activation is
+// gone. A fast aborted activation still has a duration; ended does not mean
+// it succeeded.
+def activation_timing<K, E, M, D, role: Role>(observation: Observation<K, E, M, D>)
+    -> Struct<span: Option<TimeInterval<D>>, pending: Bool, ended: Bool, overlapping_start: Bool> = {
+    span: std::time::since(opened_at, span_end(observation, now, closed)),
+    pending: std::option::is_some(open),
+    ended: closed,
+    overlapping_start: std::option::is_some(before) && std::option::is_some(opened)
+  }
+where {
+  held: Option<Instant<D>> = hold(default(held[1], None), advance(observation))
+  now: Option<Instant<D>> = current(held, observation)
+  before: Option<OpenActivation<D>> = default(open[1], None)
+  opened: Option<OpenActivation<D>> = started(observation, role)
+  closed: Bool = match(Tuple(before, ending(observation))) {
+    (Some(p), Some(a)) -> same(p.activation, a), _ -> false,
+  }
+  open: Option<OpenActivation<D>> =
+    if closed then None else std::option::or_else(before, opened)
+  opened_at: Option<Instant<D>> = match(before) { Some(p) -> Some(p.since), None -> None }
+}
+
+def service_start<K, E, M, D>(observation: Observation<K, E, M, D>, service: Str) -> Option<OpenService<D>> =
+  match(observation.record) {
+    Some({ time, value: Phase({ activation, step: ServiceStarted({ service: s, request_id, .. }), .. }) })
+        if s == service ->
+      Some({ activation, request: request_id, since: time }),
+    _ -> None,
+  }
+def service_end<K, E, M, D>(observation: Observation<K, E, M, D>, service: Str, pending: Option<OpenService<D>>)
+    -> Option<ServiceEnd> = match(Tuple(record_of(observation), pending)) {
+  (Some(Phase({ activation: a, step: ServiceCompleted({ service: s, request_id, outcome, .. }), .. })), Some(p))
+      if s == service && request_id == p.request && same(a, p.activation) ->
+    Some(ServiceEnd::Completed(outcome)),
+  (Some(Phase({ activation: a, step: End(_), .. })), Some(p))
+      if same(a, p.activation) -> Some(ServiceEnd::Abandoned),
+  _ -> None,
+}
+
+// span is the old request's age on this tick: up to the record that ends it,
+// at that record's own instant, or else up to "now". `ended` is how it ended,
+// on that record's tick only.
+def service_timing<K, E, M, D, service: Str>(observation: Observation<K, E, M, D>)
+    -> Struct<span: Option<TimeInterval<D>>, pending: Bool, ended: Option<ServiceEnd>, overlapping_start: Bool> = {
+    span: std::time::since(opened_at, span_end(observation, now, closed)),
+    pending: std::option::is_some(open),
+    ended,
+    overlapping_start: std::option::is_some(before) && std::option::is_some(opened)
+  }
+where {
+  held: Option<Instant<D>> = hold(default(held[1], None), advance(observation))
+  now: Option<Instant<D>> = current(held, observation)
+  before: Option<OpenService<D>> = default(open[1], None)
+  opened: Option<OpenService<D>> = service_start(observation, service)
+  ended: Option<ServiceEnd> = service_end(observation, service, before)
+  closed: Bool = std::option::is_some(ended)
+  open: Option<OpenService<D>> =
+    if closed then None else std::option::or_else(before, opened)
+  opened_at: Option<Instant<D>> = match(before) { Some(p) -> Some(p.since), None -> None }
+}
+
+// The domain adapter selects a transfer and supplies withdrawal evidence.
+// An arbitrary End cannot open a handoff; matching pre-End Start is Overlap.
+// `span` is the observed End-to-now wait; on the tick of a terminal record
+// it ends at that record's own instant. Only `terminal: Gap(span)` proves a
+// completed sequential handoff.
+def handoff<K, E, M, D>(observation: Observation<K, E, M, D>,
+                              selected: Option<Transfer>, withdrawn: Option<TransferWithdrawal>)
+    -> Struct<span: Option<TimeInterval<D>>, pending: Bool,
+              terminal: Option<HandoffResult<D>>, conflict: Bool> = {
+    span: handoff_age(before, span_end(observation, now, std::option::is_some(terminal))),
+    pending: std::option::is_some(waiting),
+    terminal,
+    conflict: handoff_conflict(before, selected)
+  }
+where {
+  held: Option<Instant<D>> = hold(default(held[1], None), advance(observation))
+  now: Option<Instant<D>> = current(held, observation)
+  before: Option<AwaitingHandoff<D>> = default(waiting[1], None)
+  terminal: Option<HandoffResult<D>> =
+    handoff_result(before, observation, withdrawn)
+  end_time: Option<Instant<D>> = handoff_end(before, observation)
+  waiting: Option<AwaitingHandoff<D>> =
+    handoff_open(before, selected, terminal, end_time)
+}
+
+// Current journal evidence and its previous phase timestamp.
+type TickResult<D> = Struct<
+  is_phase_record: Bool, record_time: Option<Instant<D>>,
+  run: Option<Str>, new_run: Bool, previous_phase_time: Option<Instant<D>>
+>
+// Current journal evidence. `record_time` belongs to this tick's record,
+// or is None on clock-only ticks. Phase history advances only on phase records.
+def tick<K, E, M, D>(observation: Observation<K, E, M, D>) -> TickResult<D> = {
+    is_phase_record,
+    record_time: own_time, run, new_run,
+    previous_phase_time
+  }
+where {
+  record: Option<Record<K, E, M>> = record_of(observation)
+  is_phase_record: Bool = matches(record, Some(Phase(_)))
+  own_time: Option<Instant<D>> = record_time(observation)
+  // The run (store epoch) of the newest phase record; None before the first.
+  record_run: Option<Str> =
+    match(record) { Some(Phase({ activation, .. })) -> Some(activation.epoch), _ -> None }
+  run: Option<Str> = std::option::or_else(record_run, default(run[1], None))
+  new_run: Bool = is_phase_record && run != default(run[1], None)
+  phase_time: Option<Instant<D>> = if is_phase_record then own_time else default(phase_time[1], None)
+  // The journal time of the previous phase record; None before the first.
+  previous_phase_time: Option<Instant<D>> = default(phase_time[1], None)
+}
