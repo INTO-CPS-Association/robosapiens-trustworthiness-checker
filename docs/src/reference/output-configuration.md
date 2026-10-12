@@ -6,7 +6,7 @@ Use a shortcut for one destination or `--output-config PATH` for explicit routin
 
 | Selector | Destination | Encoding |
 |---|---|---|
-| no output selector or `--output-stdout` | stdout | `name[index] = value` with zero-based logical output index; the value is written as DSRV source (see [below](#values-written-to-stdout)) |
+| no output selector or `--output-stdout` | stdout | `name[index] = value` with a zero-based index (per output stream for asynchronous and distributed DSRV monitors, per logical output tick for other producers); the value is written as DSRV source (see [below](#values-written-to-stdout)) |
 | `--mqtt-output` / `--output-mqtt-file PATH` | MQTT | `{"value": <JSON value>}` |
 | `--redis-output` / `--output-redis-file PATH` | Redis Pub/Sub | JSON value without the MQTT envelope |
 | `--output-ros-file PATH` | ROS 2 | Message type supplied by each route format; requires `--features ros` |

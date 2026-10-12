@@ -1,6 +1,6 @@
 # Outputs
 
-Choose where model output values are observed. If no output flag is selected, the CLI uses stdout. A single-destination shortcut is enough when results have one destination; use `--output-config` for explicit routing, delivery policies, mirroring, or several destinations.
+Choose where spec output values are observed. If no output flag is selected, the CLI uses stdout. A single-destination shortcut is enough when results have one destination; use `--output-config` for explicit routing, delivery policies, mirroring, or several destinations.
 
 ## Destinations
 
@@ -12,7 +12,7 @@ Choose where model output values are observed. If no output flag is selected, th
 | ROS 2 | `--output-ros-file PATH` | Message type and route come from the mapping; requires `--features ros`. |
 | Multiple destinations | `--output-config PATH` | Each configured destination receives its selected output projection. |
 
-The stdout sink increments its row index for each logical output tick. It suppresses auxiliary variables and `NoVal` values. For example, this DSRV program keeps a running total:
+With asynchronous and distributed DSRV monitors, each stdout index is the zero-based position in that variable's output stream. Outputs at the same position may arrive separately; hiding an auxiliary variable or a `NoVal` value does not renumber later values. Other output producers use one index per logical output tick. Streams can have different lengths, so these labels do not establish a shared input tick. Stdout suppresses auxiliary variables and `NoVal` values. For example, this DSRV program keeps a running total:
 
 ```dsrv
 in x: Int

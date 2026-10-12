@@ -14,7 +14,7 @@
 //! |---|---|
 //! | [`OutputUpdate`] | Names one variable and value inside a logical output tick. |
 //! | [`OutputBatch`] | Owns ordered logical ticks while preserving their native physical segments. |
-//! | [`OutputTick`], [`OutputTicks`], and [`OutputUpdates`] | Borrow the logical tick and update views without expanding packed rows. |
+//! | [`OutputTick`], [`OutputTicks`], and [`OutputUpdates`] | Borrow logical ticks and updates, including optional producer-position labels, without expanding packed rows. |
 //! | [`OutputInterface`] and [`OutputBinding`] | Describe the resolved variables, roles, and transport routes supported by one opened writer. |
 //! | [`OutputWriter`] | Applies readiness, send, flush, close, and sticky-error semantics to an output sink. |
 //! | [`OutputError`] and [`OutputErrorKind`] | Classify closed, backend, source, and invalid-output failures. |
@@ -92,6 +92,11 @@ enum OutputSegment<V> {
     SingletonTicks(Vec<OutputUpdate<V>>),
     /// Exactly one simultaneous logical tick.
     Tick(Vec<OutputUpdate<V>>),
+    /// One tick labelled with its producer stream position.
+    IndexedTick {
+        index: usize,
+        updates: Vec<OutputUpdate<V>>,
+    },
     /// Fixed-width row-major ticks sharing one validated variable layout.
     /// Valid packed segments contain at least one complete row.
     PackedRows {
@@ -106,7 +111,7 @@ impl<V> SegmentAccess<V> for OutputSegment<V> {
     fn view(&self) -> SegmentView<'_, V> {
         match self {
             Self::SingletonTicks(updates) => SegmentView::Singleton(updates),
-            Self::Tick(updates) => SegmentView::Tick(updates),
+            Self::Tick(updates) | Self::IndexedTick { updates, .. } => SegmentView::Tick(updates),
             Self::PackedRows { layout, values } => SegmentView::Packed {
                 layout: layout.variables(),
                 values,
@@ -116,7 +121,9 @@ impl<V> SegmentAccess<V> for OutputSegment<V> {
     fn into_owned(self) -> batch::OwnedSegment<V> {
         match self {
             Self::SingletonTicks(v) => batch::OwnedSegment::Singleton(v.into_iter()),
-            Self::Tick(v) => batch::OwnedSegment::Tick(Some(v)),
+            Self::Tick(v) | Self::IndexedTick { updates: v, .. } => {
+                batch::OwnedSegment::Tick(Some(v))
+            }
             Self::PackedRows { layout, values } => {
                 let width = layout.len();
                 batch::OwnedSegment::Packed {
@@ -133,14 +140,16 @@ impl<V> OutputSegment<V> {
     fn validate(&self) -> Result<(), OutputError> {
         match self {
             Self::SingletonTicks(_) => Ok(()),
-            Self::Tick(updates) => validate_tick(updates),
+            Self::Tick(updates) | Self::IndexedTick { updates, .. } => validate_tick(updates),
             Self::PackedRows { layout, values } => validate_packed_rows(layout, values.len()),
         }
     }
 
     fn update_count(&self) -> usize {
         match self {
-            Self::SingletonTicks(updates) | Self::Tick(updates) => updates.len(),
+            Self::SingletonTicks(updates)
+            | Self::Tick(updates)
+            | Self::IndexedTick { updates, .. } => updates.len(),
             Self::PackedRows { values, .. } => values.len(),
         }
     }
@@ -148,7 +157,9 @@ impl<V> OutputSegment<V> {
     fn tick_count(&self) -> usize {
         match self {
             Self::SingletonTicks(updates) => updates.len(),
-            Self::Tick(updates) => usize::from(!updates.is_empty()),
+            Self::Tick(updates) | Self::IndexedTick { updates, .. } => {
+                usize::from(!updates.is_empty())
+            }
             Self::PackedRows { layout, values } => {
                 if layout.is_empty() {
                     0
@@ -176,6 +187,10 @@ impl<V> OutputSegment<V> {
                 OutputSegment::SingletonTicks(batch::map_updates(updates, map))
             }
             Self::Tick(updates) => OutputSegment::Tick(batch::map_updates(updates, map)),
+            Self::IndexedTick { index, updates } => OutputSegment::IndexedTick {
+                index,
+                updates: batch::map_updates(updates, map),
+            },
             Self::PackedRows { layout, values } => {
                 let values = batch::map_packed(layout.variables(), values, map);
                 OutputSegment::PackedRows { layout, values }
@@ -210,6 +225,17 @@ impl<V> OutputBatch<V> {
         validate_tick(&updates)?;
         Ok(Self {
             storage: OutputBatchStorage::Single(OutputSegment::Tick(updates)),
+        })
+    }
+
+    /// Construct one tick labelled with its producer stream position.
+    ///
+    /// Independent asynchronous streams can publish the same position at
+    /// different times. This label does not establish a universal input tick.
+    pub fn indexed_tick(index: usize, updates: Vec<OutputUpdate<V>>) -> Result<Self, OutputError> {
+        validate_tick(&updates)?;
+        Ok(Self {
+            storage: OutputBatchStorage::Single(OutputSegment::IndexedTick { index, updates }),
         })
     }
 
@@ -349,7 +375,11 @@ impl<V> OutputBatch<V> {
     /// Borrow logical ticks without expanding packed storage.
     #[inline(always)]
     pub fn ticks(&self) -> OutputTicks<'_, V> {
-        OutputTicks::new(self.segment_cursor(), self.tick_count())
+        OutputTicks::new(
+            self.segment_cursor(),
+            self.segment_cursor(),
+            self.tick_count(),
+        )
     }
 
     /// Borrow updates in logical order without allocating.
@@ -431,6 +461,7 @@ impl<V> OutputBatch<V> {
 
     /// Move logical ticks out of the batch. Packed rows are expanded only at
     /// this ownership boundary; borrowed iteration remains allocation-free.
+    /// Producer-position labels are discarded by this updates-only view.
     pub fn into_ticks(self) -> OwnedOutputTicks<V> {
         let remaining = self.tick_count();
         OwnedOutputTicks::new(self.into_segments(), remaining)
@@ -467,6 +498,19 @@ impl<V> OutputBatch<V> {
                         .collect::<Vec<_>>();
                     if !updates.is_empty() {
                         segments.push(OutputSegment::Tick(updates));
+                    }
+                }
+                OutputSegment::IndexedTick { index, updates } => {
+                    let updates = updates
+                        .iter()
+                        .filter(|update| variables.contains(&update.variable))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !updates.is_empty() {
+                        segments.push(OutputSegment::IndexedTick {
+                            index: *index,
+                            updates,
+                        });
                     }
                 }
                 OutputSegment::PackedRows { layout, values } => {
@@ -528,6 +572,15 @@ impl<V> OutputBatch<V> {
                     let updates = batch::select_updates(updates, variables);
                     if !updates.is_empty() {
                         segments.push(OutputSegment::Tick(updates));
+                    }
+                }
+                OutputSegment::IndexedTick { index, updates } => {
+                    let updates = batch::select_updates(updates, variables);
+                    if !updates.is_empty() {
+                        segments.push(OutputSegment::IndexedTick {
+                            index: index,
+                            updates,
+                        });
                     }
                 }
                 OutputSegment::PackedRows { layout, values } => {
@@ -626,6 +679,16 @@ impl<V> OutputBatch<V> {
                         })
                         .collect::<Result<Vec<_>, E>>()?,
                 ),
+                OutputSegment::IndexedTick { index, updates } => OutputSegment::IndexedTick {
+                    index,
+                    updates: updates
+                        .into_iter()
+                        .map(|OutputUpdate { variable, value }| {
+                            let value = map(&variable, value)?;
+                            Ok(OutputUpdate { variable, value })
+                        })
+                        .collect::<Result<Vec<_>, E>>()?,
+                },
                 OutputSegment::PackedRows { layout, values } => {
                     let width = layout.len();
                     let values = values
@@ -686,23 +749,79 @@ fn validate_packed_rows(layout: &ValidatedLayout, value_count: usize) -> Result<
     Ok(())
 }
 
-pub type OutputTick<'a, V> = batch::Tick<'a, V>;
+/// A borrowed logical output tick with an optional producer-position label.
+#[derive(Clone, Copy, Debug)]
+pub struct OutputTick<'a, V> {
+    tick: batch::Tick<'a, V>,
+    index: Option<usize>,
+}
+impl<'a, V> OutputTick<'a, V> {
+    /// Position in the producer stream, when supplied by the runtime.
+    pub fn index(&self) -> Option<usize> {
+        self.index
+    }
+    pub fn len(&self) -> usize {
+        self.tick.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tick.is_empty()
+    }
+    pub fn updates(&self) -> batch::TickUpdates<'a, V> {
+        self.tick.updates()
+    }
+    pub fn iter(&self) -> batch::TickUpdates<'a, V> {
+        self.tick.iter()
+    }
+    pub fn to_updates(&self) -> Vec<OutputUpdate<V>>
+    where
+        V: Clone,
+    {
+        self.tick.to_updates()
+    }
+}
 
-pub struct OutputTicks<'a, V>(batch::Ticks<'a, OutputSegment<V>, V>);
+pub struct OutputTicks<'a, V> {
+    ticks: batch::Ticks<'a, OutputSegment<V>, V>,
+    segments: batch::SegmentCursor<'a, OutputSegment<V>>,
+    segment_remaining: usize,
+    index: Option<usize>,
+}
 impl<'a, V> OutputTicks<'a, V> {
     #[inline(always)]
-    fn new(segments: batch::SegmentCursor<'a, OutputSegment<V>>, remaining: usize) -> Self {
-        Self(batch::Ticks::new(segments, remaining))
+    fn new(
+        tick_segments: batch::SegmentCursor<'a, OutputSegment<V>>,
+        segments: batch::SegmentCursor<'a, OutputSegment<V>>,
+        remaining: usize,
+    ) -> Self {
+        Self {
+            ticks: batch::Ticks::new(tick_segments, remaining),
+            segments,
+            segment_remaining: 0,
+            index: None,
+        }
     }
 }
 impl<'a, V> Iterator for OutputTicks<'a, V> {
     type Item = OutputTick<'a, V>;
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
+        let tick = self.ticks.next()?;
+        while self.segment_remaining == 0 {
+            let segment = self.segments.next()?;
+            self.segment_remaining = segment.tick_count();
+            self.index = match segment {
+                OutputSegment::IndexedTick { index, .. } => Some(*index),
+                _ => None,
+            };
+        }
+        self.segment_remaining -= 1;
+        Some(OutputTick {
+            tick,
+            index: self.index,
+        })
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        self.ticks.size_hint()
     }
 }
 impl<V> ExactSizeIterator for OutputTicks<'_, V> {}
@@ -1583,6 +1702,47 @@ mod tests {
             .unwrap();
         assert_eq!(combined.tick_count(), 3);
         assert_eq!(combined.update_count(), 5);
+    }
+
+    #[test]
+    fn indexed_ticks_preserve_positions_through_mapping_selection_and_concatenation() {
+        let batch = OutputBatch::indexed_tick(7, vec![update("x", 1), update("y", 2)])
+            .unwrap()
+            .concat(OutputBatch::update(var("z"), 3))
+            .unwrap()
+            .concat(OutputBatch::indexed_tick(9, vec![update("x", 4)]).unwrap())
+            .unwrap();
+        assert_eq!(
+            batch.ticks().map(|tick| tick.index()).collect::<Vec<_>>(),
+            [Some(7), None, Some(9)]
+        );
+        let discarded = batch
+            .clone()
+            .select_variables(&[var("absent")].into_iter().collect())
+            .unwrap();
+        assert_eq!(discarded.ticks().count(), 0);
+        let selected = batch
+            .select_variables_cloned(&[var("x")].into_iter().collect())
+            .unwrap();
+        let mapped = selected
+            .map(|value| value + 10)
+            .try_map(|value| Ok::<_, ()>(value * 2))
+            .unwrap()
+            .select_variables(&[var("x")].into_iter().collect())
+            .unwrap();
+        assert_eq!(
+            mapped.ticks().map(|tick| tick.index()).collect::<Vec<_>>(),
+            [Some(7), Some(9)]
+        );
+        assert_eq!(
+            mapped
+                .updates()
+                .map(|update| *update.value)
+                .collect::<Vec<_>>(),
+            [22, 28]
+        );
+        assert!(OutputBatch::<i32>::indexed_tick(0, vec![]).is_err());
+        assert!(OutputBatch::indexed_tick(0, vec![update("x", 1), update("x", 2)]).is_err());
     }
 
     #[test]

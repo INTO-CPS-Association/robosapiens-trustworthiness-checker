@@ -2386,6 +2386,77 @@ mod tests {
     }
 
     #[test]
+    fn routed_stdout_preserves_positions_through_worker_coalescing() {
+        struct CapturedStdout(Rc<RefCell<Vec<u8>>>);
+        #[async_trait(?Send)]
+        impl TestOutputOpener<crate::Value> for CapturedStdout {
+            async fn open(
+                &self,
+                interface: OutputInterface,
+            ) -> Result<OutputWriter<crate::Value>, OutputError> {
+                crate::io::output::open_stdout_with_shared_writer(interface, Rc::clone(&self.0))
+                    .await
+            }
+        }
+        smol::block_on(async {
+            let left = Rc::new(RefCell::new(Vec::new()));
+            let right = Rc::new(RefCell::new(Vec::new()));
+            let executor = Rc::new(LocalExecutor::new());
+            let policy = DeliveryPolicy::coalesce(
+                CoalescingLimits::new(NonZeroUsize::new(2), None, None).unwrap(),
+            )
+            .with_queue(QueueLimits::new(NonZeroUsize::new(4).unwrap(), None));
+            let pipeline = pipeline(vec![
+                OutputDestination::new(
+                    "left",
+                    OutputBackendConfig::test(CapturedStdout(Rc::clone(&left))),
+                )
+                .partition([VarName::new("x")])
+                .with_delivery(policy),
+                OutputDestination::new(
+                    "right",
+                    OutputBackendConfig::test(CapturedStdout(Rc::clone(&right))),
+                )
+                .partition([VarName::new("y")])
+                .with_delivery(policy),
+            ])
+            .with_executor(Rc::clone(&executor));
+            executor
+                .run(async {
+                    let resolved = pipeline
+                        .resolve(
+                            [VarName::new("x"), VarName::new("y")],
+                            std::iter::empty::<VarName>(),
+                            None,
+                        )
+                        .unwrap();
+                    let mut writer = pipeline.open(resolved).await.unwrap();
+                    for (index, updates) in [
+                        (0, vec![value("x", 10)]),
+                        (0, vec![value("y", 20)]),
+                        (1, vec![value("x", 11), value("y", 21)]),
+                        (2, vec![value("x", 12)]),
+                    ] {
+                        writer
+                            .feed(OutputBatch::indexed_tick(index, updates).unwrap())
+                            .await
+                            .unwrap();
+                    }
+                    writer.close().await.unwrap();
+                })
+                .await;
+            assert_eq!(
+                String::from_utf8(RefCell::borrow(left.as_ref()).clone()).unwrap(),
+                "x[0] = 10\nx[1] = 11\nx[2] = 12\n"
+            );
+            assert_eq!(
+                String::from_utf8(RefCell::borrow(right.as_ref()).clone()).unwrap(),
+                "y[0] = 20\ny[1] = 21\n"
+            );
+        });
+    }
+
+    #[test]
     fn partial_open_closes_every_previous_destination() {
         smol::block_on(async {
             let closed = Rc::new(Cell::new(0));
