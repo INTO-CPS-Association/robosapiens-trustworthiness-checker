@@ -144,6 +144,11 @@ was written. The runtime expression can use that module's aliases, constants,
 callable definitions, and language settings even after the original program
 has been dropped. An occurrence in an inlined library definition uses the
 library's context, while an occurrence written by the caller uses the caller's.
+Supplied text is never treated as the module that wrote the node: it sees that
+module as an importer would, so the module's `internal` defs, constants, and
+type aliases are not available to it, while its other items, what it imports,
+and the node's variables are. Source written inside the module keeps full access
+to its internals. `internal` is part of the experimental `modules` feature.
 The [DSRV syntax reference](../../reference/dsrv-syntax.md#type-aliases)
 describes alias resolution; [language settings](../../reference/dsrv-language-settings.md#experiments)
 describes the per-module settings.

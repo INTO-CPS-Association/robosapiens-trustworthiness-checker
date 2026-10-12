@@ -5,8 +5,8 @@ use super::core_evaluation;
 use super::dynamic;
 pub(crate) use super::functions::bind_expression_for_benchmark;
 use super::functions::{
-    ScopedExpr, eval_apply, eval_fix, eval_list_filter, eval_list_fold, eval_list_map,
-    eval_partial, eval_within_tick, make_function,
+    ScopedExpr, eval_apply, eval_fix, eval_lambda, eval_list_filter, eval_list_fold, eval_list_map,
+    eval_partial, eval_within_tick,
 };
 use super::typed_combinators as typed;
 use crate::VarName;
@@ -164,7 +164,7 @@ where
                 .join(", ");
             let body = own_child(body);
             let display = format!("\\{} -> {}", params_display, body.expr).into();
-            mc::val(make_function::<AC>(display, params.clone(), body, ctx))
+            eval_lambda::<AC>(display, params.clone(), body, ctx)
         }
         Apply(func, args) => eval_apply::<AC>(
             own_child(func),

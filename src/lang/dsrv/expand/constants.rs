@@ -59,7 +59,8 @@ impl ConstantTable {
     }
 
     /// Every constant a module declared, the internal ones included: what
-    /// that module's own text may name (S12).
+    /// that module's own source text may name (S12). Text supplied at run
+    /// time is not the module's own and sees only [`Self::exported`].
     pub(crate) fn declared(&self, module: &[ModuleName]) -> Vec<(&VarName, &ConstEntry)> {
         self.entries
             .iter()
@@ -366,6 +367,10 @@ pub(crate) struct Constants {
     table: AstShared<ConstantTable>,
     own: ModulePath,
     imported: BTreeMap<ModulePath, bool>,
+    /// Whether this is the view text supplied at run time has: the module's
+    /// own constants are then only the ones it exports, as an importer sees
+    /// them.
+    runtime_text: bool,
 }
 
 impl Constants {
@@ -378,7 +383,27 @@ impl Constants {
             table,
             own: path.clone(),
             imported: functions::imported_modules(path, declarations)?,
+            runtime_text: false,
         })
+    }
+
+    /// The constants text supplied at run time to a node of this module may
+    /// name: the module's exported constants, never its internal ones, and
+    /// what it imports.
+    pub(crate) fn for_runtime_text(&self) -> Self {
+        Self {
+            runtime_text: true,
+            ..self.clone()
+        }
+    }
+
+    /// The constants the module itself declared that this view may name.
+    fn own_entries(&self) -> Vec<(&VarName, &ConstEntry)> {
+        if self.runtime_text {
+            self.table.exported(&self.own)
+        } else {
+            self.table.declared(&self.own)
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -387,8 +412,7 @@ impl Constants {
 
     /// What a name in this module stands for, bare or through a module.
     pub(crate) fn bare(&self, name: &VarName) -> Option<&SyntaxLiteral> {
-        self.table
-            .declared(&self.own)
+        self.own_entries()
             .into_iter()
             .find(|(declared, _)| *declared == name)
             .map(|(_, entry)| &entry.value)
@@ -416,7 +440,7 @@ impl Constants {
             return None;
         }
         let entries = if module == self.own.as_slice() {
-            self.table.declared(module)
+            self.own_entries()
         } else {
             self.table.exported(module)
         };
@@ -432,7 +456,7 @@ impl Constants {
         if self.is_empty() {
             return;
         }
-        for (name, entry) in self.table.declared(&self.own) {
+        for (name, entry) in self.own_entries() {
             let _ = write!(out, "{}={:?};", name.name(), entry.value);
         }
         for (module, _) in &self.imported {
@@ -459,5 +483,6 @@ impl PartialEq for Constants {
         AstShared::ptr_eq(&self.table, &other.table)
             && self.own == other.own
             && self.imported == other.imported
+            && self.runtime_text == other.runtime_text
     }
 }

@@ -427,9 +427,10 @@ fn graph_supports_early_dependency_resolution(
 fn graph_requires_temporal_commit(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
         BoundOp::Delay { offset, .. } => *offset > 0,
-        BoundOp::RecursiveDelay { .. }
-        | BoundOp::DirectApply { .. }
-        | BoundOp::Reconfigurable(_) => true,
+        BoundOp::RecursiveDelay { .. } | BoundOp::Reconfigurable(_) => true,
+        // A directly applied lambda, such as an inlined `def`, stages
+        // temporal writes only when its own body does.
+        BoundOp::DirectApply { func, .. } => func.program.requires_temporal_commit(),
         BoundOp::If {
             then_branch,
             else_branch,

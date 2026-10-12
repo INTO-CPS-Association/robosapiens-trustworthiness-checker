@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::{cell::RefCell, rc::Rc};
 
-use super::atemporal::{Scope, eval_atemporal};
+use super::atemporal::{RecursiveCall, Scope, eval_atemporal};
 use super::combinators as mc;
 use super::semantics::evaluate_scope;
 use super::shared_output::SharedOutput;
@@ -49,20 +49,49 @@ enum EvalBinding {
     Stream(SharedOutput<Value>),
 }
 
+/// What every function value a lambda yields has in common.
+///
+/// A lambda yields one function value per tick. The values share this
+/// definition, which is how an application recognises that the function it
+/// is applying has not changed, and differ only in what their captured names
+/// hold at the tick they were yielded for.
 struct UntimedFunctionDef<AC>
 where
     AC: AsyncConfig<Val = Value>,
 {
+    display: EcoString,
     params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: ScopedExpr,
-    captures: EcoVec<(VarName, SharedOutput<Value>)>,
+    /// The names the body reads from around it, in the order of
+    /// [`UntimedClosure::captures`].
+    captures: EcoVec<VarName>,
     temporal: bool,
     context: Rc<AC::Ctx>,
 }
 
+/// One function value: a definition, and what each of its captured names
+/// holds at the tick the value was yielded for.
+///
+/// Carrying values rather than streams is what keeps a function value that
+/// is used in several places consistent. Whoever yields the value reads each
+/// captured stream exactly once per tick, so a function value applied by
+/// two streams, or by one stream each tick, sees the tick it belongs to and
+/// advances nothing itself.
+struct UntimedClosure<AC>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    definition: Rc<UntimedFunctionDef<AC>>,
+    captures: EcoVec<Value>,
+}
+
+/// A function applied as a stream, for a body that may read history.
+///
+/// Its captured names are ports that the application fills once per tick
+/// from the function value of that tick, so the body sees them as streams.
 struct UntimedFunctionInstance {
     output: LocalStream<Value>,
-    capture_drivers: Vec<LocalStream<Value>>,
+    captures: Vec<futures::channel::mpsc::UnboundedSender<Value>>,
 }
 
 /// One tree-backed callback invocation context for one collection tick.
@@ -75,10 +104,11 @@ struct CollectionFunctionInstance {
 }
 
 impl CollectionFunctionInstance {
-    async fn new<AC>(definition: &UntimedFunctionDef<AC>) -> Self
+    fn new<AC>(closure: &UntimedClosure<AC>) -> Self
     where
         AC: AsyncConfig<Val = Value>,
     {
+        let definition = &closure.definition;
         let mut arguments = Vec::with_capacity(definition.params.len());
         let mut inputs = Vec::with_capacity(definition.params.len());
         for _ in &definition.params {
@@ -86,12 +116,7 @@ impl CollectionFunctionInstance {
             arguments.push(sender);
             inputs.push(SharedOutput::new(Box::pin(receiver)));
         }
-        let mut captures = Vec::with_capacity(definition.captures.len());
-        for (name, output) in &definition.captures {
-            let value = output.subscribe().next().await.unwrap_or(Value::NoVal);
-            captures.push((name.clone(), SharedOutput::new(mc::val(value))));
-        }
-        let body = definition.body.clone().bind_streams(captures).bind_streams(
+        let body = closure.bind_captures().bind_streams(
             definition
                 .params
                 .iter()
@@ -123,17 +148,16 @@ enum CollectionCallback {
 }
 
 impl CollectionCallback {
-    async fn new<AC>(function: RuntimeFunction, operation: &'static str) -> Self
+    fn new<AC>(function: RuntimeFunction, operation: &'static str) -> Self
     where
         AC: AsyncConfig<Val = Value>,
     {
-        if let Some(mut callback) = AtemporalCallback::of::<AC>(&function) {
-            let captures = callback.read_captures().await;
+        if let Some((callback, captures)) = AtemporalCallback::of::<AC>(&function) {
             return Self::Atemporal { callback, captures };
         }
         reject_temporal_collection_function::<AC>(&function, operation);
-        if let Some(definition) = function.language_payload::<UntimedFunctionDef<AC>>() {
-            return Self::Tree(CollectionFunctionInstance::new(&definition).await);
+        if let Some(closure) = function.language_payload::<UntimedClosure<AC>>() {
+            return Self::Tree(CollectionFunctionInstance::new(&closure));
         }
         Self::Stream(function)
     }
@@ -150,20 +174,6 @@ impl CollectionCallback {
     }
 }
 
-/// Advance callback captures even when a collection operand makes this tick
-/// produce only a marker.
-async fn advance_collection_captures<AC>(function: &RuntimeFunction)
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    let Some(definition) = function.language_payload::<UntimedFunctionDef<AC>>() else {
-        return;
-    };
-    for (_, capture) in &definition.captures {
-        let _ = capture.subscribe().next().await;
-    }
-}
-
 fn collection_marker(values: impl IntoIterator<Item = Value>) -> Option<Value> {
     propagated_special(values.into_iter().map(|value| PartialMarker::of(&value)))
         .map(PartialMarker::into_value)
@@ -173,6 +183,34 @@ impl<AC> UntimedFunctionDef<AC>
 where
     AC: AsyncConfig<Val = Value>,
 {
+    /// The function value of one tick, whose captured names hold `captures`.
+    fn function(self: &Rc<Self>, captures: EcoVec<Value>) -> Value {
+        let closure = Rc::new(UntimedClosure {
+            definition: Rc::clone(self),
+            captures,
+        });
+        let callable = Rc::clone(&closure);
+        // Called with values, as `fix` and a function from outside the tree
+        // call it, the body has nothing to read its captures from but the
+        // values this function value holds; its context subscribes to
+        // nothing.
+        let runtime_function = if self.evaluates_within_a_tick() {
+            RuntimeFunction::native_value(self.display.clone(), move |args| {
+                callable.call_with_values(args, false)
+            })
+        } else {
+            RuntimeFunction::native(self.display.clone(), move |args| {
+                let definition = &callable.definition;
+                let body = callable
+                    .bind_captures()
+                    .bind_values(&definition.params, args)?;
+                Ok(evaluate_scope::<AC>(body, &definition.context))
+            })
+        }
+        .with_language_payload(closure);
+        Value::Function(runtime_function)
+    }
+
     fn instantiate(
         &self,
         arguments: &[SharedOutput<Value>],
@@ -184,48 +222,114 @@ where
                 arguments.len()
             ));
         }
-        let body = self
-            .body
-            .clone()
-            .bind_streams(self.captures.iter().cloned())
-            .bind_streams(
-                self.params
-                    .iter()
-                    .zip(arguments)
-                    .map(|((name, _), stream)| (name.clone(), stream.clone())),
-            );
-        Ok(UntimedFunctionInstance {
-            output: evaluate_scope::<AC>(body, &self.context),
-            capture_drivers: self
-                .captures
-                .iter()
-                .map(|(_, stream)| stream.subscribe())
-                .collect(),
-        })
-    }
-
-    fn partially_apply(&self, arguments: &[SharedOutput<Value>]) -> anyhow::Result<Rc<Self>> {
-        if arguments.len() > self.params.len() {
-            return Err(anyhow::anyhow!(
-                "Function expected at most {} partial arguments, got {}",
-                self.params.len(),
-                arguments.len()
-            ));
+        let mut ports = Vec::with_capacity(self.captures.len());
+        let mut captures = Vec::with_capacity(self.captures.len());
+        for name in &self.captures {
+            let (sender, receiver) = futures::channel::mpsc::unbounded();
+            ports.push(sender);
+            captures.push((name.clone(), SharedOutput::new(Box::pin(receiver))));
         }
-        let mut captures = self.captures.clone();
-        captures.extend(
+        let body = self.body.clone().bind_streams(captures).bind_streams(
             self.params
                 .iter()
                 .zip(arguments)
                 .map(|((name, _), stream)| (name.clone(), stream.clone())),
         );
+        Ok(UntimedFunctionInstance {
+            output: evaluate_scope::<AC>(body, &self.context),
+            captures: ports,
+        })
+    }
+
+    /// Whether the body can be evaluated over values within one tick: it
+    /// reads no history and builds no function that could.
+    fn evaluates_within_a_tick(&self) -> bool {
+        !self.body.expr.as_ref().postorder().any(|node| {
+            matches!(
+                node.view(),
+                ExprView::SIndex(..)
+                    | ExprView::Init(..)
+                    | ExprView::Update(..)
+                    | ExprView::Latch(..)
+                    | ExprView::When(..)
+                    | ExprView::Dynamic(..)
+                    | ExprView::Defer(..)
+                    | ExprView::Fix(..)
+                    | ExprView::Partial(..)
+                    | ExprView::MonitoredAt(..)
+                    | ExprView::Dist(..)
+            )
+        })
+    }
+
+    /// The definition left once the first `count` parameters are captured.
+    fn partially_apply(&self, count: usize, display: EcoString) -> anyhow::Result<Rc<Self>> {
+        if count > self.params.len() {
+            return Err(anyhow::anyhow!(
+                "Function expected at most {} partial arguments, got {}",
+                self.params.len(),
+                count
+            ));
+        }
+        let mut captures = self.captures.clone();
+        captures.extend(self.params.iter().take(count).map(|(name, _)| name.clone()));
         Ok(Rc::new(Self {
-            params: self.params.iter().skip(arguments.len()).cloned().collect(),
+            display,
+            params: self.params.iter().skip(count).cloned().collect(),
             body: self.body.clone(),
             captures,
             temporal: self.temporal,
             context: Rc::clone(&self.context),
         }))
+    }
+}
+
+impl<AC> UntimedClosure<AC>
+where
+    AC: AsyncConfig<Val = Value>,
+{
+    /// The captured names and the values they hold for this function value.
+    fn captured(&self) -> impl Iterator<Item = (&VarName, &Value)> {
+        self.definition.captures.iter().zip(&self.captures)
+    }
+
+    /// Call the function as the body of a recursive one, over values.
+    fn call_recursively(&self, arguments: EcoVec<Value>) -> anyhow::Result<Value> {
+        self.call_with_values(arguments, true)
+    }
+
+    fn call_with_values(&self, arguments: EcoVec<Value>, recursive: bool) -> anyhow::Result<Value> {
+        let definition = &self.definition;
+        anyhow::ensure!(
+            definition.params.len() == arguments.len(),
+            "Function expected {} arguments, got {}",
+            definition.params.len(),
+            arguments.len()
+        );
+        let mut bound = self
+            .captured()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        bound.extend(
+            definition
+                .params
+                .iter()
+                .map(|(name, _)| name.clone())
+                .zip(arguments),
+        );
+        let scope = Scope {
+            bound,
+            outer: recursive.then_some(&RecursiveCall as &dyn super::atemporal::Environment),
+        };
+        eval_atemporal(definition.body.expr.as_ref(), &scope).map_err(anyhow::Error::new)
+    }
+
+    /// The body, with each captured name bound to its value for this tick.
+    fn bind_captures(&self) -> ScopedExpr {
+        self.definition.body.clone().bind_streams(
+            self.captured()
+                .map(|(name, value)| (name.clone(), SharedOutput::new(mc::val(value.clone())))),
+        )
     }
 }
 
@@ -508,55 +612,30 @@ where
 struct AtemporalCallback {
     parameters: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: Expr,
-    captures: Vec<(VarName, LocalStream<Value>)>,
 }
 
 impl AtemporalCallback {
     /// Whether this function can be run within a tick, and the means to do
-    /// it. A body that reads history cannot; lexical bindings are resolved to
-    /// one captured value for the surrounding tick.
-    fn of<AC>(function: &RuntimeFunction) -> Option<Self>
+    /// it with the values its captured names hold this tick. A body that
+    /// reads history cannot.
+    fn of<AC>(function: &RuntimeFunction) -> Option<(Self, BTreeMap<VarName, Value>)>
     where
         AC: AsyncConfig<Val = Value>,
     {
-        let definition = function.language_payload::<UntimedFunctionDef<AC>>()?;
-        if definition.body.expr.as_ref().postorder().any(|node| {
-            matches!(
-                node.view(),
-                ExprView::SIndex(..)
-                    | ExprView::Init(..)
-                    | ExprView::Update(..)
-                    | ExprView::Latch(..)
-                    | ExprView::When(..)
-                    | ExprView::Dynamic(..)
-                    | ExprView::Defer(..)
-                    | ExprView::Fix(..)
-                    | ExprView::Partial(..)
-                    | ExprView::MonitoredAt(..)
-                    | ExprView::Dist(..)
-            )
-        }) {
+        let closure = function.language_payload::<UntimedClosure<AC>>()?;
+        let definition = &closure.definition;
+        if !definition.evaluates_within_a_tick() {
             return None;
         }
-        Some(Self {
+        let callback = Self {
             parameters: definition.params.clone(),
             body: definition.body.expr.clone(),
-            captures: definition
-                .captures
-                .iter()
-                .map(|(name, stream)| (name.clone(), stream.subscribe()))
-                .collect(),
-        })
-    }
-
-    /// Read every captured name once, for the tick about to be evaluated.
-    async fn read_captures(&mut self) -> BTreeMap<VarName, Value> {
-        let mut values = BTreeMap::new();
-        for (name, stream) in &mut self.captures {
-            let value = stream.next().await.unwrap_or(Value::NoVal);
-            values.insert(name.clone(), value);
-        }
-        values
+        };
+        let captures = closure
+            .captured()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        Some((callback, captures))
     }
 
     /// Apply the callback to one element, with the tick's captured values.
@@ -581,23 +660,36 @@ fn eval_function_once(
     }
 }
 
-pub(super) fn make_function<AC>(
+/// The function values of a lambda, one per tick.
+///
+/// Each value carries what the names its body reads from around it hold at
+/// that tick. This stream reads each of them exactly once per tick, through
+/// one subscription it owns, so however many places apply the function, and
+/// however late they first do, every application sees the tick it belongs
+/// to and none of them advances a captured stream.
+pub(super) fn eval_lambda<AC>(
     display: EcoString,
     params: EcoVec<(VarName, crate::core::StreamTypeAscription)>,
     body: ScopedExpr,
     ctx: &AC::Ctx,
-) -> Value
+) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
     use ExprView::*;
 
-    let callable_ctx = Rc::new(ctx.subcontext(0));
+    // The body reads the specification's streams only through its captures,
+    // which this stream advances once per tick. The context it is evaluated
+    // in therefore subscribes to nothing. A full subcontext would subscribe
+    // to every stream and never be ticked, so each publisher's bounded
+    // channel to it would fill and block the runtime: after 8 ticks under
+    // semi-sync (its channel capacity), after 1000 under async.
+    let callable_ctx = Rc::new(ctx.restricted_subcontext(EcoVec::new(), 0));
     let param_names = params
         .iter()
         .map(|(name, _)| name)
         .collect::<std::collections::BTreeSet<_>>();
-    let captures = body
+    let (captures, capture_streams): (EcoVec<_>, Vec<_>) = body
         .expr
         .as_ref()
         .free_variables()
@@ -610,13 +702,12 @@ where
                         .map(|expression| evaluate_scope::<AC>(expression, ctx))
                 })
                 .or_else(|| ctx.var(&name))
-                .map(|stream| (name, SharedOutput::new(stream)))
+                .map(|stream| (name, stream))
         })
-        .collect();
+        .unzip();
     let definition = Rc::new(UntimedFunctionDef::<AC> {
-        params: params.clone(),
-        body: body.clone(),
-        captures,
+        display,
+        params,
         temporal: body.as_ref().postorder().any(|node| {
             matches!(
                 node.view(),
@@ -629,14 +720,31 @@ where
                     | Defer(_, _, _)
             )
         }),
-        context: Rc::clone(&callable_ctx),
+        body,
+        captures,
+        context: callable_ctx,
     });
-    let runtime_function = RuntimeFunction::native(display, move |args| {
-        let body = body.clone().bind_values(&params, args)?;
-        Ok(evaluate_scope::<AC>(body, &callable_ctx))
+    // With nothing captured, every tick's function value is the same.
+    if capture_streams.is_empty() {
+        return mc::val(definition.function(EcoVec::new()));
+    }
+    // A lambda without captures repeats its value for as long as it is
+    // read, and so does one with captures: a captured stream that has ended
+    // holds no value, as a list callback has always seen it, and the
+    // operands the function is applied to decide when the result ends.
+    let mut capture_streams = capture_streams
+        .into_iter()
+        .map(|stream| stream.chain(futures::stream::repeat(Value::NoVal)))
+        .collect::<Vec<_>>();
+    Box::pin(stream! {
+        loop {
+            let mut captures = EcoVec::with_capacity(capture_streams.len());
+            for stream in &mut capture_streams {
+                captures.push(stream.next().await.unwrap_or(Value::NoVal));
+            }
+            yield definition.function(captures);
+        }
     })
-    .with_language_payload(definition);
-    Value::Function(runtime_function)
 }
 
 fn partial_function(
@@ -652,39 +760,45 @@ fn partial_function(
     Value::Function(runtime_function)
 }
 
-fn partial_tree_function<AC>(
-    function: RuntimeFunction,
-    definition: Rc<UntimedFunctionDef<AC>>,
-    applied: &[SharedOutput<Value>],
-    display: EcoString,
-) -> anyhow::Result<Value>
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    let partial_definition = definition.partially_apply(applied)?;
-    let Value::Function(function) = partial_function(function, EcoVec::new(), display) else {
-        unreachable!();
-    };
-    Ok(Value::Function(
-        function.with_language_payload(partial_definition),
-    ))
-}
-
 fn reject_temporal_collection_function<AC>(function: &RuntimeFunction, operation: &str)
 where
     AC: AsyncConfig<Val = Value>,
 {
     if function
-        .language_payload::<UntimedFunctionDef<AC>>()
-        .is_some_and(|definition| definition.temporal)
+        .language_payload::<UntimedClosure<AC>>()
+        .is_some_and(|closure| closure.definition.temporal)
     {
         panic!("temporal functions are not supported by {operation}");
     }
 }
 
-fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
+fn fix_function<AC>(function: RuntimeFunction, display: EcoString) -> Value
+where
+    AC: AsyncConfig<Val = Value>,
+{
     let slot: Rc<RefCell<Option<RuntimeFunction>>> = Rc::new(RefCell::new(None));
     let slot_for_call = slot.clone();
+    // A recursive body is evaluated over values, so that its `if` can leave
+    // the recursive branch unevaluated once the base case is selected. The
+    // stream path cannot: it advances both branches every tick, so every
+    // call would make another without end.
+    if let Some(closure) = function.language_payload::<UntimedClosure<AC>>()
+        && closure.definition.evaluates_within_a_tick()
+    {
+        let runtime_function = RuntimeFunction::native_value(display, move |args| {
+            let self_function = slot_for_call
+                .borrow()
+                .as_ref()
+                .expect("recursive function initialized")
+                .clone();
+            let mut all_args = EcoVec::new();
+            all_args.push(Value::Function(self_function));
+            all_args.extend(args);
+            closure.call_recursively(all_args)
+        });
+        *slot.borrow_mut() = Some(runtime_function.clone());
+        return Value::Function(runtime_function);
+    }
     let runtime_function = RuntimeFunction::native(display, move |args| {
         let self_function = slot_for_call
             .borrow()
@@ -731,23 +845,26 @@ where
         .map(SharedOutput::subscribe)
         .collect::<Vec<_>>();
     Box::pin(stream! {
-        let mut active_tree_function: Option<(RuntimeFunction, UntimedFunctionInstance)> = None;
+        let mut active_tree_function: Option<(Rc<UntimedFunctionDef<AC>>, UntimedFunctionInstance)> =
+            None;
         loop {
             let Some(func_value) = func_stream.next().await else {
                 return;
             };
             if let Value::Function(function) = &func_value
-                && let Some(definition) =
-                    function.language_payload::<UntimedFunctionDef<AC>>()
+                && let Some(closure) = function.language_payload::<UntimedClosure<AC>>()
             {
+                // Each tick brings a new function value; it is the same
+                // function while its definition is.
                 let changed = active_tree_function
                     .as_ref()
-                    .is_none_or(|(active, _)| !active.same_definition(function));
+                    .is_none_or(|(active, _)| !Rc::ptr_eq(active, &closure.definition));
                 if changed {
-                    let output = definition
+                    let output = closure
+                        .definition
                         .instantiate(&arg_sources)
                         .expect("Function application failed");
-                    active_tree_function = Some((function.clone(), output));
+                    active_tree_function = Some((Rc::clone(&closure.definition), output));
                 }
                 // Function inputs are stream ports: advance each port once per
                 // application tick even when the body can produce an initial
@@ -760,10 +877,9 @@ where
                 let Some((_, instance)) = &mut active_tree_function else {
                     unreachable!();
                 };
-                for capture in &mut instance.capture_drivers {
-                    if capture.next().await.is_none() {
-                        return;
-                    }
+                for (port, value) in instance.captures.iter_mut().zip(&closure.captures) {
+                    port.unbounded_send(value.clone())
+                        .expect("function capture port closed");
                 }
                 let Some(value) = instance.output.next().await else {
                     return;
@@ -807,41 +923,45 @@ where
 {
     let display: EcoString = format!("partial({}, ...)", func_expr.expr).into();
     let mut func_stream = evaluate_scope::<AC>(func_expr, ctx);
-    let arg_sources = args
+    let mut arg_streams = args
         .into_iter()
-        .map(|arg| SharedOutput::new(evaluate_scope::<AC>(arg, ctx)))
-        .collect::<Vec<_>>();
-    let mut arg_streams = arg_sources
-        .iter()
-        .map(SharedOutput::subscribe)
+        .map(|arg| evaluate_scope::<AC>(arg, ctx))
         .collect::<Vec<_>>();
     Box::pin(stream! {
-        let mut active_tree_partial: Option<(RuntimeFunction, Value)> = None;
+        // The function partially applied, and what it becomes with its
+        // leading parameters captured.
+        let mut active_tree_partial: Option<(Rc<UntimedFunctionDef<AC>>, Rc<UntimedFunctionDef<AC>>)> =
+            None;
         loop {
             let Some(func_value) = func_stream.next().await else {
                 return;
             };
             if let Value::Function(function) = &func_value
-                && let Some(definition) =
-                    function.language_payload::<UntimedFunctionDef<AC>>()
+                && let Some(closure) = function.language_payload::<UntimedClosure<AC>>()
             {
                 let changed = active_tree_partial
                     .as_ref()
-                    .is_none_or(|(active, _)| !active.same_definition(function));
+                    .is_none_or(|(active, _)| !Rc::ptr_eq(active, &closure.definition));
                 if changed {
-                    let partial = partial_tree_function(
-                        function.clone(),
-                        definition,
-                        &arg_sources,
-                        display.clone(),
-                    )
-                    .expect("partial application failed");
-                    active_tree_partial = Some((function.clone(), partial));
+                    let partial = closure
+                        .definition
+                        .partially_apply(arg_streams.len(), display.clone())
+                        .expect("partial application failed");
+                    active_tree_partial = Some((Rc::clone(&closure.definition), partial));
+                }
+                // The applied arguments become captures, read this tick as
+                // the function's own captures were.
+                let mut captures = closure.captures.clone();
+                for arg_stream in &mut arg_streams {
+                    let Some(arg) = arg_stream.next().await else {
+                        return;
+                    };
+                    captures.push(arg);
                 }
                 let Some((_, partial)) = &active_tree_partial else {
                     unreachable!();
                 };
-                yield partial.clone();
+                yield partial.function(captures);
                 continue;
             }
             active_tree_partial = None;
@@ -881,7 +1001,7 @@ where
             match func_value {
                 Value::NoVal => yield Value::NoVal,
                 Value::Deferred => yield Value::Deferred,
-                Value::Function(function) => yield fix_function(function, display.clone()),
+                Value::Function(function) => yield fix_function::<AC>(function, display.clone()),
                 other => panic!("fix requires a function, got {}", other),
             }
         }
@@ -901,9 +1021,6 @@ where
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
-                if let Value::Function(function) = &func_value {
-                    advance_collection_captures::<AC>(function).await;
-                }
                 yield marker;
                 continue;
             }
@@ -914,7 +1031,7 @@ where
                     let Value::List(values) = list_value else {
                         panic!("List.map requires a list, got {list_value}");
                     };
-                    let mut callback = CollectionCallback::new::<AC>(function, "List.map").await;
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.map");
                     let mut mapped = EcoVec::new();
                     for value in values {
                         mapped.push(callback.apply([value]).await);
@@ -940,9 +1057,6 @@ where
     Box::pin(stream! {
         while let (Some(func_value), Some(list_value)) = (func_stream.next().await, list_stream.next().await) {
             if let Some(marker) = collection_marker([func_value.clone(), list_value.clone()]) {
-                if let Value::Function(function) = &func_value {
-                    advance_collection_captures::<AC>(function).await;
-                }
                 yield marker;
                 continue;
             }
@@ -953,7 +1067,7 @@ where
                     let Value::List(values) = list_value else {
                         panic!("List.filter requires a list, got {list_value}");
                     };
-                    let mut callback = CollectionCallback::new::<AC>(function, "List.filter").await;
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.filter");
                     let mut filtered = EcoVec::new();
                     let keep = |kept: Value, value: Value, filtered: &mut EcoVec<Value>| match kept {
                         Value::Bool(true) => filtered.push(value),
@@ -991,9 +1105,6 @@ where
                 init.clone(),
                 list_value.clone(),
             ]) {
-                if let Value::Function(function) = &func_value {
-                    advance_collection_captures::<AC>(function).await;
-                }
                 yield marker;
                 continue;
             }
@@ -1002,7 +1113,6 @@ where
                 Value::Deferred => yield Value::Deferred,
                 Value::Function(function) => {
                     if let Some(marker) = collection_marker([init.clone(), list_value.clone()]) {
-                        advance_collection_captures::<AC>(&function).await;
                         yield marker;
                         continue;
                     }
@@ -1010,7 +1120,7 @@ where
                         (acc, Value::List(values)) => (acc, values),
                         (_, list) => panic!("List.fold requires a list, got {list}"),
                     };
-                    let mut callback = CollectionCallback::new::<AC>(function, "List.fold").await;
+                    let mut callback = CollectionCallback::new::<AC>(function, "List.fold");
                     for value in values {
                         acc = callback.apply([acc, value]).await;
                     }

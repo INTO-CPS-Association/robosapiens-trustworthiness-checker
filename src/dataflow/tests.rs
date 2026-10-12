@@ -1628,6 +1628,53 @@ fn dataflow_rejects_temporal_collection_functions() {
 }
 
 #[test]
+fn dataflow_rejects_temporal_direct_applications_in_collection_functions() {
+    let spec = elaborated(
+        "in xs: List<Int>\nout z: List<Int>\nz = List.map(\\v: Int -> (\\w: Int -> w[1])(v), xs)",
+    );
+    let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
+        .err()
+        .expect("temporal collection callback should be rejected");
+
+    assert!(error.to_string().contains("collection callback"));
+}
+
+/// A callback that applies a pure lambda directly, as an inlined `def` call
+/// does, stages no temporal state, so a collection operation may call it.
+#[test]
+fn dataflow_applies_pure_direct_applications_in_collection_functions() {
+    let spec = elaborated(
+        "in xs: List<Int>\nin y: Int\nout z: List<Int>\n\
+         z = List.filter(\\v: Int -> (\\w: Int -> w > y)(v), xs)",
+    );
+    let rows = eval_dataflow_spec(
+        spec,
+        BTreeMap::from([
+            (
+                VarName::new("xs"),
+                vec![
+                    Value::List(vec![1.into(), 2.into(), 3.into()].into()),
+                    Value::List(vec![4.into(), 0.into()].into()),
+                ],
+            ),
+            (VarName::new("y"), vec![1.into(), 3.into()]),
+        ]),
+    );
+    let values = rows
+        .into_iter()
+        .map(|row| row[&VarName::new("z")].clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        values,
+        vec![
+            Value::List(vec![2.into(), 3.into()].into()),
+            Value::List(vec![4.into()].into()),
+        ]
+    );
+}
+
+#[test]
 fn dataflow_evaluates_ticks_without_inputs() {
     let spec = elaborated("out z\nz = 42");
     let mut monitor = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();

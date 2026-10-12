@@ -5,6 +5,11 @@ use super::lifting::propagated_special;
 use futures::StreamExt;
 use std::{cell::RefCell, rc::Rc};
 
+struct DataflowClosure {
+    function: StreamFunction,
+    captures: Rc<RefCell<Vec<Value>>>,
+}
+
 pub(in crate::dataflow) fn evaluate_function(
     func: &StreamFunction,
     context: EvaluationEnvironment<'_>,
@@ -20,6 +25,10 @@ pub(in crate::dataflow) fn evaluate_function(
         let captures = Rc::clone(captures);
         let parameter_count = func.parameters.len();
         let temporal = func.program.requires_temporal_commit();
+        let closure = Rc::new(DataflowClosure {
+            function: func.clone(),
+            captures: Rc::clone(&captures),
+        });
         RuntimeFunction::value_factory(display, temporal, move || {
             let evaluator = Rc::new(RefCell::new(Evaluator::new(Rc::clone(&program))));
             let captures = Rc::clone(&captures);
@@ -39,6 +48,7 @@ pub(in crate::dataflow) fn evaluate_function(
                     .map_err(anyhow::Error::from)
             })
         })
+        .with_language_payload(closure)
     });
     Value::Function(function.clone())
 }
@@ -358,6 +368,21 @@ fn partial_function(
 fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
     let slot: Rc<RefCell<Option<RuntimeFunction>>> = Rc::new(RefCell::new(None));
     let slot_for_call = slot.clone();
+    let recursive = function
+        .language_payload::<DataflowClosure>()
+        .map(|closure| {
+            let mut values = closure.captures.borrow().clone();
+            values.resize(
+                values.len() + closure.function.parameters.len(),
+                Value::NoVal,
+            );
+            RecursiveCall {
+                program: Rc::clone(&closure.function.program),
+                environment_template: values,
+                parameter_count: closure.function.parameters.len(),
+                available_frames: RefCell::new(Vec::new()),
+            }
+        });
     let function_for_stream = function.clone();
     let slot_for_stream = slot.clone();
     let runtime_function = RuntimeFunction::native_value(display, move |args| {
@@ -369,7 +394,15 @@ fn fix_function(function: RuntimeFunction, display: EcoString) -> Value {
         let mut all_args = EcoVec::new();
         all_args.push(Value::Function(self_function));
         all_args.extend(args);
-        call_runtime_function_once(function.clone(), all_args).map_err(anyhow::Error::from)
+        if let Some(recursive) = &recursive {
+            // A value-backed fix has the same branch and retention rules as
+            // a syntactic recursive application.
+            recursive
+                .call_recursive(all_args)
+                .map_err(anyhow::Error::from)
+        } else {
+            call_runtime_function_once(function.clone(), all_args).map_err(anyhow::Error::from)
+        }
     });
     let runtime_function = if function_for_stream.supports_value_calls() {
         runtime_function

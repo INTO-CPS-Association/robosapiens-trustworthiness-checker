@@ -535,6 +535,9 @@ fn bind_function(
             .into_iter()
             .chain(function.parameters.iter().cloned()),
     );
+    // A parameter named like the recursive output shadows it in the body, so
+    // the body's reads of that name are of the parameter, not of the output.
+    let recursive_output = recursive_output.filter(|output| !function.parameters.contains(output));
     let body = bind_graph(function.graph.clone(), &local_ids, recursive_output)?;
     Ok(StreamFunction {
         parameters: function.parameters,

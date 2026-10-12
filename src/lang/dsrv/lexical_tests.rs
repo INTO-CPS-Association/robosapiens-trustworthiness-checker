@@ -443,6 +443,197 @@ fn text_supplied_to_a_library_dynamic_calls_the_librarys_helper() {
     assert!(caller.to_string().contains("+ 1"), "{caller}");
 }
 
+/// The typed site of `var`, as a runtime checks text supplied to it: a name
+/// the node's environment does not offer is refused, not left free.
+fn typed_site(spec: DsrvSpecification, var: &str) -> RuntimeExpressionSite {
+    let elaborated = spec
+        .check_and_elaborate(TypeCheckOptions::STRICT)
+        .without_warnings()
+        .expect("checks");
+    elaborated
+        .var_expr_ref(&VarName::from(var))
+        .unwrap()
+        .postorder()
+        .find(|node| is_runtime_expression(node.expr()))
+        .expect("a dynamic node")
+        .runtime_expression()
+        .clone()
+}
+
+/// A library that keeps a def, a constant and a type to itself, beside
+/// public ones, and whose `read` supplies text at run time.
+const OWNER_LIB: &str = "use experimental::{modules, functions, constants, casts}\n\
+    internal def secret(n: Int) -> Int = n * 10\n\
+    def shown(n: Int) -> Int = n * 100\n\
+    internal const hidden_limit: Int = 7\n\
+    const shown_limit: Int = 8\n\
+    internal type Hidden = Int\n\
+    type Shown = Int\n\
+    def read(s: Str) -> Int = dynamic(s: Int)\n";
+
+fn owner_program() -> DsrvSpecification {
+    program(
+        &format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = lib::read(s)\n"),
+        &[("lib", OWNER_LIB)],
+    )
+}
+
+/// Text supplied at run time is not the module that wrote the node, so the
+/// owner's internal def is hidden from it as it is from an importer (N4-int).
+#[test]
+fn text_supplied_to_a_library_dynamic_cannot_call_the_librarys_internal_def() {
+    let spec = owner_program();
+    let expr = site(&spec, "y").parse("secret(2)").expect("parses");
+    assert!(
+        expr.to_string().contains("secret") && !expr.to_string().contains("* 10"),
+        "the name was left alone, got {expr}",
+    );
+    // Where it is left a variable, checking refuses it by name.
+    let error = typed_site(spec, "y")
+        .parse_and_check("secret(2)")
+        .expect_err("refused");
+    assert!(error.to_string().contains("secret"), "{error}");
+}
+
+#[test]
+fn text_supplied_to_a_library_dynamic_cannot_name_the_librarys_internal_constant() {
+    let spec = owner_program();
+    let hidden = site(&spec, "y").parse("hidden_limit").expect("parses");
+    assert!(hidden.to_string().contains("hidden_limit"), "{hidden}");
+    let error = typed_site(owner_program(), "y")
+        .parse_and_check("hidden_limit")
+        .expect_err("refused");
+    assert!(error.to_string().contains("hidden_limit"), "{error}");
+    // The owner's exported constant may be named through its module; its
+    // internal one is refused as a module item that does not exist.
+    let shown = site(&spec, "y").parse("lib::shown_limit").expect("parses");
+    assert!(shown.to_string().contains('8'), "{shown}");
+    let error = site(&spec, "y")
+        .parse("lib::hidden_limit")
+        .expect_err("refused");
+    assert!(
+        matches!(
+            &error,
+            RuntimeExpressionError::Parse {
+                error: crate::lang::dsrv::parser::DsrvParseError::Resolve(
+                    crate::lang::dsrv::source::SourceResolveError::UnknownModuleItem { name, .. }
+                ),
+                ..
+            } if name == "lib::hidden_limit"
+        ),
+        "{error:?}",
+    );
+}
+
+#[test]
+fn text_supplied_to_a_library_dynamic_cannot_name_the_librarys_internal_type() {
+    let spec = owner_program();
+    let error = site(&spec, "y")
+        .parse("dynamic(\"1\": Hidden)")
+        .expect_err("the internal alias is not in scope");
+    assert!(error.to_string().contains("Hidden"), "{error}");
+}
+
+/// What the owner exports, it still offers its own runtime text.
+#[test]
+fn text_supplied_to_a_library_dynamic_still_uses_the_librarys_public_items() {
+    let spec = owner_program();
+    let called = site(&spec, "y").parse("shown(2)").expect("parses");
+    assert!(called.to_string().contains("* 100"), "{called}");
+    let constant = site(&spec, "y").parse("shown_limit").expect("parses");
+    assert!(constant.to_string().contains('8'), "{constant}");
+    site(&spec, "y")
+        .parse("dynamic(\"1\": Shown)")
+        .expect("the public alias is in scope");
+}
+
+const ALIAS_LIB: &str = "use experimental::{modules, functions, generics}\n\
+    internal type Hidden = Int\n\
+    type Wrapped = List<Hidden>\n\
+    type Boxed<A> = Struct<value: A, count: Hidden>\n\
+    def read(s: Str) -> Int = dynamic(s: Int)\n";
+
+/// A public alias whose body names an internal one is resolved in the
+/// module that wrote it, so runtime text may use it, generic or not, though
+/// it may not name the internal alias itself.
+#[test]
+fn a_public_alias_over_an_internal_one_resolves_from_runtime_text() {
+    let spec = program(
+        &format!(
+            "use experimental::{{modules, functions, generics}}\nmod lib\nuse lib\nin s: Str\nout y: Int\nout z: Int\n\
+             y = lib::read(s)\nz = dynamic(s: Int)\n"
+        ),
+        &[("lib", ALIAS_LIB)],
+    );
+    let owner = site(&spec, "y");
+    owner
+        .parse("dynamic(\"1\": Wrapped)")
+        .expect("a public alias over an internal one resolves");
+    owner
+        .parse("dynamic(\"1\": Boxed<Str>)")
+        .expect("a public generic alias over an internal one resolves");
+    for text in [
+        "dynamic(\"1\": Hidden)",
+        "dynamic(\"1\": Boxed<Hidden>)",
+        "dynamic(\"1\": List<Hidden>)",
+    ] {
+        let error = owner.parse(text).expect_err(text);
+        assert!(error.to_string().contains("Hidden"), "{text}: {error}");
+    }
+    // The importer's view, as a control: the same aliases resolve, through
+    // the module, and the internal one does not.
+    let importer = site(&spec, "z");
+    for text in [
+        "dynamic(\"1\": lib::Wrapped)",
+        "dynamic(\"1\": lib::Boxed<Str>)",
+    ] {
+        importer
+            .parse(text)
+            .unwrap_or_else(|error| panic!("{text}: {error}"));
+    }
+    let error = importer
+        .parse("dynamic(\"1\": lib::Hidden)")
+        .expect_err("an importer cannot name it");
+    assert!(error.to_string().contains("Hidden"), "{error}");
+}
+
+/// Ordinary source inside the module keeps its own internals.
+#[test]
+fn a_librarys_own_source_still_uses_its_internals() {
+    let lib = format!(
+        "{ROOT}internal def secret(n: Int) -> Int = n * 10\n\
+         internal const hidden_limit: Int = 7\n\
+         internal type Hidden = Int\n\
+         def twice(n: Hidden) -> Int = secret(n) + hidden_limit\n"
+    );
+    let spec = program(
+        &format!("{ROOT}mod lib\nuse lib\nin x: Int\nout y: Int\ny = lib::twice(x)\n"),
+        &[("lib", &lib)],
+    );
+    let written = body(&spec, "y");
+    assert!(
+        written.contains("* 10") && written.contains('7'),
+        "{written}"
+    );
+}
+
+/// What the owner imported is still the owner's text's to use.
+#[test]
+fn text_supplied_to_a_library_dynamic_still_uses_what_the_library_imported() {
+    let lib =
+        format!("{ROOT}mod leaf\nuse lib::leaf::*\ndef read(s: Str) -> Int = dynamic(s: Int)\n");
+    let leaf =
+        format!("{ROOT}def triple(n: Int) -> Int = n * 3\ninternal def hid(n: Int) -> Int = n\n");
+    let spec = program(
+        &format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = lib::read(s)\n"),
+        &[("lib", &lib), ("lib::leaf", &leaf)],
+    );
+    let called = site(&spec, "y").parse("triple(2)").expect("parses");
+    assert!(called.to_string().contains("* 3"), "{called}");
+    let hidden = site(&spec, "y").parse("hid(2)").expect("parses");
+    assert!(hidden.to_string().contains("hid"), "{hidden}");
+}
+
 #[test]
 fn text_supplied_to_a_library_dynamic_is_judged_by_the_librarys_header() {
     let spec = helper_program();
@@ -648,9 +839,28 @@ fn a_library_sites_identity_does_not_follow_the_callers_settings() {
     assert_ne!(identity(&original, "z"), identity(&resettled, "z"));
 }
 
+/// A helper a public def calls is part of what that def means, whether or
+/// not it is internal, so the site's identity follows its body.
 #[test]
 fn a_callers_site_identity_includes_helpers_of_nested_runtime_sites() {
     let root = format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = dynamic(s: Int)\n");
+    let library = |operator| {
+        format!(
+            "{ROOT}internal def helper(n: Int) -> Int = n {operator} 2\n\
+             def read(s: Str) -> Int = helper(dynamic(s: Int))\n"
+        )
+    };
+    let doubled = program(&root, &[("lib", &library("*"))]);
+    let increased = program(&root, &[("lib", &library("+"))]);
+
+    assert_ne!(identity(&doubled, "y"), identity(&increased, "y"));
+}
+
+/// Text supplied at run time cannot reach an internal def the node's def
+/// does not call, so such a def is not part of the site's identity.
+#[test]
+fn a_sites_identity_ignores_an_internal_def_its_text_cannot_reach() {
+    let root = format!("{ROOT}mod lib\nuse lib\nin s: Str\nout y: Int\ny = lib::read(s)\n");
     let library = |operator| {
         format!(
             "{ROOT}internal def helper(n: Int) -> Int = n {operator} 2\n\
@@ -660,7 +870,7 @@ fn a_callers_site_identity_includes_helpers_of_nested_runtime_sites() {
     let doubled = program(&root, &[("lib", &library("*"))]);
     let increased = program(&root, &[("lib", &library("+"))]);
 
-    assert_ne!(identity(&doubled, "y"), identity(&increased, "y"));
+    assert_eq!(identity(&doubled, "y"), identity(&increased, "y"));
 }
 
 #[test]

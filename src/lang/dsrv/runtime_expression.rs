@@ -4,9 +4,12 @@
 //! that does not check, whether evaluation then consults the types or not. The
 //! intentionally unchecked causal path parses and admits the source without
 //! adding type checking. In both cases, source is parsed in the context of the
-//! node it was supplied to and may call the same defs the module that wrote
-//! that node could. Checked paths use the type and environment elaboration
-//! gave that node. For a node inlined from a library's def, that is the
+//! node it was supplied to, but it is never the module that wrote that node:
+//! it sees that module as an importer would. It may use the module's exported
+//! defs, constants and type aliases, what the module imports, and the node's
+//! variables, and nothing the module declares `internal`. Source written
+//! inside the module keeps its own internals. Checked paths use the type and
+//! environment elaboration gave that node. For a node inlined from a library's def, that is the
 //! library's context and defs, not its caller's.
 //!
 //! Warnings proved while checking such text are discarded: runtime expression source has
@@ -126,6 +129,18 @@ impl RuntimeExpressionSite {
         callable: AstShared<Callable>,
         typing: Option<RuntimeExpressionTyping>,
     ) -> Self {
+        // Text supplied at run time is never the module that wrote the node:
+        // it sees that module as an importer would, without its internals.
+        let context = if context.has_internal() {
+            AstShared::new(context.for_runtime_text())
+        } else {
+            context
+        };
+        let callable = if callable.is_runtime_text() {
+            callable
+        } else {
+            AstShared::new(callable.for_runtime_text())
+        };
         Self {
             context,
             callable,

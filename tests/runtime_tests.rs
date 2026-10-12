@@ -1154,6 +1154,415 @@ mapped = List.map(\x: Int -> x + bias, xs)
     Ok(())
 }
 
+async fn run_runtime_with_semantics(
+    executor: Rc<LocalExecutor<'static>>,
+    runtime: RuntimeSpec,
+    semantics: Semantics,
+    spec_str: &str,
+    input_stream: BTreeMap<VarName, Vec<Value>>,
+) -> anyhow::Result<Vec<(usize, BTreeMap<VarName, Value>)>> {
+    let spec = parse_str(spec_str)?;
+    let input_stream = map::input_stream(input_stream);
+    let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
+    let monitor = GeneralRuntimeBuilder::new()
+        .executor(executor.clone())
+        .model(elaborate_for(spec, semantics))
+        .input(input_stream)
+        .output_writer(output_writer)
+        .runtime(runtime)
+        .semantics(semantics)
+        .build()
+        .await
+        .expect("general runtime builder should succeed");
+    executor.spawn(monitor.run()).detach();
+    with_timeout(
+        outputs.enumerate().collect(),
+        10,
+        "function value parity outputs.collect()",
+    )
+    .await
+}
+
+/// A function value, such as a list callback outside a `match` arm, reads
+/// the streams it uses through its own captures. It once also subscribed to
+/// every stream of the specification through a context that nothing
+/// advanced, so each stream's bounded channel to it filled and blocked the
+/// runtime: after 8 ticks under semi-sync and 1000 under async. Each case
+/// runs well past both bounds and must match the dataflow runtime exactly.
+#[apply(async_test)]
+async fn function_values_match_dataflow_past_the_channel_bounds(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let cases = [
+        (
+            "fold",
+            "out n: Int\nn = List.fold(\\acc: Int, e: Int -> acc + e, 0, [x, 2])",
+        ),
+        (
+            "filter",
+            "out kept: List<Int>\nkept = List.filter(\\e: Int -> e > 1, [x, 2, 0])",
+        ),
+        (
+            "callbacks reading an outer stream",
+            "out n: Int\nout kept: List<Int>\n\
+             n = List.fold(\\acc: Int, e: Int -> acc + e + y, 0, [x, 2])\n\
+             kept = List.filter(\\e: Int -> e > y, [x, 2, 5])",
+        ),
+        (
+            "callbacks applying a lambda directly",
+            "out kept: List<Int>\n\
+             kept = List.filter(\\e: Int -> (\\v: Int -> v > y)(e), [x, 2, 5])",
+        ),
+        (
+            "nested callbacks",
+            "out n: Int\nout kept: List<Int>\n\
+             n = List.fold(\\acc: Int, e: Int -> \
+                 acc + List.fold(\\a: Int, b: Int -> a + b * e, y, [e, x]), 0, [x, 2])\n\
+             kept = List.filter(\\e: Int -> \
+                 List.fold(\\any: Bool, b: Int -> any || b == e + y, false, [x, 3]), [x, 1, 2])",
+        ),
+        (
+            "function values from auxiliary streams",
+            "out z: Int\nout mapped: List<Int>\naux f: (Int -> Int)\naux g: (Int -> Int)\n\
+             f = \\v: Int -> v + y\n\
+             g = \\v: Int -> v * y\n\
+             z = f(x)\n\
+             mapped = List.map(g, [x, 1])",
+        ),
+        (
+            "function values called inside callbacks",
+            "out mapped: List<Int>\nout kept: List<Int>\nout n: Int\naux f: (Int -> Int)\n\
+             f = \\v: Int -> v + y\n\
+             mapped = List.map(\\e: Int -> f(e), [x, 1])\n\
+             kept = List.filter(\\e: Int -> f(e) > 2, [x, 1, 3])\n\
+             n = List.fold(\\acc: Int, e: Int -> acc + f(e), 0, [x, 1])",
+        ),
+    ];
+
+    assert_semi_sync_and_async_match_dataflow(executor.clone(), &cases, 64, UNTIMED_SEMANTICS)
+        .await?;
+    assert_semi_sync_and_async_match_dataflow(executor, &cases, 1_100, &[Semantics::TypedUntimed])
+        .await
+}
+
+const UNTIMED_SEMANTICS: &[Semantics] = &[
+    Semantics::Untimed,
+    Semantics::TypedUntimed,
+    Semantics::GradualTypedUntimed,
+];
+
+/// Exposing a value callable for a captured function preserves its language
+/// policy, its tick's captures and the stream path for temporal bodies.
+#[apply(async_test)]
+async fn captured_function_value_calls_preserve_branch_and_temporal_semantics(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    for runtime in [RuntimeSpec::SemiSync, RuntimeSpec::Async] {
+        for &semantics in UNTIMED_SEMANTICS {
+            let spec = "in y: Int\nout f: (Int -> Int)\nout b: (Bool -> Bool)\n\
+                     out delayed: (Int -> Int)\n\
+                     f = \\k: Int -> if k == 0 then y else List.get([y], k - 1)\n\
+                     b = \\v: Bool -> (y == 2) && v\n\
+                     delayed = \\k: Int -> k + default(y[1], 0)";
+            let spec = parse_str(&spec)?;
+            let (output_writer, outputs) = channel_output(spec.output_vars().clone()).await;
+            let monitor = GeneralRuntimeBuilder::new()
+                .executor(executor.clone())
+                .model(elaborate_for(spec, semantics))
+                .input(map::input_stream(BTreeMap::from([(
+                    "y".into(),
+                    vec![Value::Int(2), Value::Int(7)],
+                )])))
+                .output_writer(output_writer)
+                .runtime(runtime)
+                .semantics(semantics)
+                .build()
+                .await?;
+            let task = executor.spawn(monitor.run());
+            // Function streams keep yielding fresh closures after their
+            // captures end; inspect the two supplied ticks explicitly.
+            let outputs: Vec<(usize, BTreeMap<VarName, Value>)> = with_timeout(
+                outputs.take(2).enumerate().collect(),
+                10,
+                "captured function rows",
+            )
+            .await?;
+            task.cancel().await;
+            assert_eq!(outputs.len(), 2, "{runtime:?} {semantics:?} ");
+            for (tick, values) in outputs {
+                let Value::Function(function) = &values[&VarName::from("f")] else {
+                    panic!("expected function")
+                };
+                let result = function.call_value(vec![Value::Int(0)].into());
+                assert!(result.is_err(), "eager if evaluates its unselected branch");
+                assert_eq!(
+                    function.call_value(vec![Value::Int(1)].into())?,
+                    Value::Int(if tick == 0 { 2 } else { 7 })
+                );
+                let Value::Function(boolean) = &values[&VarName::from("b")] else {
+                    panic!("expected function")
+                };
+                assert_eq!(
+                    boolean.call_value(vec![Value::Bool(true)].into())?,
+                    Value::Bool(tick == 0)
+                );
+                let Value::Function(delayed) = &values[&VarName::from("delayed")] else {
+                    panic!("expected function")
+                };
+                assert!(!delayed.has_value_callable());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run each `(name, body)` case, a specification over `in x: Int` and
+/// `in y: Int`, for `ticks` ticks under each of `semantics_set`, and require
+/// the semi-sync and async runtimes to produce exactly what dataflow does.
+async fn assert_semi_sync_and_async_match_dataflow(
+    executor: Rc<LocalExecutor<'static>>,
+    cases: &[(&str, &str)],
+    ticks: i64,
+    semantics_set: &[Semantics],
+) -> anyhow::Result<()> {
+    let cases = cases
+        .iter()
+        .map(|&(name, body)| (name, body, body))
+        .collect::<Vec<_>>();
+    assert_semi_sync_and_async_match_dataflow_of(executor, &cases, ticks, semantics_set).await
+}
+
+/// As [`assert_semi_sync_and_async_match_dataflow`], for cases
+/// `(name, reference, body)` in which dataflow runs `reference`, an
+/// equivalent of `body` that it supports.
+async fn assert_semi_sync_and_async_match_dataflow_of(
+    executor: Rc<LocalExecutor<'static>>,
+    cases: &[(&str, &str, &str)],
+    ticks: i64,
+    semantics_set: &[Semantics],
+) -> anyhow::Result<()> {
+    const HEADER: &str = "in x: Int\nin y: Int\n";
+    let input = BTreeMap::from([
+        ("x".into(), (0..ticks).map(Value::Int).collect::<Vec<_>>()),
+        (
+            "y".into(),
+            (0..ticks).map(|tick| Value::Int(tick % 5)).collect(),
+        ),
+    ]);
+    for (name, reference, body) in cases {
+        let reference = format!("{HEADER}{reference}");
+        let spec = format!("{HEADER}{body}");
+        for &semantics in semantics_set {
+            let expected = run_runtime_with_semantics(
+                executor.clone(),
+                RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+                semantics,
+                &reference,
+                input.clone(),
+            )
+            .await?;
+            assert_eq!(
+                expected.len(),
+                ticks as usize,
+                "dataflow {name} under {semantics:?}"
+            );
+            for runtime in [
+                RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+                RuntimeSpec::SemiSync,
+                RuntimeSpec::Async,
+            ] {
+                let outputs = run_runtime_with_semantics(
+                    executor.clone(),
+                    runtime,
+                    semantics,
+                    &spec,
+                    input.clone(),
+                )
+                .await?;
+                assert_eq!(
+                    outputs, expected,
+                    "{runtime:?} {name} under {semantics:?} over {ticks} ticks"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One function value used in several places reads each stream it captures
+/// once per tick. Its captures were once streams that each use advanced
+/// itself, and a use that started late joined at whatever tick the others
+/// had reached: a second use advanced a capture a second time per tick, so
+/// semi-sync waited for a value the next tick would publish and stalled at
+/// once, and async paired one tick's argument with a later tick's capture.
+#[apply(async_test)]
+async fn a_function_value_used_in_several_places_reads_each_capture_once_per_tick(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let cases = [
+        (
+            "applied twice",
+            "out z: Int\nout w: Int\naux f: (Int -> Int)\n\
+             f = \\v: Int -> v + y\n\
+             z = f(x)\n\
+             w = f(y)",
+        ),
+        (
+            "applied and mapped",
+            "out z: Int\nout mapped: List<Int>\naux f: (Int -> Int)\n\
+             f = \\v: Int -> v + y\n\
+             z = f(x)\n\
+             mapped = List.map(f, [x, 1])",
+        ),
+        (
+            "mapped twice",
+            "out mapped: List<Int>\nout n: Int\naux f: (Int -> Int)\n\
+             f = \\v: Int -> v * y\n\
+             mapped = List.map(f, [x, 1])\n\
+             n = List.fold(\\acc: Int, e: Int -> acc + e, 0, List.map(f, [y, 2]))",
+        ),
+        (
+            "reading a capture's history, applied twice",
+            "out z: Int\nout w: Int\naux f: (Int -> Int)\n\
+             f = \\v: Int -> v + default(y[1], 0)\n\
+             z = f(x)\n\
+             w = f(y)",
+        ),
+        (
+            "partially applied, applied twice",
+            "out z: Int\nout w: Int\naux g: (Int -> Int)\n\
+             g = partial(\\a: Int, b: Int -> a * 100 + b + y, x)\n\
+             z = g(y)\n\
+             w = g(1)",
+        ),
+    ];
+    assert_semi_sync_and_async_match_dataflow(executor, &cases, 64, UNTIMED_SEMANTICS).await
+}
+
+/// A function value that is called with values rather than applied as a
+/// stream, as `fix` calls the function it is given, evaluates its body over
+/// the values its captures hold at that tick. The body once had nothing to
+/// read them from but a context that subscribes to nothing, so a `fix` body
+/// reading an outer stream panicked with `Variable "y" not found`.
+#[apply(async_test)]
+async fn a_fix_body_reads_the_streams_around_it(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    let cases = [
+        (
+            "applied",
+            "out z: Int\naux increment: (Int -> Int)\n\
+             increment = fix(\\self: (Int -> Int), value: Int -> value + y)\n\
+             z = increment(x)",
+        ),
+        (
+            "applied twice",
+            "out z: Int\nout w: Int\naux increment: (Int -> Int)\n\
+             increment = fix(\\self: (Int -> Int), value: Int -> value + y)\n\
+             z = increment(x)\n\
+             w = increment(y)",
+        ),
+        (
+            "mapped",
+            "out z: List<Int>\n\
+             z = List.map(fix(\\self: (Int -> Int), value: Int -> value * y), [x, 1])",
+        ),
+    ];
+    assert_semi_sync_and_async_match_dataflow(executor, &cases, 64, UNTIMED_SEMANTICS).await
+}
+
+/// A recursive function evaluates only the branch its `if` selects, as the
+/// dataflow runtime does. Its body was once evaluated as streams, which
+/// advance both branches every tick, so the recursive branch was called
+/// even at the base case, each call made another, and the stack overflowed.
+///
+/// A value-backed recursive function also used to lose dataflow's recursive
+/// call context and eagerly evaluate its recursive branch at the base case.
+/// All runtimes run those forms and compare with a syntactic application.
+#[apply(async_test)]
+async fn a_recursive_function_stops_at_its_base_case(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    const COUNT: &str = "fix(\\self: (Int -> Int), k: Int -> \
+                         if k == 0 then x else self(k - 1) + 1)";
+    const SCALED: &str = "fix(\\self: (Int -> Int), k: Int -> \
+                          if k <= 0 then 0 else self(k - 1) + y)";
+    const FACTORIAL: &str = "fix(\\self: (Int -> Int), k: Int -> \
+                             if k == 0 then 1 else k * self(k - 1))";
+    let applied = format!("out z: Int\nz = {COUNT}(y)");
+    let applied_twice = format!("out z: Int\nout w: Int\nz = {SCALED}(y)\nw = {SCALED}(x % 4)");
+    let factorial = format!("out z: Int\nz = {FACTORIAL}(y)");
+    let held_and_applied_twice = format!(
+        "out z: Int\nout w: Int\naux scaled: (Int -> Int)\n\
+         scaled = {SCALED}\nz = scaled(y)\nw = scaled(x % 4)"
+    );
+    let mapped_reference = format!("out z: List<Int>\nz = [{COUNT}(y), {COUNT}(3)]");
+    let mapped = format!("out z: List<Int>\nz = List.map({COUNT}, [y, 3])");
+    let cases = [
+        ("applied", applied.as_str(), applied.as_str()),
+        ("applied twice", &applied_twice, &applied_twice),
+        ("factorial", &factorial, &factorial),
+        (
+            "held by an auxiliary stream and applied twice",
+            &applied_twice,
+            &held_and_applied_twice,
+        ),
+        ("mapped", &mapped_reference, &mapped),
+    ];
+    assert_semi_sync_and_async_match_dataflow_of(executor, &cases, 64, UNTIMED_SEMANTICS).await
+}
+
+/// `dynamic` inside a function value cannot reach the streams its runtime
+/// expression names. The dataflow runtime refuses `dynamic` inside any
+/// function, so the reference here is the same body applied syntactically,
+/// which the untimed runtimes evaluate in the applying stream's context.
+///
+/// A function value's body runs in a context that subscribes to nothing,
+/// because nothing advances that context once per tick; `dynamic` takes its
+/// subcontext from it and finds no streams. Giving it one needs a context
+/// that is advanced once per tick from the tick the application starts,
+/// which an application created lazily inside a stream cannot obtain.
+#[ignore = "dynamic inside a function value has no context to read streams from; needs a design"]
+#[apply(async_test)]
+async fn dynamic_inside_a_function_value_reads_the_streams_it_names(
+    executor: Rc<LocalExecutor<'static>>,
+) -> anyhow::Result<()> {
+    const HEADER: &str = "in x: Int\nin y: Int\nin s: Str\nout z: Int\n";
+    let ticks = 16;
+    let input = BTreeMap::from([
+        ("x".into(), (0..ticks).map(Value::Int).collect::<Vec<_>>()),
+        (
+            "y".into(),
+            (0..ticks).map(|tick| Value::Int(tick * 10)).collect(),
+        ),
+        (
+            "s".into(),
+            (0..ticks).map(|_| Value::Str("y + 1".into())).collect(),
+        ),
+    ]);
+    for runtime in [RuntimeSpec::SemiSync, RuntimeSpec::Async] {
+        let applied_syntactically = run_runtime_with_semantics(
+            executor.clone(),
+            runtime,
+            Semantics::Untimed,
+            &format!("{HEADER}z = (\\v: Int -> v + dynamic(s))(x)"),
+            input.clone(),
+        )
+        .await?;
+        assert_eq!(applied_syntactically.len(), ticks as usize);
+        let applied_as_a_value = run_runtime_with_semantics(
+            executor.clone(),
+            runtime,
+            Semantics::Untimed,
+            &format!("{HEADER}aux f\nf = \\v: Int -> v + dynamic(s)\nz = f(x)"),
+            input.clone(),
+        )
+        .await?;
+        assert_eq!(applied_as_a_value, applied_syntactically, "{runtime:?}");
+    }
+    Ok(())
+}
+
 #[apply(async_test)]
 async fn test_typed_runtime_object_literals_assign_to_maps_and_structs(
     executor: Rc<LocalExecutor<'static>>,

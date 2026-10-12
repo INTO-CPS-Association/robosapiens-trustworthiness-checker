@@ -34,6 +34,12 @@ use crate::lang::dsrv::span::Span;
 /// What the names of an expression hold at the tick it is evaluated in.
 pub(crate) trait Environment {
     fn get(&self, name: &VarName) -> Option<Value>;
+
+    /// Whether this is the body of a recursive function, in which an `if`
+    /// evaluates only the branch it selects.
+    fn in_recursive_call(&self) -> bool {
+        false
+    }
 }
 
 impl Environment for BTreeMap<VarName, Value> {
@@ -54,6 +60,30 @@ impl Environment for Scope<'_> {
             .get(name)
             .cloned()
             .or_else(|| self.outer.and_then(|outer| outer.get(name)))
+    }
+
+    fn in_recursive_call(&self) -> bool {
+        self.outer.is_some_and(|outer| outer.in_recursive_call())
+    }
+}
+
+/// The outermost environment of a recursive function's body: it binds
+/// nothing, and marks everything within it as a recursive call.
+///
+/// A recursive body chooses between its base case and its recursion with an
+/// `if`. Evaluating the branch it did not select, as an eager `if` otherwise
+/// does, would recurse past the base case without end, so within a recursive
+/// call an `if` evaluates only its selected branch, as the dataflow runtime's
+/// does.
+pub(crate) struct RecursiveCall;
+
+impl Environment for RecursiveCall {
+    fn get(&self, _name: &VarName) -> Option<Value> {
+        None
+    }
+
+    fn in_recursive_call(&self) -> bool {
+        true
     }
 }
 
@@ -184,9 +214,12 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         Floor(value) => unary(child(value)?, UnaryOperator::Floor),
         Ceil(value) => unary(child(value)?, UnaryOperator::Ceiling),
         Round(value) => unary(child(value)?, UnaryOperator::Round),
-        // Under `lazy_if`, only the selected branch is evaluated, so the
-        // other can neither fail nor make the result absent.
-        If(condition, then_value, else_value) if node.if_policy() == IfPolicy::Lazy => {
+        // Under `lazy_if`, and within a recursive call, only the selected
+        // branch is evaluated, so the other can neither fail nor make the
+        // result absent.
+        If(condition, then_value, else_value)
+            if node.if_policy() == IfPolicy::Lazy || environment.in_recursive_call() =>
+        {
             match child(condition)? {
                 Value::Bool(true) => child(then_value),
                 Value::Bool(false) => child(else_value),
@@ -554,6 +587,33 @@ mod tests {
             evaluate_under("use experimental::lazy_if\n", source, &selected),
             Err(AtemporalError::Operation(_))
         ));
+    }
+
+    // Within a recursive call an eager `if` reads only its selected branch,
+    // so a body's recursion is not evaluated once its base case is chosen,
+    // and the unselected branch cannot fail it either.
+    #[test]
+    fn a_recursive_call_evaluates_only_the_selected_branch() {
+        let source = "if c then List.get(xs, 5) else 0";
+        for (condition, expected) in [
+            (Value::Bool(false), Ok(Value::Int(0))),
+            (Value::NoVal, Ok(Value::NoVal)),
+            (Value::Deferred, Ok(Value::Deferred)),
+        ] {
+            let bindings = Scope {
+                bound: environment([
+                    ("c", condition.clone()),
+                    ("xs", Value::List(EcoVec::from([Value::Int(1)]))),
+                ]),
+                outer: Some(&RecursiveCall),
+            };
+            assert!(bindings.in_recursive_call());
+            assert_eq!(
+                evaluate_under("", source, &bindings),
+                expected,
+                "{condition:?}"
+            );
+        }
     }
 
     #[test]

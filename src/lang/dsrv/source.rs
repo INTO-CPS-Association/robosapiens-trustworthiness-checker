@@ -177,6 +177,11 @@ pub struct SourceFingerprint {
     /// The names this module keeps to itself, which no import may take.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     internal: BTreeSet<TypePath>,
+    /// Whether this is the namespace text supplied at run time sees: the
+    /// `internal` names stay in it, so the aliases that name them still
+    /// resolve in their own context, but text may not name them directly.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    runtime_text: bool,
     /// The union each imported tag builds, so a bare constructor can be
     /// resolved by name where no expected type says which union it is.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -194,6 +199,7 @@ impl PartialEq for SourceFingerprint {
         self.aliases == other.aliases
             && self.generic_identity == other.generic_identity
             && self.internal == other.internal
+            && self.runtime_text == other.runtime_text
             && self.constructors == other.constructors
             && self.language == other.language
             && self.experimental_revision == other.experimental_revision
@@ -212,6 +218,7 @@ impl Ord for SourceFingerprint {
             &self.aliases,
             &self.generic_identity,
             &self.internal,
+            self.runtime_text,
             &self.constructors,
             &self.language,
             self.experimental_revision,
@@ -220,6 +227,7 @@ impl Ord for SourceFingerprint {
                 &other.aliases,
                 &other.generic_identity,
                 &other.internal,
+                other.runtime_text,
                 &other.constructors,
                 &other.language,
                 other.experimental_revision,
@@ -295,6 +303,7 @@ impl SourceFingerprint {
             generic,
             generic_identity,
             internal,
+            runtime_text: false,
             constructors: BTreeMap::new(),
             experimental_revision: language.experimental_revision(),
             language,
@@ -326,6 +335,25 @@ impl SourceContext {
     /// Whether a name is kept inside the module that declares it.
     pub(crate) fn is_internal(&self, name: &TypePath) -> bool {
         self.fingerprint.internal.contains(name)
+    }
+
+    /// Whether the module keeps any alias to itself.
+    pub(crate) fn has_internal(&self) -> bool {
+        !self.fingerprint.internal.is_empty()
+    }
+
+    /// The namespace as text supplied at run time sees the module that owns
+    /// it: as an importer would, without the aliases the module keeps
+    /// internal.
+    pub(crate) fn for_runtime_text(&self) -> Self {
+        if self.fingerprint.internal.is_empty() || self.fingerprint.runtime_text {
+            return self.clone();
+        }
+        let mut fingerprint = (*self.fingerprint).clone();
+        fingerprint.runtime_text = true;
+        Self {
+            fingerprint: Rc::new(fingerprint),
+        }
     }
 
     /// The aliases that take parameters, which have no type until used.
@@ -374,7 +402,7 @@ impl SourceContext {
     ) -> Result<StreamType, SourceResolveError> {
         let mut active = Vec::new();
         resolve_type(source, &mut |name, arguments, span| {
-            instantiate(self, name, arguments, span, &mut active)
+            instantiate(self, name, arguments, span, &mut active, true)
         })
     }
 }
@@ -661,7 +689,17 @@ fn instantiate(
     arguments: &[SourceType],
     span: Span,
     active: &mut Vec<TypePath>,
+    written: bool,
 ) -> Result<StreamType, SourceResolveError> {
+    // A name written in text supplied at run time may not be one the owning
+    // module keeps internal. An alias's own body was written in the module,
+    // so the names it uses are resolved as the module sees them.
+    if written && context.fingerprint.runtime_text && context.fingerprint.internal.contains(name) {
+        return Err(SourceResolveError::UnknownAlias {
+            name: name.clone(),
+            span,
+        });
+    }
     let generic = &context.fingerprint.generic;
     if arguments.is_empty() {
         return match context.get(name) {
@@ -701,14 +739,14 @@ fn instantiate(
         .iter()
         .map(|argument| {
             resolve_type(argument, &mut |name, arguments, span| {
-                instantiate(context, name, arguments, span, active)
+                instantiate(context, name, arguments, span, active, written)
             })
         })
         .collect::<Result<EcoVec<_>, _>>()?;
     let body = substitute(declaration, &arguments, span)?;
     active.push(name.clone());
     let result = resolve_type(&body, &mut |name, arguments, span| {
-        instantiate(context, name, arguments, span, active)
+        instantiate(context, name, arguments, span, active, false)
     });
     active.pop();
     result

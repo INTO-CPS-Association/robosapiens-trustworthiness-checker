@@ -65,6 +65,8 @@ pub(crate) struct Lexical {
     context: AstShared<SourceContext>,
     /// What a name in this module stands for, folded once (19b).
     constants: Constants,
+    /// The same constants as text supplied at run time sees them.
+    runtime_constants: Constants,
     /// Every module this one imported, and whether the import brought its
     /// defs in bare.
     imported: BTreeMap<ModulePath, bool>,
@@ -120,7 +122,8 @@ impl FunctionTable {
     }
 
     /// Every def a module declared, the internal ones included: what that
-    /// module's own text may call (S12).
+    /// module's own source text may call (S12). Text supplied at run time is
+    /// not the module's own and sees only [`Self::exported`].
     fn declared(&self, module: &[ModuleName]) -> Vec<(&VarName, &Entry)> {
         self.entries
             .iter()
@@ -194,10 +197,12 @@ fn add_module(
     let declarations = parsed.declarations();
     let held = parsed.roots();
     let trees: Vec<ParsedExprRef<'_>> = held.iter().map(|tree| tree.as_ref()).collect();
+    let own_constants = Constants::new(AstShared::clone(constants), path, declarations)?;
     let lexical = Lexical {
         module: path.clone(),
         context,
-        constants: Constants::new(AstShared::clone(constants), path, declarations)?,
+        runtime_constants: own_constants.for_runtime_text(),
+        constants: own_constants,
         imported: imported_modules(path, declarations)?,
     };
     let id = LexicalId::from_index(table.lexicals.len());
@@ -293,8 +298,14 @@ fn add_module(
 pub(crate) struct Callable {
     table: AstShared<FunctionTable>,
     /// The environment of the module whose text this is. Its own defs are
-    /// callable bare, the ones it keeps internal included (S12).
+    /// callable bare, the ones it keeps internal included (S12), unless
+    /// `runtime_text` says this is the view of text supplied at run time.
     own: LexicalId,
+    /// Whether this is what text supplied at run time to a `dynamic` or
+    /// `defer` node may call. Such text is never the owning module: it sees
+    /// that module as an importer does, without its internal defs or
+    /// constants.
+    runtime_text: bool,
 }
 
 impl Callable {
@@ -307,11 +318,31 @@ impl Callable {
         let own = table
             .lexical_of(module)
             .unwrap_or_else(|| panic!("{} is in the table", show_path(module)));
-        Self { table, own }
+        Self {
+            table,
+            own,
+            runtime_text: false,
+        }
     }
 
     fn lexical(&self) -> Option<&Lexical> {
         self.table.lexical(self.own)
+    }
+
+    /// Whether this is the view of text supplied at run time.
+    pub(crate) fn is_runtime_text(&self) -> bool {
+        self.runtime_text
+    }
+
+    /// The constants this view may name.
+    fn constants(&self) -> Option<&Constants> {
+        self.lexical().map(|lexical| {
+            if self.runtime_text {
+                &lexical.runtime_constants
+            } else {
+                &lexical.constants
+            }
+        })
     }
 
     /// Whether any def is callable at all, which is what says a node needs
@@ -341,6 +372,7 @@ impl Callable {
         let callable = Self {
             table: AstShared::clone(&self.table),
             own: id,
+            runtime_text: false,
         };
         let callable = (!callable.is_empty()).then(|| AstShared::new(callable));
         (AstShared::clone(&lexical.context), callable)
@@ -355,6 +387,18 @@ impl Callable {
         Self {
             table: AstShared::clone(&self.table),
             own,
+            runtime_text: self.runtime_text,
+        }
+    }
+
+    /// What text supplied at run time to a node that may call `self` may
+    /// call: the owning module as an importer sees it (its exported defs and
+    /// constants), what it imports, and never its internal defs or
+    /// constants.
+    pub(crate) fn for_runtime_text(&self) -> Self {
+        Self {
+            runtime_text: true,
+            ..self.clone()
         }
     }
 
@@ -395,8 +439,8 @@ impl Callable {
             return;
         }
         let scope = self.scope();
-        if let Some(lexical) = self.lexical() {
-            lexical.constants.describe(out);
+        if let Some(constants) = self.constants() {
+            constants.describe(out);
         }
         let mut reached = BTreeSet::new();
         for (name, def) in &scope.bare {
@@ -427,7 +471,9 @@ impl Callable {
                 continue;
             };
             let _ = write!(out, "runtime-env {};", show_path(&lexical.module));
-            lexical.constants.describe(out);
+            if let Some(constants) = callable.constants() {
+                constants.describe(out);
+            }
             let scope = callable.scope();
             for (name, def) in &scope.bare {
                 let _ = write!(out, "{}", name.name());
@@ -507,10 +553,21 @@ impl Callable {
             return Scope::default();
         };
         let mut scope = scope_of(&lexical.imported, &self.table);
-        scope.constants = Some(&lexical.constants);
+        scope.constants = Some(if self.runtime_text {
+            &lexical.runtime_constants
+        } else {
+            &lexical.constants
+        });
         // A file's own defs win over the ones it imported, as types do
-        // (S11), and a file may call the ones it keeps to itself.
-        for (name, entry) in self.table.declared(&lexical.module) {
+        // (S11), and a file may call the ones it keeps to itself. Text
+        // supplied at run time is not the file: it gets only the ones the
+        // file exports.
+        let own = if self.runtime_text {
+            self.table.exported(&lexical.module)
+        } else {
+            self.table.declared(&lexical.module)
+        };
+        for (name, entry) in own {
             scope.bare.insert(name.clone(), entry.as_def());
             scope
                 .qualified
@@ -530,7 +587,9 @@ impl PartialEq for Callable {
         if self.is_empty() && other.is_empty() {
             return true;
         }
-        AstShared::ptr_eq(&self.table, &other.table) && self.own == other.own
+        AstShared::ptr_eq(&self.table, &other.table)
+            && self.own == other.own
+            && self.runtime_text == other.runtime_text
     }
 }
 

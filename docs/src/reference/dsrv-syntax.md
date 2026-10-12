@@ -47,7 +47,11 @@ An alias belongs to the module that declares it, in a namespace separate from
 stream and local names. Forward references resolve within that module; imports
 make selected aliases available to another module. A function imported from a
 module keeps the aliases and language settings of the module that wrote its
-body. An argument passed to that function keeps the caller's context. See
+body. An argument passed to that function keeps the caller's context. Text
+supplied at run time to a `dynamic` or `defer` node is not the module that
+wrote the node: it sees that module's aliases, constants, and defs as an
+importer would, so anything the module declares `internal` is not available to
+it, whereas the module's own source text still uses its internal items. See
 [language settings](dsrv-language-settings.md#experiments) for the `modules`
 and `functions` experiments.
 
