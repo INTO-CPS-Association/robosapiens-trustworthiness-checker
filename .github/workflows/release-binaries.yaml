@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           cargo +1.95 build --release --locked \
-            --package trustuworthiness_checker \
+            --package trustworthiness_checker \
             --target ${{ matrix.rust-target }}
 
       - name: Name the asset after its VSIX target
