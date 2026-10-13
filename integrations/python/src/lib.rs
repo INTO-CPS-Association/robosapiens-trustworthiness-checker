@@ -223,30 +223,44 @@ struct TcRuntime {
 #[pymethods]
 impl TcRuntime {
     #[new]
-    #[pyo3(signature = (model, *, semantics="typed-untimed"))]
-    fn new(py: Python<'_>, model: &Bound<'_, PyAny>, semantics: &str) -> PyResult<Self> {
+    #[pyo3(signature = (model, *, semantics="typed-untimed", runtime="dataflow"))]
+    fn new(
+        py: Python<'_>,
+        model: &Bound<'_, PyAny>,
+        semantics: &str,
+        runtime: &str,
+    ) -> PyResult<Self> {
         let model = model_to_text(model)?;
         let semantics = parse_semantics(semantics)?;
-        Self::from_model(py, model, semantics)
+        let runtime = parse_runtime(runtime, &semantics)?;
+        Self::from_model(py, model, semantics, runtime)
     }
 
     #[staticmethod]
-    #[pyo3(signature = (model, semantics=None))]
-    fn from_text(py: Python<'_>, model: &str, semantics: Option<&str>) -> PyResult<Self> {
+    #[pyo3(signature = (model, semantics=None, runtime=None))]
+    fn from_text(
+        py: Python<'_>,
+        model: &str,
+        semantics: Option<&str>,
+        runtime: Option<&str>,
+    ) -> PyResult<Self> {
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
-        Self::from_model(py, model.to_string(), semantics)
+        let runtime = parse_runtime(runtime.unwrap_or("dataflow"), &semantics)?;
+        Self::from_model(py, model.to_string(), semantics, runtime)
     }
 
     #[staticmethod]
-    #[pyo3(signature = (path, semantics=None))]
+    #[pyo3(signature = (path, semantics=None, runtime=None))]
     fn from_path(
         py: Python<'_>,
         path: &Bound<'_, PyAny>,
         semantics: Option<&str>,
+        runtime: Option<&str>,
     ) -> PyResult<Self> {
         let model = read_pathlike(path)?;
         let semantics = parse_semantics(semantics.unwrap_or("typed-untimed"))?;
-        Self::from_model(py, model, semantics)
+        let runtime = parse_runtime(runtime.unwrap_or("dataflow"), &semantics)?;
+        Self::from_model(py, model, semantics, runtime)
     }
 
     /// The warnings semantic checking proved about the model, in report order.
@@ -369,6 +383,26 @@ fn parse_semantics(semantics: &str) -> PyResult<RuntimeMode> {
     }
 }
 
+fn parse_runtime(runtime: &str, semantics: &RuntimeMode) -> PyResult<RuntimeSpec> {
+    let spec = match runtime {
+        "dataflow" => RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
+        "semi-sync" => RuntimeSpec::SemiSync,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unsupported runtime {runtime:?}; expected 'dataflow' or 'semi-sync'"
+            )));
+        }
+    };
+    if spec != RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous)
+        && !matches!(semantics, RuntimeMode::Ordinary(_))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "runtime {runtime:?} is not supported with causal semantics"
+        )));
+    }
+    Ok(spec)
+}
+
 fn collect_input_values(
     inputs: &Bound<'_, PyDict>,
     values: &mut BTreeMap<VarName, Value>,
@@ -399,7 +433,12 @@ impl TcRuntime {
     /// Parse, then check and elaborate the model before any runtime is built.
     /// A semantic failure raises `SemanticAnalysisError` with its warnings;
     /// every other failure keeps its existing channel.
-    fn from_model(py: Python<'_>, model: String, semantics: RuntimeMode) -> PyResult<Self> {
+    fn from_model(
+        py: Python<'_>,
+        model: String,
+        semantics: RuntimeMode,
+        runtime: RuntimeSpec,
+    ) -> PyResult<Self> {
         let spec = model.parse::<DsrvSpecification>().map_err(|err| {
             initialisation_error(anyhow::anyhow!(
                 "example model could not be parsed: {err:?}"
@@ -414,7 +453,8 @@ impl TcRuntime {
 
         let executor = Rc::new(LocalExecutor::new());
         let (input_vars, input_controller, tick_controller, outputs) =
-            build_runtime(executor.clone(), spec, semantics).map_err(initialisation_error)?;
+            build_runtime(executor.clone(), spec, semantics, runtime)
+                .map_err(initialisation_error)?;
 
         Ok(Self {
             executor,
@@ -481,6 +521,7 @@ fn build_runtime(
     executor: Rc<LocalExecutor<'static>>,
     spec: ElaboratedDsrvSpecification,
     semantics: RuntimeMode,
+    runtime: RuntimeSpec,
 ) -> anyhow::Result<(
     BTreeSet<VarName>,
     ChannelInputController<Value>,
@@ -515,7 +556,7 @@ fn build_runtime(
                             .model(spec)
                             .input(input)
                             .output_writer(output_writer)
-                            .runtime(RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous))
+                            .runtime(runtime)
                             .semantics(semantics)
                             .build()
                             .await?;

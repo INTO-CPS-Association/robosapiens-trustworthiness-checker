@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+RUNTIMES = ["dataflow", "semi-sync"]
 
 tc = pytest.importorskip(
     "trustworthiness_checker",
@@ -90,7 +91,9 @@ result = measurement
 """
 
 
-def monitor_trace(model: str, trace: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+def monitor_trace(
+    model: str, trace: Iterable[dict[str, object]]
+) -> list[dict[str, object]]:
     """Submit one observed system-output sample per checker tick."""
     runtime = tc.TcRuntime.from_text(model)
     verdicts = []
@@ -112,7 +115,11 @@ def test_checker_verdicts_follow_observed_system_outputs() -> None:
         ],
     )
 
-    assert [output["within_velocity_limit"] for output in outputs] == [True, False, False]
+    assert [output["within_velocity_limit"] for output in outputs] == [
+        True,
+        False,
+        False,
+    ]
     assert [output["verdict"] for output in outputs] == [True, False, True]
 
 
@@ -172,6 +179,78 @@ def test_each_synchronous_submission_produces_one_ordered_verdict() -> None:
     verdicts = [runtime.next_output(timeout=1.0) for _ in trace]
     assert [output["verdict"] for output in verdicts] == [True, False, True]
     assert runtime.next_output(timeout=0.0) is None
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
+def test_specifying_runtimes(runtime: str) -> None:
+    checker = tc.TcRuntime.from_text(HISTORY_SAFETY_MONITOR, runtime=runtime)
+    verdicts = []
+    for position_error in [1, 4, 1, 1]:
+        checker.provide_inputs({"position_error": position_error})
+        output = checker.next_output(timeout=None)
+        verdicts.append(output["verdict"])
+
+    assert verdicts == [True, False, False, True]
+    assert checker.next_output(timeout=0.0) is None
+
+
+@pytest.mark.parametrize(
+    "semantics", ["typed-untimed", "untimed", "gradual-typed-untimed"]
+)
+def test_semi_sync_runtime_supports_every_ordinary_semantics(semantics: str) -> None:
+    checker = tc.TcRuntime.from_text(
+        ATOMIC_BATCH_MONITOR, semantics=semantics, runtime="semi-sync"
+    )
+
+    checker.provide_inputs({"left": 9, "right": 4})
+    first = checker.next_output(timeout=1.0)
+    checker.provide_inputs({"left": 2, "right": 7})
+    second = checker.next_output(timeout=1.0)
+
+    assert first == {"difference": 5, "ticks": 1}
+    assert second == {"difference": -5, "ticks": 2}
+
+
+def test_every_constructor_accepts_a_runtime(tmp_path: Path) -> None:
+    path = tmp_path / "monitor.dsrv"
+    path.write_text(ATOMIC_BATCH_MONITOR)
+    for checker in [
+        tc.TcRuntime(ATOMIC_BATCH_MONITOR, runtime="semi-sync"),
+        tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime="semi-sync"),
+        tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, None, "semi-sync"),
+        tc.TcRuntime.from_path(path, runtime="semi-sync"),
+    ]:
+        checker.provide_inputs({"left": 1, "right": 1})
+        assert checker.next_output(timeout=1.0) == {"difference": 0, "ticks": 1}
+
+
+def test_default_runtime_is_dataflow_for_every_constructor(tmp_path: Path) -> None:
+    path = tmp_path / "monitor.dsrv"
+    path.write_text(SYNCHRONOUS_ACCUMULATOR_MONITOR)
+    for checker in [
+        tc.TcRuntime(SYNCHRONOUS_ACCUMULATOR_MONITOR),
+        tc.TcRuntime.from_text(SYNCHRONOUS_ACCUMULATOR_MONITOR),
+        tc.TcRuntime.from_text(SYNCHRONOUS_ACCUMULATOR_MONITOR, runtime=None),
+        tc.TcRuntime.from_path(path),
+        tc.TcRuntime.from_path(path, runtime=None),
+    ]:
+        checker.provide_inputs({"increment": 4})
+        assert checker.next_output(timeout=1.0) == {"total": 4, "ticks": 1}
+
+
+@pytest.mark.parametrize(
+    "runtime", ["semisync", "Semi-Sync", " semi-sync", "async", ""]
+)
+def test_unknown_runtimes_are_rejected(runtime: str) -> None:
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        tc.TcRuntime.from_text(INSTANTANEOUS_SAFETY_MONITOR, runtime=runtime)
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        tc.TcRuntime(INSTANTANEOUS_SAFETY_MONITOR, runtime=runtime)
+
+
+def test_semi_sync_runtime_is_rejected_with_causal_semantics() -> None:
+    with pytest.raises(ValueError, match="not supported with causal semantics"):
+        tc.TcRuntime.from_text(CAUSAL_MONITOR, semantics="causal", runtime="semi-sync")
 
 
 def test_checker_rejects_outputs_not_declared_by_the_monitor() -> None:
@@ -243,7 +322,9 @@ def assert_redundant_cast_warning(warning: object, model: str) -> None:
     "semantics", ["typed-untimed", "gradual-typed-untimed", "untimed", "causal"]
 )
 def test_semantic_check_failure_raises_with_its_warnings(semantics: str) -> None:
-    with pytest.raises(tc.SemanticAnalysisError, match="failed semantic checking") as raised:
+    with pytest.raises(
+        tc.SemanticAnalysisError, match="failed semantic checking"
+    ) as raised:
         tc.TcRuntime.from_text(ILL_TYPED_MONITOR, semantics)
     assert isinstance(raised.value, RuntimeError)
     assert raised.value.warnings == ()
@@ -262,7 +343,9 @@ def test_semantic_check_failure_exposes_its_real_warnings() -> None:
     assert REDUNDANT_CAST_WITH_ERROR_MONITOR[start:end] == "1 as Int"
 
 
-def test_a_checked_model_exposes_its_warnings_as_an_immutable_tuple(tmp_path: Path) -> None:
+def test_a_checked_model_exposes_its_warnings_as_an_immutable_tuple(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "monitor.dsrv"
     path.write_text(INSTANTANEOUS_SAFETY_MONITOR)
     for runtime in [
@@ -349,9 +432,7 @@ def test_canonical_causal_selectors_use_structured_role_aware_output(
     assert output["causality"]["verdict"] == {
         "alternatives": [
             {
-                "causes": [
-                    {"input": "velocity", "logical_tick": 0, "roles": roles}
-                ],
+                "causes": [{"input": "velocity", "logical_tick": 0, "roles": roles}],
             }
         ]
     }

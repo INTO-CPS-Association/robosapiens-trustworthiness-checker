@@ -15,6 +15,11 @@ checker.provide_inputs({"velocity": 3.0, "emergency_stop": False})
 verdict = checker.next_output(timeout=1.0)
 ```
 
+The runtime can be specified as an optional parameter in the constructors. Default is `dataflow`.
+```python
+checker = TcRuntime.from_path("spec.dsrv", runtime="semi-sync")
+```
+
 The model is parsed, then semantically checked, before any runtime is built.
 Typed semantics (`"typed-untimed"`, the default) checks strictly; the gradual,
 untimed and causal semantics check gradually. The warnings that checking
