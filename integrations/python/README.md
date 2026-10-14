@@ -20,6 +20,22 @@ The runtime can be specified as an optional parameter in the constructors. Defau
 checker = TcRuntime.from_path("spec.dsrv", runtime="semi-sync")
 ```
 
+The `reconf-semi-sync` runtime can replace its model while running. A step
+that provides only the `reconf` input is a reconfiguration step; its value is
+the same JSON reconfiguration request the CLI accepts on its reconfiguration
+topic. Later data steps are evaluated by the replacement model:
+
+```python
+import json
+
+checker = TcRuntime.from_path("spec.dsrv", runtime="reconf-semi-sync")
+checker.provide_inputs({"velocity": 3.0, "emergency_stop": False})
+checker.provide_inputs(reconf=json.dumps({"specification": new_model}))
+checker.provide_inputs({"velocity": 4.0, "emergency_stop": False})
+```
+
+Replacements that add or remove input or output streams are not yet supported.
+
 The model is parsed, then semantically checked, before any runtime is built.
 Typed semantics (`"typed-untimed"`, the default) checks strictly; the gradual,
 untimed and causal semantics check gradually. The warnings that checking

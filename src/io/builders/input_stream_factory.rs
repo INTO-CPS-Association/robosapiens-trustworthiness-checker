@@ -979,7 +979,7 @@ impl<V> InputSource<V> {
         Self::channel_with_control(fanouts, None)
     }
 
-    pub(crate) fn channel_with_control(
+    pub fn channel_with_control(
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
     ) -> Self {

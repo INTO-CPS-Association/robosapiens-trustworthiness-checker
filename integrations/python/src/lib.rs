@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use futures::{FutureExt, StreamExt};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
-use smol::LocalExecutor;
+use smol::{LocalExecutor, Task};
 use tc_core::causal::{
     CausalCauseReport, CausalDomain, CausalResultReport, CausalRole, CausalSet, CausalValue,
     RoleCausalAntichain, RoleCausalSet, causality_report,
@@ -16,14 +16,17 @@ use tc_core::causal::{
 use tc_core::core::{
     ExecutionPolicy, LocalStream, OutputInterface, OutputWriter, Runtime, RuntimeSpec, Semantics,
 };
-use tc_core::io::InputController;
 use tc_core::io::channel::{
     ChannelInputController, ChannelOutputReceiver, channel, open_output, output,
 };
+use tc_core::io::{
+    InputController, InputPipeline, InputSource, OutputBackendConfig, OutputPipeline,
+};
 
 use tc_core::lang::dsrv::diagnostics::{SemanticErrors, SemanticWarning as CoreSemanticWarning};
-use tc_core::runtime::builder::{GeneralRuntimeBuilder, type_check_options};
+use tc_core::runtime::builder::{GeneralRuntimeBuilder, prepare_replacement, type_check_options};
 use tc_core::semantics::CausalRuntimeBuilder;
+use tc_core::stream_utils::{Fanout, FanoutSender};
 use tc_core::{
     DsrvSpecification, ElaboratedDsrvSpecification, InputUpdate, TypeCheckOptions, Value, VarName,
 };
@@ -40,6 +43,23 @@ type OutputBatch = BTreeMap<VarName, Value>;
 type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
 type RoleCausalSetOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalSet>>;
 type RoleCausalAntichainOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalAntichain>>;
+
+/// The input that carries reconfiguration requests to `reconf-semi-sync`.
+const RECONF_INPUT: &str = "reconf";
+
+enum RuntimeInput {
+    /// One logical tick is released per input step.
+    Controlled {
+        input_controller: ChannelInputController<Value>,
+        tick_controller: InputController,
+    },
+    /// The reconfigurable runtimes read from an input pipeline: one fan-out
+    /// per input variable, plus one carrying reconfiguration requests.
+    Reconfigurable {
+        data: BTreeMap<VarName, FanoutSender<Value>>,
+        control: FanoutSender<Value>,
+    },
+}
 
 async fn channel_causal_output<D: CausalDomain>(
     output_vars: BTreeSet<VarName>,
@@ -214,9 +234,10 @@ fn initialisation_error(error: anyhow::Error) -> PyErr {
 struct TcRuntime {
     executor: Rc<LocalExecutor<'static>>,
     input_vars: BTreeSet<VarName>,
-    input_controller: ChannelInputController<Value>,
-    tick_controller: InputController,
+    input: RuntimeInput,
     outputs: RuntimeOutputs,
+    /// The running monitor, until its result has been reported.
+    monitor: Option<Task<anyhow::Result<()>>>,
     warnings: Py<PyTuple>,
 }
 
@@ -292,6 +313,22 @@ impl TcRuntime {
             collect_input_values(kwargs, &mut values)?;
         }
 
+        // A step carrying `reconf` is a reconfiguration step, and nothing else.
+        if let RuntimeInput::Reconfigurable { control, .. } = &self.input
+            && let Some(request) = values.remove(&VarName::new(RECONF_INPUT))
+        {
+            if !values.is_empty() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "a reconfiguration step must contain only {RECONF_INPUT:?}"
+                )));
+            }
+            // Always prioritize queued data first
+            while self.executor.try_tick() {}
+            smol::block_on(self.executor.run(control.send(request)));
+            while self.executor.try_tick() {}
+            return self.check_monitor();
+        }
+
         let extra = values
             .keys()
             .filter(|variable| !self.input_vars.contains(*variable))
@@ -306,15 +343,28 @@ impl TcRuntime {
             values.entry(var.clone()).or_insert(Value::NoVal);
         }
 
-        let events = values
-            .into_iter()
-            .map(|(var, value)| InputUpdate::new(var, value))
-            .collect();
         smol::block_on(self.executor.run(async {
-            self.input_controller.send_tick(events).await?;
-            self.tick_controller.advance().await
+            match &mut self.input {
+                RuntimeInput::Controlled {
+                    input_controller,
+                    tick_controller,
+                } => {
+                    let events = values
+                        .into_iter()
+                        .map(|(var, value)| InputUpdate::new(var, value))
+                        .collect();
+                    input_controller.send_tick(events).await?;
+                    tick_controller.advance().await
+                }
+                RuntimeInput::Reconfigurable { data, .. } => {
+                    for (var, value) in values {
+                        data[&var].send(value).await;
+                    }
+                    Ok(())
+                }
+            }
         }))
-        .map_err(|error| {
+        .map_err(|error: anyhow::Error| {
             pyo3::exceptions::PyRuntimeError::new_err(format!(
                 "failed to evaluate checker input step: {error}"
             ))
@@ -387,9 +437,10 @@ fn parse_runtime(runtime: &str, semantics: &RuntimeMode) -> PyResult<RuntimeSpec
     let spec = match runtime {
         "dataflow" => RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
         "semi-sync" => RuntimeSpec::SemiSync,
+        "reconf-semi-sync" => RuntimeSpec::ReconfSemiSync,
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unsupported runtime {runtime:?}; expected 'dataflow' or 'semi-sync'"
+                "unsupported runtime {runtime:?}; expected 'dataflow', 'semi-sync' or 'reconf-semi-sync'"
             )));
         }
     };
@@ -452,16 +503,16 @@ impl TcRuntime {
             .map_err(|errors| semantic_analysis_error(py, &errors, warnings.clone_ref(py)))?;
 
         let executor = Rc::new(LocalExecutor::new());
-        let (input_vars, input_controller, tick_controller, outputs) =
+        let (input_vars, input, outputs, monitor) =
             build_runtime(executor.clone(), spec, semantics, runtime)
                 .map_err(initialisation_error)?;
 
         Ok(Self {
             executor,
             input_vars,
-            input_controller,
-            tick_controller,
+            input,
             outputs,
+            monitor: Some(monitor),
             warnings,
         })
     }
@@ -501,8 +552,15 @@ impl TcRuntime {
                     .now_or_never()
                     .map(|output| output.map(RuntimeOutputBatch::RoleCausalAntichain)),
             };
-            if let Some(output) = output {
-                return Ok(output);
+            match output {
+                Some(Some(output)) => return Ok(Some(output)),
+                Some(None) => {
+                    // The outputs end when the monitor stops; let it finish.
+                    while self.executor.try_tick() {}
+                    self.check_monitor()?;
+                    return Ok(None);
+                }
+                None => self.check_monitor()?,
             }
 
             self.executor.try_tick();
@@ -515,6 +573,19 @@ impl TcRuntime {
             py.detach(|| std::thread::sleep(Duration::from_millis(1)));
         }
     }
+
+    /// Raise the error the monitor stopped with, after it has stopped
+    fn check_monitor(&mut self) -> PyResult<()> {
+        if !self.monitor.as_ref().is_some_and(Task::is_finished) {
+            return Ok(());
+        }
+        match self.monitor.take().and_then(FutureExt::now_or_never) {
+            Some(Err(error)) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "trustworthiness checker runtime failed: {error:#}"
+            ))),
+            _ => Ok(()),
+        }
+    }
 }
 
 fn build_runtime(
@@ -524,19 +595,67 @@ fn build_runtime(
     runtime: RuntimeSpec,
 ) -> anyhow::Result<(
     BTreeSet<VarName>,
-    ChannelInputController<Value>,
-    InputController,
+    RuntimeInput,
     RuntimeOutputs,
+    Task<anyhow::Result<()>>,
 )> {
     let runtime_executor = executor.clone();
 
     smol::block_on(
         executor.run(async move {
             let input_vars = spec.input_vars().clone();
+
+            if runtime == RuntimeSpec::ReconfSemiSync {
+                let RuntimeMode::Ordinary(semantics) = semantics else {
+                    anyhow::bail!("reconfigurable runtimes require ordinary semantics");
+                };
+                let (data, fanouts): (BTreeMap<_, _>, BTreeMap<_, _>) = input_vars
+                    .iter()
+                    .map(|var| {
+                        let (sender, fanout) = Fanout::new();
+                        ((var.clone(), sender), (var.clone(), fanout))
+                    })
+                    .unzip();
+                let (control, control_fanout) = Fanout::new();
+                let input_pipeline = InputPipeline::new(InputSource::channel_with_control(
+                    fanouts,
+                    Some(control_fanout),
+                ));
+                let (sender, receiver) = output(1024);
+                let outputs: LocalStream<OutputBatch> = Box::pin(futures::stream::unfold(
+                    receiver,
+                    |mut receiver| async move {
+                        receiver.recv().await.map(|output| (output, receiver))
+                    },
+                ));
+                let options = type_check_options(semantics);
+                let monitor = GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::new()
+                    .executor(runtime_executor.clone())
+                    .model(spec)
+                    .input_pipeline(input_pipeline)?
+                    .output_pipeline(OutputPipeline::from_backend(OutputBackendConfig::channel(
+                        sender,
+                    )))
+                    .prepare_replacement(move |source| {
+                        prepare_replacement(source, options, |_| Ok(()))
+                    })
+                    .reconf_topic(RECONF_INPUT.to_owned())
+                    .runtime(runtime)
+                    .semantics(semantics)
+                    .build()
+                    .await?;
+                return Ok((
+                    input_vars,
+                    RuntimeInput::Reconfigurable { data, control },
+                    RuntimeOutputs::Ordinary(outputs),
+                    runtime_executor.spawn(monitor.run()),
+                ));
+            }
+
             let (input, input_controller) = channel();
             let (input, tick_controller) = tc_core::io::controlled(input);
 
-            let outputs = match semantics {
+            let (outputs, monitor) = match semantics {
                 RuntimeMode::Ordinary(semantics) => {
                     let (sender, receiver) = output(1024);
                     let outputs: LocalStream<OutputBatch> = Box::pin(futures::stream::unfold(
@@ -560,8 +679,10 @@ fn build_runtime(
                             .semantics(semantics)
                             .build()
                             .await?;
-                    runtime_executor.spawn(monitor.run()).detach();
-                    RuntimeOutputs::Ordinary(outputs)
+                    (
+                        RuntimeOutputs::Ordinary(outputs),
+                        runtime_executor.spawn(monitor.run()),
+                    )
                 }
                 RuntimeMode::ReferenceCausalSet => {
                     let (output_writer, outputs) =
@@ -573,8 +694,10 @@ fn build_runtime(
                         .output_writer(output_writer)
                         .build()
                         .await?;
-                    runtime_executor.spawn(monitor.run()).detach();
-                    RuntimeOutputs::ReferenceCausalSet(outputs)
+                    (
+                        RuntimeOutputs::ReferenceCausalSet(outputs),
+                        runtime_executor.spawn(monitor.run()),
+                    )
                 }
                 RuntimeMode::RoleCausalSet => {
                     let (output_writer, outputs) =
@@ -586,8 +709,10 @@ fn build_runtime(
                         .output_writer(output_writer)
                         .build()
                         .await?;
-                    runtime_executor.spawn(monitor.run()).detach();
-                    RuntimeOutputs::RoleCausalSet(outputs)
+                    (
+                        RuntimeOutputs::RoleCausalSet(outputs),
+                        runtime_executor.spawn(monitor.run()),
+                    )
                 }
                 RuntimeMode::RoleCausalAntichain => {
                     let (output_writer, outputs) =
@@ -600,12 +725,22 @@ fn build_runtime(
                         .output_writer(output_writer)
                         .build()
                         .await?;
-                    runtime_executor.spawn(monitor.run()).detach();
-                    RuntimeOutputs::RoleCausalAntichain(outputs)
+                    (
+                        RuntimeOutputs::RoleCausalAntichain(outputs),
+                        runtime_executor.spawn(monitor.run()),
+                    )
                 }
             };
 
-            Ok((input_vars, input_controller, tick_controller, outputs))
+            Ok((
+                input_vars,
+                RuntimeInput::Controlled {
+                    input_controller,
+                    tick_controller,
+                },
+                outputs,
+                monitor,
+            ))
         }),
     )
 }
