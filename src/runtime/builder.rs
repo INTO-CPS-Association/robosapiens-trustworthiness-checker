@@ -1055,8 +1055,11 @@ impl<V> GeneralRuntimeBuilder<MstloSpecification, V>
 where
     V: MstloStreamValue + JsonStreamValue + RosStreamValue,
 {
-    fn mstlo_semantics(semantics: Semantics) -> mstlo::Semantics {
-        match semantics {
+    fn mstlo_semantics(semantics: Semantics) -> anyhow::Result<mstlo::Semantics> {
+        Ok(match semantics {
+            Semantics::Causal => {
+                anyhow::bail!("causal semantics requires DSRV and the semi-sync runtime")
+            }
             Semantics::DelayedQuantitative | Semantics::GradualTypedUntimed => {
                 mstlo::Semantics::DelayedQuantitative
             }
@@ -1064,7 +1067,7 @@ where
             Semantics::EagerQualitative => mstlo::Semantics::EagerQualitative,
             Semantics::RobustnessInterval => mstlo::Semantics::RobustnessInterval,
             Semantics::Untimed | Semantics::TypedUntimed => mstlo::Semantics::default(),
-        }
+        })
     }
 
     pub async fn build(mut self) -> anyhow::Result<Box<dyn Runtime>> {
@@ -1106,7 +1109,7 @@ where
             )
             .execution_policy(execution_policy)
             .algorithm(self.mstlo_algorithm)
-            .semantics(Self::mstlo_semantics(self.semantics))
+            .semantics(Self::mstlo_semantics(self.semantics)?)
             .synchronization_strategy(self.mstlo_synchronization_strategy)
             .variables(self.mstlo_variables)
             .input(input);

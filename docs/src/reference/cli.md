@@ -23,7 +23,7 @@ These groups are the parser-level requirements and mutual-exclusion boundaries e
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `language` | `--language <LANGUAGE>` | LANGUAGE | 1 value(s) | no | — | `core-dsrv` — Core DSRV: the basic temporal language, for files without a `language` line<br>`distributed-dsrv` — Distributed DSRV: DSRV with the distribution primitives, for files without a `language` line<br>`dsrv` — DSRV runtime-verification language<br>`mstlo` — Signal Temporal Logic properties monitored by the MSTLO runtime | dsrv | — | Specification language to use | — |
 | `model` | `<MODEL>` | MODEL | 1 value(s) | yes | — | — | — | — | Path to the model specification file | — |
-| `semantics` | `--semantics <SEMANTICS>` | SEMANTICS | 1 value(s) | no | — | `delayed-qualitative`<br>`delayed-quantitative`<br>`eager-qualitative`<br>`gradual-typed-untimed`<br>`robustness-interval`<br>`typed-untimed`<br>`untimed` | gradual-typed-untimed | — | Semantics engine to use for monitoring | — |
+| `semantics` | `--semantics <SEMANTICS>` | SEMANTICS | 1 value(s) | no | — | `causal` — Causal-set explanations for DSRV on the semi-sync runtime<br>`delayed-qualitative`<br>`delayed-quantitative`<br>`eager-qualitative`<br>`gradual-typed-untimed`<br>`robustness-interval`<br>`typed-untimed`<br>`untimed` | gradual-typed-untimed | — | Semantics engine to use for monitoring | — |
 
 ## 2. Finite file processing
 

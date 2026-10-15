@@ -9,7 +9,7 @@ The default values are DSRV, `gradual-typed-untimed`, the `dataflow` runtime, an
 ## Compatibility rules
 
 - `--language mstlo` selects the MSTLO runtime. Omit `--runtime`; an explicit runtime is rejected.
-- DSRV accepts `untimed`, `typed-untimed`, or `gradual-typed-untimed` through the CLI. The DSRV `distributed` runtime accepts only `untimed`.
+- DSRV accepts `untimed`, `typed-untimed`, `gradual-typed-untimed`, or `causal` through the CLI. Causal sets require `--runtime semi-sync`; they do not support `async`, dataflow, distributed, or reconfigurable runtimes. The DSRV `distributed` runtime accepts only `untimed`.
 - For DSRV, `--execution-policy synchronous` requires the `dataflow` or `reconf-dataflow` runtime. MSTLO carries the selected policy in its automatically selected runtime. The policy is an input/evaluation boundary, not a transport transaction.
 - `--input-file` is rejected with `reconf-semi-sync` and `reconf-dataflow`. Reconfiguration needs a live, control-capable source.
 - `--reconf-topic` and `--no-context-transfer` require a reconfigurable runtime. The selected control route is the configured route, the CLI override, or `reconf` when no route is supplied.
@@ -24,7 +24,7 @@ MQTT is always compiled; Redis is enabled by default. ROS routes, ROS distributi
 
 ## Observable process behavior
 
-The stdout sink writes `<variable>[<zero-based row>] = <rendered value>`. DSRV values use source syntax; MSTLO values use JSON. The sink suppresses auxiliary and `NoVal` outputs. Tracing defaults to stderr and can be appended to a file with `--log-file PATH`. File input is finite; live transports remain in the foreground until source/process termination or error. The checker currently has no separate readiness endpoint, custom signal handler, or cross-destination transaction.
+The stdout sink writes `<variable>[<zero-based row>] = <rendered value>`. Ordinary DSRV values use source syntax; MSTLO values use JSON. Causal DSRV writes a JSON report containing `value` and `causality` after the same prefix. Redis carries that report directly; MQTT keeps its usual `{"value": REPORT}` envelope. Non-finite floats use JSON5. See [causal-set output](../features/languages-and-runtimes.md#causal-set-output) for a complete example and limitations. The sink suppresses auxiliary and `NoVal` outputs. Tracing defaults to stderr and can be appended to a file with `--log-file PATH`. File input is finite; live transports remain in the foreground until source/process termination or error. The checker currently has no separate readiness endpoint, custom signal handler, or cross-destination transaction.
 
 Use the task pages for complete workflows: [writing and running DSRV models](../tutorials/write-dsrv-monitor.md), [live MQTT](../tutorials/live-mqtt.md), [ROS input/output](../tutorials/ros-input-output.md), [Redis knowledge input](../redis-knowledge-input.md), [reconfiguration](../tutorials/reconfigure-running-monitor.md), [distributed monitoring](../tutorials/distributed-monitoring.md), and [Docker service](../tutorials/docker-service.md).
 

@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, num::NonZeroU32, path::Path, rc::Rc, time::Dura
 use tracing::{debug, info};
 
 use crate::cli::args::{Cli, OutputSelection};
-use crate::core::{FileInputValue, RosStreamValue};
+use crate::core::{FileInputValue, JsonStreamValue, RosStreamValue};
 use crate::distributed::distribution_graphs::NodeName;
 use crate::io::OutputPipeline;
 use crate::io::config::deserialisation::json_to_routes;
@@ -286,7 +286,7 @@ pub fn output_pipeline<V>(
     mqtt_protocol: MqttProtocol,
 ) -> anyhow::Result<OutputPipeline<V>>
 where
-    V: FileInputValue + RosStreamValue,
+    V: JsonStreamValue + RosStreamValue,
 {
     if let Some(path) = selection.output_config {
         let config = output_config_from_path(&path)?;

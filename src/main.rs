@@ -17,7 +17,7 @@ use trustworthiness_checker::cli::adapters::{
     input_source, output_pipeline, redis_knowledge_config_from_cli,
 };
 use trustworthiness_checker::cli::diagnostics::{REPLACEMENT_LABEL, present_warnings};
-use trustworthiness_checker::core::{Runtime, RuntimeSpec};
+use trustworthiness_checker::core::{Runtime, RuntimeSpec, Semantics};
 use trustworthiness_checker::distributed::scheduling::dist_constraint_evaluator::dist_constraint_input_vars;
 use trustworthiness_checker::io::{
     InputConfigFile, InputPipeline, InputPolicy, InputReduction, InputSource, InputSources,
@@ -158,6 +158,9 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
         }
         _ => model,
     };
+    if cli.semantics == Semantics::Causal {
+        return run_causal(executor, cli, model).await;
+    }
     let model = LangSpecification::from(model);
 
     let builder = builder.model(model.clone());
@@ -228,6 +231,66 @@ async fn main(executor: Rc<LocalExecutor<'static>>) -> anyhow::Result<()> {
     // Create the runtime
     let monitor = builder.build().await?;
 
+    monitor.run().await
+}
+
+async fn run_causal(
+    executor: Rc<LocalExecutor<'static>>,
+    cli: Cli,
+    model: tc::lang::dsrv::ElaboratedDsrvSpecification,
+) -> anyhow::Result<()> {
+    use tc::causal::{CausalSet, CausalValue};
+    use tc::semantics::CausalRuntimeBuilder;
+
+    tc::core::ensure_runtime_support(
+        &model,
+        tc::core::RuntimeCapabilities::NONE,
+        "causal semi-sync",
+    )?;
+    let pipeline = output_pipeline::<CausalValue<CausalSet>>(
+        cli.output_selection.clone(),
+        executor.clone(),
+        cli.mqtt_port,
+        cli.redis_port,
+        cli.mqtt_protocol(),
+    )?
+    .with_shutdown_timeout(cli.io_shutdown_timeout_ms.map(Duration::from_millis));
+    let resolved = pipeline.resolve(model.output_vars(), model.aux_vars(), None)?;
+    let input_pipeline = configure_input_pipeline::<Value>(
+        cli.input_mode.clone(),
+        executor.clone(),
+        cli.mqtt_port,
+        cli.redis_port,
+        cli.mqtt_protocol(),
+        Some(InputSource::<Value>::redis_knowledge),
+        &cli,
+    )?;
+    let mut writer = pipeline
+        .open(resolved)
+        .await
+        .context("Causal output could not be opened")?;
+    let input = match input_pipeline.build(model.input_vars().clone()).await {
+        Ok(input) => input,
+        Err(error) => {
+            let error = error.context("Causal input could not be opened");
+            return Err(
+                match writer.shutdown_deadline().timeout(writer.close()).await {
+                    Ok(Ok(())) => error,
+                    Ok(Err(cleanup)) => {
+                        error.context(format!("also failed to close causal output: {cleanup}"))
+                    }
+                    Err(timeout) => error.context(format!("closing causal output: {timeout}")),
+                },
+            );
+        }
+    };
+    let monitor = CausalRuntimeBuilder::new()
+        .executor(executor)
+        .model(model)
+        .input(input)
+        .output_writer(writer)
+        .build()
+        .await?;
     monitor.run().await
 }
 

@@ -6,12 +6,51 @@ The TC accepts two specification languages. DSRV is the default stream-monitorin
 
 ### DSRV
 
-Use the default `dsrv` language for declarations such as `in x`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, and `gradual-typed-untimed`; the default is `gradual-typed-untimed`. The distributed DSRV runtime currently accepts only `untimed`.
+Use the default `dsrv` language for declarations such as `in x`, `out z`, and equations over current and historical stream values. The CLI's DSRV-compatible semantics are `untimed`, `typed-untimed`, `gradual-typed-untimed`, and `causal`; the default is `gradual-typed-untimed`. Use `--semantics causal --runtime semi-sync` to track the external input observations supporting each result. Causal sets currently require `semi-sync`. The distributed DSRV runtime currently accepts only `untimed`.
 
 Start with [writing and running DSRV models](../tutorials/write-dsrv-monitor.md). Language-level `dynamic` and `defer` are distinct from root monitor reconfiguration.
 The [DSRV dialects and experiments reference](../reference/dsrv-language-settings.md)
 explains what a source file can select and how those selections affect its
 meaning.
+
+#### Causal-set output
+
+Causal sets attach supporting input observations to each result. For two-input
+addition:
+
+```dsrv
+in x: Int
+in y: Int
+out z: Int
+z = x + y
+```
+
+From the repository root, run the copy in `examples/simple_add_typed.dsrv`:
+
+```sh
+cargo run -- examples/simple_add_typed.dsrv \
+  --input-file examples/simple_add.input \
+  --semantics causal --runtime semi-sync --output-stdout
+```
+
+The first input tick contains `x = 1` and `y = 2`, producing:
+
+```text
+z[0] = {"value":3,"causality":{"alternatives":[{"causes":[{"input":"x","logical_tick":0,"roles":[]},{"input":"y","logical_tick":0,"roles":[]}]}]}}
+```
+
+`logical_tick` counts input ticks from zero. History references can retain causes
+from earlier ticks. Causal sets report one unclassified support set, so `roles`
+is empty. The process exits after the finite trace.
+
+The model is checked gradually before execution. The causal evaluator supports
+scalar expressions and stateful stream operators, including `dynamic` and `defer`;
+it does not support collection operations, higher-order expressions, or
+distribution primitives. Stdout keeps the usual variable and row prefix. Redis
+publishes the per-variable JSON report without that prefix. MQTT places the
+report inside its usual `{"value": REPORT}` envelope. Both use the ordinary
+routing options. Non-finite floats use JSON5. Auxiliary and `NoVal`
+outputs remain suppressed. ROS output has no causal message mapping.
 
 ### MSTLO
 

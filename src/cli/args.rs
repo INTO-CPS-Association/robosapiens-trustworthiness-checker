@@ -110,13 +110,19 @@ const DSRV_TYPED_SEMANTICS: &[Semantics] = &[
     Semantics::GradualTypedUntimed,
 ];
 const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::Untimed];
+const DSRV_SEMI_SYNC_SEMANTICS: &[Semantics] = &[
+    Semantics::Untimed,
+    Semantics::TypedUntimed,
+    Semantics::GradualTypedUntimed,
+    Semantics::Causal,
+];
 
 fn supported_dsrv_semantics(runtime: RuntimeKind) -> &'static [Semantics] {
     match runtime {
         RuntimeKind::Distributed => DSRV_DISTRIBUTED_SEMANTICS,
+        RuntimeKind::SemiSync => DSRV_SEMI_SYNC_SEMANTICS,
         RuntimeKind::Async
         | RuntimeKind::Dataflow
-        | RuntimeKind::SemiSync
         | RuntimeKind::ReconfSemiSync
         | RuntimeKind::ReconfDataflow => DSRV_TYPED_SEMANTICS,
     }
@@ -582,6 +588,11 @@ impl Cli {
         if let Some(topic) = &self.reconf_topic {
             anyhow::ensure!(!topic.trim().is_empty(), "--reconf-topic cannot be empty");
         }
+        anyhow::ensure!(
+            self.semantics != Semantics::Causal
+                || (self.language.is_dsrv() && self.runtime == RuntimeKind::SemiSync),
+            "--semantics causal requires DSRV and --runtime semi-sync"
+        );
         if self.language.is_dsrv() {
             validate_dsrv_runtime_semantics(self.runtime, self.semantics)?;
         }
@@ -843,6 +854,39 @@ mod runtime_tests {
             ])
             .unwrap();
             cli.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn causal_semantics_requires_dsrv_semi_sync() {
+        for language in ["dsrv", "core-dsrv", "distributed-dsrv", "mstlo"] {
+            for runtime in [
+                "async",
+                "dataflow",
+                "semi-sync",
+                "distributed",
+                "reconf-semi-sync",
+                "reconf-dataflow",
+            ] {
+                let cli = Cli::try_parse_from([
+                    "trustworthiness_checker",
+                    "model.dsrv",
+                    "--mqtt-input",
+                    "--output-stdout",
+                    "--language",
+                    language,
+                    "--runtime",
+                    runtime,
+                    "--semantics",
+                    "causal",
+                ])
+                .unwrap();
+                assert_eq!(
+                    cli.validate().is_ok(),
+                    language != "mstlo" && runtime == "semi-sync",
+                    "unexpected validation result for {language} + {runtime} + causal"
+                );
+            }
         }
     }
 

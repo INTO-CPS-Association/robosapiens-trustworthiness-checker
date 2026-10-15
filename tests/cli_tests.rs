@@ -860,6 +860,158 @@ mod integration_tests {
     }
 
     #[apply(async_test)]
+    async fn test_causal_rejects_other_runtimes_and_mstlo_before_opening_io() {
+        for extra in [
+            vec![],
+            vec!["--runtime", "async"],
+            vec!["--runtime", "dataflow"],
+            vec!["--runtime", "distributed"],
+            vec!["--runtime", "reconf-semi-sync"],
+            vec!["--runtime", "reconf-dataflow"],
+            vec!["--language", "mstlo", "--runtime", "semi-sync"],
+        ] {
+            let mut args = vec![
+                "missing.dsrv",
+                "--mqtt-input",
+                "--output-stdout",
+                "--semantics",
+                "causal",
+            ];
+            args.extend_from_slice(&extra);
+            let output = run_cli(&args).await.expect("Failed to run CLI");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
+            assert!(stderr.contains("causal"), "{args:?}: {stderr}");
+            assert!(output.stdout.is_empty(), "{args:?} produced output");
+            assert!(!stderr.contains("panicked at"), "{args:?}: {stderr}");
+            assert!(
+                !stderr.contains("could not be parsed"),
+                "{args:?}: {stderr}"
+            );
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_causal_addition_reports_values_and_input_ticks() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--output-stdout",
+            "--runtime",
+            "semi-sync",
+            "--semantics",
+            "causal",
+        ])
+        .await
+        .expect("Failed to run CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3, "{stdout}");
+        for (tick, expected) in [3, 7, 11].into_iter().enumerate() {
+            let prefix = format!("z[{tick}] = ");
+            let report: serde_json::Value = serde_json::from_str(
+                lines[tick]
+                    .strip_prefix(&prefix)
+                    .expect("CLI variable/tick prefix"),
+            )
+            .unwrap();
+            assert_eq!(
+                report,
+                serde_json::json!({
+                    "value": expected,
+                    "causality": {"alternatives": [{"causes": [
+                        {"input": "x", "logical_tick": tick, "roles": []},
+                        {"input": "y", "logical_tick": tick, "roles": []},
+                    ]}]},
+                })
+            );
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_causal_counter_retains_causes_from_previous_ticks() {
+        let output = run_cli(&[
+            &fixture_path("counter.dsrv"),
+            "--input-file",
+            &fixture_path("counter.input"),
+            "--output-stdout",
+            "--runtime",
+            "semi-sync",
+            "--semantics",
+            "causal",
+        ])
+        .await
+        .expect("Failed to run CLI");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 6, "{stdout}");
+        for (tick, line) in lines.into_iter().enumerate() {
+            let report: serde_json::Value =
+                serde_json::from_str(line.split_once(" = ").unwrap().1).unwrap();
+            let causes = report["causality"]["alternatives"][0]["causes"]
+                .as_array()
+                .unwrap();
+            assert_eq!(report["value"], [1, 2, 3, 4, 6, 9][tick], "{line}");
+            let expected = (0..=tick)
+                .map(|logical_tick| {
+                    serde_json::json!({
+                        "input": "x", "logical_tick": logical_tick, "roles": [],
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(*causes, expected, "{line}");
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_causal_stdout_suppresses_absent_values_without_renumbering_ticks() {
+        let output = run_cli(&[
+            &fixture_path("simple_add_typed.dsrv"),
+            "--input-file",
+            &fixture_path("causal_missing.input"),
+            "--output-stdout",
+            "--runtime",
+            "semi-sync",
+            "--semantics",
+            "causal",
+        ])
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2, "{stdout}");
+        assert!(lines[0].starts_with("z[1] = "), "{stdout}");
+        assert!(lines[1].starts_with("z[2] = "), "{stdout}");
+        let report: serde_json::Value =
+            serde_json::from_str(lines[1].split_once(" = ").unwrap().1).unwrap();
+        assert_eq!(report["value"], 9);
+        assert_eq!(
+            report["causality"]["alternatives"][0]["causes"],
+            serde_json::json!([
+                {"input": "x", "logical_tick": 2, "roles": []},
+                {"input": "y", "logical_tick": 1, "roles": []},
+                {"input": "y", "logical_tick": 2, "roles": []},
+            ])
+        );
+    }
+
+    #[apply(async_test)]
     async fn test_invalid_typed_models_fail_without_panicking() {
         for semantics in ["typed-untimed", "gradual-typed-untimed"] {
             let output = run_cli(&[
@@ -1913,6 +2065,110 @@ mod integration_tests {
         use trustworthiness_checker::io::mqtt::{self, MqttMessage};
 
         use super::*;
+
+        #[apply(async_test)]
+        async fn test_causal_file_input_mqtt_output() {
+            let broker = start_mqtt().await;
+            let port = TokioCompat::new(broker.get_host_port_ipv4(1883))
+                .await
+                .unwrap();
+            let (subscriber, mut messages) =
+                mqtt::connect_and_receive(&format!("tcp://localhost:{port}"))
+                    .await
+                    .unwrap();
+            subscriber.subscribe(&"z".to_owned(), 1).await.unwrap();
+            let output = run_cli(&[
+                &fixture_path("simple_add_typed.dsrv"),
+                "--input-file",
+                &fixture_path("simple_add_typed.input"),
+                "--runtime",
+                "semi-sync",
+                "--semantics",
+                "causal",
+                "--mqtt-output",
+                "--mqtt-port",
+                &port.to_string(),
+            ])
+            .await
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            for (tick, expected) in [3, 7, 11].into_iter().enumerate() {
+                let message = with_timeout(messages.next(), 5, "causal MQTT output")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let envelope: serde_json::Value = serde_json::from_str(&message.payload).unwrap();
+                assert_eq!(envelope.as_object().unwrap().len(), 1);
+                let report = &envelope["value"];
+                assert_eq!(
+                    *report,
+                    serde_json::json!({
+                        "value": expected,
+                        "causality": {"alternatives": [{"causes": [
+                            {"input": "x", "logical_tick": tick, "roles": []},
+                            {"input": "y", "logical_tick": tick, "roles": []},
+                        ]}]},
+                    })
+                );
+            }
+            subscriber.disconnect().await.unwrap();
+        }
+
+        #[apply(async_test)]
+        async fn test_causal_file_input_redis_output() {
+            let server = start_redis().await;
+            let port = TokioCompat::new(server.get_host_port_ipv4(6379))
+                .await
+                .unwrap();
+            let client = redis::Client::open(format!("redis://localhost:{port}")).unwrap();
+            let mut subscriber = client.get_async_pubsub().await.unwrap();
+            subscriber.subscribe("z").await.unwrap();
+            let output = run_cli(&[
+                &fixture_path("simple_add_typed.dsrv"),
+                "--input-file",
+                &fixture_path("simple_add_typed.input"),
+                "--runtime",
+                "semi-sync",
+                "--semantics",
+                "causal",
+                "--redis-output",
+                "--redis-port",
+                &port.to_string(),
+            ])
+            .await
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            let mut messages = subscriber.on_message();
+            for (tick, expected) in [3, 7, 11].into_iter().enumerate() {
+                let message = with_timeout(messages.next(), 5, "causal Redis output")
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let payload: String = message.get_payload().unwrap();
+                let report: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                assert_eq!(
+                    report,
+                    serde_json::json!({
+                        "value": expected,
+                        "causality": {"alternatives": [{"causes": [
+                            {"input": "x", "logical_tick": tick, "roles": []},
+                            {"input": "y", "logical_tick": tick, "roles": []},
+                        ]}]},
+                    })
+                );
+            }
+        }
 
         fn generate_mqtt_test_publisher_tasks(
             executor: Rc<LocalExecutor>,

@@ -21,6 +21,8 @@ pub enum Semantics {
     Untimed,
     TypedUntimed,
     GradualTypedUntimed,
+    /// Causal-set explanations for DSRV on the semi-sync runtime.
+    Causal,
     DelayedQuantitative,
     DelayedQualitative,
     EagerQualitative,
