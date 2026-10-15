@@ -16,6 +16,7 @@ verdict = checker.next_output(timeout=1.0)
 ```
 
 The runtime can be specified as an optional parameter in the constructors. Default is `dataflow`.
+
 ```python
 checker = TcRuntime.from_path("spec.dsrv", runtime="semi-sync")
 ```
@@ -33,8 +34,6 @@ checker.provide_inputs({"velocity": 3.0, "emergency_stop": False})
 checker.provide_inputs(reconf=json.dumps({"specification": new_model}))
 checker.provide_inputs({"velocity": 4.0, "emergency_stop": False})
 ```
-
-Replacements that add or remove input or output streams are not yet supported.
 
 The model is parsed, then semantically checked, before any runtime is built.
 Typed semantics (`"typed-untimed"`, the default) checks strictly; the gradual,

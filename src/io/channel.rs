@@ -258,9 +258,117 @@ pub(crate) fn reconfigurable_stream<V: Clone + 'static>(
     (stream, ReconfigurableChannelControl { commands })
 }
 
+/// Input designed for external integrations such as Python.
+/// Each step provides data values, keyed by variable, or a reconfiguration request as a JSON string.
+#[derive(Clone, Debug)]
+pub enum IntegrationInput<V> {
+    Data(BTreeMap<VarName, V>),
+    Reconfigure(String),
+}
+
+/// Helper function that takes a map of variable-value entries. Filters out inactive variables entries
+/// (i.e., not used by the current specification).
+/// Converts a Python step (the map) into an InputBatch tick
+fn select_active<V>(
+    row: BTreeMap<VarName, V>,
+    active: &BTreeSet<VarName>,
+) -> anyhow::Result<Option<InputBatch<V>>> {
+    let updates = row
+        .into_iter()
+        .filter(|(variable, _)| active.contains(variable))
+        .map(|(variable, value)| InputUpdate::new(variable, value))
+        .collect::<Vec<_>>();
+    if updates.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(InputBatch::tick(updates)?))
+}
+
+/// Read integration input without reconfiguration: data steps become ticks,
+/// and a reconfiguration request is an error.
+pub(crate) fn integration_stream<V: Clone + 'static>(
+    items: Rc<Fanout<IntegrationInput<V>>>,
+    active: BTreeSet<VarName>,
+) -> InputStream<V> {
+    let mut receiver = items.subscribe();
+    Box::pin(async_stream::try_stream! {
+        while let Some(item) = receiver.recv().await {
+            match item {
+                IntegrationInput::Data(row) => {
+                    if let Some(tick) = select_active(row, &active)? {
+                        yield tick;
+                    }
+                }
+                IntegrationInput::Reconfigure(_) => Err(anyhow::anyhow!(
+                    "integration input received a reconfiguration request, but the runtime is not reconfigurable"
+                ))?,
+            }
+        }
+    })
+}
+
+/// Read integration input as a reconfigurable source. Data and reconfiguration
+/// requests share one ordered stream, so every step sent before a request is
+/// read by the old model and every step after it by the replacement. After a
+/// request the stream holds further steps until the runtime has rebound or
+/// resumed it.
+pub(crate) fn reconfigurable_integration_stream<V: Clone + 'static>(
+    items: Rc<Fanout<IntegrationInput<V>>>,
+    mut active: BTreeSet<VarName>,
+) -> (ReconfigurableInputStream<V>, ReconfigurableChannelControl) {
+    let (commands, mut command_receiver) = bounded::channel(1).into_split();
+    let mut receiver = items.subscribe();
+    let stream = Box::pin(async_stream::try_stream! {
+        let mut paused = false;
+        loop {
+            enum Next<V> {
+                Command(Option<ReconfigurableChannelCommand>),
+                Item(Option<IntegrationInput<V>>),
+            }
+            let next = if paused {
+                Next::Command(command_receiver.recv().await)
+            } else {
+                futures::future::poll_fn(|cx| {
+                    if let Poll::Ready(command) = command_receiver.poll_recv(cx) {
+                        return Poll::Ready(Next::Command(command));
+                    }
+                    receiver.poll_recv(cx).map(Next::Item)
+                })
+                .await
+            };
+            match next {
+                // Every step before the boundary has already been emitted.
+                Next::Command(Some(ReconfigurableChannelCommand::Pause(id))) => {
+                    paused = true;
+                    yield ReconfigurableInputItem::Boundary(id);
+                }
+                Next::Command(Some(ReconfigurableChannelCommand::Rebind(next))) => {
+                    active = next;
+                    paused = false;
+                }
+                Next::Command(Some(ReconfigurableChannelCommand::Resume)) => paused = false,
+                Next::Command(Some(ReconfigurableChannelCommand::Stop))
+                | Next::Command(None)
+                | Next::Item(None) => return,
+                Next::Item(Some(IntegrationInput::Data(row))) => {
+                    if let Some(tick) = select_active(row, &active)? {
+                        yield ReconfigurableInputItem::Data(tick);
+                    }
+                }
+                Next::Item(Some(IntegrationInput::Reconfigure(payload))) => {
+                    paused = true;
+                    yield ReconfigurableInputItem::Reconfigure(ReconfigurationRequest::from_json(&payload)?);
+                }
+            }
+        }
+    });
+    (stream, ReconfigurableChannelControl { commands })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::FutureExt;
 
     #[test]
     fn channel_input_delivers_simultaneous_steps() {
@@ -401,6 +509,53 @@ mod tests {
             };
             assert_eq!(*batch.updates().next().unwrap().value, Value::Int(4));
             assert!(stream.next().await.is_none());
+        });
+    }
+
+    #[test]
+    fn integration_input_holds_steps_after_a_reconfiguration_for_the_replacement() {
+        smol::block_on(async {
+            let (sender, items) = Fanout::<IntegrationInput<Value>>::new();
+            let (mut stream, owner) =
+                reconfigurable_integration_stream(items, BTreeSet::from([VarName::new("x")]));
+            let step = |x, y| {
+                IntegrationInput::Data(BTreeMap::from([
+                    (VarName::new("x"), Value::Int(x)),
+                    (VarName::new("y"), Value::Int(y)),
+                ]))
+            };
+            sender.send(step(1, 9)).await;
+            sender
+                .send(IntegrationInput::Reconfigure(
+                    r#"{"specification":"in x\nin y"}"#.to_owned(),
+                ))
+                .await;
+            sender.send(step(2, 3)).await;
+
+            // The old binding reads only `x`.
+            let ReconfigurableInputItem::Data(batch) = stream.next().await.unwrap().unwrap() else {
+                panic!("the step before the request belongs to the old model")
+            };
+            assert_eq!(batch.updates().count(), 1);
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Reconfigure(_)
+            ));
+            // The step after the request waits for the runtime's boundary.
+            assert!(stream.next().now_or_never().is_none());
+            owner.pause(0).await.unwrap();
+            assert!(matches!(
+                stream.next().await.unwrap().unwrap(),
+                ReconfigurableInputItem::Boundary(0)
+            ));
+            owner
+                .rebind(BTreeSet::from([VarName::new("x"), VarName::new("y")]))
+                .await
+                .unwrap();
+            let ReconfigurableInputItem::Data(batch) = stream.next().await.unwrap().unwrap() else {
+                panic!("the step after the request belongs to the replacement")
+            };
+            assert_eq!(batch.updates().count(), 2);
         });
     }
 

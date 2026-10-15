@@ -21,8 +21,10 @@ use tc_core::io::channel::{
 };
 use tc_core::io::{
     InputController, InputPipeline, InputSource, OutputBackendConfig, OutputPipeline,
+    ReconfigurationRequest,
 };
 
+use tc_core::io::channel::IntegrationInput;
 use tc_core::lang::dsrv::diagnostics::{SemanticErrors, SemanticWarning as CoreSemanticWarning};
 use tc_core::runtime::builder::{GeneralRuntimeBuilder, prepare_replacement, type_check_options};
 use tc_core::semantics::CausalRuntimeBuilder;
@@ -56,8 +58,7 @@ enum RuntimeInput {
     /// The reconfigurable runtimes read from an input pipeline: one fan-out
     /// per input variable, plus one carrying reconfiguration requests.
     Reconfigurable {
-        data: BTreeMap<VarName, FanoutSender<Value>>,
-        control: FanoutSender<Value>,
+        items: FanoutSender<IntegrationInput<Value>>,
     },
 }
 
@@ -314,7 +315,7 @@ impl TcRuntime {
         }
 
         // A step carrying `reconf` is a reconfiguration step, and nothing else.
-        if let RuntimeInput::Reconfigurable { control, .. } = &self.input
+        if let RuntimeInput::Reconfigurable { items } = &self.input
             && let Some(request) = values.remove(&VarName::new(RECONF_INPUT))
         {
             if !values.is_empty() {
@@ -322,11 +323,23 @@ impl TcRuntime {
                     "a reconfiguration step must contain only {RECONF_INPUT:?}"
                 )));
             }
-            // Always prioritize queued data first
+            let Value::Str(request) = request else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "{RECONF_INPUT:?} must be a JSON reconfiguration request string"
+                )));
+            };
+            let input_vars = replacement_input_vars(&request);
+            smol::block_on(
+                self.executor
+                    .run(items.send(IntegrationInput::Reconfigure(request.to_string()))),
+            );
+            // Let the replacement finish, so a failure is reported here.
             while self.executor.try_tick() {}
-            smol::block_on(self.executor.run(control.send(request)));
-            while self.executor.try_tick() {}
-            return self.check_monitor();
+            self.check_monitor()?;
+            if let Some(input_vars) = input_vars {
+                self.input_vars = input_vars;
+            }
+            return Ok(());
         }
 
         let extra = values
@@ -356,10 +369,8 @@ impl TcRuntime {
                     input_controller.send_tick(events).await?;
                     tick_controller.advance().await
                 }
-                RuntimeInput::Reconfigurable { data, .. } => {
-                    for (var, value) in values {
-                        data[&var].send(value).await;
-                    }
+                RuntimeInput::Reconfigurable { items } => {
+                    items.send(IntegrationInput::Data(values)).await;
                     Ok(())
                 }
             }
@@ -452,6 +463,14 @@ fn parse_runtime(runtime: &str, semantics: &RuntimeMode) -> PyResult<RuntimeSpec
         )));
     }
     Ok(spec)
+}
+
+/// The inputs of the model a reconfiguration request replaces the running one
+/// with, or `None` if the request or its model does not parse.
+fn replacement_input_vars(request: &str) -> Option<BTreeSet<VarName>> {
+    let request = ReconfigurationRequest::from_json(request).ok()?;
+    let spec = request.specification.parse::<DsrvSpecification>().ok()?;
+    Some(spec.input_vars().clone())
 }
 
 fn collect_input_values(
@@ -609,18 +628,8 @@ fn build_runtime(
                 let RuntimeMode::Ordinary(semantics) = semantics else {
                     anyhow::bail!("reconfigurable runtimes require ordinary semantics");
                 };
-                let (data, fanouts): (BTreeMap<_, _>, BTreeMap<_, _>) = input_vars
-                    .iter()
-                    .map(|var| {
-                        let (sender, fanout) = Fanout::new();
-                        ((var.clone(), sender), (var.clone(), fanout))
-                    })
-                    .unzip();
-                let (control, control_fanout) = Fanout::new();
-                let input_pipeline = InputPipeline::new(InputSource::channel_with_control(
-                    fanouts,
-                    Some(control_fanout),
-                ));
+                let (items, items_fanout) = Fanout::new();
+                let input_pipeline = InputPipeline::new(InputSource::integration_channel(items_fanout));
                 let (sender, receiver) = output(1024);
                 let outputs: LocalStream<OutputBatch> = Box::pin(futures::stream::unfold(
                     receiver,
@@ -646,7 +655,7 @@ fn build_runtime(
                     .await?;
                 return Ok((
                     input_vars,
-                    RuntimeInput::Reconfigurable { data, control },
+                    RuntimeInput::Reconfigurable { items },
                     RuntimeOutputs::Ordinary(outputs),
                     runtime_executor.spawn(monitor.run()),
                 ));

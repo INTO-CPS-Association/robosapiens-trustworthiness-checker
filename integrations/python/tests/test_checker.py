@@ -301,6 +301,53 @@ def test_failed_reconfiguration_is_reported(request_: str, reason: str) -> None:
     assert checker.next_output(timeout=1.0) is None
 
 
+def test_reconfiguration_can_introduce_new_inputs() -> None:
+    checker = tc.TcRuntime.from_text(
+        "in x: Int\nout z: Int\nz = x", runtime="reconf-semi-sync"
+    )
+    with pytest.raises(ValueError, match="unknown model inputs"):
+        checker.provide_inputs({"x": 1, "y": 2})
+    checker.provide_inputs({"x": 1})
+
+    replacement = "in x: Int\nin y: Int\nout z: Int\nz = x + y"
+    checker.provide_inputs(reconf=reconfiguration(replacement))
+    checker.provide_inputs({"x": 1, "y": 2})
+    checker.provide_inputs({"x": 4, "y": 5})
+    assert [checker.next_output(timeout=1.0) for _ in range(3)] == [
+        {"z": 1},
+        {"z": 3},
+        {"z": 9},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "replacement", "expected"),
+    [
+        (
+            "in x: Int\nout z: Int\nz = x",
+            "in x: Int\nout z: Int\nout w: Int\nz = x\nw = x * 10",
+            [{"z": 1}, {"z": 2, "w": 20}],
+        ),
+        (
+            "in x: Int\nout z: Int\nout w: Int\nz = x\nw = x * 10",
+            "in x: Int\nout z: Int\nz = x",
+            [{"z": 1, "w": 10}, {"z": 2}],
+        ),
+    ],
+    ids=["add", "remove"],
+)
+def test_reconfiguration_can_change_outputs(
+    model: str, replacement: str, expected: list[dict[str, object]]
+) -> None:
+    checker = tc.TcRuntime.from_text(model, runtime="reconf-semi-sync")
+    checker.provide_inputs({"x": 1})
+    checker.provide_inputs(reconf=reconfiguration(replacement))
+    checker.provide_inputs({"x": 2})
+
+    assert [checker.next_output(timeout=1.0) for _ in expected] == expected
+    assert checker.next_output(timeout=0.0) is None
+
+
 def test_reconfiguration_step_carries_no_data() -> None:
     checker = tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime="reconf-semi-sync")
     with pytest.raises(ValueError, match="reconfiguration step"):

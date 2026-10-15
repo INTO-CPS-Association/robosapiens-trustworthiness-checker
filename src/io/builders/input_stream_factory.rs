@@ -16,6 +16,7 @@ use crate::core::{
     FileInputValue, InputBatch, InputStream, MQTT_HOSTNAME, REDIS_HOSTNAME, RosStreamValue, Value,
     VarName,
 };
+use crate::io::channel::IntegrationInput;
 #[cfg(any(feature = "ros", test))]
 use crate::io::config::ReconfigurationRequest;
 use crate::io::config::{
@@ -198,6 +199,9 @@ enum InputSourceKind<V = Value> {
     Channel {
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
+    },
+    Integration {
+        items: Rc<Fanout<IntegrationInput<V>>>,
     },
 }
 
@@ -979,11 +983,17 @@ impl<V> InputSource<V> {
         Self::channel_with_control(fanouts, None)
     }
 
-    pub fn channel_with_control(
+    pub(crate) fn channel_with_control(
         fanouts: BTreeMap<VarName, Rc<Fanout<V>>>,
         control: Option<Rc<Fanout<Value>>>,
     ) -> Self {
         Self::new(InputSourceKind::Channel { fanouts, control })
+    }
+
+    /// Useful when a program embedding the checker, such as a language
+    /// binding, pushes whole input steps and reconfiguration requests itself.
+    pub fn integration_channel(items: Rc<Fanout<IntegrationInput<V>>>) -> Self {
+        Self::new(InputSourceKind::Integration { items })
     }
 
     fn record_catalog_ownership(
@@ -1010,7 +1020,8 @@ impl<V> InputSource<V> {
         match &self.kind {
             InputSourceKind::File { .. }
             | InputSourceKind::Mqtt { routes: None, .. }
-            | InputSourceKind::Redis { routes: None, .. } => {}
+            | InputSourceKind::Redis { routes: None, .. }
+            | InputSourceKind::Integration { .. } => {}
             InputSourceKind::InMemoryRows { columns } => {
                 for variable in requested {
                     if columns.contains_key(variable) {
@@ -1080,7 +1091,8 @@ impl<V> InputSource<V> {
             InputSourceKind::File { .. }
             | InputSourceKind::InMemoryRows { .. }
             | InputSourceKind::InMemoryTicks { .. }
-            | InputSourceKind::Channel { .. } => None,
+            | InputSourceKind::Channel { .. }
+            | InputSourceKind::Integration { .. } => None,
         }
     }
 
@@ -1090,6 +1102,7 @@ impl<V> InputSource<V> {
             InputSourceKind::File { .. }
                 | InputSourceKind::Mqtt { routes: None, .. }
                 | InputSourceKind::Redis { routes: None, .. }
+                | InputSourceKind::Integration { .. }
         )
     }
 
@@ -1156,6 +1169,7 @@ impl<V> InputSource<V> {
                     control: Some(_),
                     ..
                 }
+                | InputSourceKind::Integration { .. }
         )
     }
 
@@ -1311,6 +1325,9 @@ impl<V> InputSource<V> {
                     .collect();
                 Ok(crate::io::channel::from_streams(streams))
             }
+            InputSourceKind::Integration { items } => {
+                Ok(crate::io::channel::integration_stream(items, variables))
+            }
         }
     }
 
@@ -1445,6 +1462,11 @@ impl<V> InputSource<V> {
                 };
                 let (stream, owner) =
                     crate::io::channel::reconfigurable_stream(fanouts, variables, control);
+                Ok((stream, Some(InputSourceControl::Channel(owner))))
+            }
+            InputSourceKind::Integration { items } => {
+                let (stream, owner) =
+                    crate::io::channel::reconfigurable_integration_stream(items, variables);
                 Ok((stream, Some(InputSourceControl::Channel(owner))))
             }
             InputSourceKind::File { .. }
@@ -1854,7 +1876,7 @@ impl<V> InputPipeline<V> {
                         | InputSourceKind::Ros { .. } => {
                             rebound.push((*candidate_source).clone());
                         }
-                        InputSourceKind::Channel { .. } => {
+                        InputSourceKind::Channel { .. } | InputSourceKind::Integration { .. } => {
                             rebound.push((*candidate_source).clone())
                         }
                         _ => anyhow::bail!(
