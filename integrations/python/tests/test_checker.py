@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-RUNTIMES = ["dataflow", "semi-sync", "reconf-semi-sync"]
+RECONF_RUNTIMES = ["reconf-semi-sync", "reconf-dataflow"]
+RUNTIMES = ["dataflow", "semi-sync", *RECONF_RUNTIMES]
 
 tc = pytest.importorskip(
     "trustworthiness_checker",
@@ -249,8 +250,8 @@ def test_unknown_runtimes_are_rejected(runtime: str) -> None:
         tc.TcRuntime(INSTANTANEOUS_SAFETY_MONITOR, runtime=runtime)
 
 
-@pytest.mark.parametrize("runtime", ["semi-sync", "reconf-semi-sync"])
-def test_semi_sync_runtimes_are_rejected_with_causal_semantics(runtime: str) -> None:
+@pytest.mark.parametrize("runtime", ["semi-sync", *RECONF_RUNTIMES])
+def test_other_runtimes_are_rejected_with_causal_semantics(runtime: str) -> None:
     with pytest.raises(ValueError, match="not supported with causal semantics"):
         tc.TcRuntime.from_text(CAUSAL_MONITOR, semantics="causal", runtime=runtime)
 
@@ -260,12 +261,15 @@ def reconfiguration(model: str) -> str:
     return json.dumps({"specification": model})
 
 
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
 @pytest.mark.parametrize(
     "semantics", ["typed-untimed", "untimed", "gradual-typed-untimed"]
 )
-def test_reconf_semi_sync_replaces_the_running_model(semantics: str) -> None:
+def test_reconfiguration_replaces_the_running_model(
+    runtime: str, semantics: str
+) -> None:
     checker = tc.TcRuntime.from_text(
-        ATOMIC_BATCH_MONITOR, semantics=semantics, runtime="reconf-semi-sync"
+        ATOMIC_BATCH_MONITOR, semantics=semantics, runtime=runtime
     )
     checker.provide_inputs({"left": 9, "right": 4})
     assert checker.next_output(timeout=1.0) == {"difference": 5, "ticks": 1}
@@ -290,8 +294,11 @@ def test_reconf_semi_sync_replaces_the_running_model(semantics: str) -> None:
         ("not a reconfiguration request", "invalid reconfiguration request"),
     ],
 )
-def test_failed_reconfiguration_is_reported(request_: str, reason: str) -> None:
-    checker = tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime="reconf-semi-sync")
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
+def test_failed_reconfiguration_is_reported(
+    runtime: str, request_: str, reason: str
+) -> None:
+    checker = tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime=runtime)
     checker.provide_inputs({"left": 9, "right": 4})
 
     with pytest.raises(RuntimeError, match=reason):
@@ -301,10 +308,9 @@ def test_failed_reconfiguration_is_reported(request_: str, reason: str) -> None:
     assert checker.next_output(timeout=1.0) is None
 
 
-def test_reconfiguration_can_introduce_new_inputs() -> None:
-    checker = tc.TcRuntime.from_text(
-        "in x: Int\nout z: Int\nz = x", runtime="reconf-semi-sync"
-    )
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
+def test_reconfiguration_can_introduce_new_inputs(runtime: str) -> None:
+    checker = tc.TcRuntime.from_text("in x: Int\nout z: Int\nz = x", runtime=runtime)
     with pytest.raises(ValueError, match="unknown model inputs"):
         checker.provide_inputs({"x": 1, "y": 2})
     checker.provide_inputs({"x": 1})
@@ -336,10 +342,11 @@ def test_reconfiguration_can_introduce_new_inputs() -> None:
     ],
     ids=["add", "remove"],
 )
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
 def test_reconfiguration_can_change_outputs(
-    model: str, replacement: str, expected: list[dict[str, object]]
+    runtime: str, model: str, replacement: str, expected: list[dict[str, object]]
 ) -> None:
-    checker = tc.TcRuntime.from_text(model, runtime="reconf-semi-sync")
+    checker = tc.TcRuntime.from_text(model, runtime=runtime)
     checker.provide_inputs({"x": 1})
     checker.provide_inputs(reconf=reconfiguration(replacement))
     checker.provide_inputs({"x": 2})
@@ -348,8 +355,9 @@ def test_reconfiguration_can_change_outputs(
     assert checker.next_output(timeout=0.0) is None
 
 
-def test_reconfiguration_step_carries_no_data() -> None:
-    checker = tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime="reconf-semi-sync")
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
+def test_reconfiguration_step_carries_no_data(runtime: str) -> None:
+    checker = tc.TcRuntime.from_text(ATOMIC_BATCH_MONITOR, runtime=runtime)
     with pytest.raises(ValueError, match="reconfiguration step"):
         checker.provide_inputs(
             {"left": 1, "right": 1, "reconf": reconfiguration(ATOMIC_BATCH_MONITOR)}

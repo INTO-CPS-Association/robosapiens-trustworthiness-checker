@@ -46,7 +46,7 @@ type CausalSetOutputBatch = BTreeMap<VarName, CausalValue<CausalSet>>;
 type RoleCausalSetOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalSet>>;
 type RoleCausalAntichainOutputBatch = BTreeMap<VarName, CausalValue<RoleCausalAntichain>>;
 
-/// The input that carries reconfiguration requests to `reconf-semi-sync`.
+/// The input that carries reconfiguration requests.
 const RECONF_INPUT: &str = "reconf";
 
 enum RuntimeInput {
@@ -449,9 +449,10 @@ fn parse_runtime(runtime: &str, semantics: &RuntimeMode) -> PyResult<RuntimeSpec
         "dataflow" => RuntimeSpec::Dataflow(ExecutionPolicy::Synchronous),
         "semi-sync" => RuntimeSpec::SemiSync,
         "reconf-semi-sync" => RuntimeSpec::ReconfSemiSync,
+        "reconf-dataflow" => RuntimeSpec::ReconfDataflow(ExecutionPolicy::Synchronous),
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unsupported runtime {runtime:?}; expected 'dataflow', 'semi-sync' or 'reconf-semi-sync'"
+                "unsupported runtime {runtime:?}; expected 'dataflow', 'semi-sync', 'reconf-semi-sync' or 'reconf-dataflow'"
             )));
         }
     };
@@ -624,7 +625,10 @@ fn build_runtime(
         executor.run(async move {
             let input_vars = spec.input_vars().clone();
 
-            if runtime == RuntimeSpec::ReconfSemiSync {
+            if matches!(
+                runtime,
+                RuntimeSpec::ReconfSemiSync | RuntimeSpec::ReconfDataflow(_)
+            ) {
                 let RuntimeMode::Ordinary(semantics) = semantics else {
                     anyhow::bail!("reconfigurable runtimes require ordinary semantics");
                 };

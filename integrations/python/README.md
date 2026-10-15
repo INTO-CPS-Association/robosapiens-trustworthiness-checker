@@ -21,7 +21,8 @@ The runtime can be specified as an optional parameter in the constructors. Defau
 checker = TcRuntime.from_path("spec.dsrv", runtime="semi-sync")
 ```
 
-The `reconf-semi-sync` runtime can replace its model while running. A step
+The `reconf-semi-sync` and `reconf-dataflow` runtimes can replace their model
+while running. A step
 that provides only the `reconf` input is a reconfiguration step; its value is
 the same JSON reconfiguration request the CLI accepts on its reconfiguration
 topic. Later data steps are evaluated by the replacement model:
