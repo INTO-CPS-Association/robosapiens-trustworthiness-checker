@@ -19,7 +19,7 @@ use trustworthiness_checker::runtime::builder::{
     DistValueConfig, SemiSyncValueConfig, ValueConfig,
 };
 use trustworthiness_checker::semantics::{
-    DistributedSemantics, MonitoringSemantics, UntimedDsrvSemantics,
+    CheckedUntimedDsrvSemantics, DistributedSemantics, MonitoringSemantics,
 };
 
 /// Runtimes that cannot be started from a specification and an input file,
@@ -30,7 +30,7 @@ const NOT_RUN: &[(&str, &str)] = &[
     ("reconf-dataflow", "needs an input pipeline"),
 ];
 
-const SEMANTICS: &[&str] = &["untimed", "typed-untimed", "gradual-typed-untimed"];
+const SEMANTICS: &[&str] = &["typed-untimed", "untimed"];
 
 const DOCUMENTED_RUNTIME_CAPABILITIES: &[RuntimeCapability] = &[
     RuntimeCapability::Distribution,
@@ -43,10 +43,12 @@ const DOCUMENTED_RUNTIME_CAPABILITIES: &[RuntimeCapability] = &[
 /// the same evaluator capability set as their ordinary counterparts.
 fn declared(runtime: &str) -> RuntimeCapabilities {
     match runtime {
-        "async" => <UntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES,
-        "semi-sync" | "reconf-semi-sync" => {
-            <UntimedDsrvSemantics as MonitoringSemantics<SemiSyncValueConfig>>::RUNTIME_CAPABILITIES
+        "async" => {
+            <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::RUNTIME_CAPABILITIES
         }
+        "semi-sync" | "reconf-semi-sync" => <CheckedUntimedDsrvSemantics as MonitoringSemantics<
+            SemiSyncValueConfig,
+        >>::RUNTIME_CAPABILITIES,
         "dataflow" | "reconf-dataflow" => trustworthiness_checker::dataflow::RUNTIME_CAPABILITIES,
         "distributed" => {
             <DistributedSemantics as MonitoringSemantics<DistValueConfig>>::RUNTIME_CAPABILITIES

@@ -89,8 +89,9 @@ pub(in crate::dataflow) fn build_checked_expression_graph(
 }
 
 /// Lower an elaborated expression without specialising on its types, as
-/// `untimed` evaluation does. The types stay available to the `dynamic` and
-/// `defer` nodes, which check the text they are given.
+/// the library's `Semantics::Untimed` reference strategy does. The types stay
+/// available to the `dynamic` and `defer` nodes, which check the text they are
+/// given. The CLI's `untimed` mode uses the checked lowering instead.
 pub(in crate::dataflow) fn build_unspecialised_expression_graph(
     expr: CheckedExpr,
 ) -> UnboundEvaluationGraph {

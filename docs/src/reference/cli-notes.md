@@ -4,12 +4,13 @@ The generated rows above are parser metadata. The following constraints come fro
 
 Run the main binary as `trustworthiness_checker MODEL INPUT_SELECTION [OUTPUT_SELECTION]`. From a repository checkout, use `cargo run -- MODEL ...`. Exactly one member of the `InputMode` group is required. The `OutputSelection` group is optional: when no output member is selected, the adapter falls back to stdout.
 
-The default values are DSRV, `gradual-typed-untimed`, the `dataflow` runtime, and buffered execution. The default distributed mode is centralised. These defaults are parser defaults; a parsed command still has to pass runtime, language, feature, and resource validation.
+The default values are DSRV, `untimed` with gradual typing, the `dataflow` runtime, and buffered execution. The default distributed mode is centralised. These defaults are parser defaults; a parsed command still has to pass runtime, language, feature, and resource validation.
 
 ## Compatibility rules
 
 - `--language mstlo` selects the MSTLO runtime. Omit `--runtime`; an explicit runtime is rejected.
-- DSRV accepts `untimed`, `typed-untimed`, `gradual-typed-untimed`, or `causal` through the CLI. Causal sets require `--runtime semi-sync`; they do not support `async`, dataflow, distributed, or reconfigurable runtimes. The DSRV `distributed` runtime accepts only `untimed`.
+- DSRV accepts `untimed` (gradual typing), `typed-untimed` (strict typing), or `causal` through the CLI. Causal sets require `--runtime semi-sync`; they do not support `async`, dataflow, distributed, or reconfigurable runtimes. The DSRV `distributed` runtime accepts only `untimed`.
+- `gradual-typed-untimed` remains an accepted compatibility alias for `untimed`; help and generated reference show the canonical name.
 - For DSRV, `--execution-policy synchronous` requires the `dataflow` or `reconf-dataflow` runtime. MSTLO carries the selected policy in its automatically selected runtime. The policy is an input/evaluation boundary, not a transport transaction.
 - `--input-file` is rejected with `reconf-semi-sync` and `reconf-dataflow`. Reconfiguration needs a live, control-capable source.
 - `--reconf-topic` and `--no-context-transfer` require a reconfigurable runtime. The selected control route is the configured route, the CLI override, or `reconf` when no route is supplied.

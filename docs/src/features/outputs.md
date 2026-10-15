@@ -39,6 +39,34 @@ Each destination has one delivery policy. Direct delivery is the default; a boun
 
 Built-in MQTT output publishes each result at QoS 1 (at least once). A Rust `MqttClient::publish` request for QoS 2 is rejected before transport submission on MQTT 5 because rumqttc does not expose rejected `PubRec` acknowledgements; negative MQTT 5 protocol acknowledgements are terminal for the driver.
 
+#### Timed-provenance output
+
+In DSRV under the causal semantics and the semisync runtime, the trustworthiness checker will provide additional output recording the *Timed Provenance* of output verdicts.
+For every output value, this reports which input values the output depended upon.
+
+Given an example two-input specification,
+```dsrv
+in x: Int
+in y: Int
+out z: Int
+z = x + y
+```
+which is recorded in `examples/simple_add_typed.dsrv`, we can run the specification under the causal semantics via,
+```sh
+cargo run -- examples/simple_add_typed.dsrv \
+  --input-file examples/simple_add.input \
+  --semantics causal --runtime semi-sync --output-stdout
+```
+
+The first input tick contains `x = 1` and `y = 2`, producing:
+```text
+z[0] = {"value":3,"causality":{"alternatives":[{"causes":[{"input":"x","logical_tick":0,"roles":[]},{"input":"y","logical_tick":0,"roles":[]}]}]}}
+```
+
+The `logical_tick` record the index of the corresponding input tick, counting from zero.
+History references can retain causes from earlier ticks. Current cause set output does not use the roles `roles`
+field so it is always empty.
+
 ## Choose a task
 
 - [Write and run DSRV models](../tutorials/write-dsrv-monitor.md) — inspect exact stdout from finite traces.

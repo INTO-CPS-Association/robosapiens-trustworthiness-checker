@@ -104,14 +104,10 @@ pub const CLI_ARGUMENT_REQUIREMENTS: &[(&str, &str)] = &[
     ("scheduler_reconf_topic", "scheduler_ros_node_name"),
 ];
 
-const DSRV_TYPED_SEMANTICS: &[Semantics] = &[
-    Semantics::Untimed,
-    Semantics::TypedUntimed,
-    Semantics::GradualTypedUntimed,
-];
-const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::Untimed];
+const DSRV_TYPED_SEMANTICS: &[Semantics] =
+    &[Semantics::TypedUntimed, Semantics::GradualTypedUntimed];
+const DSRV_DISTRIBUTED_SEMANTICS: &[Semantics] = &[Semantics::GradualTypedUntimed];
 const DSRV_SEMI_SYNC_SEMANTICS: &[Semantics] = &[
-    Semantics::Untimed,
     Semantics::TypedUntimed,
     Semantics::GradualTypedUntimed,
     Semantics::Causal,
@@ -732,8 +728,7 @@ mod runtime_tests {
 
     #[test]
     fn every_dsrv_runtime_semantics_pair_matches_the_builder_matrix() {
-        const ALL_SEMANTICS: [Semantics; 7] = [
-            Semantics::Untimed,
+        const ALL_SEMANTICS: [Semantics; 6] = [
             Semantics::TypedUntimed,
             Semantics::GradualTypedUntimed,
             Semantics::DelayedQuantitative,
@@ -742,29 +737,26 @@ mod runtime_tests {
             Semantics::RobustnessInterval,
         ];
         let cases = [
-            (
-                RuntimeKind::Async,
-                [true, true, true, false, false, false, false],
-            ),
+            (RuntimeKind::Async, [true, true, false, false, false, false]),
             (
                 RuntimeKind::Dataflow,
-                [true, true, true, false, false, false, false],
+                [true, true, false, false, false, false],
             ),
             (
                 RuntimeKind::Distributed,
-                [true, false, false, false, false, false, false],
+                [false, true, false, false, false, false],
             ),
             (
                 RuntimeKind::SemiSync,
-                [true, true, true, false, false, false, false],
+                [true, true, false, false, false, false],
             ),
             (
                 RuntimeKind::ReconfSemiSync,
-                [true, true, true, false, false, false, false],
+                [true, true, false, false, false, false],
             ),
             (
                 RuntimeKind::ReconfDataflow,
-                [true, true, true, false, false, false, false],
+                [true, true, false, false, false, false],
             ),
         ];
 
@@ -830,9 +822,8 @@ mod runtime_tests {
     }
 
     #[test]
-    fn mstlo_keeps_all_semantics_available() {
-        const ALL_SEMANTICS: [Semantics; 7] = [
-            Semantics::Untimed,
+    fn mstlo_keeps_non_causal_cli_semantics_available() {
+        const ALL_SEMANTICS: [Semantics; 6] = [
             Semantics::TypedUntimed,
             Semantics::GradualTypedUntimed,
             Semantics::DelayedQuantitative,
@@ -888,6 +879,35 @@ mod runtime_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn untimed_and_its_compatibility_alias_select_gradual_typing() {
+        for language in ["dsrv", "core-dsrv", "distributed-dsrv", "mstlo"] {
+            for name in ["untimed", "gradual-typed-untimed"] {
+                let cli = Cli::try_parse_from([
+                    "trustworthiness_checker",
+                    "model.dsrv",
+                    "--mqtt-input",
+                    "--output-stdout",
+                    "--language",
+                    language,
+                    "--semantics",
+                    name,
+                ])
+                .unwrap();
+                assert_eq!(cli.semantics, Semantics::GradualTypedUntimed);
+            }
+        }
+    }
+
+    #[test]
+    fn semantics_help_shows_the_canonical_name_and_default() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("[default: untimed]"), "{help}");
+        assert!(!help.contains("gradual-typed-untimed"), "{help}");
+        assert_eq!(Semantics::GradualTypedUntimed.to_string(), "untimed");
     }
 
     #[test]

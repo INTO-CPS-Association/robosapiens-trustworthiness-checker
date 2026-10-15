@@ -18,8 +18,13 @@ use super::{StreamData, VarName};
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Semantics {
+    /// Reference evaluation strategy, retained for library callers and tests.
+    #[value(skip)]
     Untimed,
     TypedUntimed,
+    /// Untimed evaluation with gradual type checking and inference.
+    #[value(name = "untimed", alias = "gradual-typed-untimed")]
+    #[strum(serialize = "untimed")]
     GradualTypedUntimed,
     /// Causal-set explanations for DSRV on the semi-sync runtime.
     Causal,

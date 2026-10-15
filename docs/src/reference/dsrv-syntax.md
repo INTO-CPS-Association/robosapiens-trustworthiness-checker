@@ -28,7 +28,7 @@ form.
 ## The dynamic type `Any`
 
 A stream without a type annotation is checked as `Any` under the default
-`gradual-typed-untimed` semantics, and `Any` can also be written. A value of
+`untimed` semantics with gradual typing, and `Any` can also be written. A value of
 type `Any` is checked when it is used, not in advance: reading a field or a
 map key, indexing a list or calling it as a function is accepted, and gives
 `Any` again; `List.len` gives `Int` and `Map.has_key` gives `Bool`. A value

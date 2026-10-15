@@ -21,8 +21,10 @@ impl DataflowProgram {
     }
 
     /// Compile an elaborated specification with the evaluation strategy of
-    /// `semantics`: `untimed` does not consult the types, every other
-    /// semantics does, as [`Self::compile_checked`].
+    /// `semantics`: the library's `Semantics::Untimed` reference strategy does
+    /// not consult the types; every other strategy does, as
+    /// [`Self::compile_checked`]. The CLI name `untimed` selects
+    /// `Semantics::GradualTypedUntimed`.
     pub fn compile_with_semantics(
         specification: ElaboratedDsrvSpecification,
         semantics: Semantics,

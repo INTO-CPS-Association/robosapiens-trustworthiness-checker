@@ -64,7 +64,7 @@ Here `z[0]` labels the result at tick 0, and `3` is its value. The `Int` type is
 
 Write explicit types on input and output declarations by default. They document the values a source must provide, let the checker reject incompatible equations early, and keep transport mappings aligned with the model. Common scalar types are `Int`, `Float`, `Bool`, and `Str`; compound types include `List<T>`, `Map<T>`, tuples, and `Struct<...>`. [Receiving structured input](#receiving-structured-input) below shows how to declare and supply named fields.
 
-For example, changing `y` to `Str` while retaining `z = x + y` makes the addition model ill-typed; you can inspect that model in `examples/simple_add_illtyped.dsrv`. Use `Any` only when a stream is intentionally heterogeneous or its concrete type cannot be declared. The default `gradual-typed-untimed` semantics checks explicit annotations and infers information for declarations that lack one.
+For example, changing `y` to `Str` while retaining `z = x + y` makes the addition model ill-typed; you can inspect that model in `examples/simple_add_illtyped.dsrv`. Use `Any` only when a stream is intentionally heterogeneous or its concrete type cannot be declared. The default `untimed` semantics checks explicit annotations and infers information for declarations that lack one.
 
 ### Reading input rows as logical ticks
 

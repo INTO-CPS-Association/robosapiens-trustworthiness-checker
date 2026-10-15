@@ -278,8 +278,9 @@ impl<
 
 /// The checking policy a DSRV runtime with `semantics` expects its
 /// specification to have been checked with. `typed-untimed` checks strictly;
-/// the other two check gradually, and `untimed` evaluates without consulting
-/// the types.
+/// the CLI's `untimed` (`GradualTypedUntimed`) and `causal` check gradually.
+/// The library-only `Untimed` reference strategy also checks gradually, then
+/// evaluates without consulting the types.
 pub fn type_check_options(semantics: Semantics) -> TypeCheckOptions {
     match semantics {
         Semantics::TypedUntimed => TypeCheckOptions::STRICT,
@@ -1265,7 +1266,7 @@ impl GeneralRuntimeBuilder<ElaboratedDsrvSpecification, Value> {
                     );
                     Box::new(builder)
                 }
-                (RuntimeSpec::Distributed, Semantics::Untimed) => {
+                (RuntimeSpec::Distributed, Semantics::Untimed | Semantics::GradualTypedUntimed) => {
                     debug!(
                         "Setting up distributed runtime with distribution_mode = {:?}",
                         distribution_mode
@@ -1605,6 +1606,33 @@ mod tests {
         assert_eq!(
             builder.runtime,
             RuntimeSpec::Dataflow(ExecutionPolicy::Buffered)
+        );
+    }
+
+    #[test]
+    fn distributed_builder_accepts_gradually_checked_untimed_selection() {
+        let builder =
+            GeneralRuntimeBuilder::<ElaboratedDsrvSpecification, Value>::create_common_builder(
+                RuntimeSpec::Distributed,
+                Semantics::GradualTypedUntimed,
+                None,
+                None,
+                DistributionMode::CentralMonitor,
+                SchedulerCommunication::Null,
+                MqttProtocol::default(),
+                None,
+                None,
+                None,
+                true,
+                None,
+                None,
+                None,
+                false,
+                None,
+            );
+        assert!(
+            builder.is_ok(),
+            "gradual CLI selection must reach the distributed evaluator"
         );
     }
 

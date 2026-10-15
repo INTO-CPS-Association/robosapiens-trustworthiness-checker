@@ -1013,7 +1013,7 @@ mod integration_tests {
 
     #[apply(async_test)]
     async fn test_invalid_typed_models_fail_without_panicking() {
-        for semantics in ["typed-untimed", "gradual-typed-untimed"] {
+        for semantics in ["typed-untimed", "untimed", "gradual-typed-untimed"] {
             let output = run_cli(&[
                 &fixture_path("invalid_typed_model.dsrv"),
                 "--input-file",
@@ -1039,6 +1039,53 @@ mod integration_tests {
                 "invalid {semantics} model panicked: {stderr}"
             );
         }
+    }
+
+    #[apply(async_test)]
+    async fn test_untimed_and_legacy_alias_run_gradually_checked_models() {
+        for runtime in ["async", "semi-sync", "dataflow"] {
+            for semantics in [None, Some("untimed"), Some("gradual-typed-untimed")] {
+                let model = fixture_path("simple_add_inferred.dsrv");
+                let input = fixture_path("simple_add_typed.input");
+                let mut args = vec![
+                    model.as_str(),
+                    "--input-file",
+                    input.as_str(),
+                    "--output-stdout",
+                    "--runtime",
+                    runtime,
+                ];
+                if let Some(semantics) = semantics {
+                    args.extend(["--semantics", semantics]);
+                }
+                let output = run_cli(&args).await.unwrap();
+                assert!(
+                    output.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    String::from_utf8(output.stdout).unwrap(),
+                    "z[0] = 3\nz[1] = 7\nz[2] = 11\n",
+                    "{args:?}"
+                );
+            }
+        }
+        let output = run_cli(&[
+            &fixture_path("simple_add_inferred.dsrv"),
+            "--input-file",
+            &fixture_path("simple_add_typed.input"),
+            "--semantics",
+            "typed-untimed",
+        ])
+        .await
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "strict typing must require annotations"
+        );
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("type checking"));
     }
 
     #[apply(async_test)]

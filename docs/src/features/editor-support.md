@@ -76,7 +76,7 @@ Each command opens a terminal and invokes the checker directly:
 
 The simplest workflow keeps an input file beside the model with the same base name - `counter.dsrv` and `counter.input` - so **Run DSRV** needs no file dialog.
 
-Note that the editor commands select `untimed` or `typed-untimed` explicitly, while the CLI default is `gradual-typed-untimed`. Running the same model from the editor and from a shell without options therefore selects different semantics. See the [CLI reference](../reference/cli.md) for the full set of semantics values.
+The editor's ordinary run commands select `untimed`, the same gradual typing used by the CLI default. The typed commands select strict `typed-untimed` checking. See the [CLI reference](../reference/cli.md) for the full set of semantics values.
 
 ## Troubleshooting
 
