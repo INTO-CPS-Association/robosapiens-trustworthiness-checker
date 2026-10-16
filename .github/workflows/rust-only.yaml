@@ -212,7 +212,7 @@ jobs:
           benchmark-data-dir-path: benchmarks
           auto-push: true
           alert-threshold: "120%"
-          comment-on-alert: true
+          comment-on-alert: false
           fail-on-alert: false
 
       - name: Upload benchmark report
