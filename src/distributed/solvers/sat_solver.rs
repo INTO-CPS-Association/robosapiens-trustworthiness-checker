@@ -3096,16 +3096,21 @@ d3 = if ((h1 && h2) || c3) then monitored_at(s3, C) else monitored_at(s3, A)
             *localised.input_vars(),
             BTreeSet::from(["c1".into(), "c2".into(), "c3".into()])
         );
-        assert!(localised.var_expr_ref(&VarName::new("h1")).is_none());
-        assert!(localised.var_expr_ref(&VarName::new("h2")).is_none());
+        // The helpers are computed locally as aux streams, not read as inputs.
+        assert_eq!(
+            *localised.aux_vars(),
+            BTreeSet::from(["h1".into(), "h2".into()])
+        );
+        assert!(localised.var_expr_ref(&VarName::new("h1")).is_some());
+        assert!(localised.var_expr_ref(&VarName::new("h2")).is_some());
 
         let d3_expr = localised
             .var_expr_ref(&VarName::new("d3"))
             .expect("d3 expression should be present after localisation");
         let d3_inputs = d3_expr.expr().free_variables();
         assert!(
-            !d3_inputs.contains(&VarName::new("h1")) && !d3_inputs.contains(&VarName::new("h2")),
-            "localised d3 should not reference aux vars h1/h2 anymore"
+            d3_inputs.contains(&VarName::new("h1")) && d3_inputs.contains(&VarName::new("h2")),
+            "localised d3 should read the kept aux streams h1/h2"
         );
     }
 

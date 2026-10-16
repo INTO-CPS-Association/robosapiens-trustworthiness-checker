@@ -57,10 +57,6 @@ impl CheckedExpressionContext {
         &self.environment
     }
 
-    pub(crate) fn has_type(&self, expr: ExprRef<'_>) -> bool {
-        self.expr_types.get(expr).is_some()
-    }
-
     /// Prepare the sites of every runtime-expression occurrence among
     /// `nodes`, as a new context; this one is unchanged. Each site captures
     /// from `sources`, the archive the nodes' IDs belong to, what its text

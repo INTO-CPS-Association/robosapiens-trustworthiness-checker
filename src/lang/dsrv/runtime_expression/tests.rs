@@ -267,19 +267,22 @@ fn localisation_rebuilds_sites_and_drops_removed_occurrences() {
         .try_localise(&vec![var("y")])
         .expect("y localises");
 
-    // The auxiliary `defer` is inlined into `y` beside the def body's
-    // `dynamic`; `z`'s occurrence is gone with `z`.
+    // The auxiliary `a` keeps its `defer` beside the def body's `dynamic` in
+    // `y`; `z`'s occurrence is gone with `z`.
     assert_eq!(site_count(localised.checked()), Some(2));
     assert_eq!(site_count(elaborated.checked()), Some(3));
     let y = localised.var_expr(&var("y")).expect("y survives");
-    let nodes = occurrences(y.expr());
-    assert_eq!(nodes.len(), 2);
-    for node in nodes {
-        let site = y.cursor(node).runtime_expression();
-        assert_eq!(site.typing().unwrap().expected, TCType::Int);
-        // Localisation keeps only the inputs `y` reads.
-        assert!(site.parse_and_check("1").is_ok());
-        assert!(site.parse_and_check("x").is_err());
+    for name in ["a", "y"] {
+        let expression = localised.var_expr(&var(name)).expect("kept locally");
+        let nodes = occurrences(expression.expr());
+        assert_eq!(nodes.len(), 1, "{name} keeps its own occurrence");
+        for node in nodes {
+            let site = expression.cursor(node).runtime_expression();
+            assert_eq!(site.typing().unwrap().expected, TCType::Int);
+            // Localisation keeps only the inputs `y` reads.
+            assert!(site.parse_and_check("1").is_ok());
+            assert!(site.parse_and_check("x").is_err());
+        }
     }
 
     let original = elaborated.var_expr(&var("y")).expect("y exists");
