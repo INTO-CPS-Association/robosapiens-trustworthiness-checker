@@ -160,6 +160,7 @@ async fn run_mstlo(
         .expect("MSTLO threshold benchmark output pipeline should open");
 
     let semantics = match semantics {
+        Semantics::Causal => panic!("causal semantics is not supported by MSTLO benchmarks"),
         Semantics::DelayedQuantitative => MstloSemantics::DelayedQuantitative,
         Semantics::DelayedQualitative => MstloSemantics::DelayedQualitative,
         Semantics::EagerQualitative => MstloSemantics::EagerQualitative,
