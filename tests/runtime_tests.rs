@@ -6045,4 +6045,245 @@ mod reconf_tests {
             }
         }
     }
+
+    #[apply(async_test)]
+    async fn test_reconf_sindex_context_transfer_aux_self_reference(
+        ex: Rc<LocalExecutor<'static>>,
+    ) {
+        // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
+        // new one, when a self-referential expression is an auxiliary stream rather than an
+        // output. Runs twice: once with context transfer, once without.
+
+        for use_context_transfer in [true, false] {
+            let first_spec = "in x\n\
+            aux w\n\
+            out z\n\
+            w = default(w[1], 0) + 1\n\
+            z = w + x - x";
+            let second_spec = "in x\n\
+            aux w\n\
+            out z\n\
+            w = default(w[1], 0) + 2\n\
+            z = w + x - x";
+            let spec = elaborated(first_spec);
+            let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+            let in_len = xs.len();
+            let expected = if use_context_transfer {
+                vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    // Here we reconf - since context transfer we continue counting in steps of 2
+                    Value::Int(4),
+                    Value::Int(6),
+                ]
+            } else {
+                vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    // Here we reconf - since no context transfer we count from 2:
+                    Value::Int(2),
+                    Value::Int(4),
+                ]
+            };
+
+            let (input_factory, mut tx_fans) = channel_input_source(["x"]);
+
+            let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
+            let monitor_builder = Box::new(
+                TestRuntimeBuilder::new()
+                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .executor(ex.clone())
+                    .model(spec.clone())
+                    .input_pipeline(InputPipeline::new(input_factory))
+                    .output_pipeline(output_pipeline)
+                    .reconf_topic(RECONF_TOPIC.into())
+                    .use_context_transfer(use_context_transfer),
+            );
+            let monitor = monitor_builder.build().await;
+            ex.spawn(monitor.run()).detach();
+
+            let x_iter1 = xs.clone().into_iter().take(in_len / 2);
+            let x_iter2 = xs.into_iter().skip(in_len / 2);
+            let mut z_iter = expected.into_iter();
+
+            for x_exp in x_iter1 {
+                send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+                let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                    .await
+                    .expect("failed to get result")
+                    .expect("output channel closed");
+                let z_res = out_res
+                    .remove(&"z".into())
+                    .expect("output did not contain z");
+                let z_exp = z_iter.next().unwrap();
+                assert_eq!(z_res, z_exp);
+            }
+
+            info!("Finished pre-reconf phase, now sending reconf");
+            let reconf_json = serde_json::json!({
+                "specification": second_spec
+            })
+            .to_string();
+
+            // Wait for sub events to be triggered, i.e., new input stream has subscribed
+            let sub_event_futs: Vec<_> = tx_fans
+                .iter()
+                .map(|(var, fan_tx)| {
+                    let fan_rc = fan_tx.fanout();
+                    let label = format!("sub event on {}", var);
+                    let wait_fut = async move {
+                        let fan = fan_rc.as_ref();
+                        let seen = fan.sub_events();
+                        with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
+                    };
+                    Box::pin(wait_fut)
+                })
+                .collect();
+
+            send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans)
+                .await;
+
+            future::join_all(sub_event_futs).await;
+            info!("Finished reconf, now sending post-reconf values");
+
+            for x_exp in x_iter2 {
+                send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+                let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                    .await
+                    .expect("failed to get result")
+                    .expect("output channel closed");
+                let z_res = out_res
+                    .remove(&"z".into())
+                    .expect("output did not contain z");
+                let z_exp = z_iter.next().unwrap();
+                assert_eq!(z_res, z_exp);
+            }
+        }
+    }
+
+    #[apply(async_test)]
+    async fn test_reconf_sindex_context_transfer_aux_history(ex: Rc<LocalExecutor<'static>>) {
+        // Tests the ReconfSemiSyncRuntime correctly transfers the context from the old spec to the
+        // new one, when an output depends on the history of an auxiliary stream. The history
+        // access sits in an aux expression, so only the aux stream's retained history can provide
+        // it after reconfiguration. Runs twice: once with context transfer, once without.
+
+        for use_context_transfer in [true, false] {
+            let first_spec = "in x\n\
+            aux scaled\n\
+            aux prev\n\
+            out z\n\
+            scaled = x * 10\n\
+            prev = scaled[1]\n\
+            z = prev";
+            let second_spec = "in x\n\
+            aux scaled\n\
+            aux prev\n\
+            out z\n\
+            scaled = x * 10\n\
+            prev = scaled[1]\n\
+            z = prev + 1";
+            let spec = elaborated(first_spec);
+            let xs = vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+            let in_len = xs.len();
+            let expected = if use_context_transfer {
+                vec![
+                    Value::Deferred,
+                    Value::Int(10),
+                    // Notice no new deferred
+                    Value::Int(21),
+                    Value::Int(31),
+                ]
+            } else {
+                vec![
+                    Value::Deferred,
+                    Value::Int(10),
+                    // Notice the extra deferred
+                    Value::Deferred,
+                    Value::Int(31),
+                ]
+            };
+
+            let (input_factory, mut tx_fans) = channel_input_source(["x"]);
+
+            let (out_tx, mut out_rx) = bounded::channel::<BTreeMap<VarName, Value>>(4).into_split();
+            let output_pipeline =
+                OutputPipeline::from_backend(OutputBackendConfig::channel(out_tx));
+            let monitor_builder = Box::new(
+                TestRuntimeBuilder::new()
+                    .prepare_replacement(replacement_preparation(TypeCheckOptions::GRADUAL))
+                    .executor(ex.clone())
+                    .model(spec.clone())
+                    .input_pipeline(InputPipeline::new(input_factory))
+                    .output_pipeline(output_pipeline)
+                    .reconf_topic(RECONF_TOPIC.into())
+                    .use_context_transfer(use_context_transfer),
+            );
+            let monitor = monitor_builder.build().await;
+            ex.spawn(monitor.run()).detach();
+
+            let x_iter1 = xs.clone().into_iter().take(in_len / 2);
+            let x_iter2 = xs.into_iter().skip(in_len / 2);
+            let mut z_iter = expected.into_iter();
+
+            for x_exp in x_iter1 {
+                send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+                let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                    .await
+                    .expect("failed to get result")
+                    .expect("output channel closed");
+                let z_res = out_res
+                    .remove(&"z".into())
+                    .expect("output did not contain z");
+                let z_exp = z_iter.next().unwrap();
+                assert_eq!(z_res, z_exp);
+            }
+
+            info!("Finished pre-reconf phase, now sending reconf");
+            let reconf_json = serde_json::json!({
+                "specification": second_spec
+            })
+            .to_string();
+
+            // Wait for sub events to be triggered, i.e., new input stream has subscribed
+            let sub_event_futs: Vec<_> = tx_fans
+                .iter()
+                .map(|(var, fan_tx)| {
+                    let fan_rc = fan_tx.fanout();
+                    let label = format!("sub event on {}", var);
+                    let wait_fut = async move {
+                        let fan = fan_rc.as_ref();
+                        let seen = fan.sub_events();
+                        with_timeout(fan.wait_for_sub_event(seen), 3, label.as_str()).await
+                    };
+                    Box::pin(wait_fut)
+                })
+                .collect();
+
+            send_value_noval_others((RECONF_TOPIC, Value::Str(reconf_json.into())), &mut tx_fans)
+                .await;
+
+            future::join_all(sub_event_futs).await;
+            info!("Finished reconf, now sending post-reconf values");
+
+            for x_exp in x_iter2 {
+                send_value_noval_others(("x", x_exp), &mut tx_fans).await;
+
+                let mut out_res = with_timeout(out_rx.recv(), 3, "out_rx.x")
+                    .await
+                    .expect("failed to get result")
+                    .expect("output channel closed");
+                let z_res = out_res
+                    .remove(&"z".into())
+                    .expect("output did not contain z");
+                let z_exp = z_iter.next().unwrap();
+                assert_eq!(z_res, z_exp);
+            }
+        }
+    }
 }

@@ -1,7 +1,9 @@
 use crate::{
     InputStream, InputUpdate, LocalStream, VarName,
     core::{DeferrableStreamData, OutputWriter, Runtime, Specification, input, retain_stream},
-    lang::core::{DepGraph, DependencyGraphExpr, DependencyGraphSpec, DependencyResolver},
+    lang::core::{
+        DependencyGraphExpr, DependencyGraphRoots, DependencyGraphSpec, DependencyResolver,
+    },
     runtime::RuntimeBuilder,
     runtime::output_utils::{consume_row_streams, finish_writer, finish_writer_with_deadline},
     semantics::{AbstractContextBuilder, AsyncConfig, MonitoringSemantics, StreamContext},
@@ -1208,7 +1210,7 @@ where
             id,
             variables.borrow().keys()
         );
-        let deps = Box::new(DepGraph::resolver_from_spec(spec.clone()));
+        let deps = Box::new(spec.dependency_graph_for(DependencyGraphRoots::AllStreams));
         for (name, variable) in variables.borrow_mut().iter_mut() {
             variable.set_history_to_retain(deps.longest_time_dependency(name) as usize);
         }
