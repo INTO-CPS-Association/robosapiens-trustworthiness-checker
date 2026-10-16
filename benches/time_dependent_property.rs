@@ -205,6 +205,7 @@ async fn run_mstlo_value(
         .model(spec)
         .input(input)
         .output_pipeline(output_pipeline)
+        .runtime(RuntimeSpec::Mstlo(Default::default()))
         .semantics(semantics)
         .build()
         .await
