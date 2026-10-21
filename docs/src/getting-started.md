@@ -84,11 +84,13 @@ Under WSL, use the Linux instructions on this page inside the WSL distribution. 
 
 ## Editor Support
 
-![The DSRV extension in VS Code: syntax highlighting, completion, and run commands](./assets/user/editor-support.png)
+![The DSRV extension in VS Code: syntax highlighting, completion, and the run button](./assets/user/editor-support.png)
 
-A Visual Studio Code extension provides syntax highlighting, completion, and inline diagnostics for `.dsrv` files, and runs a model from the editor without switching to a shell. The language features come from the DSRV language server, which reuses this repository's parser and type checker, so the errors shown while editing are the ones the checker reports.
+A Visual Studio Code extension provides syntax highlighting, completion, and inline diagnostics for `.dsrv` files, and runs a model from the editor without switching to a shell. It ships with its own copy of the checker and of the language server, so none of the build steps above are needed to use it.
 
-See [Editor Support](features/editor-support.md) for what it provides, which binaries it needs, and how to configure them.
+The language features come from the DSRV language server, which reuses this repository's parser and type checker, so the errors shown while editing are the ones the checker reports, with the caveat described under [Editor support](features/editor-support.md#troubleshooting).
+
+See [Editor Support](features/editor-support.md) for what it provides and how to point it at your own build instead of the bundled one.
 
 ## Continue from the first run
 
