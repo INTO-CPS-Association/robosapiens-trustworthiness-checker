@@ -12,6 +12,7 @@ use crate::{
 };
 
 use anyhow::anyhow;
+use async_stream::stream;
 use async_trait::async_trait;
 use ecow::EcoVec;
 use futures::{
@@ -27,7 +28,7 @@ use std::{
 use tracing::{debug, error, info};
 use unsync::spsc;
 
-const CHANNEL_SIZE: usize = 8;
+pub(crate) const CHANNEL_SIZE: usize = 8;
 
 pub struct SemiSyncRuntimeBuilder<AC, MS>
 where
@@ -166,10 +167,19 @@ where
         ctx: &AC::Ctx,
         starting_history: Vec<AC::Val>,
     ) -> Self {
-        let hist_len = starting_history.len();
-        let eval_stream = MS::to_async_stream(&expr, ctx, Some(var_name.clone()));
-        let eval_stream: LocalStream<AC::Val> =
-            Box::pin(futures::stream::iter(starting_history).chain(eval_stream.skip(hist_len)));
+        let mut eval_stream = MS::to_async_stream(&expr, ctx, Some(var_name.clone())).fuse();
+        // Evaluate together with (skipped) eval results to avoid congesting the underlying buffer
+        // when starting_history is long
+        let eval_stream: LocalStream<AC::Val> = Box::pin(stream! {
+            for replayed in starting_history {
+                // The history is replayed even if the expression ends first.
+                let _ = eval_stream.next().await;
+                yield replayed;
+            }
+            while let Some(value) = eval_stream.next().await {
+                yield value;
+            }
+        });
         Self {
             var_name,
             _expr: expr,
@@ -1672,6 +1682,46 @@ mod tests {
         };
         assert_eq!(error.to_string(), "All history lengths must be the same");
         assert_eq!(closes.get(), 1);
+    }
+
+    #[apply(async_test)]
+    async fn starting_history_longer_than_channel_size_does_not_block(
+        _executor: Rc<LocalExecutor<'static>>,
+    ) {
+        let history_len = super::CHANNEL_SIZE + 1;
+        let history = (0..history_len as i64).map(Value::Int).collect::<Vec<_>>();
+        for source in [
+            "in x: Int\nout y: Int\ny = x".to_owned(), // Would hang if history was long, despite not having sindexes
+            format!("in x: Int\nout y: Int\ny = default(y[{history_len}], 0) + x"),
+        ] {
+            let source = source.as_str();
+            let spec = elaborated(source);
+            let starting_history = BTreeMap::from([
+                (VarName::new("x"), history.clone()),
+                (VarName::new("y"), history.clone()),
+            ]);
+            let (mut outputs, mut context, mut expr_evals) = with_timeout_res(
+                TestRuntime::setup_evaluation(spec, starting_history, "semi-sync"),
+                1,
+                source,
+            )
+            .await
+            .unwrap();
+            context
+                .set_input_tick(vec![InputUpdate::new("x".into(), Value::Int(1))])
+                .unwrap();
+            with_timeout_res(TestRuntime::step(&mut context, &mut expr_evals), 1, source)
+                .await
+                .unwrap();
+            let y = with_timeout(
+                outputs.get_mut(&VarName::new("y")).unwrap().next(),
+                1,
+                source,
+            )
+            .await
+            .unwrap();
+            assert_eq!(y, Some(Value::Int(1)), "{source}");
+        }
     }
 
     #[apply(async_test)]

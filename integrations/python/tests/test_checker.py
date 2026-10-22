@@ -309,6 +309,21 @@ def test_failed_reconfiguration_is_reported(
 
 
 @pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
+def test_reconfiguration_carries_over_a_long_output_history(runtime: str) -> None:
+    # Nine retained ticks exceed what a semi-sync subscription buffers
+    # before it is consumed, which used to stall the replacement model.
+    model = "in x: Int\nout y: Int\ny = default(y[9], 0) + x"
+    checker = tc.TcRuntime.from_text(model, runtime=runtime)
+    outputs = []
+    for tick in range(11):
+        if tick == 9:
+            checker.provide_inputs(reconf=reconfiguration(model))
+        checker.provide_inputs({"x": 1})
+        outputs.append(checker.next_output(timeout=2.0))
+    assert outputs == [{"y": 1}] * 9 + [{"y": 2}] * 2
+
+
+@pytest.mark.parametrize("runtime", RECONF_RUNTIMES)
 def test_reconfiguration_can_introduce_new_inputs(runtime: str) -> None:
     checker = tc.TcRuntime.from_text("in x: Int\nout z: Int\nz = x", runtime=runtime)
     with pytest.raises(ValueError, match="unknown model inputs"):

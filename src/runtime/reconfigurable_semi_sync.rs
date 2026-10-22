@@ -802,6 +802,7 @@ mod tests {
     use crate::semantics::UntimedDsrvSemantics;
     use crate::stream_utils::{Fanout, FanoutSender};
     use crate::{ElaboratedDsrvSpecification, TypeCheckOptions, Value, VarName};
+    use tc_testutils::streams::with_timeout;
 
     type TestRuntime = ReconfSemiSyncRuntime<SemiSyncValueConfig, UntimedDsrvSemantics>;
 
@@ -1131,6 +1132,48 @@ mod tests {
             }
         };
         assert_eq!(output.get(&VarName::new("z")), Some(&Value::Int(7)));
+    }
+
+    #[apply(async_test)]
+    async fn transfer_history_longer_than_channel_size_deadlock(
+        executor: Rc<smol::LocalExecutor<'static>>,
+    ) {
+        // Tests a regression that we do not deadlock when our history transfer
+        // has more data than the output channel can buffer
+        let lag = crate::runtime::semi_sync::CHANNEL_SIZE + 1;
+        let lagged_model = format!("in x: Int\nout y: Int\ny = default(y[{lag}], 0) + x");
+        let (input, data_sender, _data_fanout, control_sender, _control_fanout) = channel_input();
+        let (output_sender, mut output_receiver) =
+            bounded::channel::<BTreeMap<VarName, Value>>(1).into_split();
+        let output = OutputPipeline::from_backend(OutputBackendConfig::channel(output_sender));
+        let runtime = build_runtime(executor, &lagged_model, input, output).await;
+
+        let drive = async {
+            let mut outputs = Vec::new();
+            for tick in 0..lag + 2 {
+                if tick == lag {
+                    let payload = serde_json::json!({ "specification": lagged_model }).to_string();
+                    control_sender.send(Value::Str(payload.into())).await;
+                }
+                data_sender.send(Value::Int(1)).await;
+                let output = with_timeout(output_receiver.recv(), 1, "lagged output")
+                    .await
+                    .unwrap_or_else(|_| panic!("no output at tick {tick}"))
+                    .expect("output channel closed");
+                outputs.push(output[&VarName::new("y")].clone());
+            }
+            outputs
+        };
+        let outputs = match futures::future::select(Box::pin(drive), Box::pin(runtime.run())).await
+        {
+            Either::Left((outputs, _run)) => outputs,
+            Either::Right((result, _drive)) => panic!("monitor ended early: {result:?}"),
+        };
+        // `y[lag]` first reaches a real value at tick `lag`, just after the
+        // history transfer.
+        let mut expected = vec![Value::Int(1); lag];
+        expected.extend([Value::Int(2), Value::Int(2)]);
+        assert_eq!(outputs, expected);
     }
 
     #[apply(async_test)]
