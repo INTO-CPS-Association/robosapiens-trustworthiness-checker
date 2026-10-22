@@ -20,7 +20,7 @@ Both executables ship inside the extension. Installing it is the whole setup; no
 
 ## Install the extension
 
-Search for **DSRV Language Support** in the Extensions view (<kbd>Ctrl</kbd>+<kbd>shift</kbd>+<kbd>X</kbd>) and install it.
+Search for **DSRV Language Support** in the Extensions view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>) and install it.
 
 The extension is published as one package per platform, and the Marketplace sends you the one for yours. To install it from a file instead, take the `.vsix` for your platform from the [releases](https://github.com/INTO-CPS-Association/dsrv-vscode/releases) and run:
 
@@ -43,7 +43,7 @@ Set either path setting and the extension uses your executable instead of the bu
 | `DSRV.binaryPath` | A `trustworthiness_checker` of your own |
 | `DSRV.lspPath` | A `dsrv-lsp` of your own |
 
-Each accepts the executable itself, a directory containing it, or a bare command name to resolve from `PATH`. Given a Cargo checkout it also looks in `target/releases` and `target/debug`, so pointing the setting at the repository root is enough.
+Each accepts the executable itself, a directory containing it, or a bare command name to resolve from `PATH`. Given a Cargo checkout it also looks in `target/release` and `target/debug`, so pointing the setting at the repository root is enough.
 
 The extension looks at the setting first, then at the bundled binary, then at `PATH`. An empty setting, the default, means the bundled binary is used.
 
@@ -91,7 +91,7 @@ Both are empty by default, which means running from the editor is the same comma
 | Value | Meaning |
 | --- | --- |
 | `untimed` | Gradual typing: checks the annotations you wrote, infers the ones you did not, and uses type information during evaluation where supported. |
-| `typed-untimed` | Strict typing: requries annotations on all stream variables. |
+| `typed-untimed` | Strict typing: requires annotations on all stream variables. |
 | `causal` | Produces values with causal sets identifying which input observations support them. |
 
 The checker accepts further semantics that target MLTL and STL; the extension does not offer them, because it supports DSRV only. See the [CLI reference](../reference/cli.md) for the full set.
@@ -111,7 +111,7 @@ Setting `dsrv-lsp.trace.server` to `verbose` logs the traffic between the editor
 **A run exits immediately with a usage error.** Read the echoed command line in the terminal. A `--semantics` or `--runtime` value edited by hand in `settings.json` may not be one your checker accepts; the extension's dropdowns only offer values that work with the bundled one.
 
 <a id="when-diagnostics-and-runs-disagree"></a>
- 
+
 **Diagnostics disagree with what a run accepts.** The two bundled executables contain copies of the DSRV front end built from different revisions of the checker, so in edge cases around typing they can disagree: the editor may not flag something a run rejects, or the other way round. When they disagree, the run is the authority.
 
 If you build both yourself, rebuild `dsrv-lsp` against the checker revision you are running and the two agree. With the bundled binaries there is nothing to adjust; closing this gap is the next piece of work on the language server.
