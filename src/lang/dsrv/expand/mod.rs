@@ -169,6 +169,9 @@ pub enum DsrvExpandError {
 
     #[error("`{name}` is not a count, so it cannot be a stream offset")]
     ConstantOffset { name: String, span: Span },
+
+    #[error("`{name}` is a constant, not a stream, so it has no history to index")]
+    IndexedConstant { name: String, span: Span },
 }
 
 /// A parsed specification's declarations, with names and types resolved.
@@ -660,6 +663,9 @@ fn finish_specification(
     let mut specification = assemble_specification(builder, declarations, roots)?;
     specification.source_context = context;
     specification.sources = archive;
+    for (_, expression) in specification.roots() {
+        check_indexed_streams(expression)?;
+    }
     let language = specification.source_context.language().clone();
     for node in specification.nodes() {
         // Syntax is authorised by the header of the module that wrote it;
@@ -675,6 +681,20 @@ fn finish_specification(
         specification = language::CoreDsrvSpecification::check(specification)?.into_specification();
     }
     Ok(specification)
+}
+
+/// Only a declared stream has a history, so a name a lambda or pattern binds,
+/// which includes a def's parameter once the def is inlined, cannot be indexed.
+fn check_indexed_streams(
+    expression: crate::lang::dsrv::ast::ExprRef<'_>,
+) -> Result<(), SourceResolveError> {
+    match expression.indexed_binding() {
+        Some((name, node)) => Err(SourceResolveError::IndexedBinding {
+            name: name.name().into(),
+            span: node.span(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// Expand one parsed expression against an existing namespace, as `dynamic`
@@ -709,6 +729,7 @@ pub(crate) fn expand_expression(
     if let Some(key) = expr.as_ref().duplicate_field() {
         return Err(DsrvAstError::DuplicateExpressionField { field: key.clone() }.into());
     }
+    check_indexed_streams(expr.as_ref())?;
     {
         use contiguous_tree::TreeCursorExt;
         let language = context.language();
@@ -813,9 +834,18 @@ pub(crate) fn expand_tree(
                 If(a, b, c) => ExprKind::If(*node.child(*a), *node.child(*b), *node.child(*c)),
                 // Folding replaces a named offset with the number its
                 // constant stands for, so one reaching here named none.
-                SIndex(a, offset) => match offset {
+                SIndex(name, _)
+                    if context.language().has(language::Feature::TaggedUnions)
+                        && language::is_tag_name(&name.name()) =>
+                {
+                    return Err(SourceResolveError::IndexedTag {
+                        name: name.name().into(),
+                        span: metadata.span,
+                    });
+                }
+                SIndex(name, offset) => match offset {
                     parsed::SourceOffset::Literal(offset) => {
-                        ExprKind::SIndex(*node.child(*a), *offset)
+                        ExprKind::SIndex(name.clone(), *offset)
                     }
                     parsed::SourceOffset::Named(path) => {
                         return Err(SourceResolveError::UnknownOffset {

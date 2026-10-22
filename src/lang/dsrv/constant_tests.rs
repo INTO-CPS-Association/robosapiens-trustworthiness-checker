@@ -463,6 +463,28 @@ fn an_offset_naming_no_constant_is_refused() {
     assert!(message.contains("names no constant"), "got {message}");
 }
 
+#[test]
+fn a_constant_cannot_be_indexed() {
+    let message = refusal(&format!(
+        "{C}const k: Int = 2\nin x: Int\nout y: Int\ny = x + k[1]\n"
+    ));
+    assert!(message.contains("`k` is a constant"), "got {message}");
+}
+
+/// A parameter that shadows a constant is the parameter's, and is refused
+/// as a parameter rather than as a constant.
+#[test]
+fn a_parameter_shadowing_a_constant_is_refused_as_a_parameter() {
+    let message = refusal(
+        "use experimental::{constants, functions}\n\
+         const k: Int = 2\ndef prev(k: Int) -> Int = k[1]\nin x: Int\nout y: Int\ny = prev(x)\n",
+    );
+    assert!(
+        message.contains("`k`") && message.contains("parameter"),
+        "got {message}"
+    );
+}
+
 /// The spelling parses for every file, so what refuses it without the
 /// experiment is expansion, naming the experiment to add.
 #[test]

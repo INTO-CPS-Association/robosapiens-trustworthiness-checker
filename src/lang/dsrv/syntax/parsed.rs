@@ -34,7 +34,7 @@ contiguous_tree::tree_schema! {
         keyed_children: EcoVec,
 
         If(condition: child, then_expr: child, else_expr: child),
-        SIndex(input: child, offset: data(SourceOffset)),
+        SIndex(variable: data(VarName), offset: data(SourceOffset)),
         Val(value: into_data(SyntaxLiteral)),
         BinOp(left: child, right: child, operator: copy(BinaryOperator)),
         Cast(value: child, target: data(SourceType)),

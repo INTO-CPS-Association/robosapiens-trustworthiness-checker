@@ -384,7 +384,7 @@ fn a_binder_shadows_a_def_of_the_same_name() {
 fn a_binder_shadows_a_constant_named_as_an_offset() {
     let folded = format!(
         "{CONSTANTS}const back: Int = 1\n\
-         def prev(n: Int) -> Int = n[back]\n\
+         def prev(n: Int) -> Int = n + x[back]\n\
          in x: Int\nout y: Int\ny = prev(x)\n"
     );
     assert!(
@@ -401,7 +401,7 @@ fn a_binder_shadows_a_constant_named_as_an_offset() {
 /// An offset naming a constant is folded where it was written, too.
 #[test]
 fn a_library_offset_names_its_own_constant() {
-    let lib = format!("{CONSTANTS}const back: Int = 1\ndef prev(n: Int) -> Int = n[back]\n");
+    let lib = format!("{CONSTANTS}const back: Int = 1\ndef prev(n: Int) -> Int = n + x[back]\n");
     let spec = program(
         &format!(
             "{CONSTANTS}mod lib\nuse lib\nconst back: Int = 7\n\

@@ -365,7 +365,7 @@ fn check(
             )?,
             None,
         ),
-        Var(var) => (
+        Var(var) | SIndex(var, _) => (
             context
                 .get(var)
                 .map(TCType::from_stream_type)
@@ -452,7 +452,6 @@ fn check(
                 None,
             )
         }
-        SIndex(value, _) => (check(value, expected, context)?, None),
         Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
             validate_runtime_scope(expr, scope, context)?;
             let ascribed = match result_type {

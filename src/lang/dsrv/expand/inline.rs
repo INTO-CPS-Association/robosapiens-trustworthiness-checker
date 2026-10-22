@@ -193,6 +193,14 @@ pub(crate) fn inline_functions(
     // Imports first, then this file's own defs, so a local name wins as it
     // does for types (S11).
     let mut scope = imported;
+    // A def's body is read with its parameters bound, as at a call.
+    let mut parameters_at: BTreeMap<usize, Vec<VarName>> = declared
+        .iter()
+        .map(|def| {
+            let names = def.parameters.iter().map(|(name, _)| name.clone());
+            (def.root, names.collect())
+        })
+        .collect();
     for def in declared {
         scope.bare.insert(
             def.name,
@@ -210,14 +218,14 @@ pub(crate) fn inline_functions(
 
     let mut builder = ParsedExprBuilder::with_capacity(node_count);
     let mut roots = Vec::with_capacity(trees.len());
-    for tree in &trees {
+    for (index, tree) in trees.iter().enumerate() {
         let mut active = Vec::new();
         roots.push(graft(
             *tree,
             &scope,
             &mut builder,
             &mut active,
-            &mut Vec::new(),
+            &mut parameters_at.remove(&index).unwrap_or_default(),
             None,
         )?);
     }
@@ -383,27 +391,35 @@ fn graft(
                 Stamp::place(stamp, cursor),
             ));
         }
-        // An offset is a number rather than an expression, so a constant
-        // standing in for one is resolved to the number itself.
-        if let ParsedExprKind::SIndex(input, parsed::SourceOffset::Named(path)) = cursor.kind() {
+        if let ParsedExprKind::SIndex(variable, offset) = cursor.kind() {
             let span = parsed::span_of(cursor);
-            let found = if path.module().is_empty() {
-                // A binder's name is not a constant here either, so an
-                // offset written with a shadowed name stands unfolded and
-                // is refused where offsets are resolved.
-                (!bound.contains(path.name()))
-                    .then(|| constants.bare(path.name()))
-                    .flatten()
-            } else {
-                constants.through_module(path.module(), path.name())
-            };
-            if let Some(value) = found {
-                let offset = offset_of(value, path, span)?;
-                let input = graft(cursor.child(*input), scope, builder, active, bound, stamp)?;
-                return Ok(builder.alloc(
-                    ParsedExprKind::SIndex(input, parsed::SourceOffset::Literal(offset)),
-                    Stamp::place(stamp, cursor),
-                ));
+            if !bound.contains(variable) && constants.bare(variable).is_some() {
+                return Err(DsrvExpandError::IndexedConstant {
+                    name: variable.to_string(),
+                    span,
+                });
+            }
+            if let parsed::SourceOffset::Named(path) = offset {
+                let found = if path.module().is_empty() {
+                    // A binder's name is not a constant here either, so an
+                    // offset written with a shadowed name stands unfolded and
+                    // is refused where offsets are resolved.
+                    (!bound.contains(path.name()))
+                        .then(|| constants.bare(path.name()))
+                        .flatten()
+                } else {
+                    constants.through_module(path.module(), path.name())
+                };
+                if let Some(value) = found {
+                    let offset = offset_of(value, path, span)?;
+                    return Ok(builder.alloc(
+                        ParsedExprKind::SIndex(
+                            variable.clone(),
+                            parsed::SourceOffset::Literal(offset),
+                        ),
+                        Stamp::place(stamp, cursor),
+                    ));
+                }
             }
         }
     }

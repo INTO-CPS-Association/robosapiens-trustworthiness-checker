@@ -294,5 +294,5 @@ lambda parameter`, and gradual checking gives the parameter the dynamic type
 ## History and collection access
 
 Square brackets on an expression are stream-history access: `x[1]` reads one
-earlier logical tick. They are not general collection indexing. Use
+earlier logical tick of a stream variable. They are not general collection indexing. Use
 `List.get(values, index)` for a dynamic list lookup.

@@ -47,10 +47,45 @@ impl<'arena> ExprRef<'arena> {
         self.visit_dependencies_with::<true>(visit);
     }
 
+    /// The first `x[n]` whose `x` is a lambda parameter or pattern binding
+    /// rather than a stream: only a declared stream may be indexed.
+    pub(crate) fn indexed_binding(self) -> Option<(&'arena VarName, ExprRef<'arena>)> {
+        let mut found = None;
+        self.visit_in_scope(|expr, bound| {
+            if found.is_none()
+                && let ExprView::SIndex(var, _) = expr.view()
+                && bound(var)
+            {
+                found = Some((var, expr));
+            }
+        });
+        found
+    }
+
     fn visit_dependencies_with<const INCLUDE_PLACEMENT: bool>(
         self,
         mut visit: impl FnMut(DependencyKind, &VarName),
     ) {
+        use ExprView::*;
+
+        self.visit_in_scope(|expr, bound| match expr.view() {
+            Var(var) | SIndex(var, _) if !bound(var) => visit(DependencyKind::Stream, var),
+            MonitoredAt(var, _) if INCLUDE_PLACEMENT && !bound(var) => {
+                visit(DependencyKind::Placement, var);
+            }
+            Dynamic(_, _, ReconfigurableExprScope::Explicit(vars))
+            | Defer(_, _, ReconfigurableExprScope::Explicit(vars)) => {
+                for var in vars.iter().filter(|var| !bound(var)) {
+                    visit(DependencyKind::Stream, var);
+                }
+            }
+            _ => {}
+        });
+    }
+
+    /// Visit every node, with whether a name is bound by an enclosing lambda
+    /// or pattern at that node.
+    fn visit_in_scope(self, mut visit: impl FnMut(ExprRef<'arena>, &dyn Fn(&VarName) -> bool)) {
         use ExprView::*;
 
         let mut binding_depths = BTreeMap::<&VarName, usize>::new();
@@ -58,61 +93,48 @@ impl<'arena> ExprRef<'arena> {
 
         while let Some(event) = pending.pop() {
             match event {
-                DependencyTraversalEvent::Expression(expr) => match expr.view() {
-                    Var(var) if !binding_depths.contains_key(var) => {
-                        visit(DependencyKind::Stream, var);
-                    }
-                    MonitoredAt(var, _)
-                        if INCLUDE_PLACEMENT && !binding_depths.contains_key(var) =>
-                    {
-                        visit(DependencyKind::Placement, var);
-                    }
-                    Dynamic(source, _, scope) | Defer(source, _, scope) => {
-                        if let ReconfigurableExprScope::Explicit(vars) = scope {
-                            for var in vars.iter().filter(|var| !binding_depths.contains_key(*var))
-                            {
-                                visit(DependencyKind::Stream, var);
+                DependencyTraversalEvent::Expression(expr) => {
+                    visit(expr, &|var| binding_depths.contains_key(var));
+                    match expr.view() {
+                        Lambda(params, body) => {
+                            let binders: Vec<&VarName> =
+                                params.iter().map(|(name, _)| name).collect();
+                            for name in &binders {
+                                *binding_depths.entry(*name).or_default() += 1;
                             }
+                            pending.push(DependencyTraversalEvent::LeaveBindings(binders));
+                            pending.push(DependencyTraversalEvent::Expression(body));
                         }
-                        pending.push(DependencyTraversalEvent::Expression(source));
-                    }
-                    Lambda(params, body) => {
-                        let binders: Vec<&VarName> = params.iter().map(|(name, _)| name).collect();
-                        for name in &binders {
-                            *binding_depths.entry(*name).or_default() += 1;
+                        // Every arm's names are depended on, whichever arm a
+                        // value selects, because the graph is built once and the
+                        // selection is not known until the value arrives.
+                        Match(scrutinee, arms, shape) => {
+                            let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
+                            let mut place = 0;
+                            for arm in shape.iter() {
+                                let taken = arm.children();
+                                pending.push(DependencyTraversalEvent::Arm {
+                                    binders: arm.pattern.bound_name_refs(),
+                                    children: children[place..place + taken].to_vec(),
+                                });
+                                place += taken;
+                            }
+                            pending.push(DependencyTraversalEvent::Expression(scrutinee));
                         }
-                        pending.push(DependencyTraversalEvent::LeaveBindings(binders));
-                        pending.push(DependencyTraversalEvent::Expression(body));
-                    }
-                    // Every arm's names are depended on, whichever arm a
-                    // value selects, because the graph is built once and the
-                    // selection is not known until the value arrives.
-                    Match(scrutinee, arms, shape) => {
-                        let children: Vec<ExprRef<'_>> = arms.into_iter().collect();
-                        let mut place = 0;
-                        for arm in shape.iter() {
-                            let taken = arm.children();
+                        Matches(scrutinee, guard, pattern) => {
                             pending.push(DependencyTraversalEvent::Arm {
-                                binders: arm.pattern.bound_name_refs(),
-                                children: children[place..place + taken].to_vec(),
+                                binders: pattern.bound_name_refs(),
+                                children: guard.into_iter().collect(),
                             });
-                            place += taken;
+                            pending.push(DependencyTraversalEvent::Expression(scrutinee));
                         }
-                        pending.push(DependencyTraversalEvent::Expression(scrutinee));
+                        _ => pending.extend(
+                            expr.children()
+                                .rev()
+                                .map(DependencyTraversalEvent::Expression),
+                        ),
                     }
-                    Matches(scrutinee, guard, pattern) => {
-                        pending.push(DependencyTraversalEvent::Arm {
-                            binders: pattern.bound_name_refs(),
-                            children: guard.into_iter().collect(),
-                        });
-                        pending.push(DependencyTraversalEvent::Expression(scrutinee));
-                    }
-                    _ => pending.extend(
-                        expr.children()
-                            .rev()
-                            .map(DependencyTraversalEvent::Expression),
-                    ),
-                },
+                }
                 DependencyTraversalEvent::Arm { binders, children } => {
                     for name in &binders {
                         *binding_depths.entry(*name).or_default() += 1;

@@ -89,7 +89,7 @@ impl Display for ExprRef<'_> {
             Cast(value, target) => write!(f, "({value} as {target})"),
             Ascribe(value, target) => write!(f, "({value}: {target})"),
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
-            SIndex(expr, index) => write!(f, "{}[{index}]", expr),
+            SIndex(var, index) => write!(f, "{var}[{index}]"),
             Not(expr) => write!(f, "!{expr}"),
             Neg(expr) => write!(f, "-{expr}"),
             Dynamic(source, result_type, scope) => {

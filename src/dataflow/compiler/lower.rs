@@ -157,8 +157,8 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
                 else_branch,
             })
         }
-        SIndex(input, offset) => {
-            let input = lower_expression(input, builder);
+        SIndex(variable, offset) => {
+            let input = UnboundRef::External(variable.clone());
             builder.push(UnboundOp::Delay { input, offset })
         }
         Default(input, fallback) => {

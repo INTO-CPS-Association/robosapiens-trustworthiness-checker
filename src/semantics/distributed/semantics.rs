@@ -96,6 +96,7 @@ where
             panic!("function application requires typed DSRV semantics")
         }
         Var(v) => mc::var::<AC>(ctx, v.clone()),
+        SIndex(v, index) => mc::sindex(mc::var::<AC>(ctx, v.clone()), index),
         Dynamic(source, _, scope) => {
             let site = checked.cursor(expr).runtime_expression().clone();
             let e = evaluate(source);

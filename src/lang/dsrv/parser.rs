@@ -96,7 +96,8 @@ impl From<DsrvExpandError> for DsrvParseError {
             | DsrvExpandError::RecursiveConstant { .. }
             | DsrvExpandError::ConstantValue { .. }
             | DsrvExpandError::ConstantType { .. }
-            | DsrvExpandError::ConstantOffset { .. }) => Self::Modules(other.to_string()),
+            | DsrvExpandError::ConstantOffset { .. }
+            | DsrvExpandError::IndexedConstant { .. }) => Self::Modules(other.to_string()),
         }
     }
 }
@@ -917,6 +918,49 @@ mod tests {
     }
 
     #[test]
+    fn only_variables_can_be_indexed() {
+        for source in [
+            "(x + y)[1]",
+            "(x)[1]",
+            "1[1]",
+            "\"s\"[2]",
+            "m::x[1]",
+            "(x[1])[1]",
+        ] {
+            let error = parse_expr(source).expect_err(source).to_string();
+            assert!(
+                error.contains("only a stream variable can be indexed"),
+                "{source}: {error}"
+            );
+        }
+        let error = parse_str("in x: Int\nout y: Int\ny = 1 + (x + 1)[1]").unwrap_err();
+        assert!(
+            error.to_string().contains("line 3, column 9"),
+            "the refusal is located at the indexed expression: {error}"
+        );
+        assert!(parse_expr("x[1]").is_ok());
+        assert!(parse_expr("X[1]").is_ok());
+    }
+
+    #[test]
+    fn test_lambda_only_streams_can_sindex() {
+        for source in [
+            "(\\v: Int -> v[1])(x)",
+            "(\\v: Int -> (\\w: Int -> v[2])(v))(x)",
+        ] {
+            let error = parse_expr(source).expect_err(source).to_string();
+            assert!(
+                error.contains("`v`") && error.contains("not a declared stream"),
+                "{source}: {error}"
+            );
+        }
+        assert!(parse_expr("(\\v: Int -> v + x[1])(x)").is_ok());
+        // A stream shadowed by a parameter is the parameter there.
+        let error = parse_str("in x: Int\nout y: Int\ny = (\\x: Int -> x[1])(x)").unwrap_err();
+        assert!(error.to_string().contains("`x`"), "{error}");
+    }
+
+    #[test]
     fn test_sexpr() {
         let parsed = parse_expr("1 + 2");
         let exp = "Ok(BinOp(Val(Int(1)), Val(Int(2)), Add))";
@@ -934,16 +978,12 @@ mod tests {
         let exp = "Ok(If(Val(Bool(true)), Val(Int(1)), Val(Int(2))))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
-        let parsed = parse_expr("(x)[1]");
-        let exp = "Ok(SIndex(Var(VarName::new(\"x\")), 1))";
+        let parsed = parse_expr("x[1]");
+        let exp = "Ok(SIndex(VarName::new(\"x\"), 1))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
-        let parsed = parse_expr("(x + y)[3]");
-        let exp = "Ok(SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add), 3))";
-        assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
-
-        let parsed = parse_expr("1 + (x)[1]");
-        let exp = "Ok(BinOp(Val(Int(1)), SIndex(Var(VarName::new(\"x\")), 1), Add))";
+        let parsed = parse_expr("1 + x[1]");
+        let exp = "Ok(BinOp(Val(Int(1)), SIndex(VarName::new(\"x\"), 1), Add))";
         assert_eq!(presult_strip_span(&parsed.unwrap()), exp);
 
         let parsed = parse_expr("\"test\"");
@@ -1132,7 +1172,7 @@ mod tests {
     fn test_parse_dsrv_count() {
         let input = "\
             out x\n\
-            x = 1 + (x)[1]";
+            x = 1 + x[1]";
         let count_spec = DsrvSpecification::new(
             BTreeSet::from([]),
             BTreeSet::from(["x".into()]),
@@ -1140,7 +1180,7 @@ mod tests {
                 "x".into(),
                 Expr::BinOp(
                     Box::new(Expr::Val(1)),
-                    Box::new(Expr::SIndex(Box::new(Expr::Var("x".into())), 1)),
+                    Box::new(Expr::SIndex("x".into(), 1)),
                     BinaryOperator::Add,
                 ),
             )]),
@@ -1359,11 +1399,11 @@ mod tests {
         // Time index
         assert_eq!(
             presult_strip_span(&parse_expr("x [1]").unwrap()),
-            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
+            r#"Ok(SIndex(VarName::new("x"), 1))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("x[1 ]").unwrap()),
-            r#"Ok(SIndex(Var(VarName::new("x")), 1))"#
+            r#"Ok(SIndex(VarName::new("x"), 1))"#
         );
         // Paren
         assert_eq!(
@@ -1469,11 +1509,11 @@ mod tests {
         // Time index in arithmetic expression
         assert_eq!(
             presult_strip_span(&parse_expr("x[0] + y[1]").unwrap()),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 0), SIndex(Var(VarName::new("y")), 1), Add))"#
+            r#"Ok(BinOp(SIndex(VarName::new("x"), 0), SIndex(VarName::new("y"), 1), Add))"#
         );
         assert_eq!(
             presult_strip_span(&parse_expr("x[1] * (y + 3)").unwrap()),
-            r#"Ok(BinOp(SIndex(Var(VarName::new("x")), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), Add), Multiply))"#
+            r#"Ok(BinOp(SIndex(VarName::new("x"), 1), BinOp(Var(VarName::new("y")), Val(Int(3)), Add), Multiply))"#
         );
         // Case to test precedence of if-then-else with arithmetic
         // Most languages implement this as "if a then b else (c + d)" and so should we.
@@ -2339,8 +2379,7 @@ mod tests {
         let expression = parse_expr("x[18446744073709551615]").unwrap();
         assert!(matches!(
             expression.as_ref().view(),
-            ExprView::SIndex(input, u64::MAX)
-                if matches!(input.view(), ExprView::Var(name) if name == &VarName::new("x"))
+            ExprView::SIndex(name, u64::MAX) if name == &VarName::new("x")
         ));
         let field = parse_expr("values.18446744073709551615").unwrap();
         assert!(matches!(
@@ -2550,15 +2589,11 @@ mod tests {
 
         assert_eq!(
             strip_span(&parse_expr("x[1]").unwrap()),
-            "SIndex(Var(VarName::new(\"x\")), 1)"
-        );
-        assert_eq!(
-            strip_span(&parse_expr("(x + y)[2]").unwrap()),
-            "SIndex(BinOp(Var(VarName::new(\"x\")), Var(VarName::new(\"y\")), Add), 2)"
+            "SIndex(VarName::new(\"x\"), 1)"
         );
         assert_eq!(
             strip_span(&parse_expr("x[1] ** 2").unwrap()),
-            "BinOp(SIndex(Var(VarName::new(\"x\")), 1), Val(Int(2)), Power)"
+            "BinOp(SIndex(VarName::new(\"x\"), 1), Val(Int(2)), Power)"
         );
         assert!(
             parse_expr("x[1,]").is_err(),
@@ -2827,21 +2862,21 @@ mod spec_tests {
     fn counter_inf() -> (&'static str, &'static str) {
         (
             "out z\nz = default(z[1], 0) + 1",
-            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Val(Int(1)), Add)}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(VarName::new(\"z\"), 1), Val(Int(0))), Val(Int(1)), Add)}, type_annotations: {} })",
         )
     }
 
     fn counter() -> (&'static str, &'static str) {
         (
             "in x\nout z\nz = default(z[1], 0) + x",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(Var(VarName::new(\"z\")), 1), Val(Int(0))), Var(VarName::new(\"x\")), Add)}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\")}, output_vars: {VarName::new(\"z\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\")}, exprs: {VarName::new(\"z\"): BinOp(Default(SIndex(VarName::new(\"z\"), 1), Val(Int(0))), Var(VarName::new(\"x\")), Add)}, type_annotations: {} })",
         )
     }
 
     fn future() -> (&'static str, &'static str) {
         (
             "in x\nin y\nout z\nout a\nz = x[1]\na = y",
-            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(Var(VarName::new(\"x\")), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
+            "Ok(DsrvSpecification { input_vars: {VarName::new(\"x\"), VarName::new(\"y\")}, output_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, aux_vars: {}, stream_vars: {VarName::new(\"z\"), VarName::new(\"a\")}, exprs: {VarName::new(\"z\"): SIndex(VarName::new(\"x\"), 1), VarName::new(\"a\"): Var(VarName::new(\"y\"))}, type_annotations: {} })",
         )
     }
 

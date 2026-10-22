@@ -104,12 +104,14 @@ fn validate_expression(
             SourceLocation::default(),
         )
         .located(expression.origin())),
-        Var(var) if !context.contains(var) => Err(SemanticError::UndeclaredVariable(
-            format!("undeclared variable {var}"),
-            Some(expression.span()),
-            SourceLocation::default(),
-        )
-        .located(expression.origin())),
+        Var(var) | SIndex(var, _) if !context.contains(var) => {
+            Err(SemanticError::UndeclaredVariable(
+                format!("undeclared variable {var}"),
+                Some(expression.span()),
+                SourceLocation::default(),
+            )
+            .located(expression.origin()))
+        }
         Lambda(parameters, body) => {
             let frame_start = context.bindings.len();
             context

@@ -151,6 +151,17 @@ where
     evaluate_ref::<AC, D>(expr.expr().as_ref(), &expr, ctx, owner)
 }
 
+/// The stream a declared name refers to.
+fn variable<AC, D>(ctx: &AC::Ctx, name: &VarName) -> LocalStream<CausalValue<D>>
+where
+    D: CausalDomain,
+    AC: AsyncConfig<Val = CausalValue<D>>,
+    AC::Ctx: StreamContext<AC = AC>,
+{
+    ctx.var(name)
+        .unwrap_or_else(|| panic!("causal DSRV variable `{name}` was not declared"))
+}
+
 fn evaluate_ref<AC, D>(
     node: ExprRef<'_>,
     expr: &UntypedExpr,
@@ -169,9 +180,7 @@ where
 
     match node.view() {
         Val(value) => combinators::constant(value.clone().into_runtime_value()),
-        Var(name) => ctx
-            .var(name)
-            .unwrap_or_else(|| panic!("causal DSRV variable `{name}` was not declared")),
+        Var(name) => variable::<AC, D>(ctx, name),
         Not(value) => combinators::unary(UnaryOperator::Not, child(value)),
         Neg(value) => combinators::unary(UnaryOperator::Negate, child(value)),
         Sin(value) => combinators::unary(UnaryOperator::Sin, child(value)),
@@ -198,7 +207,7 @@ where
         If(condition, then_expr, else_expr) => {
             combinators::if_stream::<D>(child(condition), child(then_expr), child(else_expr))
         }
-        SIndex(value, offset) => combinators::sindex(child(value), offset),
+        SIndex(name, offset) => combinators::sindex(variable::<AC, D>(ctx, name), offset),
         Default(value, default) => combinators::default::<D>(child(value), child(default)),
         Init(value, initial) => combinators::init::<D>(child(value), child(initial)),
         Update(value, update) => combinators::update::<D>(child(value), child(update)),
@@ -270,9 +279,7 @@ where
 
     match node.view() {
         Val(value) => combinators::constant(value.clone().into_runtime_value()),
-        Var(name) => ctx
-            .var(name)
-            .unwrap_or_else(|| panic!("causal DSRV variable `{name}` was not declared")),
+        Var(name) => variable::<AC, D>(ctx, name),
         Not(value) => combinators::unary(UnaryOperator::Not, child(value)),
         Neg(value) => combinators::unary(UnaryOperator::Negate, child(value)),
         Sin(value) => combinators::unary(UnaryOperator::Sin, child(value)),
@@ -299,7 +306,7 @@ where
         If(condition, then_expr, else_expr) => {
             combinators::if_stream::<D>(child(condition), child(then_expr), child(else_expr))
         }
-        SIndex(value, offset) => combinators::sindex(child(value), offset),
+        SIndex(name, offset) => combinators::sindex(variable::<AC, D>(ctx, name), offset),
         Default(value, default) => combinators::default::<D>(child(value), child(default)),
         Init(value, initial) => combinators::init::<D>(child(value), child(initial)),
         Update(value, update) => combinators::update::<D>(child(value), child(update)),

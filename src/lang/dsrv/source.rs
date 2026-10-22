@@ -139,6 +139,14 @@ pub enum SourceResolveError {
 
     #[error("`{name}` at {span:?} names no constant: a stream offset must be a number")]
     UnknownOffset { name: EcoString, span: Span },
+
+    #[error("`{name}` at {span:?} is a union tag, not a stream, so it has no history to index")]
+    IndexedTag { name: EcoString, span: Span },
+
+    #[error(
+        "`{name}` at {span:?} is a parameter or pattern binding, not a declared stream, so it cannot be indexed"
+    )]
+    IndexedBinding { name: EcoString, span: Span },
     #[error("{name} at {span:?} takes {expected} type arguments, given {found}")]
     AliasArity {
         name: TypePath,

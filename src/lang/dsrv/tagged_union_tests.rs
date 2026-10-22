@@ -157,6 +157,20 @@ fn a_nullary_constructor_carries_no_payload() {
     assert_eq!(payload.into_iter().count(), 0);
 }
 
+#[test]
+fn a_tag_cannot_be_indexed() {
+    let message = parse_str(&format!(
+        "{HEADER}type State = Union<Stopped, Moving: Int>\n\
+         out y: State\ny = Stopped[1]\n"
+    ))
+    .expect_err("indexing a tag is refused")
+    .to_string();
+    assert!(
+        message.contains("`Stopped`") && message.contains("union tag"),
+        "got {message}"
+    );
+}
+
 // R16.2-c: a constructor is not a function, so its parentheses hold its
 // payload rather than making a call of it.
 #[test]

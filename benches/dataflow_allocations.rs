@@ -114,7 +114,7 @@ fn first_class_spec(dynamic: bool) -> String {
     format!(
         "in x: Int\nin bias: Int\nin a_source: Str\nin b_source: Str\n\
          aux f: (Int -> Int)\nout z: Int\nout a: Int\nout b: Int\n\
-         f = \\v: Int -> v[1] + bias\nz = f(x)\n{scheduling}"
+         f = \\v: Int -> v + x[1] + bias\nz = f(x)\n{scheduling}"
     )
 }
 

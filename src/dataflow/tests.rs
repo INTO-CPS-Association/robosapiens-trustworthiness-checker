@@ -86,19 +86,16 @@ fn arb_valid_dataflow_program_and_inputs()
                         Box::new(var(lhs)),
                         Box::new(var(rhs)),
                     ),
-                    2 => Expr::SIndex(Box::new(var(lhs)), offset),
+                    2 => Expr::SIndex(lhs, offset),
                     3 => Expr::Default(
-                        Box::new(Expr::SIndex(Box::new(var(lhs)), offset)),
+                        Box::new(Expr::SIndex(lhs, offset)),
                         Box::new(var(VarName::new("x"))),
                     ),
                     4 => Expr::Update(Box::new(var(lhs)), Box::new(var(rhs))),
                     5 => Expr::Init(Box::new(var(lhs)), Box::new(var(rhs))),
                     6 => Expr::BinOp(
                         Box::new(Expr::Default(
-                            Box::new(Expr::SIndex(
-                                Box::new(var(name.clone())),
-                                u64::from(second % 4) + 1,
-                            )),
+                            Box::new(Expr::SIndex(name.clone(), u64::from(second % 4) + 1)),
                             Box::new(Expr::Val(0)),
                         )),
                         Box::new(var(VarName::new("x"))),
@@ -1445,7 +1442,7 @@ fn dataflow_rejects_recursive_function_capture() {
 
 #[test]
 fn dataflow_preserves_temporal_state_in_direct_functions() {
-    let spec = elaborated("in x: Int\nout z: Int\nz = (\\v: Int -> v[1])(x)");
+    let spec = elaborated("in x: Int\nout z: Int\nz = (\\v: Int -> v + x[1])(x)");
     let rows = eval_dataflow_spec(
         spec,
         BTreeMap::from([(
@@ -1458,12 +1455,13 @@ fn dataflow_preserves_temporal_state_in_direct_functions() {
         .map(|row| row[&VarName::new("z")].clone())
         .collect::<Vec<_>>();
 
-    assert_eq!(values, vec![Value::Deferred, 1.into(), 2.into(), 3.into()]);
+    assert_eq!(values, vec![Value::Deferred, 3.into(), 5.into(), 7.into()]);
 }
 
 #[test]
 fn dataflow_updates_captures_of_persistent_direct_functions() {
-    let spec = elaborated("in x: Int\nin bias: Int\nout z: Int\nz = (\\v: Int -> v[1] + bias)(x)");
+    let spec =
+        elaborated("in x: Int\nin bias: Int\nout z: Int\nz = (\\v: Int -> v + x[1] + bias)(x)");
     let rows = eval_dataflow_spec(
         spec,
         BTreeMap::from([
@@ -1476,13 +1474,14 @@ fn dataflow_updates_captures_of_persistent_direct_functions() {
         .map(|row| row[&VarName::new("z")].clone())
         .collect::<Vec<_>>();
 
-    assert_eq!(values, vec![Value::Deferred, 21.into(), 32.into()]);
+    assert_eq!(values, vec![Value::Deferred, 23.into(), 35.into()]);
 }
 
 #[test]
 fn dataflow_preserves_temporal_state_in_first_class_functions() {
-    let spec =
-        elaborated("in x: Int\naux f: (Int -> Int)\nout z: Int\nf = \\v: Int -> v[1]\nz = f(x)");
+    let spec = elaborated(
+        "in x: Int\naux f: (Int -> Int)\nout z: Int\nf = \\v: Int -> v + x[1]\nz = f(x)",
+    );
     let rows = eval_dataflow_spec(
         spec,
         BTreeMap::from([(
@@ -1495,14 +1494,14 @@ fn dataflow_preserves_temporal_state_in_first_class_functions() {
         .map(|row| row[&VarName::new("z")].clone())
         .collect::<Vec<_>>();
 
-    assert_eq!(values, vec![Value::Deferred, 1.into(), 2.into(), 3.into()]);
+    assert_eq!(values, vec![Value::Deferred, 3.into(), 5.into(), 7.into()]);
 }
 
 #[test]
 fn dataflow_updates_captures_of_first_class_function_instances() {
     let spec = elaborated(
         "in x: Int\nin bias: Int\naux f: (Int -> Int)\nout z: Int\n\
-         f = \\v: Int -> v[1] + bias\nz = f(x)",
+         f = \\v: Int -> v + x[1] + bias\nz = f(x)",
     );
     let rows = eval_dataflow_spec(
         spec,
@@ -1516,14 +1515,14 @@ fn dataflow_updates_captures_of_first_class_function_instances() {
         .map(|row| row[&VarName::new("z")].clone())
         .collect::<Vec<_>>();
 
-    assert_eq!(values, vec![Value::Deferred, 21.into(), 32.into()]);
+    assert_eq!(values, vec![Value::Deferred, 23.into(), 35.into()]);
 }
 
 #[test]
 fn dataflow_function_switching_starts_a_new_call_site_instance() {
     let spec = elaborated(
         "in x: Int\nin choose: Bool\naux f: (Int -> Int)\naux g: (Int -> Int)\n\
-         out z: Int\nf = \\v: Int -> v[1]\ng = \\v: Int -> v[1]\n\
+         out z: Int\nf = \\v: Int -> v + x[1]\ng = \\v: Int -> v + x[1]\n\
          z = (if choose then f else g)(x)",
     );
     let rows = eval_dataflow_spec(
@@ -1554,9 +1553,9 @@ fn dataflow_function_switching_starts_a_new_call_site_instance() {
         values,
         vec![
             Value::Deferred,
-            1.into(),
-            Value::Deferred,
             3.into(),
+            Value::Deferred,
+            7.into(),
             Value::Deferred,
         ]
     );
@@ -1618,7 +1617,9 @@ fn dataflow_applies_fixed_auxiliary_functions() {
 
 #[test]
 fn dataflow_rejects_temporal_collection_functions() {
-    let spec = elaborated("in xs: List<Int>\nout z: List<Int>\nz = List.map(\\v: Int -> v[1], xs)");
+    let spec = elaborated(
+        "in x: Int\nin xs: List<Int>\nout z: List<Int>\nz = List.map(\\v: Int -> v + x[1], xs)",
+    );
     let error = DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed)
         .err()
         .expect("temporal collection callback should be rejected");

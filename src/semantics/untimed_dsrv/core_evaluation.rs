@@ -43,7 +43,6 @@ pub(crate) fn evaluate<'a>(
         When(value) => mc::when(evaluate(value)),
         Latch(value, trigger) => mc::latch(evaluate(value), evaluate(trigger)),
         Init(initial, value) => mc::init(evaluate(initial), evaluate(value)),
-        SIndex(value, index) => mc::sindex(evaluate(value), index),
         If(condition, then_value, else_value) => mc::if_stm(
             evaluate(condition),
             evaluate(then_value),

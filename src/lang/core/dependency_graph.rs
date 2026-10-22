@@ -347,57 +347,32 @@ fn add_sexpr_dependencies(
 ) {
     fn visit(
         expr: ExprRef<'_>,
-        steps: &[Weight],
         graph: &mut DepGraph,
         nodes: &mut BTreeMap<VarName, NodeIndex>,
         current_node: NodeIndex,
-        current_idx: u64,
     ) {
-        debug!(
-            "Visiting {:?} with steps {:?} and current_idx {}",
-            expr.kind(),
-            steps,
-            current_idx
-        );
-        match expr.view() {
-            ExprView::Var(name) => {
-                let node = *nodes
-                    .entry(name.clone())
-                    .or_insert_with(|| graph.graph.add_node(name.clone()));
-                if steps.is_empty() {
-                    graph.graph.add_edge(current_node, node, 0);
-                } else {
-                    for weight in steps {
-                        graph.graph.add_edge(current_node, node, *weight);
-                    }
-                }
-            }
-            ExprView::SIndex(child, offset) => {
-                let current_idx = current_idx + offset;
-                let mut nested_steps = steps.to_vec();
-                nested_steps.push(current_idx);
-                visit(
-                    child,
-                    &nested_steps,
-                    graph,
-                    nodes,
-                    current_node,
-                    current_idx,
-                );
-            }
+        debug!("Visiting {:?}", expr.kind());
+        let (name, offset) = match expr.view() {
+            ExprView::Var(name) => (name, 0),
+            ExprView::SIndex(name, offset) => (name, offset),
             _ => {
                 for child in expr.children() {
-                    visit(child, steps, graph, nodes, current_node, current_idx);
+                    visit(child, graph, nodes, current_node);
                 }
+                return;
             }
-        }
+        };
+        let node = *nodes
+            .entry(name.clone())
+            .or_insert_with(|| graph.graph.add_node(name.clone()));
+        graph.graph.add_edge(current_node, node, offset);
     }
 
     debug!("sexpr_dependencies for {}: {:?}", root_name, expr.kind());
     let root_node = *nodes
         .entry(root_name.clone())
         .or_insert_with(|| graph.graph.add_node(root_name.clone()));
-    visit(expr, &[], graph, nodes, root_node, 0);
+    visit(expr, graph, nodes, root_node);
 }
 
 fn sexpr_dependencies(expr: ExprRef<'_>, root_name: &Node) -> DepGraph {
@@ -782,10 +757,7 @@ mod tests {
         let mut spec = specs()["multi_dependent"];
         let spec = test_parser(&mut spec).unwrap();
         let mut dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
-        dep.add_dependency(
-            &"x".into(),
-            &Expr::SIndex(Box::new(Expr::Var("a".into())), 1),
-        );
+        dep.add_dependency(&"x".into(), &Expr::SIndex("a".into(), 1));
         let graph = get_graph(dep);
         assert_eq!(graph.node_count(), 3);
         assert_eq!(graph.edge_count(), 3);
@@ -833,27 +805,8 @@ mod tests {
     }
 
     #[test]
-    fn test_double_sindex() {
-        // Tests that multiple indices are aggregated correctly.
-
-        // Parentheses unfortunately needed due to parser bugs
-        let mut spec = "in x\nout z\nz = (x[1])[1]";
-        let spec = test_parser(&mut spec).unwrap();
-        let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);
-        assert_eq!(dep.longest_time_dependency(&"x".into()), 2);
-        let graph = get_graph(dep);
-        assert_eq!(graph.node_count(), 2);
-        assert_eq!(graph.edge_count(), 2);
-    }
-
-    #[test]
-    fn test_double_sindex2() {
-        // Tests that multiple indices are aggregated correctly.
-        // In this case by treating indirect dependencies correctly.
-        // Here, it could be said that there is a dependency of 2 for x,
-        // but we don't since the dependecy is stored in an intermediate variable (y).
-
-        // Parentheses unfortunately needed due to parser bugs
+    fn test_indirect_sindex() {
+        // Test that indirect time dependencies are registered correctly.
         let mut spec = "in x\nout y\nout z\ny = x[1]\nz = y[1]";
         let spec = test_parser(&mut spec).unwrap();
         let dep = DepGraph::resolver_from_spec::<SyntaxConfig>(spec);

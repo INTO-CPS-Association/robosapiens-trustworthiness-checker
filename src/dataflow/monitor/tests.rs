@@ -959,7 +959,7 @@ fn changed_dynamic_transfer_does_not_reuse_wrong_provenance_history() {
                 &[
                     ("x", Value::Int(1)),
                     ("y", Value::Int(10)),
-                    ("source", Value::Str("(x + 1)[1]".into())),
+                    ("source", Value::Str("x[1] + 1".into())),
                 ],
             ),
             &mut output,
@@ -974,7 +974,7 @@ fn changed_dynamic_transfer_does_not_reuse_wrong_provenance_history() {
                 &[
                     ("x", Value::Int(2)),
                     ("y", Value::Int(20)),
-                    ("source", Value::Str("(y + 1)[1]".into())),
+                    ("source", Value::Str("y[1] + 1".into())),
                 ],
             ),
             &mut output,
@@ -2758,10 +2758,7 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
         ),
         (VarName::new("unit"), Expr::Val(SyntaxLiteral::Unit)),
         (VarName::new("absent"), Expr::Var(source.clone())),
-        (
-            VarName::new("waiting"),
-            Expr::SIndex(Box::new(Expr::Var(source.clone())), 1),
-        ),
+        (VarName::new("waiting"), Expr::SIndex(source.clone(), 1)),
     ]);
     let specification = DsrvSpecification::new(
         BTreeSet::from([source]),

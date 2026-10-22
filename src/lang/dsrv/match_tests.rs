@@ -244,3 +244,16 @@ fn match_needs_its_experiment_and_is_outside_core() {
         ))
     ));
 }
+
+#[test]
+fn a_pattern_binding_cannot_be_indexed() {
+    let source =
+        specification("out y: Int\ny = match(state) { Moving(n) -> n[1], Stopped -> 0, }\n");
+    let message = parse_str(&source)
+        .expect_err("indexing a binding is refused")
+        .to_string();
+    assert!(
+        message.contains("`n`") && message.contains("not a declared stream"),
+        "got {message}"
+    );
+}

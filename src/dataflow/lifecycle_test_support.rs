@@ -238,21 +238,15 @@ fn specification_from_recipes(recipes: &[LifecycleRecipe]) -> DsrvSpecification 
                 Box::new(var(dependency(*else_source))),
             ),
             LifecycleRecipe::Past { source, offset } => {
-                Expr::SIndex(Box::new(var(dependency(*source))), offset.get())
+                Expr::SIndex(dependency(*source), offset.get())
             }
             LifecycleRecipe::PastOrInput { source, offset } => Expr::Default(
-                Box::new(Expr::SIndex(
-                    Box::new(var(dependency(*source))),
-                    offset.get(),
-                )),
+                Box::new(Expr::SIndex(dependency(*source), offset.get())),
                 Box::new(var(x.clone())),
             ),
             LifecycleRecipe::RecursiveSum { offset } => Expr::BinOp(
                 Box::new(Expr::Default(
-                    Box::new(Expr::SIndex(
-                        Box::new(var(name.clone())),
-                        offset.get().max(1),
-                    )),
+                    Box::new(Expr::SIndex(name.clone(), offset.get().max(1))),
                     Box::new(Expr::Val(SyntaxLiteral::Int(0))),
                 )),
                 Box::new(var(x.clone())),
