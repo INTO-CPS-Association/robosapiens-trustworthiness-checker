@@ -215,6 +215,7 @@ SIndex: ExprId = {
 };
 
 SIndexRefusedBase: () = {
+    SIndex => (),
     SpannedLiteral => (),
     SpannedParen => (),
     (<LowerIdent> "::")+ LowerIdent => (),

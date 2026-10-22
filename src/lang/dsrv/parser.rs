@@ -926,6 +926,7 @@ mod tests {
             "\"s\"[2]",
             "m::x[1]",
             "(x[1])[1]",
+            "x[1][1]",
         ] {
             let error = parse_expr(source).expect_err(source).to_string();
             assert!(
