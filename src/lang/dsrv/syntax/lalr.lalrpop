@@ -221,9 +221,9 @@ SIndex: ExprId = {
 // name is resolved in expansion, so parsing settles nothing here.
 SourceOffsetSpelling: SourceOffset = {
     <value:Uint> => SourceOffset::Literal(value),
-    <name:LowerIdent> =>
+    <name:RawIdent> =>
         SourceOffset::Named(ValuePath::new(EcoVec::new(), VarName::from(name))),
-    <l:@L> <module:(<LowerIdent> "::")+> <name:LowerIdent> =>? {
+    <l:@L> <module:(<LowerIdent> "::")+> <name:RawIdent> =>? {
         let module = module
             .into_iter()
             .map(ModuleName::new)

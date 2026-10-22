@@ -403,6 +403,27 @@ fn a_constant_may_be_named_as_a_stream_offset() {
 }
 
 #[test]
+fn a_capitalised_constant_may_be_named_as_a_stream_offset() {
+    let printed = body(&format!(
+        "{C}const WINDOW: Int = 3\nin x: Int\nout y: Int\ny = default(x[WINDOW], 0)\n"
+    ));
+    assert!(
+        printed.contains("x[3]") && !printed.contains("WINDOW"),
+        "got {printed}",
+    );
+}
+
+#[test]
+fn a_capitalised_constant_offset_may_be_named_through_its_module() {
+    let printed = program_body(
+        &format!("{CM}mod store\nuse store\nin x: Int\nout y: Int\ny = x[store::WINDOW]\n"),
+        &[("store", &format!("{CM}const WINDOW: Int = 2\n"))],
+        "y",
+    );
+    assert!(printed.contains("x[2]"), "got {printed}");
+}
+
+#[test]
 fn a_stream_offset_may_still_be_written_as_a_number() {
     let printed = body("in x: Int\nout y: Int\ny = x[2]\n");
     assert!(printed.contains("x[2]"), "got {printed}");
