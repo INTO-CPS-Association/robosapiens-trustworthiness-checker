@@ -22,15 +22,25 @@ Both executables ship inside the extension. Installing it is the whole setup; no
 
 Search for **DSRV Language Support** in the Extensions view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>) and install it.
 
-The extension is published as one package per platform, and the Marketplace sends you the one for yours. To install it from a file instead, take the `.vsix` for your platform from the [releases](https://github.com/INTO-CPS-Association/dsrv-vscode/releases) and run:
+The extension contains the binaries for every supported platform and uses the ones matching your machine.
+
+To install it from a file instead, take `dsrv-vscode.vsix` from the [releases](https://github.com/INTO-CPS-Association/dsrv-vscode/releases) and run:
 
 ````sh
-code --install-extension <vsix-file>
+code --install-extension dsrv-vscode.vsix
 ````
 
 ## Bundled binaries
 
-The extension contains a `dsrv-lsp` and a `trustworthiness_checker` built for your platform, so completion, diagnostics and running a model all work on a fresh install.
+The extension contains a `dsrv-lsp` and a `trustworthiness_checker` for each of these platforms, and uses the pair matching the machine it runs on.
+
+| Platform | Architecture |
+| --- | --- |
+| Linux | x86-64 |
+| Windows | x86-64 |
+| macOS | Apple silicon and Intel |
+
+Completion, diagnostics and running a model all work on a fresh install on those platforms.
 
 Each release pins the exact version of each executable it ships, rather than tracking the latest; `bundled-binaries.json` in the extension's repository records which ones a given version contains.
 
