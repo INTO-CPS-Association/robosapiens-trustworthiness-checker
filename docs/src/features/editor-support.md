@@ -2,7 +2,7 @@
 
 The DSRV language has editor support for Visual Studio Code, provided by two separate components:
 
-- the **[dsrv-vscode](https://github.com/INTO-CPS-Association/dsrv-vscode)** extension, which supplies syntax highlighting, the `.dsrv` file association, and commands for running a model;
+- the **[robosapiens-trustworthiness-checker-vscode](https://github.com/INTO-CPS-Association/dsrv-vscode)** extension, which supplies syntax highlighting, the `.dsrv` file association, and commands for running a model;
 - the **[dsrv-lsp](https://github.com/INTO-CPS-Association/dsrv-lsp)** language server, which supplies completion and diagnostics over the Language Server Protocol.
 
 The language server links the Trustworthiness Checker (TC) as a library and reuses its parser and type checker, so editor diagnostics come from the same language definition the TC evaluates, though not necessarily from the same revision of it. See [When diagnostics and runs disagree](#when-diagnostics-and-runs-disagree).
@@ -20,14 +20,14 @@ Both executables ship inside the extension. Installing it is the whole setup; no
 
 ## Install the extension
 
-Search for **DSRV Language Support** in the Extensions view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>) and install it.
+Search for **RoboSAPIENS Trustworthiness Checker** in the Extensions view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>) and install it.
 
 The extension contains the binaries for every supported platform and uses the ones matching your machine.
 
-To install it from a file instead, take `dsrv-vscode.vsix` from the [releases](https://github.com/INTO-CPS-Association/dsrv-vscode/releases) and run:
+To install it from a file instead, take `robosapiens-trustworthiness-checker-vscode.vsix` from the [releases](https://github.com/INTO-CPS-Association/dsrv-vscode/releases) and run:
 
 ````sh
-code --install-extension dsrv-vscode.vsix
+code --install-extension robosapiens-trustworthiness-checker-vscode.vsix
 ````
 
 ## Bundled binaries
