@@ -255,6 +255,7 @@ fn local_declarations(
             Declaration::Output { name, .. } if local.outputs.contains(name) => Some(entry.clone()),
             Declaration::Aux { name, .. } if local.aux.contains(name) => Some(entry.clone()),
             Declaration::Equation { name, .. } if exprs.contains_key(name) => Some(entry.clone()),
+            Declaration::TypeAlias { .. } => Some(entry.clone()),
             _ => None,
         })
         .collect()
@@ -398,6 +399,51 @@ mod tests {
             assert_eq!(localised.check_mode(), options.mode);
             assert_eq!(localised.source().check_mode(), options.mode);
             assert_eq!(localised.checked().check_mode(), options.mode);
+        }
+    }
+
+    #[test]
+    fn localisation_preserves_type_alias_declarations() {
+        let spec = elaborated("in x: Int\ntype T = Int\nout y: T\ny = x");
+        let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
+        assert_eq!(
+            tree(&localised).source_context().aliases(),
+            tree(&spec).source_context().aliases()
+        );
+        let source = tree(&localised).to_string();
+        assert!(
+            source.contains("in x: Int\ntype T = Int\nout y: Int"),
+            "localized source lost alias or its position: {source}"
+        );
+    }
+
+    #[test]
+    fn localisation_preserves_generic_alias_declarations() {
+        let spec = elaborated(
+            "use experimental::{generics}\ntype Box<T> = List<T>\nin x: Box<Int>\nout y: Box<Int>\ny = x",
+        );
+        let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
+        let source = tree(&localised).to_string();
+        assert!(source.contains("type Box<T> = List<T>"), "{source}");
+        crate::lang::dsrv::parser::parse_str(&source).expect("localized source reparses");
+    }
+
+    #[test]
+    fn localised_generic_aliases_with_nested_types_reparse() {
+        for alias in [
+            "type Shape<T> = (List<T>, Map<T>, Expr<T>, (T -> T))",
+            "type Shape<T> = Struct<\"field name\": T, ...>",
+            "type Shape<T> = Union<Empty, Item: T>",
+        ] {
+            let input = format!(
+                "use experimental::{{generics, tagged_unions}}\n{alias}\nin x: Int\nout y: Int\ny = x"
+            );
+            let spec = elaborated(&input);
+            let localised = spec.try_localise(&vec![VarName::new("y")]).unwrap();
+            let displayed = tree(&localised).to_string();
+            assert!(displayed.contains("type Shape<T>"), "{displayed}");
+            crate::lang::dsrv::parser::parse_str(&displayed)
+                .unwrap_or_else(|error| panic!("{displayed}: {error}"));
         }
     }
 

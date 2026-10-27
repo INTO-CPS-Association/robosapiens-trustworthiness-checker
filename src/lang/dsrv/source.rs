@@ -513,6 +513,82 @@ pub(crate) enum SourceTypeKind {
     Union(EcoVec<SourceAlternative>),
 }
 
+impl fmt::Display for SourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let list = |f: &mut fmt::Formatter<'_>, types: &[SourceType]| {
+            for (index, ty) in types.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{ty}")?;
+            }
+            Ok(())
+        };
+        match &self.kind {
+            SourceTypeKind::Named(name, args) => {
+                write!(f, "{name}")?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    list(f, args)?;
+                    write!(f, ">")?;
+                }
+                Ok(())
+            }
+            SourceTypeKind::Int => write!(f, "Int"),
+            SourceTypeKind::Float => write!(f, "Float"),
+            SourceTypeKind::Str => write!(f, "Str"),
+            SourceTypeKind::Bool => write!(f, "Bool"),
+            SourceTypeKind::Unit => write!(f, "Unit"),
+            SourceTypeKind::Any => write!(f, "Any"),
+            SourceTypeKind::List(ty) => write!(f, "List<{ty}>"),
+            SourceTypeKind::Map(ty) => write!(f, "Map<{ty}>"),
+            SourceTypeKind::Expr(ty) => write!(f, "Expr<{ty}>"),
+            SourceTypeKind::Tuple(types) => {
+                write!(f, "(")?;
+                list(f, types)?;
+                if types.len() == 1 {
+                    write!(f, ",")?;
+                }
+                write!(f, ")")
+            }
+            SourceTypeKind::Function(args, result) => {
+                write!(f, "(")?;
+                list(f, args)?;
+                write!(f, " -> {result})")
+            }
+            SourceTypeKind::Struct(fields, open) => {
+                write!(f, "Struct<")?;
+                for (index, (name, ty)) in fields.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{name:?}: {ty}")?;
+                }
+                if *open {
+                    if !fields.is_empty() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "...")?;
+                }
+                write!(f, ">")
+            }
+            SourceTypeKind::Union(alternatives) => {
+                write!(f, "Union<")?;
+                for (index, alternative) in alternatives.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", alternative.tag)?;
+                    if let Some(payload) = &alternative.payload {
+                        write!(f, ": {payload}")?;
+                    }
+                }
+                write!(f, ">")
+            }
+        }
+    }
+}
+
 /// One alternative of a source-level union type, before its payload resolves.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct SourceAlternative {

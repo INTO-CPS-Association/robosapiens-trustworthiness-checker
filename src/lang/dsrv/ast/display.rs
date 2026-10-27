@@ -270,10 +270,19 @@ fn fmt_specification<'a>(
                 writeln!(f, "{name} = {expression}")?;
             }
             Declaration::TypeAlias { name, .. } => {
-                let ty = spec
-                    .source_context
-                    .get(&TypePath::local(name.clone()))
-                    .ok_or(Error)?;
+                let path = TypePath::local(name.clone());
+                if let Some(alias) = spec.source_context.generic().get(&path) {
+                    let parameters = alias
+                        .parameters
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let internal = if alias.internal { "internal " } else { "" };
+                    writeln!(f, "{internal}type {name}<{parameters}> = {}", alias.ty)?;
+                    continue;
+                }
+                let ty = spec.source_context.get(&path).ok_or(Error)?;
                 writeln!(f, "type {name} = {}", SourceTypeDisplay(ty))?;
             }
         }
