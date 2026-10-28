@@ -2036,7 +2036,7 @@ async fn dataflow_matches_arithmetic(executor: Rc<LocalExecutor<'static>>) {
     .await;
 }
 
-// SYN-R15/SYN-R16/E1: generic dataflow, the checked/specialized dataflow
+// Generic dataflow, the checked/specialized dataflow
 // runtime, and the semi-sync reference must agree on revised operators.
 #[apply(async_test)]
 async fn dataflow_revised_operators_match_all_runtime_references(
@@ -2080,7 +2080,7 @@ async fn dataflow_revised_operators_match_all_runtime_references(
         ]
     );
 
-    // SYN-R11: brackets remain temporal history access in the same parity harness.
+    // Brackets remain temporal history access in the same parity harness.
     let temporal = elaborated("in x: Int\nout delayed: Int\ndelayed = x[1]");
     let trace = assert_runtime_parity(
         executor,
@@ -2097,7 +2097,7 @@ async fn dataflow_revised_operators_match_all_runtime_references(
     );
 }
 
-// SYN-R19/E3: revised operators survive source replacement through both
+// Revised operators survive source replacement through both
 // reconfigurable forms, including an explicit scope and trailing comma.
 #[apply(async_test)]
 async fn reconfigurable_revised_operator_sources_match_static_results(
@@ -2147,7 +2147,7 @@ async fn reconfigurable_revised_operator_sources_match_static_results(
     );
 }
 
-// SYN-R19/E3: a source whose revised expression is statically invalid is
+// A source whose revised expression is statically invalid is
 // rejected during nested compilation, before an output row is published.
 #[test]
 fn reconfigured_negative_integer_power_reports_source_context() {

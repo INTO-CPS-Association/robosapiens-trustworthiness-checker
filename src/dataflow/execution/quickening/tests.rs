@@ -102,7 +102,7 @@ fn add_graph(left: BoundRef, right: BoundRef) -> BoundEvaluationGraph {
     binary_graph(BinaryOperator::Add, left, right)
 }
 
-// SYN-R15/SYN-R16/E1: a quickened scalar island executes checked integer power
+// A quickened scalar island executes checked integer power
 // and declines the row on an arithmetic error without publishing a replacement.
 #[test]
 fn quickened_integer_power_matches_canonical_and_rejects_negative_exponents() {

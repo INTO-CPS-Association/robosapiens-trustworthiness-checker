@@ -1,7 +1,7 @@
 //! Every `def` of a program, with its body already inlined.
 //!
 //! A def's body is an expression, and an expression cannot be erased into a
-//! structural form the way a type can (S16). So a body travels as a **tree
+//! structural form the way a type can. So a body travels as a **tree
 //! of its own**: built once per module, fully inlined against what its
 //! imports gave it, and copied into each caller from there.
 //!
@@ -76,7 +76,7 @@ pub(crate) struct Entry {
     pub(crate) parameters: EcoVec<(VarName, SourceType)>,
     pub(crate) type_parameters: EcoVec<TypeName>,
     pub(crate) result: SourceType,
-    /// Hidden from importers, usable inside its own module (S12).
+    /// Hidden from importers, usable inside its own module.
     pub(crate) internal: bool,
     /// The body, inlined, in a tree this entry owns.
     pub(crate) body: ParsedExpr,
@@ -120,7 +120,7 @@ impl FunctionTable {
     }
 
     /// Every def a module declared, the internal ones included: what that
-    /// module's own text may call (S12).
+    /// module's own text may call.
     fn declared(&self, module: &[ModuleName]) -> Vec<(&VarName, &Entry)> {
         self.entries
             .iter()
@@ -203,7 +203,7 @@ fn add_module(
     let id = LexicalId::from_index(table.lexicals.len());
 
     // What this module's own bodies may call: its imports, then its own
-    // defs, so a local name wins as it does for types (S11). A constant
+    // defs, so a local name wins as it does for types. A constant
     // they name is this module's, folded here rather than at a caller that
     // may name something else by it.
     let mut scope = scope_of(&lexical.imported, table);
@@ -293,7 +293,7 @@ fn add_module(
 pub(crate) struct Callable {
     table: AstShared<FunctionTable>,
     /// The environment of the module whose text this is. Its own defs are
-    /// callable bare, the ones it keeps internal included (S12).
+    /// callable bare, the ones it keeps internal included.
     own: LexicalId,
 }
 
@@ -509,7 +509,7 @@ impl Callable {
         let mut scope = scope_of(&lexical.imported, &self.table);
         scope.constants = Some(&lexical.constants);
         // A file's own defs win over the ones it imported, as types do
-        // (S11), and a file may call the ones it keeps to itself.
+        // and a file may call the ones it keeps to itself.
         for (name, entry) in self.table.declared(&lexical.module) {
             scope.bare.insert(name.clone(), entry.as_def());
             scope

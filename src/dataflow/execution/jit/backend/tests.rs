@@ -308,7 +308,7 @@ fn integer_and_float_power_activate_native_execution() {
     );
 }
 
-// SYN-R15/E1: inequality itself, rather than an unrelated scalar operation,
+// Inequality itself, rather than an unrelated scalar operation,
 // must produce a native artifact and agree with the canonical monitor.
 #[test]
 fn inequality_activates_native_execution() {
@@ -343,7 +343,7 @@ fn native_integer_power_rejects_negative_exponents_and_overflow() {
     }
 }
 
-// SYN-R16/E1: the native path must preserve the complete i64 exponent rather
+// The native path must preserve the complete i64 exponent rather
 // than narrowing it before checking the negative-exponent error.
 #[test]
 fn native_integer_power_rejects_i64_min_exponent_without_wrapping() {

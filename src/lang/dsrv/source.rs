@@ -481,7 +481,7 @@ pub(crate) struct AliasDeclaration {
     /// a type; an alias with parameters is a way of making one.
     pub parameters: EcoVec<TypeName>,
     /// An internal alias may be used inside the module that declares it and
-    /// is never reachable from another one (S12).
+    /// is never reachable from another one.
     pub internal: bool,
     pub ty: SourceType,
     pub span: Span,

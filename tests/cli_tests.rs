@@ -630,7 +630,7 @@ mod integration_tests {
         );
     }
 
-    // SYN-R06: an overflowing source literal fails at the CLI boundary with
+    // An overflowing source literal fails at the CLI boundary with
     // diagnostics instead of aborting or being accepted as infinity.
     #[apply(async_test)]
     async fn test_dsrv_syntax_revision_invalid_float_literal() {

@@ -212,7 +212,7 @@ impl UseTree {
     }
 
     /// Whether this is the header line that configures the file rather than
-    /// an import of an item, which decides where it may appear (S9).
+    /// an import of an item, which decides where it may appear.
     ///
     /// The first segment decides, so `use experimental::tagged_unions` and
     /// `use experimental::{…}` are both header lines.

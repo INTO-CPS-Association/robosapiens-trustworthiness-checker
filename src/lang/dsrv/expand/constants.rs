@@ -1,7 +1,7 @@
 //! Every `const` of a program, folded to the literal it stands for.
 //!
 //! A constant is not a def of no arguments. A def's body travels as a tree
-//! and is copied into each caller (S18); a constant's body is **evaluated
+//! and is copied into each caller; a constant's body is **evaluated
 //! once**, and what it yields is a value. The difference is forced by where
 //! a constant has to be usable: a stream offset `x[n]` holds a number, not
 //! a subtree, so nothing that only copies trees could put a constant there.
@@ -34,7 +34,7 @@ use super::{DsrvExpandError, functions, graph};
 /// One constant, already folded.
 #[derive(Debug)]
 pub(crate) struct ConstEntry {
-    /// Hidden from importers, usable inside its own module (S12).
+    /// Hidden from importers, usable inside its own module.
     pub(crate) internal: bool,
     pub(crate) value: SyntaxLiteral,
 }
@@ -59,7 +59,7 @@ impl ConstantTable {
     }
 
     /// Every constant a module declared, the internal ones included: what
-    /// that module's own text may name (S12).
+    /// that module's own text may name.
     pub(crate) fn declared(&self, module: &[ModuleName]) -> Vec<(&VarName, &ConstEntry)> {
         self.entries
             .iter()
@@ -149,7 +149,7 @@ fn add_module(
     }
 
     // What this module's own bodies may name: its imports, then its own
-    // constants, so a local name wins as it does for types (S11).
+    // constants, so a local name wins as it does for types.
     let imported = functions::imported_modules(path, declarations)?;
     let mut scope = ConstScope::default();
     for (module, bare) in &imported {
@@ -426,7 +426,7 @@ impl Constants {
             .map(|(_, entry)| &entry.value)
     }
 
-    /// What this module may name, written into a node's identity (S20).
+    /// What this module may name, written into a node's identity.
     pub(crate) fn describe(&self, out: &mut String) {
         use std::fmt::Write as _;
         if self.is_empty() {
@@ -449,8 +449,8 @@ impl Constants {
     }
 }
 
-/// Two are the same where they offer the same constants, which sharing a
-/// table and standing in the same module is what says (S20).
+/// Two `Constants` values are equal when they share a table and module and
+/// have the same imports.
 impl PartialEq for Constants {
     fn eq(&self, other: &Self) -> bool {
         if self.is_empty() && other.is_empty() {

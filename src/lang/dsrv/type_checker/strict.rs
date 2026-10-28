@@ -62,7 +62,7 @@ mod tests {
         )));
     }
 
-    // SYN-R12/V2: both semantic drivers implement the complete numeric power table.
+    // both semantic drivers implement the complete numeric power table.
     #[test]
     fn power_type_table_and_static_negative_exponent_rule() {
         for (source, expected) in [
@@ -153,7 +153,7 @@ mod tests {
         }
     }
 
-    // SYN-R12/V1: inequality has equality's admissibility, rather than ordering's.
+    // inequality has equality's admissibility, rather than ordering's.
     #[test]
     fn inequality_shares_equality_admissibility_in_strict_and_gradual_modes() {
         for source in [

@@ -1,10 +1,9 @@
 //! Every module's namespace, built in dependency order.
 //!
-//! A module's `SourceContext` is self-contained (S14): the names it imports
+//! A module's `SourceContext` is self-contained: the names it imports
 //! are copied into it, so looking one up needs no graph and a node carries
 //! one `Rc` as before. Imports are applied in tiers so that a local
-//! declaration shadows a glob silently while an explicit clash is an error
-//! (S15).
+//! declaration shadows a glob silently while an explicit clash is an error.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -70,7 +69,7 @@ pub(super) fn imports_in(
 
 /// Modules ordered so that each follows everything it imports.
 ///
-/// A cycle is an error naming the path (S13): alias-only modules would
+/// A cycle is an error naming the path: alias-only modules would
 /// sometimes admit a fixpoint, but the simpler rule is the agreed one.
 pub(super) fn dependency_order(
     sources: &ModuleSources,
@@ -125,7 +124,7 @@ fn visit(
 /// The items one import contributes, keyed as the importer will write them.
 ///
 /// A resolved alias travels as its type; a generic alias travels as a declaration
-/// whose body was resolved in the module that declared it (S16).
+/// whose body was resolved in the module that declared it.
 fn contributed(
     import: &Import,
     graph: &ModuleGraph,
@@ -135,7 +134,7 @@ fn contributed(
     };
     let mut taken = BTreeMap::new();
     let mut add = |key: TypePath, under: TypePath| -> Result<(), DsrvExpandError> {
-        // An internal name stays in the module that declared it (S12).
+        // An internal name stays in the module that declared it.
         if exporter.is_internal(&key) {
             return Err(DsrvExpandError::InternalImport {
                 name: format!("{}::{key}", show_path(&import.module)),
@@ -229,7 +228,7 @@ fn build_module(
     let config = language::resolve_language(declarations, requested_dialect)?;
 
     // Three tiers, merged by precedence: a local declaration shadows a glob
-    // silently, and an explicit clash is an error (S15).
+    // silently, and an explicit clash is an error.
     let mut glob: BTreeMap<TypePath, AliasDeclaration> = BTreeMap::new();
     let mut explicit: BTreeMap<TypePath, AliasDeclaration> = BTreeMap::new();
     for declaration in declarations {
@@ -453,7 +452,7 @@ mod tests {
         assert!(root_of(&graph).get(&local("Colour")).is_none());
     }
 
-    /// S11: a declaration in the file displaces a glob import without
+    /// A declaration in the file displaces a glob import without
     /// complaint.
     #[test]
     fn a_local_declaration_shadows_a_glob_silently() {
@@ -530,7 +529,7 @@ mod tests {
         EcoString::from(s)
     }
 
-    /// S10: importing a tag records the union it builds, so a bare
+    /// Importing a tag records the union it builds, so a bare
     /// constructor resolves where nothing else says which union it is.
     #[test]
     fn importing_a_tag_records_the_union_it_builds() {
@@ -640,7 +639,7 @@ mod tests {
         );
     }
 
-    /// S16: a name private to the exporter is resolved away, so the importer
+    /// A name private to the exporter is resolved away, so the importer
     /// never needs it in scope.
     #[test]
     fn a_generic_aliases_private_names_are_resolved_before_it_travels() {
@@ -712,7 +711,7 @@ mod tests {
         );
     }
 
-    /// S12: an internal name is usable inside its module and invisible to
+    /// An internal name is usable inside its module and invisible to
     /// every importer.
     #[test]
     fn an_internal_name_is_not_brought_in_by_a_glob() {
@@ -755,7 +754,7 @@ mod tests {
         assert_eq!(store.get(&local("Shown")), Some(&StreamType::Int));
     }
 
-    /// The reason S16 resolves a generic alias rather than copying it: an
+    /// A generic alias is resolved rather than copied because an
     /// exported generic alias may rest on an internal name, which the importer
     /// must never need.
     #[test]
@@ -791,7 +790,7 @@ mod tests {
 }
 
 /// A generic alias with every non-parameter name resolved in the module that
-/// declared it, so it can be copied into another namespace (S16).
+/// declared it, so it can be copied into another namespace.
 ///
 /// A parameter stays free. An application of another of the exporter's
 /// generic aliases are inlined, because it cannot be resolved to a structural type
@@ -975,7 +974,7 @@ mod function_tests {
         .expect("built");
     }
 
-    /// S12 for functions: a glob skips an internal def silently, exactly as
+    /// For functions, a glob skips an internal def silently, exactly as
     /// it skips an internal type. The call is left alone and fails later as
     /// an unknown name.
     #[test]

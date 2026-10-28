@@ -450,10 +450,10 @@ pub(crate) fn resolve_language(
         let (keyword, span) = match declaration {
             ParsedDeclaration::Language(_, span) => ("language", *span),
             // `mod` pulls a file into the program, so it stays in the header
-            // region (S6) even though an item import no longer does (S9).
+            // region even though an item import no longer does.
             ParsedDeclaration::Mod { span, .. } => ("mod", *span),
             // An item import populates a namespace rather than configuring
-            // the file, so it belongs to the body and may sit anywhere (S9).
+            // the file, so it belongs to the body and may sit anywhere.
             ParsedDeclaration::Use { tree, span } => {
                 if !tree.is_experimental() {
                     body_started = true;

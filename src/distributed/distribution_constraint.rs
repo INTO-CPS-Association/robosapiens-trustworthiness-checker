@@ -732,7 +732,7 @@ mod tests {
         }
     }
 
-    // SYN-R17/E2: compact constraints are partial evaluators. Arithmetic
+    // Compact constraints are partial evaluators. Arithmetic
     // failures become absence, unlike normal monitor execution.
     #[test]
     fn compact_power_evaluation_returns_none_for_missing_and_failed_values() {
@@ -818,7 +818,7 @@ mod tests {
         );
     }
 
-    // SYN-R18/E2: inequality survives constraint lowering and retains its
+    // Inequality survives constraint lowering and retains its
     // first-class operator metadata.
     #[test]
     fn inequality_constraints_lower_with_dependencies_and_direct_semantics() {
@@ -859,7 +859,7 @@ mod tests {
         }
     }
 
-    // SYN-R17/V4: floating overflow is a successful IEEE value in constraints.
+    // Floating overflow is a successful IEEE value in constraints.
     #[test]
     fn compact_float_power_overflow_remains_some_infinity() {
         let spec = ("out constraint\nconstraint = 1e308 ** 2.0")

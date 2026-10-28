@@ -13,7 +13,7 @@ fn typed_monitor_mixed_rows_avoid_the_value_interface() {
     assert_eq!(monitor.evaluate(&(4, 0.5)), (2.0,));
 }
 
-// SYN-R15/E1: checked typed execution preserves the canonical result type and
+// Checked typed execution preserves the canonical result type and
 // value for both revised operators.
 #[test]
 fn typed_monitor_evaluates_power_and_inequality() {
@@ -150,7 +150,7 @@ fn adaptive_jit_preserves_rounding_when_native_tier_activates() {
     );
 }
 
-// SYN-R15/E1: the typed monitor reaches a direct native artifact for the actual
+// The typed monitor reaches a direct native artifact for the actual
 // revised operators, not just for an unrelated arithmetic prefix.
 #[cfg(feature = "jit")]
 #[test]

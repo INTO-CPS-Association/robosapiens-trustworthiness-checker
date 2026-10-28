@@ -78,7 +78,7 @@ fn parse_spec(source: &str) -> ElaboratedDsrvSpecification {
     )
 }
 
-// SYN-R15/R18/E1/E2: the in-process distributed runtime carries revised scalar
+// The in-process distributed runtime carries revised scalar
 // operators through its normal scheduling and output path.
 #[apply(async_test)]
 async fn test_distributed_revised_operators(executor: Rc<LocalExecutor<'static>>) {

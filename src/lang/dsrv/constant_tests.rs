@@ -332,7 +332,7 @@ fn a_constant_may_be_named_through_its_module() {
     );
 }
 
-/// S12 for constants: a glob skips an internal one silently, exactly as it
+/// A glob skips an internal one silently, exactly as it
 /// skips an internal type or def.
 #[test]
 fn a_glob_does_not_bring_an_internal_constant() {

@@ -2082,7 +2082,7 @@ mod tests {
         )
     }
 
-    // SYN-R01: revised operators remain distinct AST nodes and retain source spans.
+    // revised operators remain distinct AST nodes and retain source spans.
     #[test]
     fn syntax_revision_operators_are_first_class_and_display_roundtrip() {
         for (source, operator) in [
@@ -2139,7 +2139,7 @@ mod tests {
         }
     }
 
-    // SYN-R02/SYN-R03: keyword aliases use the symbolic precedence table.
+    // Keyword aliases use the symbolic precedence table.
     #[test]
     fn boolean_keyword_aliases_match_symbolic_forms() {
         for (symbolic, keyword) in [
@@ -2207,7 +2207,7 @@ mod tests {
         );
     }
 
-    // SYN-R02: aliases are reserved in identifier positions, but only at token boundaries.
+    // Aliases are reserved in identifier positions, but only at token boundaries.
     #[test]
     fn boolean_keywords_are_reserved_without_affecting_neighbouring_identifiers() {
         for source in [
@@ -2257,7 +2257,7 @@ mod tests {
         );
     }
 
-    // SYN-R03/SYN-R04: signed RHS operands are unary AST nodes, not signed tokens.
+    // Signed RHS operands are unary AST nodes, not signed tokens.
     #[test]
     fn power_accepts_signed_rhs_but_rejects_unary_plus_and_source_i64_min() {
         assert!(matches!(
@@ -2277,7 +2277,7 @@ mod tests {
         }
     }
 
-    // SYN-R05/SYN-R06: numeric source boundaries are errors, not successful prefixes or panics.
+    // Numeric source boundaries are errors, not successful prefixes or panics.
     #[test]
     fn numeric_literal_matrix_and_full_input_consumption() {
         for (source, expected) in [
@@ -2356,7 +2356,7 @@ mod tests {
         }
     }
 
-    // SYN-R06: a second dot after a scientific exponent is not a valid
+    // A second dot after a scientific exponent is not a valid
     // specification, even if the lexer can otherwise interpret the suffix as
     // field syntax.
     #[test]
@@ -2374,7 +2374,7 @@ mod tests {
         }
     }
 
-    // SYN-R05/SYN-R11: unsigned offsets and tuple-field indices have a checked parser boundary.
+    // Unsigned offsets and tuple-field indices have a checked parser boundary.
     #[test]
     fn temporal_and_field_indices_accept_u64_max_but_not_overflow() {
         let expression = parse_expr("x[18446744073709551615]").unwrap();
@@ -2403,7 +2403,7 @@ mod tests {
         ));
     }
 
-    // SYN-R07/SYN-R09: every changed value/call family accepts exactly one trailing comma.
+    // Every changed value/call family accepts exactly one trailing comma.
     #[test]
     fn approved_value_and_builtin_lists_accept_one_trailing_comma_only() {
         let pairs = [
@@ -2485,7 +2485,7 @@ mod tests {
         );
     }
 
-    // SYN-R08: type wrappers and tuple/struct forms use the same one-comma boundary.
+    // Type wrappers and tuple/struct forms use the same one-comma boundary.
     #[test]
     fn approved_type_lists_accept_one_trailing_comma() {
         let pairs = [
@@ -2560,7 +2560,7 @@ mod tests {
         assert!(parse_expr(r#"\x: Int, y: Int, -> x"#).is_err());
     }
 
-    // SYN-R10: canonical else-if nesting is right-nested and preserves dangling-else attachment.
+    // Canonical else-if nesting is right-nested and preserves dangling-else attachment.
     #[test]
     fn else_if_chains_and_temporal_brackets_keep_their_existing_ast_forms() {
         let source = "if a then 1 else if b then 2 else 3";
@@ -2602,7 +2602,7 @@ mod tests {
         );
     }
 
-    // SYN-P01/P03/P04/P06: bounded generators exercise totality and source/display composition.
+    // Bounded generators exercise totality and source/display composition.
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -2672,7 +2672,7 @@ mod tests {
             }
         }
 
-        // SYN-P06: this is a distinct AST rendering property, rather than a
+        // This is a distinct AST rendering property, rather than a
         // relabelled literal/comma property. The generator guarantees both
         // revised operators and a negative-base power survive shrinking.
         #[test]

@@ -143,7 +143,7 @@ fn flatten(
 
 /// Split a path into the module it reaches and the names inside it.
 ///
-/// The split is the lexical one (S1): the leading lowercase run names the
+/// The split is the lexical one: the leading lowercase run names the
 /// module, and the capitalised segments after it name a type and its tag.
 fn classify(
     segments: &[PathSegment],

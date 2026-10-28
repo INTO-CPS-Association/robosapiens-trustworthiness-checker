@@ -3938,7 +3938,7 @@ async fn test_dynamic_monitor_untimed(executor: Rc<LocalExecutor<'static>>) -> a
     Ok(())
 }
 
-// SYN-R19/E3: one public runtime replacement test covers revised source
+// One public runtime replacement test covers revised source
 // syntax without repeating the arithmetic matrix in every transport fixture.
 #[apply(async_test)]
 async fn test_revised_dynamic_source_replacement(

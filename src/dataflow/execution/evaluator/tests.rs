@@ -27,7 +27,7 @@ fn add_graph(left: i64, right: i64) -> BoundEvaluationGraph {
     )
 }
 
-// SYN-R15/SYN-R16/E1: the canonical evaluator owns the same checked operation
+// The canonical evaluator owns the same checked operation
 // semantics used by the accelerated execution tiers.
 #[test]
 fn canonical_evaluator_evaluates_revised_binary_operators_and_terminates_errors() {
@@ -290,7 +290,7 @@ fn exact_nested_expression_reconfiguration_keeps_warm_state() {
     );
 }
 
-// SYN-R19/E3: runtime source replacement compiles revised operators and does
+// Runtime source replacement compiles revised operators and does
 // not retain the previous expression's result.
 #[test]
 fn revised_operators_work_through_dynamic_reconfiguration() {

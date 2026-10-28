@@ -256,7 +256,7 @@ fn self_is_recognised_as_a_segment_not_a_module_called_self() {
     assert!(matches!(found[0].path()[0], PathSegment::Zelf));
 }
 
-/// S9: an item import populates a namespace rather than configuring the file,
+/// an item import populates a namespace rather than configuring the file,
 /// so it may follow a declaration. `lib/std/option.dsrv` writes exactly this.
 #[test]
 fn an_item_import_may_follow_a_declaration() {
@@ -417,7 +417,7 @@ fn declaring_a_module_needs_the_experiment() {
     );
 }
 
-/// S6: `mod` pulls a file into the program, so unlike an item import it stays
+/// `mod` pulls a file into the program, so unlike an item import it stays
 /// in the header region.
 #[test]
 fn a_module_declaration_may_not_follow_a_declaration() {
@@ -687,7 +687,7 @@ fn text_supplied_at_runtime_may_call_an_imported_def() {
 }
 
 /// What a module keeps to itself stays hidden from the text supplied to
-/// another module's node, as it is from that module's own expressions (S12).
+/// another module's node, as it is from that module's own expressions.
 #[test]
 fn text_supplied_at_runtime_cannot_call_an_internal_def() {
     let spec = program(

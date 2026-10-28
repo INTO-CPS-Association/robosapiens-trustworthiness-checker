@@ -1260,7 +1260,7 @@ mod tests {
         assert!(futures::StreamExt::next(&mut stream).await.is_none());
     }
 
-    // SYN-R18/E2: NotEqual must compile as the Boolean complement of equality,
+    // NotEqual must compile as the Boolean complement of equality,
     // including symbolic inputs and constant-folded cases.
     #[test]
     fn sat_inequality_matches_direct_constraint_truth_and_satisfiability() {

@@ -151,7 +151,7 @@ fn power_and_inequality_have_canonical_value_semantics() {
     );
 }
 
-// SYN-R13/V3: checked integer power must use the complete i64 exponent domain.
+// Checked integer power must use the complete i64 exponent domain.
 #[test]
 fn checked_integer_power_boundaries_are_logarithmic_and_structured() {
     let exact = [
@@ -222,7 +222,7 @@ fn checked_integer_power_boundaries_are_logarithmic_and_structured() {
     }
 }
 
-// SYN-R14/V4: Float-containing powers use f64::powf, including IEEE special values.
+// Float-containing powers use f64::powf, including IEEE special values.
 #[test]
 fn float_power_uses_promoted_ieee_values() {
     let finite = [
@@ -285,7 +285,7 @@ fn float_power_uses_promoted_ieee_values() {
     assert_eq!(underflow, 0.0);
 }
 
-// SYN-R12/V1/P05: inequality is the direct complement of canonical equality for every Value.
+// Inequality is the direct complement of canonical equality for every Value.
 #[test]
 fn inequality_complements_equality_for_special_and_nested_values() {
     let mut map = BTreeMap::new();
@@ -355,7 +355,7 @@ fn arb_supported_value() -> BoxedStrategy<Value> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
-    // SYN-P02: the canonical checked-power operation agrees with an independent oracle.
+    // The canonical checked-power operation agrees with an independent oracle.
     #[test]
     fn integer_power_matches_the_generated_checked_oracle(case in arb_int_power_case()) {
         let actual = binary(
@@ -376,7 +376,7 @@ proptest! {
         }
     }
 
-    // SYN-P05: arbitrary supported values retain the canonical equality complement invariant.
+    // Arbitrary supported values retain the canonical equality complement invariant.
     #[test]
     fn generated_inequality_is_the_canonical_equality_complement(
         left in arb_supported_value(),

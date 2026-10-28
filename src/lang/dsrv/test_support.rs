@@ -371,7 +371,7 @@ fn arb_small_int_display_expr() -> BoxedStrategy<Expr> {
     .boxed()
 }
 
-/// Bounded, type-shaped expressions for SYN-P06.
+/// Bounded, type-shaped expressions for generated tests.
 ///
 /// Every generated tree is an integer expression containing a first-class
 /// `NotEqual`, a `Power` with a syntactically negative base, a `Neg` node, and

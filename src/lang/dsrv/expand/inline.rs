@@ -191,7 +191,7 @@ pub(crate) fn inline_functions(
     // body, remains valid for the whole pass.
     let trees: Vec<ParsedExprRef<'_>> = held.iter().map(|tree| tree.as_ref()).collect();
     // Imports first, then this file's own defs, so a local name wins as it
-    // does for types (S11).
+    // does for types.
     let mut scope = imported;
     // A def's body is read with its parameters bound, as at a call.
     let mut parameters_at: BTreeMap<usize, Vec<VarName>> = declared
