@@ -2716,6 +2716,9 @@ fn lifecycle_trace_is_append_only_and_empty_calls_do_not_check_poison() {
 
 #[test]
 fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
+    // The constructor accepts a set, whose order follows interned identifiers.
+    // A name may already have been interned by another test.
+    let _ = VarName::new("absent");
     let source = VarName::new("source");
     let names = [
         "integer", "boolean", "string", "list", "tuple", "map", "unit", "absent", "waiting",
@@ -2771,32 +2774,39 @@ fn lifecycle_trace_preserves_complete_declared_rows_in_output_order() {
     .check_and_elaborate(crate::TypeCheckOptions::GRADUAL)
     .without_warnings()
     .expect("complete-value spec should check");
+    let expected_order = crate::core::Specification::output_vars_in_order(&specification);
     let mut monitor = DataflowMonitor::compile_with_semantics(specification, Semantics::Untimed)
         .expect("complete-value spec should compile");
     let mut output = Vec::new();
     monitor
         .evaluate_trace([[Value::NoVal]], &mut output)
         .unwrap();
-    assert_eq!(
-        monitor.output_vars(),
-        &names
-            .iter()
-            .map(|name| VarName::new(*name))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(monitor.output_vars(), &expected_order);
     assert_eq!(
         output,
-        vec![vec![
-            Value::Int(7),
-            Value::Bool(true),
-            Value::Str("a".into()),
-            Value::List(vec![Value::Int(1), Value::Int(2)].into()),
-            Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
-            Value::Map(ValueMap::from([("k".into(), Value::Int(3))])),
-            Value::Unit,
-            Value::NoVal,
-            Value::Deferred,
-        ]]
+        vec![
+            expected_order
+                .iter()
+                .map(|name| {
+                    let values = [
+                        Value::Int(7),
+                        Value::Bool(true),
+                        Value::Str("a".into()),
+                        Value::List(vec![Value::Int(1), Value::Int(2)].into()),
+                        Value::Tuple(vec![Value::Int(1), Value::Bool(false)].into()),
+                        Value::Map(ValueMap::from([("k".into(), Value::Int(3))])),
+                        Value::Unit,
+                        Value::NoVal,
+                        Value::Deferred,
+                    ];
+                    values[names
+                        .iter()
+                        .position(|candidate| name.name() == *candidate)
+                        .unwrap()]
+                    .clone()
+                })
+                .collect::<Vec<_>>()
+        ]
     );
 }
 
