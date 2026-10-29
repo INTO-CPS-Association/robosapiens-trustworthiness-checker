@@ -43,7 +43,10 @@ pub trait StreamContext: 'static {
 
     fn restricted_subcontext(&self, vs: EcoVec<VarName>, history_length: usize) -> Self;
 
-    fn subcontext_excluding(&self, var: &VarName, history_length: usize) -> Self;
+    /// A subcontext over this context's external streams
+    /// Used for DUPs in certain runtimes that cannot handle multiple subcontexts over the same
+    /// computed streams.
+    fn external_subcontext(&self, history_length: usize) -> Self;
 
     /// Advance the clock used by the context by one step, letting all
     /// streams to progress (blocking)

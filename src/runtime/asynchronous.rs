@@ -1032,17 +1032,13 @@ where
             .build()
     }
 
-    fn subcontext_excluding(&self, excluded: &VarName, history_length: usize) -> Self {
+    fn external_subcontext(&self, history_length: usize) -> Self {
         // An automatic DUP scope is an authorization boundary, not a reason to subscribe to every
         // computed stream in the parent. Only external streams are safe to advance independently;
-        // an unused sibling output can otherwise wait on this owner while this context waits on the
+        // an unused sibling output can otherwise wait on the owner while this context waits on the
         // sibling. Explicit scopes still go through restricted_subcontext unchanged.
         self.restricted_subcontext(
-            self.external_var_names
-                .iter()
-                .filter(|var| *var != excluded)
-                .cloned()
-                .collect(),
+            self.external_var_names.iter().cloned().collect(),
             history_length,
         )
     }
@@ -1901,7 +1897,7 @@ mod tests {
         executor: Rc<LocalExecutor<'static>>,
     ) {
         // The scope lists the names in a different order from the context, as
-        // an explicit scope may, and as `subcontext_excluding` does when the
+        // an explicit scope may, and as `external_subcontext` does when the
         // names were interned in a different order from their declaration.
         let a = Box::pin(stream::iter(vec![Value::Int(1)]));
         let b = Box::pin(stream::iter(vec![Value::Str("b".into())]));

@@ -228,10 +228,10 @@ where
             .build()
     }
 
-    fn subcontext_excluding(&self, var: &VarName, history_length: usize) -> Self {
+    fn external_subcontext(&self, history_length: usize) -> Self {
         self.builder
             .partial_clone()
-            .context(self.ctx.subcontext_excluding(var, history_length))
+            .context(self.ctx.external_subcontext(history_length))
             .graph_stream(
                 self.graph_manager
                     .borrow_mut()

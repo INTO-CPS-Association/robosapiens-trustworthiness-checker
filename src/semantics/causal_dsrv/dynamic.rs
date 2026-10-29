@@ -24,11 +24,7 @@ enum RuntimeEvaluator<AC: AsyncConfig, D: CausalDomain> {
     Checked(CheckedEvaluator<AC, D>),
 }
 
-fn subcontext<AC, D>(
-    ctx: &AC::Ctx,
-    scope: ReconfigurableExprScope,
-    owner: Option<&VarName>,
-) -> AC::Ctx
+fn subcontext<AC, D>(ctx: &AC::Ctx, scope: ReconfigurableExprScope) -> AC::Ctx
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
@@ -37,10 +33,7 @@ where
 {
     match scope {
         ReconfigurableExprScope::Explicit(vars) => ctx.restricted_subcontext(vars, 1),
-        ReconfigurableExprScope::Automatic => match owner {
-            Some(owner) => ctx.subcontext_excluding(owner, 1),
-            None => ctx.subcontext(1),
-        },
+        ReconfigurableExprScope::Automatic => ctx.external_subcontext(1),
     }
 }
 
@@ -132,7 +125,7 @@ where
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    let mut ctx = subcontext::<AC, D>(ctx, scope, owner.as_ref());
+    let mut ctx = subcontext::<AC, D>(ctx, scope);
     let mut source = lift_property_stream(source);
     Box::pin(stream! {
         let mut installed: Option<(Value, LocalStream<CausalValue<D>>)> = None;
@@ -295,7 +288,7 @@ where
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    let mut ctx = subcontext::<AC, D>(ctx, scope, owner.as_ref());
+    let mut ctx = subcontext::<AC, D>(ctx, scope);
     let mut source = lift_property_stream(source);
     Box::pin(stream! {
         let mut absence = D::unit();

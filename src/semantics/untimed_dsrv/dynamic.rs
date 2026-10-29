@@ -48,10 +48,7 @@ where
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
         ReconfigurableExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        ReconfigurableExprScope::Automatic => match owner.as_ref() {
-            Some(owner) => ctx.subcontext_excluding(&owner, history_length),
-            None => ctx.subcontext(history_length),
-        },
+        ReconfigurableExprScope::Automatic => ctx.external_subcontext(history_length),
     };
     let mut eval_stream = stream_lift_base(eval_stream);
 
@@ -145,10 +142,7 @@ where
     // Create a subcontext with a history window length
     let mut subcontext = match scope {
         ReconfigurableExprScope::Explicit(vs) => ctx.restricted_subcontext(vs, history_length),
-        ReconfigurableExprScope::Automatic => match owner.as_ref() {
-            Some(owner) => ctx.subcontext_excluding(&owner, history_length),
-            None => ctx.subcontext(history_length),
-        },
+        ReconfigurableExprScope::Automatic => ctx.external_subcontext(history_length),
     };
     let mut eval_stream = stream_lift_base(eval_stream);
     let mut eval_output_stream: Option<LocalStream<Value>> = None;
