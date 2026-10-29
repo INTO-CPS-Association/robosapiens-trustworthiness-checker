@@ -75,7 +75,6 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
-        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
         evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.untyped(), ctx)
     }
@@ -90,7 +89,6 @@ impl MonitoringSemantics<CausalCheckedSemiSyncConfig<CausalSet>> for CausalDsrvS
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<CausalSet>>,
-        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
         evaluate_checked::<CausalCheckedSemiSyncConfig<CausalSet>, CausalSet>(expr, ctx)
     }
@@ -112,7 +110,6 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
-        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
         evaluate::<CausalSemiSyncConfig<D>, D>(expr.untyped(), ctx)
     }
@@ -129,7 +126,6 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<D>>,
-        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
         evaluate_checked::<CausalCheckedSemiSyncConfig<D>, D>(expr, ctx)
     }

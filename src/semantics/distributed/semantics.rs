@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use crate::VarName;
 use crate::core::LocalStream;
 use crate::core::{RuntimeFunction, Value};
 use crate::lang::dsrv::ast::{CheckedExpr, ExprRef, ExprView};
@@ -24,12 +23,8 @@ where
             .with(crate::core::RuntimeCapability::Distribution)
             .with(crate::core::RuntimeCapability::TaggedUnions);
 
-    fn to_async_stream(
-        expr: &AC::Expr,
-        ctx: &AC::Ctx,
-        owner: Option<VarName>,
-    ) -> LocalStream<AC::Val> {
-        <DistributedExprSemantics as MonitoringSemantics<AC>>::to_async_stream(expr, ctx, owner)
+    fn to_async_stream(expr: &AC::Expr, ctx: &AC::Ctx) -> LocalStream<AC::Val> {
+        <DistributedExprSemantics as MonitoringSemantics<AC>>::to_async_stream(expr, ctx)
     }
 }
 
@@ -47,11 +42,7 @@ where
             .with(crate::core::RuntimeCapability::Distribution)
             .with(crate::core::RuntimeCapability::TaggedUnions);
 
-    fn to_async_stream(
-        expr: &AC::Expr,
-        ctx: &AC::Ctx,
-        _owner: Option<VarName>,
-    ) -> LocalStream<AC::Val> {
+    fn to_async_stream(expr: &AC::Expr, ctx: &AC::Ctx) -> LocalStream<AC::Val> {
         evaluate_expr::<AC>(expr.expr().as_ref(), expr, ctx)
     }
 }

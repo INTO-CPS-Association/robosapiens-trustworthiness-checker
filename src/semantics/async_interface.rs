@@ -79,11 +79,7 @@ where
     /// `runtime::capabilities` tests each declaration against the runtime.
     const RUNTIME_CAPABILITIES: crate::core::RuntimeCapabilities;
 
-    fn to_async_stream(
-        expr: &AC::Expr,
-        ctx: &AC::Ctx,
-        owner: Option<VarName>,
-    ) -> LocalStream<AC::Val>;
+    fn to_async_stream(expr: &AC::Expr, ctx: &AC::Ctx) -> LocalStream<AC::Val>;
 }
 
 pub trait AsyncConfig: Clone + 'static {

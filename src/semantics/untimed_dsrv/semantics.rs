@@ -456,11 +456,7 @@ where
             .with(crate::core::RuntimeCapability::TaggedUnions)
             .with(crate::core::RuntimeCapability::PatternMatching);
 
-    fn to_async_stream(
-        expr: &CheckedExpr,
-        ctx: &AC::Ctx,
-        _owner: Option<VarName>,
-    ) -> LocalStream<Value> {
+    fn to_async_stream(expr: &CheckedExpr, ctx: &AC::Ctx) -> LocalStream<Value> {
         evaluate_ignoring_types::<AC>(expr.untyped(), ctx)
     }
 }
@@ -485,11 +481,7 @@ where
             .with(crate::core::RuntimeCapability::TaggedUnions)
             .with(crate::core::RuntimeCapability::PatternMatching);
 
-    fn to_async_stream(
-        expr: &CheckedExpr,
-        ctx: &AC::Ctx,
-        _owner: Option<VarName>,
-    ) -> LocalStream<Value> {
+    fn to_async_stream(expr: &CheckedExpr, ctx: &AC::Ctx) -> LocalStream<Value> {
         evaluate_checked::<AC>(expr.clone(), ctx)
     }
 }
@@ -594,7 +586,7 @@ mod tests {
 
         let values: Vec<Value> = <CheckedUntimedDsrvSemantics as MonitoringSemantics<
             ValueConfig,
-        >>::to_async_stream(&expression, &context, None)
+        >>::to_async_stream(&expression, &context)
         .take(1)
         .collect::<Vec<_>>()
         .await;
@@ -618,7 +610,6 @@ mod tests {
             <CheckedUntimedDsrvSemantics as MonitoringSemantics<ValueConfig>>::to_async_stream(
                 &expression,
                 &context,
-                None,
             );
         context.run().await;
         let values: Vec<Value> = output.collect::<Vec<_>>().await;

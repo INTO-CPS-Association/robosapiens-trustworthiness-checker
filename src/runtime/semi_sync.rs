@@ -167,7 +167,7 @@ where
         ctx: &AC::Ctx,
         starting_history: Vec<AC::Val>,
     ) -> Self {
-        let mut eval_stream = MS::to_async_stream(&expr, ctx, Some(var_name.clone())).fuse();
+        let mut eval_stream = MS::to_async_stream(&expr, ctx).fuse();
         // Evaluate together with (skipped) eval results to avoid congesting the underlying buffer
         // when starting_history is long
         let eval_stream: LocalStream<AC::Val> = Box::pin(stream! {

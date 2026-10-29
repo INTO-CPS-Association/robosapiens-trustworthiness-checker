@@ -1390,7 +1390,7 @@ where
                 let expr = model.var_expr(&var).unwrap_or_else(|| {
                     panic!("Failed to find expression for var {}", var.name().as_str())
                 });
-                let stream = S::to_async_stream(&expr, &context, Some(var.clone()));
+                let stream = S::to_async_stream(&expr, &context);
                 if tx.send(stream).is_err() {
                     warn!(?var, "Failed to send stream for var to requester");
                 }
