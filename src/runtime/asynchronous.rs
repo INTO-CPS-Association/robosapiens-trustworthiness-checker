@@ -1015,23 +1015,18 @@ where
     }
 
     fn restricted_subcontext(&self, vs: ecow::EcoVec<VarName>, history_length: usize) -> Self {
-        let vs = vs.into_iter().collect::<Vec<_>>();
-        let input_streams: Vec<_> = self
+        // Ensure varname-stream pair ordering is maintained
+        let (var_names, input_streams): (Vec<_>, Vec<_>) = self
             .var_names
             .iter()
-            .filter_map(|var| {
-                if vs.contains(var) {
-                    self.var(var).map(retain_stream)
-                } else {
-                    None
-                }
-            })
-            .collect();
+            .filter(|var| vs.contains(var))
+            .filter_map(|var| Some((var.clone(), retain_stream(self.var(var)?))))
+            .unzip();
 
         // Recursively create a new context based on ourself
         self.builder
             .partial_clone()
-            .var_names(vs)
+            .var_names(var_names)
             .input_streams(input_streams)
             .history_length(history_length)
             .build()
@@ -1899,5 +1894,30 @@ mod tests {
         // figure out when streams end
         let res: Vec<_> = var_stream.collect().await;
         assert_eq!(exp, res);
+    }
+
+    #[apply(async_test)]
+    async fn restricted_subcontext_keeps_each_stream_with_its_name(
+        executor: Rc<LocalExecutor<'static>>,
+    ) {
+        // The scope lists the names in a different order from the context, as
+        // an explicit scope may, and as `subcontext_excluding` does when the
+        // names were interned in a different order from their declaration.
+        let a = Box::pin(stream::iter(vec![Value::Int(1)]));
+        let b = Box::pin(stream::iter(vec![Value::Str("b".into())]));
+        let mut ctx = Context::<TestConfig>::new(
+            executor.clone(),
+            vec!["a".into(), "b".into()],
+            vec![a, b],
+            10,
+        );
+        let mut subcontext = ctx.restricted_subcontext(ecow::eco_vec!["b".into(), "a".into()], 10);
+        let a = subcontext.var(&"a".into()).unwrap();
+        let b = subcontext.var(&"b".into()).unwrap();
+        subcontext.run().await;
+        ctx.run().await;
+
+        assert_eq!(a.collect::<Vec<_>>().await, vec![Value::Int(1)]);
+        assert_eq!(b.collect::<Vec<_>>().await, vec![Value::Str("b".into())]);
     }
 }
