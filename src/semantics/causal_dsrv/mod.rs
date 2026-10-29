@@ -75,9 +75,9 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
-        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.untyped(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.untyped(), ctx)
     }
 }
 
@@ -90,9 +90,9 @@ impl MonitoringSemantics<CausalCheckedSemiSyncConfig<CausalSet>> for CausalDsrvS
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<CausalSet>>,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<CausalSet>> {
-        evaluate_checked::<CausalCheckedSemiSyncConfig<CausalSet>, CausalSet>(expr, ctx, owner)
+        evaluate_checked::<CausalCheckedSemiSyncConfig<CausalSet>, CausalSet>(expr, ctx)
     }
 }
 
@@ -112,9 +112,9 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
-        evaluate::<CausalSemiSyncConfig<D>, D>(expr.untyped(), ctx, owner)
+        evaluate::<CausalSemiSyncConfig<D>, D>(expr.untyped(), ctx)
     }
 }
 
@@ -129,26 +129,22 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalCheckedSemiSyncConfig<D>>,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<CausalValue<D>> {
-        evaluate_checked::<CausalCheckedSemiSyncConfig<D>, D>(expr, ctx, owner)
+        evaluate_checked::<CausalCheckedSemiSyncConfig<D>, D>(expr, ctx)
     }
 }
 
 /// Evaluate an expression without its types. Its runtime expressions are
 /// parsed at their prepared sites and evaluated unchecked.
-fn evaluate<AC, D>(
-    expr: UntypedExpr,
-    ctx: &AC::Ctx,
-    owner: Option<VarName>,
-) -> LocalStream<CausalValue<D>>
+fn evaluate<AC, D>(expr: UntypedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    evaluate_ref::<AC, D>(expr.expr().as_ref(), &expr, ctx, owner)
+    evaluate_ref::<AC, D>(expr.expr().as_ref(), &expr, ctx)
 }
 
 /// The stream a declared name refers to.
@@ -166,7 +162,6 @@ fn evaluate_ref<AC, D>(
     node: ExprRef<'_>,
     expr: &UntypedExpr,
     ctx: &AC::Ctx,
-    owner: Option<VarName>,
 ) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
@@ -176,7 +171,7 @@ where
 {
     use ExprView::*;
 
-    let child = |node: ExprRef<'_>| evaluate_ref::<AC, D>(node, expr, ctx, owner.clone());
+    let child = |node: ExprRef<'_>| evaluate_ref::<AC, D>(node, expr, ctx);
 
     match node.view() {
         Val(value) => combinators::constant(value.clone().into_runtime_value()),
@@ -218,17 +213,15 @@ where
             ctx,
             child(source),
             scope.clone(),
-            owner,
             expr.site(node),
-            |expr, subctx, owner| evaluate::<AC, D>(expr, subctx, owner),
+            |expr, subctx| evaluate::<AC, D>(expr, subctx),
         ),
         Defer(source, _, scope) => dynamic::defer::<AC, D>(
             ctx,
             child(source),
             scope.clone(),
-            owner,
             expr.site(node),
-            |expr, subctx, owner| evaluate::<AC, D>(expr, subctx, owner),
+            |expr, subctx| evaluate::<AC, D>(expr, subctx),
         ),
         unsupported => panic!(
             "causal DSRV currently supports scalar expressions only; unsupported expression at {:?}: {unsupported:?}",
@@ -237,36 +230,27 @@ where
     }
 }
 
-fn evaluate_checked<AC, D>(
-    expr: &CheckedExpr,
-    ctx: &AC::Ctx,
-    owner: Option<VarName>,
-) -> LocalStream<CausalValue<D>>
+fn evaluate_checked<AC, D>(expr: &CheckedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    evaluate_checked_owned::<AC, D>(expr.clone(), ctx, owner)
+    evaluate_checked_owned::<AC, D>(expr.clone(), ctx)
 }
 
-fn evaluate_checked_owned<AC, D>(
-    expr: CheckedExpr,
-    ctx: &AC::Ctx,
-    owner: Option<VarName>,
-) -> LocalStream<CausalValue<D>>
+fn evaluate_checked_owned<AC, D>(expr: CheckedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    evaluate_checked_ref::<AC, D>(expr.as_ref(), ctx, owner)
+    evaluate_checked_ref::<AC, D>(expr.as_ref(), ctx)
 }
 
 fn evaluate_checked_ref<AC, D>(
     node: CheckedExprRef<'_>,
     ctx: &AC::Ctx,
-    owner: Option<VarName>,
 ) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
@@ -275,7 +259,7 @@ where
 {
     use ExprView::*;
 
-    let child = |node: CheckedExprRef<'_>| evaluate_checked_ref::<AC, D>(node, ctx, owner.clone());
+    let child = |node: CheckedExprRef<'_>| evaluate_checked_ref::<AC, D>(node, ctx);
 
     match node.view() {
         Val(value) => combinators::constant(value.clone().into_runtime_value()),
@@ -317,7 +301,6 @@ where
             ctx,
             child(source),
             scope.clone(),
-            owner,
             node.runtime_expression().clone(),
             evaluate_checked_owned::<AC, D>,
         ),
@@ -325,7 +308,6 @@ where
             ctx,
             child(source),
             scope.clone(),
-            owner,
             node.runtime_expression().clone(),
             evaluate_checked_owned::<AC, D>,
         ),

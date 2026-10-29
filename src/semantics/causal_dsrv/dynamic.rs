@@ -8,12 +8,11 @@ use crate::lang::dsrv::runtime_expression::{
     RuntimeExpressionError, RuntimeExpressionSite, UntypedExpr,
 };
 use crate::semantics::{AsyncConfig, StreamContext};
-use crate::{LocalStream, Value, VarName};
+use crate::{LocalStream, Value};
 
-type Evaluator<AC, D> =
-    fn(UntypedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
+type Evaluator<AC, D> = fn(UntypedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
 type CheckedEvaluator<AC, D> =
-    fn(CheckedExpr, &<AC as AsyncConfig>::Ctx, Option<VarName>) -> LocalStream<CausalValue<D>>;
+    fn(CheckedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
 
 /// How a runtime expression is accepted and evaluated. Monitors evaluated
 /// without types keep their parse-only policy: their runtime expressions are
@@ -67,7 +66,6 @@ pub fn dynamic<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: Evaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -81,7 +79,6 @@ where
         ctx,
         source,
         scope,
-        owner,
         site,
         RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
     )
@@ -91,7 +88,6 @@ pub fn dynamic_checked<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -105,7 +101,6 @@ where
         ctx,
         source,
         scope,
-        owner,
         site,
         RuntimeEvaluator::<AC, D>::Checked(evaluator),
     )
@@ -115,7 +110,6 @@ fn dynamic_inner<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -168,7 +162,6 @@ where
                         property.as_ref(),
                         &site,
                         &ctx,
-                        owner.clone(),
                         evaluator.clone(),
                     );
                     ctx.tick().await;
@@ -191,7 +184,6 @@ fn evaluate_property<AC, D>(
     property: &str,
     site: &RuntimeExpressionSite,
     ctx: &AC::Ctx,
-    owner: Option<VarName>,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
 where
@@ -205,7 +197,7 @@ where
             let expr = site
                 .parse_unchecked_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
                 .unwrap_or_else(|error| panic!("invalid scalar dynamic DSRV expression: {error}"));
-            evaluator(expr, ctx, owner)
+            evaluator(expr, ctx)
         }
         RuntimeEvaluator::Checked(evaluator) => {
             let checked = site
@@ -221,7 +213,7 @@ where
                         panic!("Dynamic expression is unsupported: {error}")
                     }
                 });
-            evaluator(checked, ctx, owner)
+            evaluator(checked, ctx)
         }
     }
 }
@@ -230,7 +222,6 @@ pub fn defer<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: Evaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -244,7 +235,6 @@ where
         ctx,
         source,
         scope,
-        owner,
         site,
         RuntimeEvaluator::<AC, D>::Unchecked(evaluator),
     )
@@ -254,7 +244,6 @@ pub fn defer_checked<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: CheckedEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -268,7 +257,6 @@ where
         ctx,
         source,
         scope,
-        owner,
         site,
         RuntimeEvaluator::<AC, D>::Checked(evaluator),
     )
@@ -278,7 +266,6 @@ fn defer_inner<AC, D>(
     ctx: &AC::Ctx,
     source: LocalStream<CausalValue<D>>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     site: RuntimeExpressionSite,
     evaluator: RuntimeEvaluator<AC, D>,
 ) -> LocalStream<CausalValue<D>>
@@ -312,7 +299,6 @@ where
                         property.as_ref(),
                         &site,
                         &ctx,
-                        owner.clone(),
                         evaluator.clone(),
                     );
                     ctx.tick().await;
