@@ -97,7 +97,6 @@ mod tests {
             &ctx,
             e,
             ReconfigurableExprScope::Automatic,
-            None,
             10,
             RuntimeExpressionSite::default(),
         );

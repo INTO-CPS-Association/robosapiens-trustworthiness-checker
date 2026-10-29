@@ -1,10 +1,10 @@
 use super::combinators::stream_lift_base;
 use super::{functions::ScopedExpr, semantics::evaluate_scope};
+use crate::LocalStream;
 use crate::core::{RuntimeCapabilities, RuntimeCapability, Value};
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
 use crate::semantics::{AsyncConfig, StreamContext};
-use crate::{LocalStream, VarName};
 use async_stream::stream;
 use futures::StreamExt;
 use tracing::{debug, info};
@@ -12,7 +12,7 @@ use tracing::{debug, info};
 /// Check a runtime expression on arrival and prepare it for evaluation.
 /// Source that does not check is refused, as source that does not parse
 /// always was.
-fn accept_text(site: &RuntimeExpressionSite, source: &str, owner: Option<&VarName>) -> ScopedExpr {
+fn accept_text(site: &RuntimeExpressionSite, source: &str) -> ScopedExpr {
     let checked = site
         .parse_and_check_for(
             source,
@@ -23,18 +23,13 @@ fn accept_text(site: &RuntimeExpressionSite, source: &str, owner: Option<&VarNam
         )
         .unwrap_or_else(|error| panic!("{error}"));
     debug!("Runtime expression accepted as {:?}", checked.expr());
-    let expression = ScopedExpr::checked(checked);
-    match owner {
-        Some(owner) => expression.with_owner(owner.clone()),
-        None => expression,
-    }
+    ScopedExpr::checked(checked)
 }
 
 pub fn dynamic<AC>(
     ctx: &AC::Ctx,
     eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     history_length: usize,
     site: RuntimeExpressionSite,
 ) -> LocalStream<AC::Val>
@@ -106,7 +101,7 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expression = accept_text(&site, s.as_ref(), owner.as_ref());
+                    let expression = accept_text(&site, s.as_ref());
                     let eval_output_stream = evaluate_scope::<AC>(expression, &subcontext);
                     let mut eval_output_stream = stream_lift_base(eval_output_stream);
                     // Advance the subcontext to make a new set of input values
@@ -132,7 +127,6 @@ pub fn defer<AC>(
     ctx: &AC::Ctx,
     eval_stream: LocalStream<AC::Val>,
     scope: ReconfigurableExprScope,
-    owner: Option<VarName>,
     history_length: usize,
     site: RuntimeExpressionSite,
 ) -> LocalStream<AC::Val>
@@ -163,7 +157,7 @@ where
                     yield Value::NoVal;
                 }
                 Value::Str(s) => {
-                    let expression = accept_text(&site, s.as_ref(), owner.as_ref());
+                    let expression = accept_text(&site, s.as_ref());
                     let tmp_stream = evaluate_scope::<AC>(expression, &subcontext);
                     let mut tmp_stream = stream_lift_base(tmp_stream);
                     // Advance the subcontext to make a new set of input values

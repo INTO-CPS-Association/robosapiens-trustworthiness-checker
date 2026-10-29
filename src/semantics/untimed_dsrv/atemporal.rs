@@ -626,7 +626,7 @@ mod tests {
         let expr = parse_expr_with_context(source, context)
             .unwrap_or_else(|error| panic!("{source}: {error}"));
         let mut output =
-            crate::semantics::untimed_dsrv::semantics::evaluate::<TestConfig>(expr, None, &ctx);
+            crate::semantics::untimed_dsrv::semantics::evaluate::<TestConfig>(expr, &ctx);
         ctx.run().await;
         output.next().await.unwrap_or(Value::NoVal)
     }

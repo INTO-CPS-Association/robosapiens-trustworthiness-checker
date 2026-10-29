@@ -50,9 +50,9 @@ where
     fn to_async_stream(
         expr: &AC::Expr,
         ctx: &AC::Ctx,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<AC::Val> {
-        evaluate_expr::<AC>(expr.expr().as_ref(), expr, ctx, owner)
+        evaluate_expr::<AC>(expr.expr().as_ref(), expr, ctx)
     }
 }
 
@@ -64,14 +64,13 @@ fn evaluate_expr<'a, AC>(
     // runtime, although evaluation here does not consult those types.
     checked: &CheckedExpr,
     ctx: &AC::Ctx,
-    owner: Option<VarName>,
 ) -> LocalStream<AC::Val>
 where
     AC: AsyncConfig<Val = Value, Expr = CheckedExpr, Ctx = DistributedContext<AC>>,
 {
     use ExprView::*;
 
-    let evaluate = |child| evaluate_expr::<AC>(child, checked, ctx, owner.clone());
+    let evaluate = |child| evaluate_expr::<AC>(child, checked, ctx);
     if let Some(stream) = core_evaluation::evaluate(expr, &evaluate) {
         return stream;
     }
@@ -100,12 +99,12 @@ where
         Dynamic(source, _, scope) => {
             let site = checked.cursor(expr).runtime_expression().clone();
             let e = evaluate(source);
-            mc::dynamic::<AC>(ctx, e, scope.clone(), owner.clone(), 10, site)
+            mc::dynamic::<AC>(ctx, e, scope.clone(), 10, site)
         }
         Defer(source, _, scope) => {
             let site = checked.cursor(expr).runtime_expression().clone();
             let e = evaluate(source);
-            mc::defer::<AC>(ctx, e, scope.clone(), owner.clone(), 10, site)
+            mc::defer::<AC>(ctx, e, scope.clone(), 10, site)
         }
         LMap(_, _) | LFilter(_, _) | LFold(_, _, _) => {
             panic!("higher-order list operations require typed DSRV semantics")

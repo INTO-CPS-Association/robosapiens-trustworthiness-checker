@@ -24,7 +24,6 @@ pub(super) struct ScopedExpr {
     pub(super) expr: Expr,
     phase: ExprPhase,
     pub(super) environment: Option<Rc<EvalBindingFrame>>,
-    owner: Option<VarName>,
 }
 
 /// AST-owned checking state retained while an expression moves through lexical scopes.
@@ -235,7 +234,6 @@ impl ScopedExpr {
             expr,
             phase: ExprPhase::Unchecked,
             environment: None,
-            owner: None,
         }
     }
 
@@ -244,7 +242,6 @@ impl ScopedExpr {
             phase: ExprPhase::Untyped(AstShared::clone(expr.sites())),
             expr: expr.expr().clone(),
             environment: None,
-            owner: None,
         }
     }
 
@@ -253,17 +250,7 @@ impl ScopedExpr {
             expr: checked.expr().clone(),
             phase: ExprPhase::Checked(checked),
             environment: None,
-            owner: None,
         }
-    }
-
-    pub(super) fn with_owner(mut self, owner: VarName) -> Self {
-        self.owner = Some(owner);
-        self
-    }
-
-    pub(super) fn owner(&self) -> Option<&VarName> {
-        self.owner.as_ref()
     }
 
     pub(super) fn as_ref(&self) -> ExprRef<'_> {
@@ -305,7 +292,6 @@ impl ScopedExpr {
             expr: self.expr.subtree(expr),
             phase: self.phase.clone(),
             environment: self.environment.clone(),
-            owner: self.owner.clone(),
         }
     }
 
@@ -333,7 +319,6 @@ impl ScopedExpr {
                 parent: self.environment,
                 bindings,
             })),
-            owner: self.owner,
         })
     }
 
@@ -366,7 +351,6 @@ impl ScopedExpr {
                 parent: self.environment,
                 bindings,
             })),
-            owner: self.owner,
         })
     }
 
@@ -418,7 +402,6 @@ impl ScopedExpr {
                     .map(|(name, stream)| (name, EvalBinding::Stream(stream)))
                     .collect(),
             })),
-            owner: self.owner,
         }
     }
 

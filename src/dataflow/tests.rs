@@ -549,8 +549,7 @@ async fn eval_untimed(
         .collect::<Vec<_>>();
     let mut ctx = Context::<TestConfig>::new(executor, var_names, streams, 8);
     let expr = parse_expr(src);
-    let output =
-        crate::semantics::untimed_dsrv::semantics::evaluate::<TestConfig>(expr, None, &ctx);
+    let output = crate::semantics::untimed_dsrv::semantics::evaluate::<TestConfig>(expr, &ctx);
     ctx.run().await;
     output.collect().await
 }

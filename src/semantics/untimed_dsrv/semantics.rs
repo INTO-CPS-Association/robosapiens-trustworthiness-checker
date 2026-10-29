@@ -32,48 +32,28 @@ pub struct UntimedDsrvSemantics;
 /// Evaluate bare syntax that was never prepared, such as an expression a
 /// test builds. Its runtime expressions are accepted without types.
 #[cfg(test)]
-pub(crate) fn evaluate<AC>(expr: Expr, owner: Option<VarName>, ctx: &AC::Ctx) -> LocalStream<Value>
+pub(crate) fn evaluate<AC>(expr: Expr, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let expression = if let Some(owner) = owner {
-        ScopedExpr::unchecked(expr).with_owner(owner)
-    } else {
-        ScopedExpr::unchecked(expr)
-    };
+    let expression = ScopedExpr::unchecked(expr);
     evaluate_scope::<AC>(expression, ctx)
 }
 
 /// Evaluate a prepared expression without consulting its types.
-pub(crate) fn evaluate_ignoring_types<AC>(
-    expr: UntypedExpr,
-    owner: Option<VarName>,
-    ctx: &AC::Ctx,
-) -> LocalStream<Value>
+pub(crate) fn evaluate_ignoring_types<AC>(expr: UntypedExpr, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let expression = if let Some(owner) = owner {
-        ScopedExpr::untyped(expr).with_owner(owner)
-    } else {
-        ScopedExpr::untyped(expr)
-    };
+    let expression = ScopedExpr::untyped(expr);
     evaluate_scope::<AC>(expression, ctx)
 }
 
-pub(crate) fn evaluate_checked<AC>(
-    expr: CheckedExpr,
-    owner: Option<VarName>,
-    ctx: &AC::Ctx,
-) -> LocalStream<Value>
+pub(crate) fn evaluate_checked<AC>(expr: CheckedExpr, ctx: &AC::Ctx) -> LocalStream<Value>
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let expression = if let Some(owner) = owner {
-        ScopedExpr::checked(expr).with_owner(owner)
-    } else {
-        ScopedExpr::checked(expr)
-    };
+    let expression = ScopedExpr::checked(expr);
     checked_typed_dispatch_stream::<AC>(expression, ctx)
 }
 
@@ -81,8 +61,7 @@ pub(super) fn evaluate_scope<AC>(expr: ScopedExpr, ctx: &AC::Ctx) -> LocalStream
 where
     AC: AsyncConfig<Val = Value>,
 {
-    let owner = expr.owner().cloned();
-    evaluate_ref::<AC>(expr.as_ref(), &expr, owner, ctx)
+    evaluate_ref::<AC>(expr.as_ref(), &expr, ctx)
 }
 
 pub(super) fn evaluate_scoped_typed<T, AC>(
@@ -94,18 +73,12 @@ where
     <T as TryFrom<Value>>::Error: std::fmt::Debug,
     AC: AsyncConfig<Val = Value>,
 {
-    to_typed_partial_stream(evaluate_ref::<AC>(
-        expr.as_ref(),
-        &expr,
-        expr.owner().cloned(),
-        ctx,
-    ))
+    to_typed_partial_stream(evaluate_ref::<AC>(expr.as_ref(), &expr, ctx))
 }
 
 pub(super) fn evaluate_ref<'a, AC>(
     node: ExprRef<'a>,
     expression: &ScopedExpr,
-    owner: Option<VarName>,
     ctx: &AC::Ctx,
 ) -> LocalStream<Value>
 where
@@ -114,15 +87,9 @@ where
     use ExprView::*;
 
     debug!("Creating async stream for expression: {:?}", node);
-    let owner = owner.or_else(|| expression.owner().cloned());
     let evaluate = |child| {
         let child_expression = expression.scope(child);
-        evaluate_ref::<AC>(
-            child_expression.as_ref(),
-            &child_expression,
-            owner.clone(),
-            ctx,
-        )
+        evaluate_ref::<AC>(child_expression.as_ref(), &child_expression, ctx)
     };
     let own_child = |child| expression.scope(child);
     let variable = |v: &VarName| {
@@ -131,7 +98,7 @@ where
             return stream;
         }
         match expression.resolve(v) {
-            Some(bound) => evaluate_ref::<AC>(bound.as_ref(), &bound, owner.clone(), ctx),
+            Some(bound) => evaluate_ref::<AC>(bound.as_ref(), &bound, ctx),
             None => mc::var::<AC>(ctx, v.clone()),
         }
     };
@@ -145,12 +112,12 @@ where
         Dynamic(source, _, scope) => {
             let site = expression.runtime_expression(node);
             let e = evaluate(source);
-            dynamic::dynamic::<AC>(ctx, e, scope.clone(), owner, 1, site)
+            dynamic::dynamic::<AC>(ctx, e, scope.clone(), 1, site)
         }
         Defer(source, _, scope) => {
             let site = expression.runtime_expression(node);
             let e = evaluate(source);
-            dynamic::defer::<AC>(ctx, e, scope.clone(), owner, 1, site)
+            dynamic::defer::<AC>(ctx, e, scope.clone(), 1, site)
         }
         // An arm runs only when its pattern selects it, which a stream
         // cannot advance for, so the whole `match` is one stream: it reads
@@ -457,7 +424,7 @@ fn evaluate_untyped<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStrea
 where
     AC: AsyncConfig<Val = Value>,
 {
-    evaluate_ref::<AC>(expression.as_ref(), &expression, None, context)
+    evaluate_ref::<AC>(expression.as_ref(), &expression, context)
 }
 
 fn checked_typed_dispatch_stream<AC>(
@@ -492,9 +459,9 @@ where
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &AC::Ctx,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<Value> {
-        evaluate_ignoring_types::<AC>(expr.untyped(), owner, ctx)
+        evaluate_ignoring_types::<AC>(expr.untyped(), ctx)
     }
 }
 
@@ -521,9 +488,9 @@ where
     fn to_async_stream(
         expr: &CheckedExpr,
         ctx: &AC::Ctx,
-        owner: Option<VarName>,
+        _owner: Option<VarName>,
     ) -> LocalStream<Value> {
-        evaluate_checked::<AC>(expr.clone(), owner, ctx)
+        evaluate_checked::<AC>(expr.clone(), ctx)
     }
 }
 
@@ -818,7 +785,7 @@ mod tests {
     }
 
     fn to_stream(expr: Expr, ctx: &Context<TestConfig>) -> LocalStream<Value> {
-        evaluate::<TestConfig>(expr, None, ctx)
+        evaluate::<TestConfig>(expr, ctx)
     }
     // ============================================================================
     // DEFER TESTS
