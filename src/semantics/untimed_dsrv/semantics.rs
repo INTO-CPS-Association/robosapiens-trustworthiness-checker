@@ -64,18 +64,6 @@ where
     evaluate_ref::<AC>(expr.as_ref(), &expr, ctx)
 }
 
-pub(super) fn evaluate_scoped_typed<T, AC>(
-    expr: ScopedExpr,
-    ctx: &AC::Ctx,
-) -> LocalStream<PartialStreamValue<T>>
-where
-    T: TryFrom<Value> + std::fmt::Debug + 'static,
-    <T as TryFrom<Value>>::Error: std::fmt::Debug,
-    AC: AsyncConfig<Val = Value>,
-{
-    to_typed_partial_stream(evaluate_ref::<AC>(expr.as_ref(), &expr, ctx))
-}
-
 pub(super) fn evaluate_ref<'a, AC>(
     node: ExprRef<'a>,
     expression: &ScopedExpr,
@@ -417,14 +405,7 @@ where
     <T as TryFrom<Value>>::Error: std::fmt::Debug,
     AC: AsyncConfig<Val = Value>,
 {
-    evaluate_scoped_typed::<T, AC>(expression, context)
-}
-
-fn evaluate_untyped<AC>(expression: ScopedExpr, context: &AC::Ctx) -> LocalStream<Value>
-where
-    AC: AsyncConfig<Val = Value>,
-{
-    evaluate_ref::<AC>(expression.as_ref(), &expression, context)
+    to_typed_partial_stream(evaluate_scope::<AC>(expression, context))
 }
 
 fn checked_typed_dispatch_stream<AC>(
@@ -438,7 +419,7 @@ where
         Some(TCType::Int) => evaluate_int::<AC>(expression, context),
         Some(TCType::Bool) => evaluate_bool::<AC>(expression, context),
         Some(TCType::Float) => evaluate_float::<AC>(expression, context),
-        _ => evaluate_untyped::<AC>(expression, context),
+        _ => evaluate_scope::<AC>(expression, context),
     }
 }
 

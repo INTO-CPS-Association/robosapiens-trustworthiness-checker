@@ -76,7 +76,7 @@ impl MonitoringSemantics<CausalSemiSyncConfig<CausalSet>> for CausalDsrvSemantic
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<CausalSet>>,
     ) -> LocalStream<CausalValue<CausalSet>> {
-        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(expr.untyped(), ctx)
+        evaluate::<CausalSemiSyncConfig<CausalSet>, CausalSet>(&expr.untyped(), ctx)
     }
 }
 
@@ -111,7 +111,7 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalSemiSyncConfig<D>>
         expr: &CheckedExpr,
         ctx: &SemiSyncContext<CausalSemiSyncConfig<D>>,
     ) -> LocalStream<CausalValue<D>> {
-        evaluate::<CausalSemiSyncConfig<D>, D>(expr.untyped(), ctx)
+        evaluate::<CausalSemiSyncConfig<D>, D>(&expr.untyped(), ctx)
     }
 }
 
@@ -133,14 +133,14 @@ impl<D: RoleCausalDomain> MonitoringSemantics<CausalCheckedSemiSyncConfig<D>>
 
 /// Evaluate an expression without its types. Its runtime expressions are
 /// parsed at their prepared sites and evaluated unchecked.
-fn evaluate<AC, D>(expr: UntypedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
+fn evaluate<AC, D>(expr: &UntypedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>>,
     AC::Expr: DependencyGraphExpr,
     AC::Ctx: StreamContext<AC = AC>,
 {
-    evaluate_ref::<AC, D>(expr.expr().as_ref(), &expr, ctx)
+    evaluate_ref::<AC, D>(expr.expr().as_ref(), expr, ctx)
 }
 
 /// The stream a declared name refers to.
@@ -210,14 +210,14 @@ where
             child(source),
             scope.clone(),
             expr.site(node),
-            |expr, subctx| evaluate::<AC, D>(expr, subctx),
+            evaluate::<AC, D>,
         ),
         Defer(source, _, scope) => dynamic::defer::<AC, D>(
             ctx,
             child(source),
             scope.clone(),
             expr.site(node),
-            |expr, subctx| evaluate::<AC, D>(expr, subctx),
+            evaluate::<AC, D>,
         ),
         unsupported => panic!(
             "causal DSRV currently supports scalar expressions only; unsupported expression at {:?}: {unsupported:?}",
@@ -227,15 +227,6 @@ where
 }
 
 fn evaluate_checked<AC, D>(expr: &CheckedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
-where
-    D: CausalDomain,
-    AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
-    AC::Ctx: StreamContext<AC = AC>,
-{
-    evaluate_checked_owned::<AC, D>(expr.clone(), ctx)
-}
-
-fn evaluate_checked_owned<AC, D>(expr: CheckedExpr, ctx: &AC::Ctx) -> LocalStream<CausalValue<D>>
 where
     D: CausalDomain,
     AC: AsyncConfig<Val = CausalValue<D>, Expr = CheckedExpr>,
@@ -298,14 +289,14 @@ where
             child(source),
             scope.clone(),
             node.runtime_expression().clone(),
-            evaluate_checked_owned::<AC, D>,
+            evaluate_checked::<AC, D>,
         ),
         Defer(source, _, scope) => dynamic::defer_checked::<AC, D>(
             ctx,
             child(source),
             scope.clone(),
             node.runtime_expression().clone(),
-            evaluate_checked_owned::<AC, D>,
+            evaluate_checked::<AC, D>,
         ),
         _unsupported => panic!(
             "causal DSRV currently supports scalar expressions only; unsupported expression at {:?}",

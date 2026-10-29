@@ -10,9 +10,9 @@ use crate::lang::dsrv::runtime_expression::{
 use crate::semantics::{AsyncConfig, StreamContext};
 use crate::{LocalStream, Value};
 
-type Evaluator<AC, D> = fn(UntypedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
+type Evaluator<AC, D> = fn(&UntypedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
 type CheckedEvaluator<AC, D> =
-    fn(CheckedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
+    fn(&CheckedExpr, &<AC as AsyncConfig>::Ctx) -> LocalStream<CausalValue<D>>;
 
 /// How a runtime expression is accepted and evaluated. Monitors evaluated
 /// without types keep their parse-only policy: their runtime expressions are
@@ -197,7 +197,7 @@ where
             let expr = site
                 .parse_unchecked_for(property, crate::core::RuntimeCapabilities::NONE, "causal")
                 .unwrap_or_else(|error| panic!("invalid scalar dynamic DSRV expression: {error}"));
-            evaluator(expr, ctx)
+            evaluator(&expr, ctx)
         }
         RuntimeEvaluator::Checked(evaluator) => {
             let checked = site
@@ -213,7 +213,7 @@ where
                         panic!("Dynamic expression is unsupported: {error}")
                     }
                 });
-            evaluator(checked, ctx)
+            evaluator(&checked, ctx)
         }
     }
 }
