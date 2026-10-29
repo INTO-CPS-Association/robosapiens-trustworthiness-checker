@@ -1,0 +1,21 @@
+use experimental::high_level_dsrv
+
+in x: Int
+in flag: Bool
+in test_struct: Struct<a: Str, b: Int>
+
+type NestedList<X> = List<List<X>>
+
+out nested_list: NestedList<Int>
+out test_struct2: Struct<a: Str, b: Int>
+out nested_map: Map<List<Bool>>
+out value: Int
+out s: Str
+out y: Int
+
+nested_list = List(List(x, x + 1))
+nested_map = Map("flags": List(flag, !flag))
+value = x + 1
+s = test_struct.a ++ "abc"
+y = test_struct.b * 4
+test_struct2 = {"a": test_struct.a, "b": test_struct.b}

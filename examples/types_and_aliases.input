@@ -1,0 +1,9 @@
+0: x = 1
+0: flag = true
+0: test_struct = {a: "foo", b: 2}
+1: x = 5
+1: flag = false
+1: test_struct = {a: "bar", b: -3}
+2: x = -2
+2: flag = true
+2: test_struct = {a: "", b: 10}
