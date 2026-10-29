@@ -1,5 +1,4 @@
-//! List-operation workloads shared by the `list_operations` timing benchmark and the
-//! `list_operation_allocations` counting benchmark.
+//! List-operation workloads for the `list_operations` timing benchmark.
 //!
 //! Each workload evaluates one list operation per tick over an input list whose elements are
 //! integers or eight-field records. The input row keeps its list, and operand lifting retains

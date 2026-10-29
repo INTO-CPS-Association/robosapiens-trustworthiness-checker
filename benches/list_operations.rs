@@ -1,9 +1,8 @@
 //! Time per tick of runtime list operations in the dataflow evaluator.
 //!
-//! The workloads are described in `list_operations/workloads.rs`. This binary uses jemalloc
-//! without instrumentation; `list_operation_allocations` counts allocations for the same
-//! workloads. Output: the value layout, then one JSON object per workload with the median time
-//! per tick over several samples.
+//! The workloads are described in `list_operations/workloads.rs`; unit tests in
+//! `src/core/values/operations/tests.rs` check what the operations allocate. Output: the value
+//! layout, then one JSON object per workload with the median time per tick over several samples.
 //!
 //! Run with `cargo bench --profile bench-fast --features jemalloc --bench list_operations`,
 //! optionally followed by substrings that select `element/workload/len` labels.

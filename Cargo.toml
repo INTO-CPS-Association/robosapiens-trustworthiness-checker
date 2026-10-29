@@ -199,16 +199,7 @@ harness = false
 required-features = ["jemalloc"]
 
 [[bench]]
-name = "dataflow_allocations"
-harness = false
-
-[[bench]]
 name = "list_operations"
-harness = false
-required-features = ["jemalloc"]
-
-[[bench]]
-name = "list_operation_allocations"
 harness = false
 required-features = ["jemalloc"]
 

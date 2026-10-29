@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use ecow::{EcoString, eco_vec};
 
 use super::*;
+use crate::allocation_counter::{Allocations, allocations};
 use crate::core::{BinaryOperator, StreamType, UnaryOperator, ValueMap};
 use crate::lang::dsrv::test_support::arb_int_power_case;
 use proptest::prelude::*;
@@ -611,5 +612,81 @@ fn list_filter_keeps_decided_elements_in_order() {
                 }
             }
         }
+    }
+}
+
+/// Applies `decisions` to a filter over `source`, as `List.filter` does with its predicate.
+fn filtered(source: EcoVec<Value>, decisions: &[bool]) -> EcoVec<Value> {
+    let mut filter = ListFilter::new(source);
+    for &keep in decisions {
+        filter.decide(keep);
+    }
+    filter.finish()
+}
+
+/// What a list of exactly `len` elements allocates.
+fn exact_list(len: usize) -> Allocations {
+    allocations(|| EcoVec::<Value>::with_capacity(len)).0
+}
+
+/// Edits of a list nothing else holds work in its own buffer.
+#[test]
+fn unique_list_edits_allocate_nothing() {
+    let mut spare = EcoVec::with_capacity(4);
+    spare.extend(records(0..3));
+    let x = record(3);
+    let (made, appended) = allocations(|| list_append(Value::List(spare), x));
+    assert_eq!(made, Allocations::default(), "append");
+    let (made, _) = allocations(|| list_tail(appended.unwrap()));
+    assert_eq!(made, Allocations::default(), "tail");
+
+    for mask in 0..8_u32 {
+        let decisions: Vec<bool> = (0..3).map(|index| mask & (1 << index) != 0).collect();
+        let source = records(0..3);
+        let (made, _) = allocations(|| filtered(source, &decisions));
+        assert_eq!(made, Allocations::default(), "filter {decisions:?}");
+    }
+}
+
+/// Results that equal a shared operand, or are empty, need no new list.
+#[test]
+fn shared_list_shortcuts_allocate_nothing() {
+    let retained = records(0..3);
+    let shared = || Value::List(retained.clone());
+    let empty = || Value::List(EcoVec::new());
+    for (name, made) in [
+        (
+            "concat empty left",
+            allocations(|| list_concat(empty(), shared())).0,
+        ),
+        (
+            "concat empty right",
+            allocations(|| list_concat(shared(), empty())).0,
+        ),
+        (
+            "filter keeping all",
+            allocations(|| filtered(retained.clone(), &[true; 3])).0,
+        ),
+        (
+            "filter keeping none",
+            allocations(|| filtered(retained.clone(), &[false; 3])).0,
+        ),
+    ] {
+        assert_eq!(made, Allocations::default(), "{name}");
+    }
+}
+
+/// An edit of a shared list makes one copy, sized for its result rather than by amortized growth.
+#[test]
+fn shared_list_edits_make_one_exact_copy() {
+    let retained = records(0..5);
+    let shared = || Value::List(retained.clone());
+    let (x, more) = (record(5), Value::List(records(5..7)));
+    for (name, made, len) in [
+        ("append", allocations(|| list_append(shared(), x)).0, 6),
+        ("concat", allocations(|| list_concat(shared(), more)).0, 7),
+        ("tail", allocations(|| list_tail(shared())).0, 4),
+    ] {
+        assert_eq!(made, exact_list(len), "{name}");
     }
 }

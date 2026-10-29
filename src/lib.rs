@@ -19,6 +19,8 @@ pub use lang::dsrv::{
     ElaboratedDsrvSpecification, TypeCheckMode, TypeCheckOptions,
     ast::{CheckedDsrvSpecification, Declaration, DsrvSpecification, ValidatedDsrvSpecification},
 };
+#[cfg(test)]
+mod allocation_counter;
 pub mod distributed;
 pub mod dsrv_fixtures;
 mod fingerprint;

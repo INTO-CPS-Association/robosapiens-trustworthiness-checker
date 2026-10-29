@@ -3733,3 +3733,151 @@ fn changed_library_settings_change_the_dynamic_stream() {
         .collect::<Vec<_>>();
     assert_eq!(initialized.len(), 1, "{report:?}");
 }
+
+/// Allocations made by evaluating a warm monitor, tick after tick.
+mod steady_state_allocations {
+    use super::*;
+    use crate::allocation_counter::{Allocations, allocations};
+    use crate::{TypeCheckOptions, VarName};
+
+    const TICKS: usize = 100;
+
+    /// What `TICKS` evaluations of a warm monitor for `source` allocate, with inputs given by name.
+    fn allocations_over_ticks(source: &str, inputs: &[(&str, Value)]) -> Allocations {
+        let spec = crate::dsrv_fixtures::elaborated_with(source, TypeCheckOptions::GRADUAL);
+        let mut monitor =
+            DataflowMonitor::compile_with_semantics(spec, Semantics::Untimed).unwrap();
+        let input: Vec<Value> = monitor
+            .input_vars()
+            .iter()
+            .map(|var| {
+                inputs
+                    .iter()
+                    .find_map(|(name, value)| (var == &VarName::new(name)).then(|| value.clone()))
+                    .unwrap_or_else(|| panic!("no input given for `{var}`"))
+            })
+            .collect();
+        let mut output = vec![Value::NoVal; monitor.output_vars().len()];
+        // Warm dynamic plans, lifting state and retained histories before counting.
+        for _ in 0..2 {
+            monitor.evaluate(&input, &mut output).unwrap();
+        }
+        let (made, ()) = allocations(|| {
+            for _ in 0..TICKS {
+                monitor.evaluate(&input, &mut output).unwrap();
+            }
+        });
+        made
+    }
+
+    /// `streams` streams, each adding one to the last, beside a stream that is `x` either directly
+    /// or through `dynamic`.
+    fn chain_spec(streams: usize, dynamic: bool) -> String {
+        let mut source = String::from("in x: Int\nin dynamic_source: Str\n");
+        for index in 0..streams - 1 {
+            source.push_str(&format!("aux s{index}: Int\n"));
+        }
+        source.push_str("out result: Int\nout dynamic_result: Int\n");
+        for index in 0..streams {
+            let name = if index + 1 == streams {
+                "result".to_owned()
+            } else {
+                format!("s{index}")
+            };
+            let operand = if index == 0 {
+                "x".to_owned()
+            } else {
+                format!("s{}", index - 1)
+            };
+            source.push_str(&format!("{name} = {operand} + 1\n"));
+        }
+        source.push_str(if dynamic {
+            "dynamic_result = dynamic(dynamic_source: Int)\n"
+        } else {
+            "dynamic_result = x\n"
+        });
+        source
+    }
+
+    #[test]
+    fn stream_chains_allocate_nothing() {
+        for streams in [1, 8, 32, 128] {
+            for dynamic in [false, true] {
+                let made = allocations_over_ticks(
+                    &chain_spec(streams, dynamic),
+                    &[
+                        ("x", Value::Int(1)),
+                        ("dynamic_source", Value::Str("x".into())),
+                    ],
+                );
+                assert_eq!(
+                    made,
+                    Allocations::default(),
+                    "{streams} streams, dynamic {dynamic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delayed_streams_allocate_nothing() {
+        for recursive in [false, true] {
+            for offset in [1, 64, 1_024, 16_384] {
+                let delayed = if recursive {
+                    format!("default(delayed[{offset}], 0) + x")
+                } else {
+                    format!("default(x[{offset}], 0)")
+                };
+                let source = format!(
+                    "in x: Int\nin dynamic_source: Str\nout delayed: Int\nout dynamic_result: Int\n\
+                     delayed = {delayed}\n\
+                     dynamic_result = dynamic(dynamic_source: Int)\n"
+                );
+                let made = allocations_over_ticks(
+                    &source,
+                    &[
+                        ("x", Value::Int(1)),
+                        ("dynamic_source", Value::Str("x".into())),
+                    ],
+                );
+                assert_eq!(
+                    made,
+                    Allocations::default(),
+                    "offset {offset}, recursive {recursive}"
+                );
+            }
+        }
+    }
+
+    /// Evaluating a function stream is not yet allocation-free: it currently allocates four times
+    /// a tick. The bound catches any further allocation.
+    #[test]
+    fn function_streams_allocate_at_most_four_times_a_tick() {
+        for dynamic in [false, true] {
+            let scheduling = if dynamic {
+                "a = dynamic(a_source: Int)\nb = dynamic(b_source: Int)"
+            } else {
+                "a = x\nb = x"
+            };
+            let source = format!(
+                "in x: Int\nin bias: Int\nin a_source: Str\nin b_source: Str\n\
+                 aux f: (Int -> Int)\nout z: Int\nout a: Int\nout b: Int\n\
+                 f = \\v: Int -> v + x[1] + bias\nz = f(x)\n{scheduling}"
+            );
+            let made = allocations_over_ticks(
+                &source,
+                &[
+                    ("x", Value::Int(2)),
+                    ("bias", Value::Int(20)),
+                    ("a_source", Value::Str("x".into())),
+                    ("b_source", Value::Str("a + 1".into())),
+                ],
+            );
+            assert!(
+                made.count <= 4 * TICKS,
+                "dynamic {dynamic}: {} allocations over {TICKS} ticks",
+                made.count
+            );
+        }
+    }
+}
