@@ -4,24 +4,47 @@
 //! cross a compilation or source-barrier boundary.
 
 use std::fmt;
-use std::sync::Arc;
 
 use crate::VarName;
 use crate::fingerprint;
 
-/// The stable identity of one reconfigurable expression occurrence.
+/// The source owner of a reconfigurable expression, without display-name aliases.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ExpressionStateKey(Arc<str>);
+pub(crate) enum ExpressionSourceOwner {
+    Constant,
+    Variable(VarName),
+    Slot(usize),
+}
+
+/// The stable identity of one reconfigurable expression occurrence.
+///
+/// Keep components structural: readable labels and delimiter-separated strings
+/// cannot distinguish equally labelled internal bindings or arbitrary source names.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ExpressionStateKey {
+    stream: VarName,
+    owner: ExpressionSourceOwner,
+    occurrence: usize,
+}
 
 impl ExpressionStateKey {
-    pub(crate) fn new(stream: &VarName, owner: impl fmt::Display, occurrence: usize) -> Self {
-        Self(Arc::from(format!("{stream}/{owner}/{occurrence}")))
+    pub(crate) fn new(stream: &VarName, owner: ExpressionSourceOwner, occurrence: usize) -> Self {
+        Self {
+            stream: stream.clone(),
+            owner,
+            occurrence,
+        }
     }
 }
 
 impl fmt::Display for ExpressionStateKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        // Diagnostic presentation only; correspondence compares the fields.
+        write!(
+            formatter,
+            "{}/{:?}/{}",
+            self.stream, self.owner, self.occurrence
+        )
     }
 }
 
@@ -132,6 +155,37 @@ impl StreamStateTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expression_addresses_separate_owner_kinds_and_delimiters() {
+        let stream = VarName::new("stream");
+        let key = |owner| ExpressionStateKey::new(&stream, owner, 0);
+        assert_ne!(
+            key(ExpressionSourceOwner::Constant),
+            key(ExpressionSourceOwner::Variable(VarName::new("constant")))
+        );
+        assert_ne!(
+            key(ExpressionSourceOwner::Slot(4)),
+            key(ExpressionSourceOwner::Variable(VarName::new("slot:4")))
+        );
+        // Both pairs used to format as `left/middle/right/0`.
+        assert_ne!(
+            ExpressionStateKey::new(
+                &VarName::new("left/middle"),
+                ExpressionSourceOwner::Variable(VarName::new("right")),
+                0,
+            ),
+            ExpressionStateKey::new(
+                &VarName::new("left"),
+                ExpressionSourceOwner::Variable(VarName::new("middle/right")),
+                0,
+            )
+        );
+        assert_ne!(
+            key(ExpressionSourceOwner::Constant),
+            ExpressionStateKey::new(&stream, ExpressionSourceOwner::Constant, 1)
+        );
+    }
 
     #[test]
     fn revisions_advance_independently_and_checked() {

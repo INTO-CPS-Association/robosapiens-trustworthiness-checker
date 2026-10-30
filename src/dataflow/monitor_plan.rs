@@ -13,7 +13,7 @@ use super::compiler::pipeline::NamedDependencies;
 use super::environment::EnvironmentSlot;
 use super::error::DataflowCompilationError;
 use super::ir::{BoundRef, NodeId, ReconfigurableExpressionKind, StreamProgram};
-use super::reconfiguration::ExpressionStateKey;
+use super::reconfiguration::{ExpressionSourceOwner, ExpressionStateKey};
 use super::stream_id::{StreamId, StreamSet, StreamSlots};
 use super::{Value, VarName};
 use std::collections::BTreeMap;
@@ -185,19 +185,19 @@ impl ReconfigurableExpressionPlan {
         for (index, program) in programs.iter().enumerate() {
             let stream = StreamId::new(index);
             let start = expressions.len();
-            let mut owner_occurrences = BTreeMap::<String, usize>::new();
+            let mut owner_occurrences = BTreeMap::<ExpressionSourceOwner, usize>::new();
             for (node, source, kind) in program.reconfigurable_expressions() {
                 let (source, owner) = match source {
                     BoundRef::Const(value) => (
                         ExpressionSource::Constant(value.clone()),
-                        "constant".to_owned(),
+                        ExpressionSourceOwner::Constant,
                     ),
                     BoundRef::External(slot) => {
                         let owner = program
                             .environment_layout
                             .variable(*slot)
-                            .map(|variable| variable.name())
-                            .unwrap_or_else(|| format!("slot:{}", slot.index()));
+                            .map(|variable| ExpressionSourceOwner::Variable(variable.clone()))
+                            .unwrap_or(ExpressionSourceOwner::Slot(slot.index()));
                         (ExpressionSource::Environment(*slot), owner)
                     }
                     BoundRef::Node(_) => {
@@ -407,7 +407,11 @@ pub(super) mod test_support {
             id: ReconfigurableExpressionId::new(id),
             stream: StreamId::new(id),
             node: NodeId::new(0),
-            address: ExpressionStateKey::new(&VarName::new("stream"), "test", id),
+            address: ExpressionStateKey::new(
+                &VarName::new("stream"),
+                ExpressionSourceOwner::Constant,
+                id,
+            ),
             source: ExpressionSource::Constant(Value::Int(0)),
             kind,
             source_prerequisites: StreamSet::from_streams(

@@ -68,6 +68,119 @@ fn report_count(report: &ContextTransferReport, outcome: StreamStateTransferOutc
         .count()
 }
 
+#[test]
+fn replacement_checks_cycles_for_defer_sources_with_colliding_address_spellings() {
+    use crate::core::{BinaryOperator, StreamType, StreamTypeAscription};
+    use crate::lang::dsrv::ast::ReconfigurableExprScope;
+
+    // The old slash-separated stream/source addresses were identical.
+    let outputs = [VarName::new("left/middle"), VarName::new("left")];
+    let sources = [VarName::new("right"), VarName::new("middle/right")];
+    let unrelated = VarName::new("unrelated");
+    let producer = VarName::new("producer");
+    let compile = |unrelated_value: i64| {
+        let mut expressions = BTreeMap::from([(unrelated.clone(), Expr::Val(unrelated_value))]);
+        // Installing `producer` as the pending defer's body closes a cycle.
+        // It must be detected at the source barrier, before ordinary evaluation.
+        expressions.insert(
+            producer.clone(),
+            Expr::BinOp(
+                Box::new(Expr::Var(outputs[1].clone())),
+                Box::new(Expr::Val(1)),
+                BinaryOperator::Add,
+            ),
+        );
+        for (output, source) in outputs.iter().zip(&sources) {
+            expressions.insert(
+                output.clone(),
+                Expr::Defer(
+                    Box::new(Expr::Var(source.clone())),
+                    StreamTypeAscription::Ascribed(StreamType::Int),
+                    ReconfigurableExprScope::Automatic,
+                ),
+            );
+        }
+        let mut annotations = sources
+            .iter()
+            .cloned()
+            .map(|source| (source, StreamType::Str))
+            .collect::<BTreeMap<_, _>>();
+        annotations.extend(
+            expressions
+                .keys()
+                .cloned()
+                .map(|output| (output, StreamType::Int)),
+        );
+        let specification = DsrvSpecification::new(
+            sources.iter().cloned().collect(),
+            expressions.keys().cloned().collect(),
+            expressions,
+            annotations,
+            [],
+        )
+        .check_and_elaborate(crate::TypeCheckOptions::STRICT)
+        .without_warnings()
+        .unwrap();
+        DataflowProgram::compile_checked(specification).unwrap()
+    };
+    let mut monitor = DataflowMonitor::from_program(compile(1));
+    let step = |monitor: &mut DataflowMonitor, first: Value, second: Value| {
+        let values = BTreeMap::from([(sources[0].clone(), first), (sources[1].clone(), second)]);
+        let input = monitor
+            .input_vars()
+            .iter()
+            .map(|name| values[name].clone())
+            .collect::<Vec<_>>();
+        let mut row = vec![Value::NoVal; monitor.output_vars().len()];
+        monitor.evaluate(&input, &mut row).unwrap();
+        monitor
+            .output_vars()
+            .iter()
+            .cloned()
+            .zip(row)
+            .collect::<BTreeMap<_, _>>()
+    };
+    let initial = step(&mut monitor, Value::Str("11".into()), Value::NoVal);
+    assert_eq!(initial[&outputs[0]], Value::Int(11));
+    assert_eq!(initial[&outputs[1]], Value::NoVal);
+
+    let report = monitor
+        .reconfigure(compile(2), ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert!(report.monitor_changed, "exercise actual replacement");
+    for output in &outputs {
+        assert!(report.context_transfer.streams.iter().any(|entry| {
+            &entry.stream == output && entry.outcome == StreamStateTransferOutcome::Transferred
+        }));
+    }
+    let values = BTreeMap::from([
+        (
+            sources[0].clone(),
+            Value::Str("sealed source must be ignored".into()),
+        ),
+        (sources[1].clone(), Value::Str("producer".into())),
+    ]);
+    let input = monitor
+        .input_vars()
+        .iter()
+        .map(|name| values[name].clone())
+        .collect::<Vec<_>>();
+    let mut output = vec![Value::Int(-999); monitor.output_vars().len()];
+    let untouched = output.clone();
+    let error = monitor
+        .evaluate(&input, &mut output)
+        .expect_err("the pending source must participate in cycle validation");
+    assert!(matches!(
+        error,
+        DataflowEvaluationError::DynamicDependencyCycle(_)
+    ));
+    assert_eq!(output, untouched, "a rejected tick must not publish output");
+    assert!(matches!(
+        monitor.evaluate(&input, &mut output),
+        Err(DataflowEvaluationError::MonitorFailed)
+    ));
+}
+
 fn history_id_for(monitor: &DataflowMonitor, variable: &str) -> HistoryId {
     let slot = monitor
         .program
