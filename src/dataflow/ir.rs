@@ -657,9 +657,12 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             append_ref_descriptor(descriptor, scrutinee, layout);
             for arm in arms {
                 let _ = write!(descriptor, "){{{}", arm.pattern);
-                if arm.guard.is_some() {
-                    descriptor.push_str(" if …");
+                if let Some(guard) = &arm.guard {
+                    descriptor.push_str(" if ");
+                    append_function_descriptor(descriptor, guard, layout);
                 }
+                descriptor.push_str(" -> ");
+                append_function_descriptor(descriptor, &arm.body, layout);
                 descriptor.push(';');
             }
             descriptor.push('}');
@@ -787,25 +790,7 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
         StreamOp::Function { func }
         | StreamOp::DirectApply { func, .. }
         | StreamOp::RecursiveApply { func, .. } => {
-            descriptor.push_str("function(");
-            for parameter in &func.parameters {
-                append_identifier(descriptor, parameter.name());
-                descriptor.push(',');
-            }
-            descriptor.push_str("captures=");
-            for slot in &func.capture_slots {
-                if let Some(variable) = layout.variable(*slot) {
-                    append_identifier(descriptor, variable.name());
-                }
-                descriptor.push(',');
-            }
-            descriptor.push_str("body{");
-            append_graph_descriptor(
-                descriptor,
-                &func.program.graph,
-                &func.program.environment_layout,
-            );
-            descriptor.push_str("})");
+            append_function_descriptor(descriptor, func, layout);
         }
         StreamOp::Apply { func, args } => append_apply(descriptor, "apply", func, args, layout),
         StreamOp::Partial { func, args, .. } => {
@@ -836,6 +821,34 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             descriptor.push(')');
         }
     }
+}
+
+/// Describes a compiled function: its parameters, its captures named in the
+/// enclosing `layout`, and its body described in the function's own layout.
+fn append_function_descriptor(
+    descriptor: &mut String,
+    func: &StreamFunction,
+    layout: &EnvironmentLayout,
+) {
+    descriptor.push_str("function(");
+    for parameter in &func.parameters {
+        append_identifier(descriptor, parameter.name());
+        descriptor.push(',');
+    }
+    descriptor.push_str("captures=");
+    for slot in &func.capture_slots {
+        if let Some(variable) = layout.variable(*slot) {
+            append_identifier(descriptor, variable.name());
+        }
+        descriptor.push(',');
+    }
+    descriptor.push_str("body{");
+    append_graph_descriptor(
+        descriptor,
+        &func.program.graph,
+        &func.program.environment_layout,
+    );
+    descriptor.push_str("})");
 }
 
 fn append_unary_named(

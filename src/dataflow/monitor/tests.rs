@@ -3994,3 +3994,69 @@ mod steady_state_allocations {
         }
     }
 }
+
+fn assert_match_arm_program_replacement(source: &str, target: &str) {
+    use crate::dataflow::ir::canonical_graph_descriptor;
+
+    let source = format!("use experimental::pattern_matching\n{source}");
+    let target = format!("use experimental::pattern_matching\n{target}");
+    let source = DataflowProgram::compile_checked(elaborated(&source)).unwrap();
+    let target = DataflowProgram::compile_checked(elaborated(&target)).unwrap();
+    let source_stream = &source.stream_programs()[0];
+    let target_stream = &target.stream_programs()[0];
+    let source_descriptor =
+        canonical_graph_descriptor(&source_stream.graph, &source_stream.environment_layout);
+    let target_descriptor =
+        canonical_graph_descriptor(&target_stream.graph, &target_stream.environment_layout);
+    let source_state_key = source_stream.state_key();
+    let target_state_key = target_stream.state_key();
+    let source_definition = *source.definition_key();
+    let target_definition = *target.definition_key();
+
+    let mut output = [Value::NoVal];
+    let mut fresh_target = DataflowMonitor::from_program(target.clone());
+    fresh_target
+        .evaluate(&[Value::Int(1)], &mut output)
+        .unwrap();
+    assert_eq!(output, [Value::Int(100)]);
+    let mut monitor = DataflowMonitor::from_program(source);
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    assert_eq!(output, [Value::Int(10)]);
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    monitor.evaluate(&[Value::Int(1)], &mut output).unwrap();
+    assert_eq!(
+        output,
+        [Value::Int(100)],
+        "replacement must execute the target's changed match arm program"
+    );
+    assert!(
+        report.monitor_changed,
+        "a changed arm must not select RetainExact"
+    );
+    assert_eq!(report.context_transfer.streams.len(), 1);
+    assert_eq!(
+        report.context_transfer.streams[0].outcome,
+        StreamStateTransferOutcome::Initialized
+    );
+    assert_ne!(source_descriptor, target_descriptor);
+    assert_ne!(source_state_key, target_state_key);
+    assert_ne!(source_definition, target_definition);
+}
+
+#[test]
+fn root_replacement_invalidates_changed_match_arm_body() {
+    assert_match_arm_program_replacement(
+        "in x: Int\nout y: Int\ny = match(x) { _ -> 10, }",
+        "in x: Int\nout y: Int\ny = match(x) { _ -> 100, }",
+    );
+}
+
+#[test]
+fn root_replacement_invalidates_changed_match_arm_guard() {
+    assert_match_arm_program_replacement(
+        "in x: Int\nout y: Int\ny = match(x) { n if n > 0 -> 10, _ -> 100, }",
+        "in x: Int\nout y: Int\ny = match(x) { n if n < 0 -> 10, _ -> 100, }",
+    );
+}
