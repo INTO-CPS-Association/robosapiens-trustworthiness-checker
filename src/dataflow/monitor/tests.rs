@@ -4123,3 +4123,48 @@ fn root_replacement_invalidates_changed_recursive_call_arguments() {
         100,
     );
 }
+
+#[test]
+fn root_replacement_invalidates_a_capture_whose_type_changed() {
+    let program = |x_type: &str| {
+        DataflowProgram::compile_checked(elaborated(&format!(
+            "use experimental::functions\nin x: {x_type}\nin w: Int\nout z: Bool\n\
+             z = (\\v: Int -> is_defined(x[1]))(w)"
+        )))
+        .unwrap()
+    };
+    let source = program("Int");
+    let target = program("Float");
+    assert_ne!(source.definition_key(), target.definition_key());
+
+    let mut output = [Value::NoVal];
+    let mut fresh_target = DataflowMonitor::from_program(target.clone());
+    let row = input_row(
+        &fresh_target,
+        &[("x", Value::Float(1.5)), ("w", Value::Int(0))],
+    );
+    fresh_target.evaluate(&row, &mut output).unwrap();
+    assert_eq!(
+        output,
+        [Value::Bool(false)],
+        "a fresh target has no history"
+    );
+
+    let mut monitor = DataflowMonitor::from_program(source);
+    for x in [1, 2] {
+        let row = input_row(&monitor, &[("x", Value::Int(x)), ("w", Value::Int(0))]);
+        monitor.evaluate(&row, &mut output).unwrap();
+    }
+    assert_eq!(output, [Value::Bool(true)]);
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert!(report.monitor_changed);
+    let row = input_row(&monitor, &[("x", Value::Float(1.5)), ("w", Value::Int(0))]);
+    monitor.evaluate(&row, &mut output).unwrap();
+    assert_eq!(
+        output,
+        [Value::Bool(false)],
+        "the captured `Int` history must not survive as the target's `Float` history"
+    );
+}

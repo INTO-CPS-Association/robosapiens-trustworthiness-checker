@@ -827,8 +827,8 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
     }
 }
 
-/// Describes a compiled function: its parameters, its captures named in the
-/// enclosing `layout`, and its body described in the function's own layout.
+/// Describes a compiled function: its parameters, its captures named and
+/// typed by the enclosing `layout`, and its body in the function's own layout.
 fn append_function_descriptor(
     descriptor: &mut String,
     func: &StreamFunction,
@@ -843,6 +843,10 @@ fn append_function_descriptor(
     for slot in &func.capture_slots {
         if let Some(variable) = layout.variable(*slot) {
             append_identifier(descriptor, variable.name());
+            if let Some(stream_type) = layout.stream_type(*slot) {
+                descriptor.push(':');
+                append_stream_type(descriptor, stream_type);
+            }
         }
         descriptor.push(',');
     }
