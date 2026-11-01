@@ -437,8 +437,8 @@ fn unwrap_or_evaluates_its_default_eagerly() {
         .expect("y is defined")
         .to_string();
     assert!(
-        printed.starts_with("\\option, fallback -> match(option)")
-            && printed.ends_with("None -> fallback, }(o, default(x[1], 0))"),
+        printed.starts_with("(\\option, fallback -> match(option)")
+            && printed.ends_with("None -> fallback, })(o, default(x[1], 0))"),
         "{printed}"
     );
     let rows = evaluate(

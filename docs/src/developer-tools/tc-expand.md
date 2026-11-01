@@ -31,7 +31,7 @@ The report begins:
 
 in reading: Union<None, Some: Int>
 out present: Bool
-present = (\option -> matches(option, Some(_))(reading): Bool)
+present = ((\option -> matches(option, Some(_)))(reading): Bool)
 ```
 
 The command exits 0 on success. Omit `--check-mode strict` for an expanded,

@@ -142,7 +142,13 @@ impl Display for ExprRef<'_> {
                 write!(f, "\\{params} -> {body}")
             }
             Apply(function, args) => {
-                write!(f, "{function}(")?;
+                // Unbracketed, an applied lambda's body would take in the
+                // arguments when the text is parsed again.
+                if matches!(function.view(), Lambda(..)) {
+                    write!(f, "({function})(")?;
+                } else {
+                    write!(f, "{function}(")?;
+                }
                 for (index, arg) in args.into_iter().enumerate() {
                     if index > 0 {
                         write!(f, ", ")?;
@@ -321,6 +327,20 @@ mod tests {
                     if matches!(lhs.view(), super::super::ExprView::Neg(_))
             ));
         }
+    }
+
+    #[test]
+    fn an_applied_lambda_prints_in_brackets_that_parse_back() {
+        let expression = parse_expr("(\\a: Int -> a + 1)(2)").unwrap();
+        let displayed = expression.to_string();
+        assert_eq!(displayed, "(\\a: Int -> (a + 1))(2)");
+        let reparsed = parse_expr(&displayed).unwrap();
+        assert!(matches!(
+            reparsed.as_ref().view(),
+            super::super::ExprView::Apply(function, _)
+                if matches!(function.view(), super::super::ExprView::Lambda(..))
+        ));
+        assert_eq!(reparsed.to_string(), displayed);
     }
 
     #[test]
