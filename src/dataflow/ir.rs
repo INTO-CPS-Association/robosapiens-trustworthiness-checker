@@ -787,10 +787,14 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             spec.site.callable().describe(descriptor);
             descriptor.push(')');
         }
-        StreamOp::Function { func }
-        | StreamOp::DirectApply { func, .. }
-        | StreamOp::RecursiveApply { func, .. } => {
+        StreamOp::Function { func } => {
             append_function_descriptor(descriptor, func, layout);
+        }
+        StreamOp::DirectApply { func, args } => {
+            append_static_apply(descriptor, "direct-apply", func, args, layout)
+        }
+        StreamOp::RecursiveApply { func, args } => {
+            append_static_apply(descriptor, "recursive-apply", func, args, layout)
         }
         StreamOp::Apply { func, args } => append_apply(descriptor, "apply", func, args, layout),
         StreamOp::Partial { func, args, .. } => {
@@ -890,6 +894,26 @@ fn append_map_named(
     append_ref_descriptor(descriptor, reference, layout);
     descriptor.push(',');
     append_identifier(descriptor, key.as_str());
+    descriptor.push(')');
+}
+
+/// Describes a call whose function is known at compile time: the function
+/// itself followed by every argument in order.
+fn append_static_apply(
+    descriptor: &mut String,
+    name: &str,
+    function: &StreamFunction,
+    args: &[BoundRef],
+    layout: &EnvironmentLayout,
+) {
+    descriptor.push_str(name);
+    descriptor.push('(');
+    append_function_descriptor(descriptor, function, layout);
+    descriptor.push(';');
+    for arg in args {
+        append_ref_descriptor(descriptor, arg, layout);
+        descriptor.push(',');
+    }
     descriptor.push(')');
 }
 

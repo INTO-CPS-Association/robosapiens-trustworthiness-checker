@@ -4060,3 +4060,66 @@ fn root_replacement_invalidates_changed_match_arm_guard() {
         "in x: Int\nout y: Int\ny = match(x) { n if n < 0 -> 10, _ -> 100, }",
     );
 }
+
+fn assert_static_call_argument_replacement(
+    source: &str,
+    target: &str,
+    source_result: i64,
+    target_result: i64,
+) {
+    let source = format!("use experimental::functions\n{source}");
+    let target = format!("use experimental::functions\n{target}");
+    let source = DataflowProgram::compile_checked(elaborated(&source)).unwrap();
+    let target = DataflowProgram::compile_checked(elaborated(&target)).unwrap();
+    let source_definition = *source.definition_key();
+    let target_definition = *target.definition_key();
+    let mut output = [Value::NoVal];
+    let mut fresh_target = DataflowMonitor::from_program(target.clone());
+    let target_inputs = input_row(
+        &fresh_target,
+        &[("x", Value::Int(10)), ("z", Value::Int(100))],
+    );
+    fresh_target.evaluate(&target_inputs, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(target_result)], "fresh target call");
+
+    let mut monitor = DataflowMonitor::from_program(source);
+    let inputs = input_row(&monitor, &[("x", Value::Int(10)), ("z", Value::Int(100))]);
+    monitor.evaluate(&inputs, &mut output).unwrap();
+    assert_eq!(output, [Value::Int(source_result)], "source call");
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    monitor.evaluate(&target_inputs, &mut output).unwrap();
+    assert_eq!(
+        output,
+        [Value::Int(target_result)],
+        "replacement must run the target call"
+    );
+    assert_ne!(source_definition, target_definition);
+    assert!(report.monitor_changed);
+    assert_eq!(report.context_transfer.streams.as_slice().len(), 1);
+    assert_eq!(
+        report.context_transfer.streams.as_slice()[0].outcome,
+        StreamStateTransferOutcome::Initialized
+    );
+}
+
+#[test]
+fn root_replacement_invalidates_changed_direct_call_arguments() {
+    assert_static_call_argument_replacement(
+        "in x: Int\nin z: Int\nout y: Int\ny = (\\a: Int, b: Int -> a - b)(x, z)",
+        "in x: Int\nin z: Int\nout y: Int\ny = (\\a: Int, b: Int -> a - b)(z, x)",
+        -90,
+        90,
+    );
+}
+
+#[test]
+fn root_replacement_invalidates_changed_recursive_call_arguments() {
+    assert_static_call_argument_replacement(
+        "in x: Int\nin z: Int\nout y: Int\ny = fix(\\self: (Int -> Int), value: Int -> value)(x)",
+        "in x: Int\nin z: Int\nout y: Int\ny = fix(\\self: (Int -> Int), value: Int -> value)(z)",
+        10,
+        100,
+    );
+}
