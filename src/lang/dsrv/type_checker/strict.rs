@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_runtime_scopes_reject_duplicates_unknown_variables_and_self_references() {
+    fn explicit_runtime_scopes_name_only_distinct_known_streams_other_than_their_owner() {
         for expression in [
             "dynamic(source: Int, {x, x})",
             "defer(source: Int, {x, x})",
@@ -376,6 +376,8 @@ mod tests {
             "defer(source: Int, {missing})",
             "dynamic(source: Int, {z})",
             "defer(source: Int, {z})",
+            "(\\x: Int -> dynamic(source: Int, {x}))(x)",
+            "(\\x: Int -> defer(source: Int, {x}))(x)",
         ] {
             let document = format!("in x: Int\nin source: Str\nout z: Int\nz = {expression}");
             let combinator_source = document.as_str();

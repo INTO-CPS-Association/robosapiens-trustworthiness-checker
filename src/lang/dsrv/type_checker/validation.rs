@@ -191,6 +191,11 @@ fn validate_runtime_scope(
             Some(format!(
                 "runtime scope cannot contain its owning stream {variable}"
             ))
+        } else if context.bindings.contains(variable) {
+            // The runtime supplies a scope's streams, never a binder's value.
+            Some(format!(
+                "runtime scope names {variable}, a parameter or pattern binding; it can name only streams"
+            ))
         } else if !context.contains(variable) {
             Some(format!(
                 "runtime scope contains unknown variable {variable}"
