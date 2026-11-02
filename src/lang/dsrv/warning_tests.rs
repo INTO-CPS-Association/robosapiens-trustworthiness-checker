@@ -151,6 +151,28 @@ fn branches_of_different_types_merged_into_an_unrequested_any_warn() {
     }
 }
 
+/// A function or union that has an `Any` inside it does not say what its
+/// values are, so branches of those types are already dynamic and the merge
+/// does not warn.
+#[test]
+fn branches_of_function_or_union_types_containing_any_do_not_warn() {
+    let header = "use experimental::{modules, generics, tagged_unions}\nuse std::option::*\n";
+    for source in [
+        "in c: Bool\nin f: (Any -> Int)\nin g: (Any -> Str)\nout h: Bool\n\
+         h = (if c then f else g) == f",
+        "in c: Bool\nin f: (Int -> Any)\nin n: Int\nout h: Bool\nh = (if c then f else n) == n",
+        &format!(
+            "{header}in c: Bool\nin o: Option<Any>\nin n: Int\nout h: Bool\n\
+             h = (if c then o else n) == n"
+        ),
+    ] {
+        for options in MODES {
+            let report = check(source, options);
+            assert!(report.warnings().is_empty(), "{source} {options:?}");
+        }
+    }
+}
+
 /// An annotation says the `Any` is meant, an `Any` branch is dynamic
 /// already, equal types merge to themselves, and list elements are often
 /// mixed on purpose: none of these warn.

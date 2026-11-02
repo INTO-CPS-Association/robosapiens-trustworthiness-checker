@@ -1453,6 +1453,16 @@ fn is_fully_known(typ: &TCType) -> bool {
         TCType::List(inner) | TCType::Map(inner) | TCType::Expr(inner) => is_fully_known(inner),
         TCType::Tuple(items) => items.iter().all(is_fully_known),
         TCType::Struct(fields, _) => fields.iter().all(|(_, field)| is_fully_known(field)),
+        TCType::Function(arguments, result) => {
+            arguments.iter().all(is_fully_known) && is_fully_known(result)
+        }
+        TCType::Union(schema) => schema
+            .alternatives()
+            .iter()
+            .all(|alternative| match alternative.payload() {
+                crate::core::UnionPayload::Nullary => true,
+                crate::core::UnionPayload::Of(payload) => is_fully_known(payload),
+            }),
         _ => true,
     }
 }
