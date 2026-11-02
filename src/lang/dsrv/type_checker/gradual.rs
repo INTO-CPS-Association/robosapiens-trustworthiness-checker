@@ -80,12 +80,20 @@ fn gradual_consistent(expected: &StreamType, actual: &TCType) -> bool {
                         }
                 })
         }
-        (StreamType::Struct(ef, _), TCType::Struct(af, _)) => {
-            ef.len() == af.len()
-                && ef
-                    .iter()
-                    .zip(af.iter())
-                    .all(|((en, et), (an, at))| en == an && gradual_consistent(et, at))
+        // Fields match by name and an open struct allows extra fields, as in
+        // `unify`.
+        (StreamType::Struct(ef, e_extra), TCType::Struct(af, a_extra)) => {
+            let expected_covered = ef.iter().all(|(name, e)| {
+                af.iter()
+                    .any(|(other, a)| other == name && gradual_consistent(e, a))
+            });
+            let actual_covered = af.iter().all(|(name, a)| {
+                ef.iter()
+                    .any(|(other, e)| other == name && gradual_consistent(e, a))
+            });
+            (expected_covered && actual_covered)
+                || (*e_extra && expected_covered)
+                || (*a_extra && actual_covered)
         }
         _ => false,
     }
@@ -805,6 +813,18 @@ mod tests {
         )
     }
 
+    /// `out y: output_type; y = r` where the input `r` has `input_type`.
+    fn struct_copy_spec(input_type: StreamType, output_type: StreamType) -> DsrvSpecification {
+        let (r, y): (VarName, VarName) = ("gradual_struct_r".into(), "gradual_struct_y".into());
+        DsrvSpecification::new(
+            BTreeSet::from([r.clone()]),
+            BTreeSet::from([y.clone()]),
+            BTreeMap::from([(y.clone(), Expr::Var(r.clone()))]),
+            BTreeMap::from([(r, input_type), (y, output_type)]),
+            BTreeSet::new(),
+        )
+    }
+
     fn struct_type(fields: &[(&str, StreamType)], allow_extra: bool) -> StreamType {
         StreamType::Struct(
             fields
@@ -821,6 +841,29 @@ mod tests {
         // Checking panics in debug builds if the extra `name` field has no
         // recorded type.
         type_check(spec).expect("an open struct annotation allows extra fields");
+    }
+
+    #[test]
+    fn test_gradual_struct_annotation_matches_fields_by_name() {
+        let input = struct_type(&[("id", StreamType::Int), ("name", StreamType::Str)], false);
+        let output = struct_type(&[("name", StreamType::Str), ("id", StreamType::Int)], false);
+        type_check_gradual(struct_copy_spec(input, output)).expect("field order should not matter");
+    }
+
+    #[test]
+    fn test_gradual_open_struct_annotation_accepts_extra_fields() {
+        let input = struct_type(&[("id", StreamType::Int), ("name", StreamType::Str)], false);
+        let output = struct_type(&[("id", StreamType::Int)], true);
+        type_check_gradual(struct_copy_spec(input, output))
+            .expect("an open struct annotation allows extra fields");
+    }
+
+    #[test]
+    fn test_gradual_closed_struct_annotation_rejects_extra_fields() {
+        let input = struct_type(&[("id", StreamType::Int), ("name", StreamType::Str)], false);
+        let output = struct_type(&[("id", StreamType::Int)], false);
+        type_check_gradual(struct_copy_spec(input, output))
+            .expect_err("a closed struct annotation rejects extra fields");
     }
 
     #[test]
