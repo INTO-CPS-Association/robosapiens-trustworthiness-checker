@@ -52,7 +52,54 @@ struct TypeContext<'types> {
     warnings: Option<&'types mut WarningCollector>,
 }
 
-impl TypeContext<'_> {
+impl<'types> TypeContext<'types> {
+    /// A context for one driver. `strict` is strict checking: runtime
+    /// expression sources must be `Expr<T>`, and an unannotated lambda
+    /// parameter without a hint is an error. `expr_types` is present when
+    /// the pass keeps its types.
+    fn new(
+        environment: Cow<'types, StreamTypeEnvironment>,
+        expr_types: Option<ExprTypesBuilder>,
+        strict: bool,
+        warnings: Option<&'types mut WarningCollector>,
+    ) -> Self {
+        TypeContext {
+            environment,
+            local_bindings: Vec::new(),
+            expr_types,
+            runtime_checks: Vec::new(),
+            owner: None,
+            strict_runtime_sources: strict,
+            dynamic_unhinted_parameters: !strict,
+            parameter_hints: None,
+            warnings,
+        }
+    }
+
+    /// A context for a speculative check, which has the same environment,
+    /// bindings and modes and takes over the recorded types and run-time
+    /// checks. It reports warnings only to `warnings`, and only if this
+    /// context reports any. Give the results back with [`Self::into_records`].
+    fn fork<'a>(&'a mut self, warnings: &'a mut WarningCollector) -> TypeContext<'a> {
+        TypeContext {
+            expr_types: self.expr_types.take(),
+            runtime_checks: std::mem::take(&mut self.runtime_checks),
+            environment: Cow::Borrowed(self.environment.as_ref()),
+            local_bindings: self.local_bindings.clone(),
+            owner: self.owner.clone(),
+            strict_runtime_sources: self.strict_runtime_sources,
+            dynamic_unhinted_parameters: self.dynamic_unhinted_parameters,
+            parameter_hints: None,
+            warnings: self.warnings.is_some().then_some(warnings),
+        }
+    }
+
+    /// The recorded types and run-time checks, to hand back to the context
+    /// this one was forked from.
+    fn into_records(self) -> (Option<ExprTypesBuilder>, Vec<(ExprId, StreamType)>) {
+        (self.expr_types, self.runtime_checks)
+    }
+
     fn get(&self, name: &VarName) -> Option<&StreamType> {
         self.local_bindings
             .iter()
@@ -81,17 +128,12 @@ fn check_specification_with(
 ) -> SemanticResult<CheckedDsrvSpecification> {
     super::validation::validate_specification(&spec)?;
     let mut errors = Vec::new();
-    let mut context = TypeContext {
-        environment: Cow::Owned(spec.type_annotations().clone()),
-        local_bindings: Vec::new(),
-        expr_types: Some(spec.exprs.annotations_builder()),
-        runtime_checks: Vec::new(),
-        owner: None,
-        strict_runtime_sources: true,
-        dynamic_unhinted_parameters: false,
-        parameter_hints: None,
-        warnings: Some(warnings),
-    };
+    let mut context = TypeContext::new(
+        Cow::Owned(spec.type_annotations().clone()),
+        Some(spec.exprs.annotations_builder()),
+        true,
+        Some(warnings),
+    );
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
         let Some(expected) = spec.type_annotations.get(var) else {
@@ -150,17 +192,12 @@ fn check_expression_with(
     environment: &AstShared<StreamTypeEnvironment>,
     warnings: &mut WarningCollector,
 ) -> SemanticResult<CheckedExpr> {
-    let mut context = TypeContext {
-        environment: Cow::Borrowed(environment.as_ref()),
-        local_bindings: Vec::new(),
-        expr_types: Some(expr.annotations_builder()),
-        runtime_checks: Vec::new(),
-        owner: None,
-        strict_runtime_sources: true,
-        dynamic_unhinted_parameters: false,
-        parameter_hints: None,
-        warnings: Some(warnings),
-    };
+    let mut context = TypeContext::new(
+        Cow::Borrowed(environment.as_ref()),
+        Some(expr.annotations_builder()),
+        true,
+        Some(warnings),
+    );
     check(expr.as_ref(), Some(expected), &mut context).map_err(|error| vec![error])?;
     #[cfg(debug_assertions)]
     assert_expr_fully_typed(expr.as_ref(), context.expr_types.as_ref().unwrap());
@@ -217,17 +254,7 @@ pub(crate) fn infer_expression(
     environment: &StreamTypeEnvironment,
     warnings: &mut WarningCollector,
 ) -> Result<TCType, SemanticError> {
-    let mut context = TypeContext {
-        environment: Cow::Borrowed(environment),
-        local_bindings: Vec::new(),
-        expr_types: None,
-        runtime_checks: Vec::new(),
-        owner: None,
-        strict_runtime_sources: false,
-        dynamic_unhinted_parameters: true,
-        parameter_hints: None,
-        warnings: Some(warnings),
-    };
+    let mut context = TypeContext::new(Cow::Borrowed(environment), None, false, Some(warnings));
     check(expr, expected, &mut context)
 }
 
@@ -239,17 +266,12 @@ pub(crate) fn check_gradual_expr_types(
     environment: &mut StreamTypeEnvironment,
     warnings: &mut WarningCollector,
 ) -> SemanticResult<(ExprTypes, RuntimeChecks)> {
-    let mut context = TypeContext {
-        environment: Cow::Owned(std::mem::take(environment)),
-        local_bindings: Vec::new(),
-        expr_types: Some(spec.exprs.annotations_builder()),
-        runtime_checks: Vec::new(),
-        owner: None,
-        strict_runtime_sources: false,
-        dynamic_unhinted_parameters: true,
-        parameter_hints: None,
-        warnings: Some(warnings),
-    };
+    let mut context = TypeContext::new(
+        Cow::Owned(std::mem::take(environment)),
+        Some(spec.exprs.annotations_builder()),
+        false,
+        Some(warnings),
+    );
     for (var, expr) in spec.roots() {
         context.owner = Some(var.clone());
         let expected = root_types
@@ -2228,20 +2250,11 @@ fn check_attempt(
 ) -> Result<TCType, SemanticError> {
     let recorded = context.runtime_checks.len();
     let mut warnings = WarningCollector::default();
-    let mut attempt = TypeContext {
-        environment: Cow::Borrowed(context.environment.as_ref()),
-        local_bindings: context.local_bindings.clone(),
-        expr_types: context.expr_types.take(),
-        runtime_checks: std::mem::take(&mut context.runtime_checks),
-        owner: context.owner.clone(),
-        strict_runtime_sources: context.strict_runtime_sources,
-        dynamic_unhinted_parameters: context.dynamic_unhinted_parameters,
-        parameter_hints: None,
-        warnings: context.warnings.is_some().then_some(&mut warnings),
-    };
+    let mut attempt = context.fork(&mut warnings);
     let result = check(argument, expected, &mut attempt);
-    context.expr_types = attempt.expr_types.take();
-    context.runtime_checks = std::mem::take(&mut attempt.runtime_checks);
+    let (expr_types, runtime_checks) = attempt.into_records();
+    context.expr_types = expr_types;
+    context.runtime_checks = runtime_checks;
     if result.is_ok() {
         if let Some(collector) = context.warnings.as_deref_mut() {
             collector.absorb(warnings);
