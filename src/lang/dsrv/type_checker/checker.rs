@@ -1008,6 +1008,13 @@ fn check(
                             expr,
                         )?;
                     }
+                    // Fields beyond those an open struct requires still need
+                    // a recorded type.
+                    for (name, value) in fields.iter() {
+                        if !expected_fields.iter().any(|(expected, _)| expected == name) {
+                            check(value, None, context)?;
+                        }
+                    }
                     (expected.cloned().expect("matched expected Struct"), None)
                 }
                 // `Any` expects nothing of the fields, so they are inferred as

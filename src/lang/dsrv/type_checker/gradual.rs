@@ -786,6 +786,43 @@ mod tests {
         assert_eq!(typed.var_expr_ref(&name).unwrap().typ(), &TCType::Str);
     }
 
+    fn struct_spec(annotation: StreamType) -> DsrvSpecification {
+        let robot: VarName = "gradual_struct_robot".into();
+        let mut exprs = BTreeMap::new();
+        exprs.insert(
+            robot.clone(),
+            Expr::Struct(BTreeMap::from([
+                ("id".into(), Expr::Val(1).into()),
+                ("name".into(), Expr::Val("r2d2").into()),
+            ])),
+        );
+        DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([robot.clone()]),
+            exprs,
+            BTreeMap::from([(robot, annotation)]),
+            BTreeSet::new(),
+        )
+    }
+
+    fn struct_type(fields: &[(&str, StreamType)], allow_extra: bool) -> StreamType {
+        StreamType::Struct(
+            fields
+                .iter()
+                .map(|(name, typ)| ((*name).into(), typ.clone()))
+                .collect(),
+            allow_extra,
+        )
+    }
+
+    #[test]
+    fn test_strict_open_struct_annotation_types_extra_fields() {
+        let spec = struct_spec(struct_type(&[("id", StreamType::Int)], true));
+        // Checking panics in debug builds if the extra `name` field has no
+        // recorded type.
+        type_check(spec).expect("an open struct annotation allows extra fields");
+    }
+
     #[test]
     fn test_gradual_struct_annotation_rejects_field_mismatch() {
         let robot: VarName = "gradual_struct_bad_robot".into();
