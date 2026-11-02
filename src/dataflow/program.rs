@@ -3,9 +3,10 @@ use std::rc::Rc;
 use super::VarName;
 use super::environment::{EnvironmentLayout, EnvironmentSlot};
 use super::history_requirements::HistoryRequirements;
-use super::ir::StreamProgram;
+use super::ir::{StreamProgram, append_stream_type};
 use super::monitor_plan::MonitorPlan;
 use super::reconfiguration::DefinitionKey;
+use crate::core::StreamType;
 use crate::fingerprint::FingerprintBuilder;
 
 #[cfg(test)]
@@ -101,6 +102,20 @@ impl DataflowProgram {
         &self.payload.definition_key
     }
 
+    /// Whether `other` declares the same input and output variables, in the same
+    /// order and with the same types.
+    pub(in crate::dataflow) fn same_interface(&self, other: &Self) -> bool {
+        let same_declarations = |own: &[VarName], others: &[VarName]| {
+            own == others
+                && own.iter().all(|variable| {
+                    declared_type_of(self.environment_layout(), variable)
+                        == declared_type_of(other.environment_layout(), variable)
+                })
+        };
+        same_declarations(self.input_vars(), other.input_vars())
+            && same_declarations(self.output_vars(), other.output_vars())
+    }
+
     pub(in crate::dataflow) fn output_slots(&self) -> &[EnvironmentSlot] {
         &self.payload.output_slots
     }
@@ -128,8 +143,9 @@ impl DataflowProgram {
         stream_vars: Vec<VarName>,
         stream_programs: Vec<Rc<StreamProgram>>,
         monitor_plan: MonitorPlan,
-        environment_size: usize,
+        environment_layout: Rc<EnvironmentLayout>,
     ) -> Self {
+        let environment_size = environment_layout.len();
         debug_assert_eq!(output_vars.len(), output_slots.len());
         debug_assert_eq!(stream_vars.len(), stream_programs.len());
         debug_assert_eq!(environment_size, input_vars.len() + stream_programs.len());
@@ -138,18 +154,6 @@ impl DataflowProgram {
                 .iter()
                 .all(|slot| slot.index() < environment_size)
         );
-        let environment_layout = stream_programs
-            .first()
-            .map(|program| Rc::clone(&program.environment_layout))
-            .unwrap_or_else(|| {
-                Rc::new(EnvironmentLayout::from_variables(
-                    input_vars
-                        .iter()
-                        .cloned()
-                        .chain(stream_vars.iter().cloned()),
-                ))
-            });
-        debug_assert_eq!(environment_layout.len(), environment_size);
         debug_assert!(
             stream_programs
                 .iter()
@@ -162,8 +166,13 @@ impl DataflowProgram {
             &stream_programs,
             &environment_layout,
         );
-        let definition_key =
-            monitor_definition_key(&input_vars, &output_vars, &stream_vars, &stream_programs);
+        let definition_key = monitor_definition_key(
+            &input_vars,
+            &output_vars,
+            &stream_vars,
+            &stream_programs,
+            &environment_layout,
+        );
         Self {
             payload: Rc::new(DataflowProgramPayload {
                 input_vars,
@@ -186,17 +195,32 @@ fn monitor_definition_key(
     output_vars: &[VarName],
     stream_vars: &[VarName],
     stream_programs: &[Rc<StreamProgram>],
+    environment_layout: &EnvironmentLayout,
 ) -> DefinitionKey {
     let mut fingerprint = FingerprintBuilder::new("dataflow-definition-v1");
-    for variable in input_vars {
+    let write_declaration = |fingerprint: &mut FingerprintBuilder, variable: &VarName| {
         fingerprint.write_str(&variable.name());
-    }
-    for variable in output_vars {
-        fingerprint.write_str(&variable.name());
+        let mut declared_type = String::new();
+        if let Some(stream_type) = declared_type_of(environment_layout, variable) {
+            append_stream_type(&mut declared_type, stream_type);
+        }
+        fingerprint.write_str(&declared_type);
+    };
+    for variable in input_vars.iter().chain(output_vars) {
+        write_declaration(&mut fingerprint, variable);
     }
     for (variable, program) in stream_vars.iter().zip(stream_programs) {
-        fingerprint.write_str(&variable.name());
+        write_declaration(&mut fingerprint, variable);
         fingerprint.write_u128(program.state_key().value());
     }
     DefinitionKey::from_fingerprint(fingerprint.finish())
+}
+
+fn declared_type_of<'layout>(
+    environment_layout: &'layout EnvironmentLayout,
+    variable: &VarName,
+) -> Option<&'layout StreamType> {
+    environment_layout
+        .slot(variable)
+        .and_then(|slot| environment_layout.stream_type(slot))
 }

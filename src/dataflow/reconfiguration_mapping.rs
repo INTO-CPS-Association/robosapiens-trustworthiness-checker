@@ -87,7 +87,9 @@ impl ReconfigurationMapping {
                 };
                 let source_program = &source.stream_programs()[source_stream.index()];
                 let target_program = &target.stream_programs()[target_stream.index()];
-                if source_program.state_key() == target_program.state_key() {
+                if source_program.state_key() == target_program.state_key()
+                    && source_program.automatic_scopes_agree(target_program)
+                {
                     StreamMapping::Exact(source_stream)
                 } else {
                     StreamMapping::Unmapped
@@ -171,7 +173,8 @@ impl ReconfigurationMapping {
             let target_program = &target.stream_programs()[target_stream.index()];
             match mapping {
                 StreamMapping::Exact(_)
-                    if source_program.state_key() != target_program.state_key() =>
+                    if source_program.state_key() != target_program.state_key()
+                        || !source_program.automatic_scopes_agree(target_program) =>
                 {
                     return Err(ReconfigurationMappingError::ExactStreamMismatch {
                         target: target_stream,
@@ -456,6 +459,46 @@ mod tests {
             assert!(matches!(
                 mapping.stream(StreamId::new(0)),
                 Some(StreamMapping::Unmapped)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_dynamic_stream_is_unmapped_when_a_variable_its_text_may_read_is_retyped() {
+        for kind in ["dynamic", "defer"] {
+            let program = |x_type: &str| {
+                compile(&format!(
+                    "in x: {x_type}\nin source: Str\nout z: Int\nz = {kind}(source: Int)"
+                ))
+            };
+            let (source, target) = (program("Int"), program("Float"));
+            let mapping = ReconfigurationMapping::between(&source, &target);
+            assert!(matches!(
+                mapping.stream(StreamId::new(0)),
+                Some(StreamMapping::Unmapped)
+            ));
+            mapping.validate(&source, &target).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_dynamic_stream_stays_exact_beside_an_added_or_reordered_declaration() {
+        for kind in ["dynamic", "defer"] {
+            let source = compile(&format!(
+                "in x: Int\nin y: Float\nin source: Str\nout z: Int\nz = {kind}(source: Int)"
+            ));
+            let target = compile(&format!(
+                "in added: Str\nin y: Float\nin x: Int\nin source: Str\nout z: Int\n\
+                 z = {kind}(source: Int)"
+            ));
+            assert_eq!(
+                source.stream_programs()[0].state_key(),
+                target.stream_programs()[0].state_key()
+            );
+            let mapping = ReconfigurationMapping::between(&source, &target);
+            assert!(matches!(
+                mapping.stream(StreamId::new(0)),
+                Some(StreamMapping::Exact(_))
             ));
         }
     }

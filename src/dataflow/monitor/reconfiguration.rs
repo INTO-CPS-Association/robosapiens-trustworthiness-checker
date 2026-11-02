@@ -582,9 +582,8 @@ impl DataflowMonitor {
 
         let monitor_changed =
             candidate.program().definition_key() != active.program().definition_key();
-        let interface_changed = io_interface_changed
-            || candidate.input_vars() != active.input_vars()
-            || candidate.output_vars() != active.output_vars();
+        let interface_changed =
+            io_interface_changed || !candidate.program().same_interface(active.program());
         let monitor_revision = active
             .revision
             .checked_next()

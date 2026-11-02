@@ -12,7 +12,7 @@ Schedule positions, physical route positions, and coincidental storage indices a
 
 The identities divide by how equality is decided.
 
-**Structural keys** are fingerprints of the compiled body. `StreamStateKey` and `DefinitionKey` are 128-bit values derived from the canonical graph descriptor, so two of them are equal precisely when the compiled bodies are semantically identical — same operations, same operands, same resolved variable names. Renaming an intermediate, reordering equations, or changing a schedule leaves them equal. Changing what the stream computes does not.
+**Structural keys** are fingerprints of the compiled body. `StreamStateKey` and `DefinitionKey` are 128-bit values derived from the canonical graph descriptor, so two of them are equal precisely when the compiled bodies are semantically identical — same operations, same operands, same resolved variable names. Renaming an intermediate, reordering equations, or changing a schedule leaves them equal. Changing what the stream computes does not. `DefinitionKey` also records the declared type of every input, output and auxiliary stream, so a retyped declaration cannot be retained as an exact match even where no stream reads it.
 
 **Positional keys** identify a location. `ExpressionStateKey` is literally `stream/owner/occurrence`: the third `dynamic` in stream `alert` is the same occurrence across two definitions because it sits in the same place, regardless of what source text it happens to be running. A reconfiguration point is identified this way because its source text is expected to change while the point itself persists.
 
@@ -34,7 +34,7 @@ The identities divide by how equality is decided.
 
 ## Cross-definition mapping
 
-`ReconfigurationMapping::between` is indexed by the target definition, and asks for each target stream whether some source stream can supply its state. A computed stream maps when variable identity and `StreamStateKey` both agree; environment values map by variable identity and compatible type.
+`ReconfigurationMapping::between` is indexed by the target definition, and asks for each target stream whether some source stream can supply its state. A computed stream maps when variable identity and `StreamStateKey` both agree, and, where it has a `dynamic` or `defer` with an automatic scope, when every variable both programs hold in that scope keeps its type: text supplied at runtime is checked against those types, and they are not part of the key because a declaration added beside the stream must not cost it its state. Environment values map by variable identity and compatible type.
 
 Because the key is structural rather than positional, this permits stream reordering without moving any state: a definition that declares the same equations in a different order produces the same fingerprints, so every stream maps and nothing is rebuilt. Conversely a stream whose body changed at all is a different stream by this rule, and starts cold — there is no partial match.
 

@@ -353,6 +353,26 @@ impl StreamProgram {
             })
     }
 
+    /// Whether text supplied to each automatically scoped `dynamic` or `defer`
+    /// node here is checked against the same types as at its counterpart in
+    /// `other`, a program with the same [`state_key`](Self::state_key).
+    ///
+    /// Only variables both scopes hold are compared. An active body cannot read
+    /// a variable added beside it, and one that reads a removed variable is
+    /// refused when its environment is projected. A restricted scope's types
+    /// are already part of the state key.
+    pub(super) fn automatic_scopes_agree(&self, other: &Self) -> bool {
+        let mut own_specs = Vec::new();
+        let mut other_specs = Vec::new();
+        for_each_reconfigurable_spec(&self.graph, &mut |spec| own_specs.push(spec));
+        for_each_reconfigurable_spec(&other.graph, &mut |spec| other_specs.push(spec));
+        own_specs.len() == other_specs.len()
+            && own_specs
+                .into_iter()
+                .zip(other_specs)
+                .all(|(own, other)| automatic_scope_types_agree(own, other))
+    }
+
     pub(super) fn can_resolve_dependencies_before_evaluation(&self) -> bool {
         graph_supports_early_dependency_resolution(&self.graph, |source| {
             matches!(source, BoundRef::Const(_) | BoundRef::External(_))
@@ -367,6 +387,63 @@ impl StreamProgram {
     #[inline]
     pub(super) fn uses_static_evaluation(&self) -> bool {
         self.evaluation_mode == EvaluationMode::Static
+    }
+}
+
+fn automatic_scope_types_agree(
+    own: &BoundReconfigurableExpressionSpec,
+    other: &BoundReconfigurableExpressionSpec,
+) -> bool {
+    let (
+        ReconfigurableExpressionScope::Automatic { allowed_variables },
+        ReconfigurableExpressionScope::Automatic {
+            allowed_variables: other_variables,
+        },
+    ) = (&own.scope, &other.scope)
+    else {
+        return true;
+    };
+    let (Some(typing), Some(other_typing)) = (own.site.typing(), other.site.typing()) else {
+        return true;
+    };
+    allowed_variables
+        .iter()
+        .filter(|variable| other_variables.contains(variable))
+        .all(|variable| typing.environment.get(variable) == other_typing.environment.get(variable))
+}
+
+/// Visits every `dynamic` and `defer` node of `graph`, in the order its
+/// descriptor writes them, including those in branches and function bodies.
+fn for_each_reconfigurable_spec<'graph>(
+    graph: &'graph BoundEvaluationGraph,
+    visit: &mut impl FnMut(&'graph BoundReconfigurableExpressionSpec),
+) {
+    for op in &graph.nodes {
+        match op {
+            BoundOp::Reconfigurable(spec) => visit(spec),
+            BoundOp::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                for_each_reconfigurable_spec(then_branch, visit);
+                for_each_reconfigurable_spec(else_branch, visit);
+            }
+            BoundOp::Function { func }
+            | BoundOp::DirectApply { func, .. }
+            | BoundOp::RecursiveApply { func, .. } => {
+                for_each_reconfigurable_spec(&func.program.graph, visit);
+            }
+            BoundOp::Match { arms, .. } => {
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        for_each_reconfigurable_spec(&guard.program.graph, visit);
+                    }
+                    for_each_reconfigurable_spec(&arm.body.program.graph, visit);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -765,8 +842,10 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
             descriptor.push_str(",scope=");
             // An automatic scope is derived from the whole program's variable
             // set, so naming its members here would make every dynamic stream
-            // depend on unrelated declarations. A body that actually reads a
-            // changed variable is caught by that body's own descriptor.
+            // depend on unrelated declarations. A statically written body that
+            // reads a changed variable is caught by that body's own descriptor;
+            // runtime text is not written here, so the types it is checked
+            // against are compared by `automatic_scopes_agree` instead.
             match &spec.scope {
                 ReconfigurableExpressionScope::Automatic { .. } => descriptor.push_str("automatic"),
                 ReconfigurableExpressionScope::Restricted { allowed_variables } => {
@@ -1099,7 +1178,7 @@ fn append_union_descriptor<T: Clone>(
     descriptor.push('>');
 }
 
-fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
+pub(super) fn append_stream_type(descriptor: &mut String, type_: &StreamType) {
     match type_ {
         StreamType::Int => descriptor.push_str("int"),
         StreamType::Float => descriptor.push_str("float"),

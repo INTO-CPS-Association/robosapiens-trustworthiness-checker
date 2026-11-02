@@ -4168,3 +4168,224 @@ fn root_replacement_invalidates_a_capture_whose_type_changed() {
         "the captured `Int` history must not survive as the target's `Float` history"
     );
 }
+
+fn dynamic_reading_x_program(x_type: &str) -> DataflowProgram {
+    DataflowProgram::compile_checked(elaborated(&format!(
+        "in x: {x_type}\nin s: Str\nout y: Bool\ny = dynamic(s: Bool)"
+    )))
+    .unwrap()
+}
+
+/// The checked text of a `dynamic` may read any visible stream, so replacing
+/// a stream's declared type changes what the text means even though no
+/// expression in the specification mentions the stream.
+#[test]
+fn root_replacement_checks_runtime_text_against_a_retyped_input() {
+    let source = dynamic_reading_x_program("Int");
+    let target = dynamic_reading_x_program("Float");
+    let mut output = [Value::NoVal];
+    let mut fresh_target = DataflowMonitor::from_program(target.clone());
+    let row = [
+        ("x", Value::Float(3.0)),
+        ("s", Value::Str("x == 3.0".into())),
+    ];
+    fresh_target
+        .evaluate(&input_row(&fresh_target, &row), &mut output)
+        .unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+
+    let mut monitor = DataflowMonitor::from_program(source);
+    let before = input_row(
+        &monitor,
+        &[("x", Value::Int(3)), ("s", Value::Str("x == 3".into()))],
+    );
+    monitor.evaluate(&before, &mut output).unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+
+    let source_key = *monitor.definition_key();
+    let target_key = *target.definition_key();
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    let after = input_row(&monitor, &row);
+    monitor.evaluate(&after, &mut output).unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+
+    assert_ne!(source_key, target_key);
+    assert!(report.monitor_changed);
+    assert!(report.interface_changed);
+    assert_eq!(
+        report.interface_revision,
+        InterfaceRevision(1),
+        "a retyped input is a new interface"
+    );
+    assert_eq!(
+        report.context_transfer.streams[0].outcome,
+        StreamStateTransferOutcome::Initialized
+    );
+}
+
+/// The active body was checked against the old type, and unchanged text does
+/// not check it again, so it must not survive the replacement.
+#[test]
+fn root_replacement_does_not_keep_a_body_checked_against_the_old_type() {
+    let source = dynamic_reading_x_program("Int");
+    let target = dynamic_reading_x_program("Str");
+    let text = Value::Str("x == 3".into());
+
+    let mut output = [Value::NoVal];
+    let mut monitor = DataflowMonitor::from_program(source);
+    let row = input_row(&monitor, &[("x", Value::Int(3)), ("s", text.clone())]);
+    monitor.evaluate(&row, &mut output).unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+    monitor
+        .reconfigure(target.clone(), ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+
+    let row = [("x", Value::Str("three".into())), ("s", text)];
+    let mut fresh_target = DataflowMonitor::from_program(target);
+    let fresh = fresh_target
+        .evaluate(&input_row(&fresh_target, &row), &mut output)
+        .map_err(|error| error.to_string());
+    assert!(fresh.is_err(), "`x == 3` does not check for `x: Str`");
+    let replaced = monitor
+        .evaluate(&input_row(&monitor, &row), &mut output)
+        .map_err(|error| error.to_string());
+    assert_eq!(replaced, fresh);
+}
+
+#[test]
+fn replacing_a_program_with_itself_stays_exact_and_keys_are_repeatable() {
+    let source = dynamic_reading_x_program("Int");
+    let target = dynamic_reading_x_program("Int");
+    assert_eq!(source.definition_key(), target.definition_key());
+    assert_eq!(
+        source.stream_programs()[0].state_key(),
+        target.stream_programs()[0].state_key()
+    );
+
+    let mut output = [Value::NoVal];
+    let mut monitor = DataflowMonitor::from_program(source);
+    let row = input_row(
+        &monitor,
+        &[("x", Value::Int(3)), ("s", Value::Str("x == 3".into()))],
+    );
+    monitor.evaluate(&row, &mut output).unwrap();
+    assert!(matches!(
+        monitor.plan_reconfiguration(target.clone(), ContextTransferPolicy::MatchingStreamState),
+        MonitorReconfigurationPlan::RetainExact
+    ));
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert!(!report.monitor_changed);
+    assert!(!report.interface_changed);
+    assert_eq!(
+        report.context_transfer.streams[0].outcome,
+        StreamStateTransferOutcome::Transferred
+    );
+    monitor.evaluate(&row, &mut output).unwrap();
+    assert_eq!(output, [Value::Bool(true)]);
+}
+
+/// A guard: the definition key sees a declared type without help from any
+/// expression, so no stream's own key changes.
+#[test]
+fn an_input_nothing_reads_changes_the_definition_key_when_its_type_changes() {
+    let program = |unused_type: &str| {
+        DataflowProgram::compile_checked(elaborated(&format!(
+            "in unused: {unused_type}\nin x: Int\nout y: Int\ny = x + 1"
+        )))
+        .unwrap()
+    };
+    let source = program("Int");
+    let target = program("Float");
+    assert_ne!(source.definition_key(), target.definition_key());
+    assert_eq!(
+        source.stream_programs()[0].state_key(),
+        target.stream_programs()[0].state_key(),
+        "the stream does not read `unused`, so its state remains exact"
+    );
+
+    let mut output = [Value::NoVal];
+    let mut monitor = DataflowMonitor::from_program(source);
+    let row = input_row(&monitor, &[("unused", Value::Int(0)), ("x", Value::Int(1))]);
+    monitor.evaluate(&row, &mut output).unwrap();
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert!(report.monitor_changed);
+    assert!(report.interface_changed);
+    assert_eq!(
+        report.context_transfer.streams[0].outcome,
+        StreamStateTransferOutcome::Transferred
+    );
+}
+
+#[test]
+fn a_retyped_aux_stream_a_dynamic_may_read_starts_that_dynamic_cold() {
+    let program = |aux_type: &str| {
+        DataflowProgram::compile_checked(elaborated(&format!(
+            "in w: Int\nin s: Str\naux a: {aux_type}\nout y: Bool\na = w\ny = dynamic(s: Bool)"
+        )))
+        .unwrap()
+    };
+    let source = program("Int");
+    let target = program("Any");
+    assert_ne!(source.definition_key(), target.definition_key());
+
+    let mut output = [Value::NoVal];
+    let mut monitor = DataflowMonitor::from_program(source);
+    let row = input_row(
+        &monitor,
+        &[("w", Value::Int(3)), ("s", Value::Str("true".into()))],
+    );
+    monitor.evaluate(&row, &mut output).unwrap();
+    let report = monitor
+        .reconfigure(target, ContextTransferPolicy::MatchingStreamState)
+        .unwrap();
+    assert!(report.monitor_changed);
+    assert!(
+        !report.interface_changed,
+        "an aux stream is not part of the interface"
+    );
+    let outcome = |stream: &str| {
+        report
+            .context_transfer
+            .streams
+            .iter()
+            .find(|entry| entry.stream == VarName::new(stream))
+            .unwrap()
+            .outcome
+    };
+    assert_eq!(outcome("y"), StreamStateTransferOutcome::Initialized);
+}
+
+#[test]
+fn a_program_without_streams_still_records_its_input_types() {
+    let program = |input_type: &str| {
+        DataflowProgram::compile_checked(elaborated(&format!("in x: {input_type}"))).unwrap()
+    };
+    assert_ne!(
+        program("Int").definition_key(),
+        program("Float").definition_key()
+    );
+    assert_eq!(
+        program("Int").definition_key(),
+        program("Int").definition_key()
+    );
+}
+
+#[test]
+fn a_changed_output_type_changes_the_definition_key() {
+    let program = |output_type: &str| {
+        DataflowProgram::compile_checked(elaborated(&format!(
+            "in x: Int\nout y: {output_type}\ny = x"
+        )))
+        .unwrap()
+    };
+    assert_ne!(
+        program("Int").definition_key(),
+        program("Any").definition_key()
+    );
+}

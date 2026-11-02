@@ -240,7 +240,7 @@ impl LoweredDataflow {
             stream_variables,
             stream_programs,
             monitor_plan,
-            environment_layout.len(),
+            environment_layout,
         ))
     }
 }
