@@ -313,7 +313,7 @@ fn check(
 ) -> Result<TCType, SemanticError> {
     use ExprView::*;
 
-    let (typ, _resolved_operator) = match expr.view() {
+    let typ = match expr.view() {
         Val(SyntaxLiteral::NoVal) => {
             return Err(SemanticError::UnsupportedLiteral(
                 "Deferred and NoVal are runtime states, not source literals".to_owned(),
@@ -336,7 +336,7 @@ fn check(
                     ),
                 ));
             }
-            (typ, None)
+            typ
         }
         Match(scrutinee, arms, shape) => {
             let scrutinee_type = check(scrutinee, None, context)?;
@@ -376,7 +376,7 @@ fn check(
                 ));
             };
             check_exhaustive(expr, shape, &scrutinee_type)?;
-            (result, None)
+            result
         }
         Matches(scrutinee, guard, pattern) => {
             let scrutinee_type = check(scrutinee, None, context)?;
@@ -388,23 +388,20 @@ fn check(
                 context.local_bindings.truncate(frame);
                 require(checked?, &TCType::Bool, guard)?;
             }
-            (TCType::Bool, None)
+            TCType::Bool
         }
         // A tag names an alternative, not a union, so which union it belongs
         // to comes from the qualifier the writer gave or the type the
         // expression is expected to have.
-        Constructor(payload, tag, qualifier) => (
-            check_constructor(
-                expr,
-                payload.into_iter().next(),
-                tag,
-                qualifier.as_ref(),
-                expected,
-                context,
-            )?,
-            None,
-        ),
-        Var(var) | SIndex(var, _) => (
+        Constructor(payload, tag, qualifier) => check_constructor(
+            expr,
+            payload.into_iter().next(),
+            tag,
+            qualifier.as_ref(),
+            expected,
+            context,
+        )?,
+        Var(var) | SIndex(var, _) => {
             context
                 .get(var)
                 .map(TCType::from_stream_type)
@@ -415,9 +412,8 @@ fn check(
                         SourceLocation::default(),
                     )
                     .located(expr.origin())
-                })?,
-            None,
-        ),
+                })?
+        }
         BinOp(lhs, rhs, parsed) => {
             // The result constraint is not an operand constraint: comparisons
             // produce `Bool` while comparing values of another type. The
@@ -453,7 +449,7 @@ fn check(
             let target_type = TCType::from_stream_type(target);
             let source = check(value, Some(&target_type), context)?;
             require(source, &target_type, expr)?;
-            (target_type, None)
+            target_type
         }
         Cast(value, target) => {
             let source = check(value, None, context)?;
@@ -489,7 +485,7 @@ fn check(
                     format!("cannot cast {source} to {target}{detail}"),
                 ));
             }
-            (target_type, None)
+            target_type
         }
         If(cond, yes, no) => {
             require(
@@ -499,15 +495,12 @@ fn check(
             )?;
             let yes_type = check(yes, expected, context)?;
             let no_type = check(no, expected, context)?;
-            (
-                merge(
-                    Some(expr),
-                    &[(yes, yes_type), (no, no_type)],
-                    expected,
-                    context,
-                )?,
-                None,
-            )
+            merge(
+                Some(expr),
+                &[(yes, yes_type), (no, no_type)],
+                expected,
+                context,
+            )?
         }
         Dynamic(source, result_type, scope) | Defer(source, result_type, scope) => {
             validate_runtime_scope(expr, scope, context)?;
@@ -542,24 +535,21 @@ fn check(
                     ));
                 }
             };
-            (typ, None)
+            typ
         }
         Update(a, b) | Default(a, b) | Init(a, b) => {
             let a_type = check(a, expected, context)?;
             let b_type = check(b, expected, context)?;
-            (
-                merge(Some(expr), &[(a, a_type), (b, b_type)], expected, context)?,
-                None,
-            )
+            merge(Some(expr), &[(a, a_type), (b, b_type)], expected, context)?
         }
         Latch(value, trigger) => {
             let value = check(value, expected, context)?;
             check(trigger, None, context)?;
-            (value, None)
+            value
         }
         IsDefined(value) | When(value) => {
             check(value, None, context)?;
-            (TCType::Bool, None)
+            TCType::Bool
         }
         Not(value) => {
             require(
@@ -567,7 +557,7 @@ fn check(
                 &TCType::Bool,
                 expr,
             )?;
-            (TCType::Bool, None)
+            TCType::Bool
         }
         Neg(value) => {
             let typ = check(value, expected, context)?;
@@ -578,7 +568,7 @@ fn check(
                     "unary minus requires a number",
                 ));
             }
-            (typ, None)
+            typ
         }
         Trunc(value) | Floor(value) | Ceil(value) | Round(value) => {
             require(
@@ -586,7 +576,7 @@ fn check(
                 &TCType::Float,
                 expr,
             )?;
-            (TCType::Int, None)
+            TCType::Int
         }
         Lambda(params, body) => {
             // A parameter's type is its annotation, else the type the
@@ -632,15 +622,12 @@ fn check(
             context.local_bindings.extend(parameters.iter().cloned());
             let result = check(body, result_hint, context);
             context.local_bindings.truncate(frame_start);
-            (
-                TCType::Function(
-                    parameters
-                        .iter()
-                        .map(|(_, typ)| TCType::from_stream_type(typ))
-                        .collect(),
-                    Box::new(result?),
-                ),
-                None,
+            TCType::Function(
+                parameters
+                    .iter()
+                    .map(|(_, typ)| TCType::from_stream_type(typ))
+                    .collect(),
+                Box::new(result?),
             )
         }
         Apply(function, args) if function.generic_function_signature().is_some() => {
@@ -678,7 +665,7 @@ fn check(
                 require(actual.clone(), expected, expr)?;
                 accept_at_run_time(node, &actual, expected, context);
             }
-            (*result, None)
+            *result
         }
         Apply(function, args) => 'apply: {
             let function = check(function, None, context)?;
@@ -687,7 +674,7 @@ fn check(
                 for arg in args {
                     check(arg, None, context)?;
                 }
-                break 'apply (TCType::Any, None);
+                break 'apply TCType::Any;
             }
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -707,12 +694,12 @@ fn check(
                 let actual = check(arg, Some(expected), context)?;
                 require(actual, expected, expr)?;
             }
-            (*result, None)
+            *result
         }
         Fix(function) => 'fix: {
             let function = check(function, None, context)?;
             if function == TCType::Any {
-                break 'fix (TCType::Any, None);
+                break 'fix TCType::Any;
             }
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -734,7 +721,7 @@ fn check(
                 TCType::Function(params[1..].to_vec().into(), result)
             };
             require(params[0].clone(), &fixed, expr)?;
-            (fixed, None)
+            fixed
         }
         Partial(function, args) => 'partial: {
             let function = check(function, None, context)?;
@@ -742,7 +729,7 @@ fn check(
                 for arg in args {
                     check(arg, None, context)?;
                 }
-                break 'partial (TCType::Any, None);
+                break 'partial TCType::Any;
             }
             let TCType::Function(params, result) = function else {
                 return Err(error(
@@ -761,15 +748,12 @@ fn check(
             for (arg, expected) in args.clone().zip(&params) {
                 require(check(arg, Some(expected), context)?, expected, expr)?;
             }
-            (
-                TCType::Function(params[args.len()..].iter().cloned().collect(), result),
-                None,
-            )
+            TCType::Function(params[args.len()..].iter().cloned().collect(), result)
         }
         List(items) => {
             let expected_element = expected.and_then(TCType::list_element_type);
             let element = check_elements(items, expected_element, context)?;
-            (TCType::list(element), None)
+            TCType::list(element)
         }
         Tuple(items) => {
             let expected_items = match expected {
@@ -784,7 +768,7 @@ fn check(
                     context,
                 )?);
             }
-            (TCType::Tuple(types), None)
+            TCType::Tuple(types)
         }
         LIndex(list, index) => {
             require(
@@ -793,9 +777,9 @@ fn check(
                 expr,
             )?;
             match check(list, None, context)? {
-                TCType::List(element) => (*element, None),
+                TCType::List(element) => *element,
                 // A dynamic value is indexed at runtime.
-                TCType::Any => (TCType::Any, None),
+                TCType::Any => TCType::Any,
                 _ => {
                     return Err(error(
                         expr,
@@ -808,11 +792,11 @@ fn check(
         LAppend(list, value) => match check(list, expected, context)? {
             TCType::List(element) => {
                 require(check(value, Some(&element), context)?, &element, expr)?;
-                (TCType::List(element), None)
+                TCType::List(element)
             }
             TCType::Any => {
                 check(value, None, context)?;
-                (TCType::Any, None)
+                TCType::Any
             }
             _ => {
                 return Err(error(
@@ -825,14 +809,11 @@ fn check(
         LConcat(a, b) => {
             let a_type = check(a, expected, context)?;
             let b_type = check(b, expected, context)?;
-            (
-                merge(None, &[(a, a_type), (b, b_type)], expected, context)?,
-                None,
-            )
+            merge(None, &[(a, a_type), (b, b_type)], expected, context)?
         }
         LHead(list) => match check(list, None, context)? {
-            TCType::List(element) => (*element, None),
-            TCType::Any => (TCType::Any, None),
+            TCType::List(element) => *element,
+            TCType::Any => TCType::Any,
             _ => {
                 return Err(error(
                     expr,
@@ -850,7 +831,7 @@ fn check(
                     "tail requires a list",
                 ));
             }
-            (typ, None)
+            typ
         }
         LLen(list) => {
             let typ = check(list, None, context)?;
@@ -861,7 +842,7 @@ fn check(
                     "length requires a list",
                 ));
             }
-            (TCType::Int, None)
+            TCType::Int
         }
         LMap(function, list) => {
             let list = match check(list, None, context)? {
@@ -890,7 +871,7 @@ fn check(
                     "map function has wrong type",
                 ));
             }
-            (TCType::List(output), None)
+            TCType::List(output)
         }
         LFilter(function, list) => {
             let list = match check(list, expected, context)? {
@@ -919,7 +900,7 @@ fn check(
                     "filter predicate has wrong type",
                 ));
             }
-            (list, None)
+            list
         }
         LFold(function, init, list) => {
             let accumulator = check(init, expected, context)?;
@@ -957,7 +938,7 @@ fn check(
                     "fold function has wrong type",
                 ));
             }
-            (accumulator, None)
+            accumulator
         }
         Map(fields) => {
             reject_duplicate_fields(expr, &fields)?;
@@ -967,7 +948,7 @@ fn check(
                 expected_value,
                 context,
             )?;
-            (TCType::map(value), None)
+            TCType::map(value)
         }
         ObjectLiteral(fields) if matches!(expected, Some(TCType::Map(_))) => {
             reject_duplicate_fields(expr, &fields)?;
@@ -977,7 +958,7 @@ fn check(
                 expected_value,
                 context,
             )?;
-            (TCType::map(value), None)
+            TCType::map(value)
         }
         Struct(fields) => {
             reject_duplicate_fields(expr, &fields)?;
@@ -1015,7 +996,7 @@ fn check(
                             check(value, None, context)?;
                         }
                     }
-                    (expected.cloned().expect("matched expected Struct"), None)
+                    expected.cloned().expect("matched expected Struct")
                 }
                 // `Any` expects nothing of the fields, so they are inferred as
                 // they are with no expectation at all.
@@ -1024,7 +1005,7 @@ fn check(
                     for (name, value) in fields.iter() {
                         inferred.push((name.clone(), check(value, None, context)?));
                     }
-                    (TCType::Struct(inferred, false), None)
+                    TCType::Struct(inferred, false)
                 }
                 Some(_) => {
                     return Err(error(
@@ -1082,25 +1063,22 @@ fn check(
                 }
                 _ => actual,
             };
-            (checked, None)
+            checked
         }
         MGet(map, key) => match check(map, None, context)? {
-            TCType::Map(value) => (*value, None),
-            TCType::Any => (TCType::Any, None),
-            TCType::Struct(fields, _) => (
-                fields
-                    .iter()
-                    .find(|(name, _)| name == key)
-                    .map(|(_, typ)| typ.clone())
-                    .ok_or_else(|| {
-                        error(
-                            expr,
-                            TypeErrorKind::StructFieldAccess,
-                            "Struct has no field with this name",
-                        )
-                    })?,
-                None,
-            ),
+            TCType::Map(value) => *value,
+            TCType::Any => TCType::Any,
+            TCType::Struct(fields, _) => fields
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, typ)| typ.clone())
+                .ok_or_else(|| {
+                    error(
+                        expr,
+                        TypeErrorKind::StructFieldAccess,
+                        "Struct has no field with this name",
+                    )
+                })?,
             other => {
                 return Err(error(
                     expr,
@@ -1110,34 +1088,28 @@ fn check(
             }
         },
         SGet(value, key) => match check(value, None, context)? {
-            TCType::Any => (TCType::Any, None),
-            TCType::Struct(fields, _) => (
-                fields
-                    .iter()
-                    .find(|(name, _)| name == key)
-                    .map(|(_, typ)| typ.clone())
-                    .ok_or_else(|| {
-                        error(
-                            expr,
-                            TypeErrorKind::StructFieldAccess,
-                            "Struct has no field with this name",
-                        )
-                    })?,
-                None,
-            ),
-            TCType::Tuple(items) => (
-                items
-                    .get(key.parse::<usize>().unwrap_or(usize::MAX))
-                    .cloned()
-                    .ok_or_else(|| {
-                        error(
-                            expr,
-                            TypeErrorKind::StructFieldAccess,
-                            "tuple index out of bounds",
-                        )
-                    })?,
-                None,
-            ),
+            TCType::Any => TCType::Any,
+            TCType::Struct(fields, _) => fields
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, typ)| typ.clone())
+                .ok_or_else(|| {
+                    error(
+                        expr,
+                        TypeErrorKind::StructFieldAccess,
+                        "Struct has no field with this name",
+                    )
+                })?,
+            TCType::Tuple(items) => items
+                .get(key.parse::<usize>().unwrap_or(usize::MAX))
+                .cloned()
+                .ok_or_else(|| {
+                    error(
+                        expr,
+                        TypeErrorKind::StructFieldAccess,
+                        "tuple index out of bounds",
+                    )
+                })?,
             _ => {
                 return Err(error(
                     expr,
@@ -1171,7 +1143,7 @@ fn check(
                 }
             };
             require(check(value, Some(element), context)?, element, expr)?;
-            (map_type, None)
+            map_type
         }
         MRemove(map, _) => {
             let typ = check(map, expected, context)?;
@@ -1182,7 +1154,7 @@ fn check(
                     "remove requires a map",
                 ));
             }
-            (typ, None)
+            typ
         }
         MHasKey(map, _) => {
             let typ = check(map, None, context)?;
@@ -1193,7 +1165,7 @@ fn check(
                     "has-key requires a map",
                 ));
             }
-            (TCType::Bool, None)
+            TCType::Bool
         }
         Sin(value) | Cos(value) | Tan(value) => {
             require(
@@ -1201,7 +1173,7 @@ fn check(
                 &TCType::Float,
                 expr,
             )?;
-            (TCType::Float, None)
+            TCType::Float
         }
         Abs(value) => {
             let typ = check(value, expected, context)?;
@@ -1212,10 +1184,10 @@ fn check(
                     "abs requires a number",
                 ));
             }
-            (typ, None)
+            typ
         }
-        MonitoredAt(_, _) => (TCType::Bool, None),
-        Dist(_, _) => (TCType::Int, None),
+        MonitoredAt(_, _) => TCType::Bool,
+        Dist(_, _) => TCType::Int,
         Check(..) => unreachable!("only elaboration builds a run-time check, after checking"),
     };
     if let Some(expected) = expected {
@@ -1319,7 +1291,7 @@ fn resolve_binary(
     operator: BinaryOperator,
     lhs: &TCType,
     rhs: &TCType,
-) -> Result<(TCType, Option<()>), SemanticError> {
+) -> Result<TCType, SemanticError> {
     let invalid = || {
         let hint = match (lhs, rhs) {
             (TCType::Int, TCType::Float) | (TCType::Float, TCType::Int) => {
@@ -1338,13 +1310,11 @@ fn resolve_binary(
         )
     };
     let numeric_result = || match (lhs, rhs) {
-        (TCType::Int, TCType::Int) => Some((TCType::Int, Some(()))),
-        (TCType::Float, TCType::Float) => Some((TCType::Float, Some(()))),
-        (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => Some((TCType::Int, Some(()))),
-        (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => {
-            Some((TCType::Float, Some(())))
-        }
-        (TCType::Any, TCType::Any) => Some((TCType::Any, None)),
+        (TCType::Int, TCType::Int) => Some(TCType::Int),
+        (TCType::Float, TCType::Float) => Some(TCType::Float),
+        (TCType::Any, TCType::Int) | (TCType::Int, TCType::Any) => Some(TCType::Int),
+        (TCType::Any, TCType::Float) | (TCType::Float, TCType::Any) => Some(TCType::Float),
+        (TCType::Any, TCType::Any) => Some(TCType::Any),
         _ => None,
     };
 
@@ -1354,27 +1324,27 @@ fn resolve_binary(
             if matches!(lhs, TCType::Bool | TCType::Any)
                 && matches!(rhs, TCType::Bool | TCType::Any) =>
         {
-            (TCType::Bool, Some(()))
+            TCType::Bool
         }
         BinaryOperatorKind::String
             if matches!(lhs, TCType::Str | TCType::Any)
                 && matches!(rhs, TCType::Str | TCType::Any) =>
         {
-            (TCType::Str, Some(()))
+            TCType::Str
         }
-        BinaryOperatorKind::Equality(_) if unify(lhs, rhs).is_some() => (TCType::Bool, Some(())),
-        BinaryOperatorKind::Ordering(_) if numeric_result().is_some() => (TCType::Bool, Some(())),
+        BinaryOperatorKind::Equality(_) if unify(lhs, rhs).is_some() => TCType::Bool,
+        BinaryOperatorKind::Ordering(_) if numeric_result().is_some() => TCType::Bool,
         BinaryOperatorKind::Ordering(_)
             if matches!(lhs, TCType::Bool | TCType::Any)
                 && matches!(rhs, TCType::Bool | TCType::Any) =>
         {
-            (TCType::Bool, Some(()))
+            TCType::Bool
         }
         BinaryOperatorKind::Ordering(_)
             if matches!(lhs, TCType::Str | TCType::Any)
                 && matches!(rhs, TCType::Str | TCType::Any) =>
         {
-            (TCType::Bool, Some(()))
+            TCType::Bool
         }
         _ => return Err(invalid()),
     })
@@ -1993,7 +1963,7 @@ fn check_generic_def_call(
     args: ExprRefs<'_>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
-) -> Result<(TCType, Option<()>), SemanticError> {
+) -> Result<TCType, SemanticError> {
     let signature = function
         .generic_function_signature()
         .expect("generic call guard supplies a signature");
@@ -2176,7 +2146,7 @@ fn check_generic_def_call(
     if let Some(expected) = expected {
         require(result.clone(), expected, call)?;
     }
-    Ok((result, None))
+    Ok(result)
 }
 
 /// Check the operands of a binary operator. Either grounded operand can supply
