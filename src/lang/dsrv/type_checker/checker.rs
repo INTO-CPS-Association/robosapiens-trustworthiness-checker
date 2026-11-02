@@ -94,6 +94,36 @@ impl<'types> TypeContext<'types> {
         }
     }
 
+    /// Check the root expression of stream `var` against `expected`.
+    fn check_root(
+        &mut self,
+        var: &VarName,
+        expr: ExprRef<'_>,
+        expected: &TCType,
+    ) -> Result<(), SemanticError> {
+        self.owner = Some(var.clone());
+        check(expr, Some(expected), self).map(|_| ())
+    }
+
+    /// The types and run-time checks of a pass that checked every root of
+    /// `spec`.
+    fn finish(&mut self, spec: &DsrvSpecification) -> (ExprTypes, RuntimeChecks) {
+        #[cfg(debug_assertions)]
+        assert_all_exprs_typed(spec, self.expr_types.as_ref().unwrap());
+        let expr_types = self
+            .expr_types
+            .take()
+            .expect("the pass records expression types")
+            .finish()
+            .expect("successful checking typed every expression");
+        let runtime_checks = finish_runtime_checks(
+            std::mem::take(&mut self.runtime_checks),
+            spec.exprs.sparse_annotations_builder(),
+            spec.nodes(),
+        );
+        (expr_types, runtime_checks)
+    }
+
     /// The recorded types and run-time checks, to hand back to the context
     /// this one was forked from.
     fn into_records(self) -> (Option<ExprTypesBuilder>, Vec<(ExprId, StreamType)>) {
@@ -135,7 +165,6 @@ fn check_specification_with(
         Some(warnings),
     );
     for (var, expr) in spec.roots() {
-        context.owner = Some(var.clone());
         let Some(expected) = spec.type_annotations.get(var) else {
             errors.push(SemanticError::MissingTypeAnnotation(
                 format!("Variable {var} is missing a type annotation"),
@@ -145,23 +174,12 @@ fn check_specification_with(
             continue;
         };
         let expected = TCType::from_stream_type(expected);
-        if let Err(error) = check(expr, Some(&expected), &mut context) {
+        if let Err(error) = context.check_root(var, expr, &expected) {
             errors.push(error);
         }
     }
     if errors.is_empty() {
-        #[cfg(debug_assertions)]
-        assert_all_exprs_typed(&spec, context.expr_types.as_ref().unwrap());
-        let expr_types = context
-            .expr_types
-            .expect("strict checking records expression types")
-            .finish()
-            .expect("successful checking typed every expression");
-        let runtime_checks = finish_runtime_checks(
-            context.runtime_checks,
-            spec.exprs.sparse_annotations_builder(),
-            spec.nodes(),
-        );
+        let (expr_types, runtime_checks) = context.finish(&spec);
         Ok(CheckedDsrvSpecification::new(
             spec,
             expr_types,
@@ -273,7 +291,6 @@ pub(crate) fn check_gradual_expr_types(
         Some(warnings),
     );
     for (var, expr) in spec.roots() {
-        context.owner = Some(var.clone());
         let expected = root_types
             .get(var)
             .cloned()
@@ -284,24 +301,13 @@ pub(crate) fn check_gradual_expr_types(
             // type.
             let declared = TCType::from_stream_type(&context.environment[var]);
             accept_at_run_time(expr, &TCType::Any, &declared, &mut context);
-        } else if let Err(error) = check(expr, Some(&expected), &mut context) {
+        } else if let Err(error) = context.check_root(var, expr, &expected) {
             *environment = context.environment.into_owned();
             return Err(vec![error]);
         }
     }
+    let (expr_types, runtime_checks) = context.finish(spec);
     *environment = context.environment.into_owned();
-    #[cfg(debug_assertions)]
-    assert_all_exprs_typed(spec, context.expr_types.as_ref().unwrap());
-    let expr_types = context
-        .expr_types
-        .expect("gradual checking records expression types")
-        .finish()
-        .expect("successful gradual checking typed every expression");
-    let runtime_checks = finish_runtime_checks(
-        context.runtime_checks,
-        spec.exprs.sparse_annotations_builder(),
-        spec.nodes(),
-    );
     Ok((expr_types, runtime_checks))
 }
 
