@@ -7,7 +7,6 @@ use super::warnings::WarningCollector;
 use crate::DsrvSpecification;
 use crate::core::{StreamType, UnionPayload};
 use crate::lang::dsrv::ast::CheckedDsrvSpecification;
-use crate::lang::dsrv::ast::ValidatedDsrvSpecification;
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticError, SemanticResult, TypeErrorKind,
 };
@@ -109,7 +108,7 @@ fn can_widen_gradual_error(error: &SemanticError) -> bool {
     }
 }
 
-fn type_check_gradual_for(
+pub(crate) fn type_check_gradual(
     spec: DsrvSpecification,
 ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     let mut warnings = WarningCollector::default();
@@ -222,18 +221,6 @@ fn type_check_gradual_with(
         CheckedDsrvSpecification::new(spec, expr_types, crate::lang::dsrv::TypeCheckMode::Gradual)
             .with_runtime_checks(runtime_checks),
     )
-}
-
-pub(crate) fn type_check_gradual(
-    spec: DsrvSpecification,
-) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
-    type_check_gradual_for(spec)
-}
-
-pub(crate) fn check_validated_gradual(
-    spec: ValidatedDsrvSpecification,
-) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
-    type_check_gradual_for(spec.into_specification())
 }
 
 #[cfg(test)]

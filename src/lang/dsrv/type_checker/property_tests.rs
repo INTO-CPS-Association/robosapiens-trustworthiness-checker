@@ -445,7 +445,7 @@ proptest! {
         };
         let mut annotated = spec;
         annotated.type_annotations = gradual.type_annotations().clone();
-        let (strict, _warnings) = super::strict::type_check(annotated).into_parts();
+        let (strict, _warnings) = super::type_check(annotated).into_parts();
         let strict = match strict {
             Ok(strict) => strict,
             Err(errors) => {
@@ -558,7 +558,7 @@ proptest! {
     // Totality is about not panicking, so a generated spec may warn.
     #[test]
     fn strict_typechecking_is_total(spec in arb_dsrv_spec()) {
-        let _ = super::strict::type_check(spec).into_parts();
+        let _ = super::type_check(spec).into_parts();
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! Inferred node types are stored as immutable metadata indexed by expression ID.
 //!
-//! - `strict`: the strict driver, which requires type annotations on all
-//!   variables
+//! - `checker`: expression checking, and the strict driver, which requires
+//!   type annotations on all variables
 //! - `gradual`: the gradual driver, which infers types for unannotated
 //!   variables and falls back to `Any`
 //! - `types`: the checker type representation and node annotations
@@ -29,7 +29,6 @@
 
 mod checker;
 mod gradual;
-mod strict;
 mod types;
 mod validation;
 mod warnings;
@@ -41,6 +40,5 @@ pub use checker::type_check_expression;
 pub use types::*;
 pub use validation::*;
 
-pub(crate) use checker::check_expression;
-pub(crate) use gradual::{check_validated_gradual, type_check_gradual};
-pub(crate) use strict::{check_validated_strict, type_check};
+pub(crate) use checker::{check_expression, type_check};
+pub(crate) use gradual::type_check_gradual;

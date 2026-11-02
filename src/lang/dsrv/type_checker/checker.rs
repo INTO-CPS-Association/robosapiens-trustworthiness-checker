@@ -143,16 +143,16 @@ impl<'types> TypeContext<'types> {
     }
 }
 
-pub(super) fn check_specification(
+pub(crate) fn type_check(
     spec: DsrvSpecification,
 ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
     let mut warnings = WarningCollector::default();
     let sources = AstShared::clone(spec.sources());
-    let result = check_specification_with(spec, &mut warnings);
+    let result = type_check_with(spec, &mut warnings);
     warnings.report(result, Some(&sources))
 }
 
-fn check_specification_with(
+fn type_check_with(
     spec: DsrvSpecification,
     warnings: &mut WarningCollector,
 ) -> SemanticResult<CheckedDsrvSpecification> {
@@ -780,7 +780,7 @@ fn check(
         }
         List(items) => {
             let expected_element = expected.and_then(TCType::list_element_type);
-            let element = check_elements(items, expected_element, context)?;
+            let element = check_fields(items, expected_element, context)?;
             TCType::list(element)
         }
         Tuple(items) => {
@@ -1231,14 +1231,6 @@ fn check(
             .expect("expression belongs to the expression-type scope");
     }
     Ok(typ)
-}
-
-fn check_elements(
-    items: ExprRefs<'_>,
-    expected: Option<&TCType>,
-    context: &mut TypeContext<'_>,
-) -> Result<TCType, SemanticError> {
-    check_fields(items, expected, context)
 }
 
 fn check_fields<'arena>(
@@ -2490,4 +2482,510 @@ fn reject_duplicate_fields(
 
 fn error(expr: ExprRef<'_>, kind: TypeErrorKind, message: impl Into<String>) -> SemanticError {
     SemanticError::type_error_at(kind, message.into(), expr.span()).located(expr.origin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DsrvSpecification;
+    use crate::VarName;
+    use crate::core::{BinaryOperator, StreamType};
+    use crate::lang::dsrv::ast::{Expr, SyntaxLiteral};
+    use crate::lang::dsrv::diagnostics::{SemanticError, TypeErrorKind};
+    use crate::lang::dsrv::span::Span;
+    use crate::lang::dsrv::test_support::{type_check, type_check_gradual};
+    use crate::lang::dsrv::type_checker::TCType;
+    use ecow::EcoVec;
+    use std::collections::{BTreeMap, BTreeSet};
+    use test_log::test;
+
+    #[test]
+    fn unary_minus_accepts_int_and_float_and_rejects_non_numeric_values() {
+        for source in ["out z: Int\nz = -1", "out z: Float\nz = -1.5"] {
+            type_check(source.parse().unwrap()).expect("numeric negation should be accepted");
+        }
+
+        let errors = type_check("out z: Bool\nz = -true".parse().unwrap())
+            .expect_err("boolean negation should be rejected");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::TypeError(type_error)
+                if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+        )));
+    }
+
+    #[test]
+    fn equality_and_ordering_have_distinct_operand_rules() {
+        type_check("out z: Bool\nz = [1] == [1]".parse().unwrap())
+            .expect("equal lists should be comparable for equality");
+
+        let errors = type_check("out z: Bool\nz = [1] < [1]".parse().unwrap())
+            .expect_err("lists should not support ordering");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            SemanticError::TypeError(type_error)
+                if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+        )));
+    }
+
+    // both semantic drivers implement the complete numeric power table.
+    #[test]
+    fn power_type_table_and_static_negative_exponent_rule() {
+        for (source, expected) in [
+            ("out z: Int\nz = 2 ** 3", TCType::Int),
+            ("out z: Float\nz = 4 ** 0.5", TCType::Float),
+            ("out z: Float\nz = 2.0 ** -3", TCType::Float),
+            ("out z: Float\nz = 4.0 ** 0.5", TCType::Float),
+            ("out z: Int\nz = 2 ** -0", TCType::Int),
+            ("out z: Int\nz = 0 ** (-0)", TCType::Int),
+        ] {
+            let strict =
+                type_check(source.parse().unwrap()).expect("strict power should type check");
+            assert_eq!(
+                strict.var_expr_ref(&VarName::new("z")).unwrap().typ(),
+                &expected
+            );
+            let gradual = type_check_gradual(source.parse().unwrap())
+                .expect("gradual power should type check");
+            assert_eq!(
+                gradual.var_expr_ref(&VarName::new("z")).unwrap().typ(),
+                &expected
+            );
+        }
+
+        for source in ["out z: Int\nz = 2 ** -1", "out z: Int\nz = 2 ** (-1)"] {
+            for errors in [
+                type_check(source.parse().unwrap())
+                    .expect_err("strict must reject known negative exponent"),
+                type_check_gradual(source.parse().unwrap())
+                    .expect_err("gradual must reject known negative exponent"),
+            ] {
+                assert!(errors.iter().any(|error| matches!(
+                    error,
+                    SemanticError::TypeError(type_error)
+                        if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+                            && type_error.message().contains("integer exponent must be non-negative")
+                            && type_error.span().is_some()
+                )));
+            }
+        }
+
+        let dynamic = "in base: Int\nin exponent: Int\nout z: Int\nz = base ** exponent";
+        type_check(dynamic.parse().unwrap()).expect("dynamic Int exponent is valid");
+        type_check_gradual(dynamic.parse().unwrap())
+            .expect("gradual dynamic Int exponent is valid");
+
+        let z = VarName::new("z");
+        let direct_negative_exponent = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z.clone()]),
+            BTreeMap::from([(
+                z.clone(),
+                Expr::BinOp(
+                    Box::new(Expr::Val(SyntaxLiteral::Int(2))),
+                    Box::new(Expr::Val(SyntaxLiteral::Int(-1))),
+                    BinaryOperator::Power,
+                ),
+            )]),
+            BTreeMap::from([(z, StreamType::Int)]),
+            BTreeSet::new(),
+        );
+        for errors in [
+            type_check(direct_negative_exponent.clone())
+                .expect_err("strict must reject a direct negative integer literal"),
+            type_check_gradual(direct_negative_exponent)
+                .expect_err("gradual must reject a direct negative integer literal"),
+        ] {
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.message().contains("integer exponent must be non-negative")
+            )));
+        }
+
+        for source in [
+            "out z: Int\nz = true ** 1",
+            "out z: Int\nz = \"text\" ** 1",
+            "out z: Int\nz = 1 ** true",
+        ] {
+            assert!(
+                type_check(source.parse().unwrap()).is_err(),
+                "{source} should fail"
+            );
+            assert!(
+                type_check_gradual(source.parse().unwrap()).is_err(),
+                "{source} should fail in gradual mode"
+            );
+        }
+    }
+
+    // inequality has equality's admissibility, rather than ordering's.
+    #[test]
+    fn inequality_shares_equality_admissibility_in_strict_and_gradual_modes() {
+        for source in [
+            "out z: Bool\nz = 1 != 2",
+            "out z: Bool\nz = 1.0 != 2.0",
+            "out z: Bool\nz = 1 != 2.0",
+            "out z: Bool\nz = true != false",
+            "out z: Bool\nz = \"a\" != \"b\"",
+            "out z: Bool\nz = [1] != [1]",
+            "out z: Bool\nz = Tuple(1) != Tuple(1)",
+            "out z: Bool\nz = Map(\"x\": 1) != Map(\"x\": 1)",
+        ] {
+            type_check(source.parse().unwrap())
+                .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
+            type_check_gradual(source.parse().unwrap())
+                .unwrap_or_else(|errors| panic!("{source} unexpectedly failed: {errors:?}"));
+        }
+        for source in [
+            "out z: Bool\nz = [1] != true",
+            "out z: Bool\nz = Tuple(1) != 1",
+        ] {
+            let errors = type_check(source.parse().unwrap())
+                .expect_err("incompatible inequality operands should fail");
+            assert!(
+                errors.iter().any(|error| {
+                    matches!(
+                        error,
+                        SemanticError::TypeError(type_error)
+                            if type_error.message().contains("inequality")
+                                || type_error.message().contains("!=")
+                    )
+                }),
+                "diagnostic should identify inequality: {errors:?}"
+            );
+            assert!(type_check_gradual(source.parse().unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn test_top_level_type_check_empty_list_output() {
+        // Simulates a full spec where an output variable is assigned []
+        // and its declared type is List<Int>.
+        let mut exprs = BTreeMap::new();
+        let var: VarName = "y".into();
+        exprs.insert(var.clone(), Expr::List(EcoVec::new()));
+        let mut type_annotations = BTreeMap::new();
+        type_annotations.insert(var.clone(), StreamType::List(Box::new(StreamType::Int)));
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([var.clone()]),
+            exprs,
+            type_annotations,
+            BTreeSet::new(),
+        );
+        let result = type_check(spec);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for spec with y : List<Int> = [], got {:?}",
+            result
+        );
+        let typed_spec = result.unwrap();
+        let te = typed_spec.var_expr_ref(&var).unwrap();
+        assert_eq!(te.typ(), &TCType::list(TCType::Int));
+    }
+
+    #[test]
+    fn test_type_check_preserves_aux_vars() {
+        let x: VarName = "strict_aux_x".into();
+        let z: VarName = "strict_aux_z".into();
+        let u: VarName = "strict_aux_u".into();
+        let exprs = BTreeMap::from([
+            (u.clone(), Expr::Var(x.clone())),
+            (z.clone(), Expr::Var(u.clone())),
+        ]);
+        let type_annotations = BTreeMap::from([
+            (x.clone(), StreamType::Int),
+            (u.clone(), StreamType::Int),
+            (z.clone(), StreamType::Int),
+        ]);
+        let spec = DsrvSpecification::new(
+            BTreeSet::from([x]),
+            BTreeSet::from([z.clone()]),
+            exprs,
+            type_annotations,
+            BTreeSet::from([u.clone()]),
+        );
+
+        let typed = type_check(spec).expect("strict type check should preserve aux vars");
+
+        assert_eq!(typed.aux_vars(), &BTreeSet::from([u.clone()]));
+        assert_eq!(typed.stream_vars(), &BTreeSet::from([z.clone(), u]));
+        assert_eq!(typed.output_vars(), &BTreeSet::from([z]));
+    }
+
+    #[test]
+    fn shared_source_handles_get_independent_contextual_types() {
+        let int_output = VarName::new("int_output");
+        let bool_output = VarName::new("bool_output");
+        let empty_list = Expr::List(EcoVec::new());
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([int_output.clone(), bool_output.clone()]),
+            BTreeMap::from([
+                (int_output.clone(), empty_list.clone()),
+                (bool_output.clone(), empty_list),
+            ]),
+            BTreeMap::from([
+                (
+                    int_output.clone(),
+                    StreamType::List(Box::new(StreamType::Int)),
+                ),
+                (
+                    bool_output.clone(),
+                    StreamType::List(Box::new(StreamType::Bool)),
+                ),
+            ]),
+            Vec::new(),
+        );
+
+        let checked = type_check(spec).expect("both contextual types are valid");
+
+        assert_eq!(
+            checked.var_expr_ref(&int_output).unwrap().typ(),
+            &TCType::list(TCType::Int)
+        );
+        assert_eq!(
+            checked.var_expr_ref(&bool_output).unwrap().typ(),
+            &TCType::list(TCType::Bool)
+        );
+        assert_ne!(
+            checked.var_expr_ref(&int_output).unwrap().expr().id(),
+            checked.var_expr_ref(&bool_output).unwrap().expr().id()
+        );
+    }
+
+    #[test]
+    fn top_level_type_error_uses_document_span() {
+        let input = "in x: Int\nout z: Int\nz = x + true";
+        let source = input;
+        let spec = source.parse().unwrap();
+
+        let errors = type_check(spec).expect_err("spec should fail type checking");
+        let expected_start = input.find("x + true").expect("expression should exist") as u32;
+        let expected_end = expected_start + "x + true".len() as u32;
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+                        && error.span() == Some(Span::new(expected_start, expected_end))
+            )),
+            "expected top-level operator error at {:?}, got {:?}",
+            Span::new(expected_start, expected_end),
+            errors
+        );
+    }
+
+    #[test]
+    fn lalr_top_level_type_error_uses_document_span() {
+        let input = "in x: Int\nout z: Int\nz = x + true";
+        let source = input;
+        let spec = source.parse().unwrap();
+
+        let errors = type_check(spec).expect_err("spec should fail type checking");
+        let expected_start = input.find("x + true").expect("expression should exist") as u32;
+        let expected_end = expected_start + "x + true".len() as u32;
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::OperatorTypeMismatch
+                        && error.span() == Some(Span::new(expected_start, expected_end))
+            )),
+            "expected LALR top-level operator error at {:?}, got {:?}",
+            Span::new(expected_start, expected_end),
+            errors
+        );
+    }
+
+    #[test]
+    fn latch_trigger_may_have_a_different_type_from_its_value() {
+        let spec = "in x: Int\nin trigger: Bool\nout z: Int\nz = latch(x, trigger)"
+            .parse()
+            .unwrap();
+
+        type_check(spec).expect("latch trigger type must not constrain its value type");
+    }
+
+    #[test]
+    fn annotation_mismatch_uses_expression_span() {
+        let input = "out z: Bool\nz = 1";
+        let source = input;
+        let spec = source.parse().unwrap();
+
+        let errors = type_check(spec).expect_err("spec should fail type checking");
+        let expected_start = input.find('1').expect("expression should exist") as u32;
+        let expected_end = expected_start + 1;
+
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::AnnotationTypeMismatch
+                        && error.span() == Some(Span::new(expected_start, expected_end))
+            )),
+            "expected annotation mismatch at {:?}, got {:?}",
+            Span::new(expected_start, expected_end),
+            errors
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_scopes_name_only_distinct_known_streams_other_than_their_owner() {
+        for expression in [
+            "dynamic(source: Int, {x, x})",
+            "defer(source: Int, {x, x})",
+            "dynamic(source: Int, {missing})",
+            "defer(source: Int, {missing})",
+            "dynamic(source: Int, {z})",
+            "defer(source: Int, {z})",
+            "(\\x: Int -> dynamic(source: Int, {x}))(x)",
+            "(\\x: Int -> defer(source: Int, {x}))(x)",
+        ] {
+            let document = format!("in x: Int\nin source: Str\nout z: Int\nz = {expression}");
+            let combinator_source = document.as_str();
+            let lalr_source = document.as_str();
+            let specs: [DsrvSpecification; 2] = [
+                combinator_source.parse().unwrap(),
+                lalr_source.parse().unwrap(),
+            ];
+            for spec in specs {
+                let errors =
+                    type_check(spec).expect_err("invalid runtime scope should be rejected");
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| matches!(error, SemanticError::InvalidRuntimeScope(_, _, _))),
+                    "expected a scope error for `{expression}`, got {errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_defer_scope_type_checks() {
+        let document = "in x: Int\nin source: Str\nout z: Int\nz = defer(source: Int, {x, source})";
+        type_check(document.parse().unwrap()).expect("defer scope should type-check");
+    }
+
+    #[test]
+    fn typed_expression_sources_determine_dynamic_and_defer_results() {
+        for operator in ["dynamic", "defer"] {
+            let source = format!(
+                "in property: Expr<List<Int>>\nout result: List<Int>\nresult = {operator}(property)"
+            );
+            let checked = type_check(source.parse().unwrap())
+                .unwrap_or_else(|errors| panic!("{operator} should accept Expr<T>: {errors:?}"));
+            let result = checked.var_expr_ref(&VarName::new("result")).unwrap();
+            assert_eq!(result.typ(), &TCType::list(TCType::Int));
+            let runtime_source = match result.view() {
+                crate::lang::dsrv::ast::ExprView::Dynamic(source, _, _)
+                | crate::lang::dsrv::ast::ExprView::Defer(source, _, _) => source,
+                _ => panic!("expected runtime expression"),
+            };
+            assert_eq!(
+                runtime_source.typ(),
+                &TCType::Expr(Box::new(TCType::list(TCType::Int)))
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_string_sources_require_local_ascriptions() {
+        for operator in ["dynamic", "defer"] {
+            let accepted =
+                format!("in property: Str\nout result: Int\nresult = {operator}(property: Int)");
+            type_check(accepted.parse().unwrap()).unwrap_or_else(|errors| {
+                panic!("legacy {operator} source should pass: {errors:?}")
+            });
+
+            let rejected =
+                format!("in property: Str\nout result: Int\nresult = {operator}(property)");
+            let errors = type_check(rejected.parse().unwrap())
+                .expect_err("an unascribed Str source must fail strict checking");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                SemanticError::TypeError(type_error)
+                    if type_error.kind() == &TypeErrorKind::ExpectedExpressionSource
+            )));
+        }
+    }
+
+    #[test]
+    fn expression_source_type_must_match_the_result_type() {
+        for expression in ["dynamic(property)", "defer(property: Int)"] {
+            let source = format!("in property: Expr<Bool>\nout result: Int\nresult = {expression}");
+            type_check(source.parse().unwrap())
+                .expect_err("an Expr<Bool> source cannot produce Int");
+        }
+    }
+
+    #[test]
+    fn string_literals_can_initialize_typed_expression_streams() {
+        let source = "aux property: Expr<Int>\nout result: Int\n\
+                      property = \"1 + 1\"\nresult = dynamic(property)";
+        type_check(source.parse().unwrap())
+            .expect("a string literal should initialize an explicitly typed Expr<T> stream");
+    }
+
+    #[test]
+    fn recursive_function_application_type_checks() {
+        let source = "in n: Int\nin bias: Int\nout z: Int\n\
+                      z = fix(\\self: (Int -> Int), k: Int -> \
+                      if k == 0 then bias else self(k - 1) + 1)(n)";
+        type_check(source.parse().unwrap())
+            .expect("recursive function application should type-check");
+    }
+
+    #[test]
+    fn checking_a_clone_does_not_annotate_or_poison_the_original() {
+        let original: DsrvSpecification = "out z: Int\nz = 1".parse().unwrap();
+        let checked = type_check(original.clone()).unwrap();
+
+        assert_eq!(
+            checked.var_expr_ref(&"z".into()).unwrap().typ(),
+            &TCType::Int
+        );
+
+        let mut contradictory = original;
+        contradictory
+            .type_annotations
+            .insert("z".into(), StreamType::Bool);
+        type_check(contradictory).expect_err("a prior check must not cache away a new constraint");
+    }
+
+    /// An `Any` operand is accepted by unary minus and `abs`, as it is by the
+    /// binary operators: it is checked when it runs.
+    #[test]
+    fn unary_minus_and_abs_accept_any() {
+        for source in [
+            "in x: Any\nout y: Any\ny = -x",
+            "in x: Any\nout y: Any\ny = abs(x)",
+        ] {
+            type_check(source.parse().unwrap()).expect("an Any operand should be accepted");
+        }
+    }
+
+    /// `Any` expects nothing of a struct's fields, so the constructor is
+    /// inferred as it is with no expectation, and the struct is accepted
+    /// where `Any` is.
+    #[test]
+    fn a_struct_constructor_checked_against_any_is_inferred() {
+        let z: VarName = "z".into();
+        let exprs = BTreeMap::from([(
+            z.clone(),
+            Expr::Struct(BTreeMap::from([("count".into(), Expr::Val(1).into())])).into(),
+        )]);
+        let spec = DsrvSpecification::new(
+            BTreeSet::new(),
+            BTreeSet::from([z.clone()]),
+            exprs,
+            BTreeMap::from([(z, StreamType::Any)]),
+            BTreeSet::new(),
+        );
+        type_check(spec).expect("a struct constructor is accepted where Any is expected");
+    }
 }

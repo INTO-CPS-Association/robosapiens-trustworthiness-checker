@@ -99,8 +99,8 @@ impl ValidatedDsrvSpecification {
         options: TypeCheckOptions,
     ) -> SemanticAnalysisReport<CheckedDsrvSpecification> {
         match options.mode {
-            TypeCheckMode::Strict => type_checker::check_validated_strict(self),
-            TypeCheckMode::Gradual => type_checker::check_validated_gradual(self),
+            TypeCheckMode::Strict => type_checker::type_check(self.into_specification()),
+            TypeCheckMode::Gradual => type_checker::type_check_gradual(self.into_specification()),
         }
     }
 }
