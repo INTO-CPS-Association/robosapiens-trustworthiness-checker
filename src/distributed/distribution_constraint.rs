@@ -47,6 +47,10 @@ pub enum ConstraintExprKind {
     Abs(Box<ConstraintExpr>),
     Unary(Box<ConstraintExpr>, UnaryOperator),
     Cast(Box<ConstraintExpr>, StreamType),
+    /// A value checking typed `Any`, used where a `StreamType` is needed.
+    /// A data value of another type does not evaluate, as a failed cast
+    /// does not.
+    Check(Box<ConstraintExpr>, StreamType),
     List(EcoVec<ConstraintExpr>),
     ListIndex(Box<ConstraintExpr>, Box<ConstraintExpr>),
     ListAppend(Box<ConstraintExpr>, Box<ConstraintExpr>),
@@ -286,6 +290,17 @@ impl DistributionConstraintPlan {
                 value_operations::cast(self.evaluate(value, bindings, monitored_at, stack)?, target)
                     .ok()
             }
+            E::Check(value, target) => {
+                let value = self.evaluate(value, bindings, monitored_at, stack)?;
+                crate::lang::dsrv::type_checker::check_runtime_value(
+                    &value,
+                    target,
+                    Span::default(),
+                    &Default::default(),
+                )
+                .ok()
+                .map(|()| value)
+            }
             E::List(items) => items
                 .iter()
                 .map(|item| self.evaluate(item, bindings, monitored_at, stack))
@@ -433,6 +448,9 @@ impl Lowerer<'_> {
             }
             Cast(value, target) => {
                 ConstraintExprKind::Cast(Box::new(self.lower_expr(value)?), target.clone())
+            }
+            Check(value, target, _) => {
+                ConstraintExprKind::Check(Box::new(self.lower_expr(value)?), target.clone())
             }
             MGet(map, key) | SGet(map, key) => {
                 ConstraintExprKind::MapGet(Box::new(self.lower_expr(map)?), key.clone())

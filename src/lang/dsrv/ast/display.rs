@@ -88,6 +88,9 @@ impl Display for ExprRef<'_> {
             }
             Cast(value, target) => write!(f, "({value} as {target})"),
             Ascribe(value, target) => write!(f, "({value}: {target})"),
+            // A run-time check is not written by anyone, so it prints as the
+            // value it checks.
+            Check(value, _, _) => write!(f, "{value}"),
             If(cond, yes, no) => write!(f, "(if {} then {} else {})", cond, yes, no),
             SIndex(var, index) => write!(f, "{var}[{index}]"),
             Not(expr) => write!(f, "!{expr}"),

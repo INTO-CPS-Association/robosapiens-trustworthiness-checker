@@ -5,7 +5,13 @@ use itertools::Itertools;
 
 use crate::VarName;
 use crate::core::{ClosedUnion, StreamType};
+use crate::lang::dsrv::ast::ExprArena;
 use std::collections::BTreeMap;
+
+/// The nodes whose `Any` type checking accepted where a value of a concrete
+/// type is needed, each with that type. Elaboration wraps each such node in
+/// a run-time check; a fully typed specification has none.
+pub(crate) type RuntimeChecks = contiguous_tree::SparseNodeAnnotations<ExprArena, StreamType>;
 
 /// Global environment mapping stream variables to their declared or inferred types.
 ///

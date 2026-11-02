@@ -451,7 +451,7 @@ fn collect_required_concrete_inputs(
         return;
     }
 
-    match &expression.kind {
+    match &without_checks(expression).kind {
         E::Not(value) => collect_required_concrete_inputs(value, plan, required),
         E::Binary(left, right, operator)
             if matches!(operator.kind(), BinaryOperatorKind::Boolean(_)) =>
@@ -468,6 +468,16 @@ fn collect_required_concrete_inputs(
     }
 }
 
+/// The expression under any `Check` wrappers. A `Check` only asserts the
+/// run-time type of an `Any` value, which says nothing about the symbolic
+/// structure the SAT solver works on.
+fn without_checks(mut expression: &ConstraintExpr) -> &ConstraintExpr {
+    while let ConstraintExprKind::Check(value, _) = &expression.kind {
+        expression = value;
+    }
+    expression
+}
+
 fn is_symbolically_compilable(
     expression: &ConstraintExpr,
     plan: &DistributionConstraintPlan,
@@ -482,7 +492,7 @@ fn is_symbolically_compilable(
         return true;
     }
 
-    match &expression.kind {
+    match &without_checks(expression).kind {
         E::Value(Value::Bool(_)) | E::MonitoredAt(_, _) => true,
         E::Variable(variable) if plan.input_dependencies().contains(variable) => true,
         E::Variable(variable) => {
@@ -550,6 +560,7 @@ fn collect_input_dependencies(
         | E::Abs(value)
         | E::Unary(value, _)
         | E::Cast(value, _)
+        | E::Check(value, _)
         | E::ListHead(value)
         | E::ListTail(value)
         | E::ListLen(value)
@@ -653,7 +664,7 @@ fn guarded_monitored_choices(
         };
     }
 
-    match &expression.kind {
+    match &without_checks(expression).kind {
         ConstraintExprKind::MonitoredAt(variable, node) => Ok(GuardedChoice::Choices(vec![(
             variable.clone(),
             node.clone(),
@@ -939,7 +950,7 @@ fn compile_expr_to_lit(
 ) -> Result<Lit, SatCompileError> {
     use ConstraintExprKind as E;
 
-    match &expression.kind {
+    match &without_checks(expression).kind {
         E::MonitoredAt(variable, node) => {
             Ok(st.atom_for_monitored_at(variable.clone(), node.clone()))
         }
@@ -1874,6 +1885,44 @@ c = (List.get(xs, 1) == 42) && (List.len(List.append(xs, 0)) == 3) && monitored_
             res.is_ok(),
             "unresolved input vars in SAT constraints should compile to symbolic literals"
         );
+    }
+
+    #[test]
+    fn checked_variables_are_still_symbolic_inputs() {
+        let spec = "in gate\nout c\nc = gate && !gate"
+            .parse::<DsrvSpecification>()
+            .expect("test DSRV specification should parse");
+        let graph = simple_dist_graph();
+        let plan =
+            DistributionConstraintPlan::lower(&spec, [VarName::new("c")], ConstraintProfile::Sat)
+                .unwrap();
+        let checked = |expression: &ConstraintExpr| ConstraintExpr {
+            kind: ConstraintExprKind::Check(
+                Box::new(expression.clone()),
+                crate::core::StreamType::Bool,
+            ),
+            span: expression.span.clone(),
+            display: expression.display.clone(),
+        };
+        let (gate, negated) = match &plan.expression(&VarName::new("c")).unwrap().kind {
+            ConstraintExprKind::Binary(left, right, _) => (checked(left), checked(right)),
+            _ => panic!("expected binary constraint"),
+        };
+        assert!(is_symbolically_compilable(
+            &gate,
+            &plan,
+            &mut BTreeSet::new()
+        ));
+        let mut required = BTreeSet::new();
+        collect_required_concrete_inputs(&gate, &plan, &mut required);
+        assert!(required.is_empty());
+
+        let mut state = CnfCompilerState::new(&graph);
+        let gate = compile_expr_to_lit(&gate, &plan, &mut state).expect("checked input compiles");
+        let negated =
+            compile_expr_to_lit(&negated, &plan, &mut state).expect("checked negation compiles");
+        assert_eq!(gate, -negated);
+        assert_eq!(state.symbolic_input_atoms.len(), 1);
     }
 
     #[test]

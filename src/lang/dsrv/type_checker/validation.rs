@@ -14,6 +14,7 @@ use crate::lang::dsrv::diagnostics::{
     SemanticError, SemanticResult, TypeErrorKind, materialise_errors,
 };
 use crate::lang::dsrv::source_map::{NodeOrigin, SourceLocation};
+use crate::lang::dsrv::span::Span;
 use crate::{Value, VarName};
 use ecow::EcoVec;
 
@@ -274,6 +275,92 @@ pub fn check_value_type(typ: TCType, value: &Value) -> Result<(), String> {
 pub fn check_value_stream_type(typ: &StreamType, value: &Value) -> Result<(), String> {
     let typ = TCType::from_stream_type(typ);
     check_value_type_ref(&typ, value)
+}
+
+/// A value of checked type `Any` that is not of the type it was used at: the
+/// error a runtime stops with at a run-time check.
+///
+/// It names the type the value was needed at, the value, and where the use
+/// was written: the span of the checked node and, when the specification
+/// was located, the file, line and column.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[error("expected {expected}, got {got} {}", self.place())]
+pub struct RuntimeTypeError {
+    expected: StreamType,
+    /// The value with its type, as `Float 1.5`. A value is not `Send`, and
+    /// the error crosses threads, so it keeps the value's printed form.
+    got: String,
+    span: Span,
+    location: SourceLocation,
+}
+
+impl RuntimeTypeError {
+    pub fn expected(&self) -> &StreamType {
+        &self.expected
+    }
+
+    /// The value that failed, with its type, as `Float 1.5`.
+    pub fn got(&self) -> &str {
+        &self.got
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    pub fn location(&self) -> &SourceLocation {
+        &self.location
+    }
+
+    fn place(&self) -> String {
+        let span = self.span;
+        let mut place = match self.location.primary() {
+            Some(site) => {
+                let label = site.label();
+                let at = match site.position() {
+                    Some((line, column)) => format!("at {label}:{line}:{column}"),
+                    None => format!("at {label}"),
+                };
+                match site.snippet() {
+                    Some(snippet) => {
+                        format!("{at} (bytes {}..{}): `{snippet}`", span.start, span.end)
+                    }
+                    None => format!("{at} (bytes {}..{})", span.start, span.end),
+                }
+            }
+            None => format!("at bytes {}..{}", span.start, span.end),
+        };
+        if let Some(definition) = self.location.definition() {
+            let label = definition.label();
+            match definition.position() {
+                Some((line, column)) => {
+                    place.push_str(&format!(", defined at {label}:{line}:{column}"))
+                }
+                None => place.push_str(&format!(", defined in {label}")),
+            }
+        }
+        place
+    }
+}
+
+/// Check a value that checking typed `Any` against `expected`, the type it
+/// is used at. Only a data value is checked: `NoVal`, `Deferred` and `Unit`
+/// pass, as they pass through every operation.
+pub(crate) fn check_runtime_value(
+    value: &Value,
+    expected: &StreamType,
+    span: Span,
+    location: &SourceLocation,
+) -> Result<(), RuntimeTypeError> {
+    if matches!(value, Value::NoVal | Value::Deferred | Value::Unit) {
+        return Ok(());
+    }
+    check_value_stream_type(expected, value).map_err(|_| RuntimeTypeError {
+        expected: expected.clone(),
+        got: format!("{} {value}", extract_value_type(value.clone())),
+        span,
+        location: location.clone(),
+    })
 }
 
 pub fn extract_value_type(value: Value) -> TCType {

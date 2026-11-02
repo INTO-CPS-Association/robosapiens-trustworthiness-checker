@@ -35,6 +35,12 @@ pub(crate) fn evaluate<'a>(
             }
         }
         Cast(value, target) | Ascribe(value, target) => mc::cast(evaluate(value), target.clone()),
+        Check(value, target, location) => mc::check(
+            evaluate(value),
+            target.clone(),
+            node.span(),
+            location.clone(),
+        ),
         Not(value) => mc::not(evaluate(value)),
         Neg(value) => mc::neg(evaluate(value)),
         Update(current, update) => mc::update(evaluate(current), evaluate(update)),

@@ -10,15 +10,15 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::warnings::WarningCollector;
-use super::{StreamTypeEnvironment, TCType};
+use super::{RuntimeChecks, StreamTypeEnvironment, TCType};
 use crate::VarName;
 use crate::core::{
     BinaryOperator, BinaryOperatorKind, ClosedUnion, StreamType, StreamTypeAscription, UnionPayload,
 };
 use crate::lang::dsrv::ast::{
-    AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprFieldRefs,
-    ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView, ReconfigurableExprScope,
-    SyntaxLiteral,
+    AstShared, CheckedDsrvSpecification, CheckedExpr, DsrvSpecification, Expr, ExprArena,
+    ExprFieldRefs, ExprId, ExprRef, ExprRefs, ExprTypes, ExprTypesBuilder, ExprView,
+    ReconfigurableExprScope, SyntaxLiteral,
 };
 use crate::lang::dsrv::diagnostics::{
     SemanticAnalysisReport, SemanticError, SemanticResult, SemanticWarning, SemanticWarningKind,
@@ -33,6 +33,11 @@ struct TypeContext<'types> {
     environment: Cow<'types, StreamTypeEnvironment>,
     local_bindings: Vec<(VarName, StreamType)>,
     expr_types: Option<ExprTypesBuilder>,
+    /// Each node whose `Any` type was accepted where a value of a concrete
+    /// type is needed, with that type, in the order they were accepted; a
+    /// node accepted again takes its latest type. Recorded only alongside
+    /// `expr_types`, in the pass whose types are kept.
+    runtime_checks: Vec<(ExprId, StreamType)>,
     owner: Option<VarName>,
     strict_runtime_sources: bool,
     /// Gradual checking gives a lambda parameter with neither annotation nor
@@ -80,6 +85,7 @@ fn check_specification_with(
         environment: Cow::Owned(spec.type_annotations().clone()),
         local_bindings: Vec::new(),
         expr_types: Some(spec.exprs.annotations_builder()),
+        runtime_checks: Vec::new(),
         owner: None,
         strict_runtime_sources: true,
         dynamic_unhinted_parameters: false,
@@ -109,11 +115,17 @@ fn check_specification_with(
             .expect("strict checking records expression types")
             .finish()
             .expect("successful checking typed every expression");
+        let runtime_checks = finish_runtime_checks(
+            context.runtime_checks,
+            spec.exprs.sparse_annotations_builder(),
+            spec.nodes(),
+        );
         Ok(CheckedDsrvSpecification::new(
             spec,
             expr_types,
             crate::lang::dsrv::TypeCheckMode::Strict,
-        ))
+        )
+        .with_runtime_checks(runtime_checks))
     } else {
         Err(errors)
     }
@@ -142,6 +154,7 @@ fn check_expression_with(
         environment: Cow::Borrowed(environment.as_ref()),
         local_bindings: Vec::new(),
         expr_types: Some(expr.annotations_builder()),
+        runtime_checks: Vec::new(),
         owner: None,
         strict_runtime_sources: true,
         dynamic_unhinted_parameters: false,
@@ -208,6 +221,7 @@ pub(crate) fn infer_expression(
         environment: Cow::Borrowed(environment),
         local_bindings: Vec::new(),
         expr_types: None,
+        runtime_checks: Vec::new(),
         owner: None,
         strict_runtime_sources: false,
         dynamic_unhinted_parameters: true,
@@ -217,16 +231,19 @@ pub(crate) fn infer_expression(
     check(expr, expected, &mut context)
 }
 
+/// The authoritative gradual pass: each node's type, and the run-time checks
+/// of the `Any` values it accepted at a concrete type.
 pub(crate) fn check_gradual_expr_types(
     spec: &DsrvSpecification,
     root_types: &BTreeMap<VarName, TCType>,
     environment: &mut StreamTypeEnvironment,
     warnings: &mut WarningCollector,
-) -> SemanticResult<ExprTypes> {
+) -> SemanticResult<(ExprTypes, RuntimeChecks)> {
     let mut context = TypeContext {
         environment: Cow::Owned(std::mem::take(environment)),
         local_bindings: Vec::new(),
         expr_types: Some(spec.exprs.annotations_builder()),
+        runtime_checks: Vec::new(),
         owner: None,
         strict_runtime_sources: false,
         dynamic_unhinted_parameters: true,
@@ -241,6 +258,10 @@ pub(crate) fn check_gradual_expr_types(
             .unwrap_or_else(|| TCType::from_stream_type(&context.environment[var]));
         if expected == TCType::Any {
             assign_any_to_subtree(expr, context.expr_types.as_mut().unwrap());
+            // A root inferred as `Any` is still used at its stream's declared
+            // type.
+            let declared = TCType::from_stream_type(&context.environment[var]);
+            accept_at_run_time(expr, &TCType::Any, &declared, &mut context);
         } else if let Err(error) = check(expr, Some(&expected), &mut context) {
             *environment = context.environment.into_owned();
             return Err(vec![error]);
@@ -249,11 +270,17 @@ pub(crate) fn check_gradual_expr_types(
     *environment = context.environment.into_owned();
     #[cfg(debug_assertions)]
     assert_all_exprs_typed(spec, context.expr_types.as_ref().unwrap());
-    Ok(context
+    let expr_types = context
         .expr_types
         .expect("gradual checking records expression types")
         .finish()
-        .expect("successful gradual checking typed every expression"))
+        .expect("successful gradual checking typed every expression");
+    let runtime_checks = finish_runtime_checks(
+        context.runtime_checks,
+        spec.exprs.sparse_annotations_builder(),
+        spec.nodes(),
+    );
+    Ok((expr_types, runtime_checks))
 }
 
 fn assign_any_to_subtree(expr: ExprRef<'_>, expr_types: &mut ExprTypesBuilder) {
@@ -415,7 +442,12 @@ fn check(
                     "integer exponent must be non-negative".to_owned(),
                 ));
             }
-            resolve_binary(expr, parsed, &lhs_type, &rhs_type)?
+            let resolved = resolve_binary(expr, parsed, &lhs_type, &rhs_type)?;
+            if let Some(operand) = operand_type(parsed, &lhs_type, &rhs_type) {
+                accept_at_run_time(lhs, &lhs_type, &operand, context);
+                accept_at_run_time(rhs, &rhs_type, &operand, context);
+            }
+            resolved
         }
         Ascribe(value, target) => {
             let target_type = TCType::from_stream_type(target);
@@ -624,8 +656,10 @@ fn check(
         {
             // `(\x -> …)(a)`: the arguments are checked first and give the
             // lambda's parameters their types.
-            let arguments = args
-                .map(|arg| check(arg, None, context))
+            let nodes: Vec<ExprRef<'_>> = args.collect();
+            let arguments = nodes
+                .iter()
+                .map(|arg| check(*arg, None, context))
                 .collect::<Result<EcoVec<_>, _>>()?;
             context.parameter_hints = Some(arguments.clone());
             let checked = check(function, None, context);
@@ -640,8 +674,9 @@ fn check(
                     "function argument count differs",
                 ));
             }
-            for (actual, expected) in arguments.into_iter().zip(&params) {
-                require(actual, expected, expr)?;
+            for ((node, actual), expected) in nodes.into_iter().zip(arguments).zip(&params) {
+                require(actual.clone(), expected, expr)?;
+                accept_at_run_time(node, &actual, expected, context);
             }
             (*result, None)
         }
@@ -1174,9 +1209,11 @@ fn check(
         }
         MonitoredAt(_, _) => (TCType::Bool, None),
         Dist(_, _) => (TCType::Int, None),
+        Check(..) => unreachable!("only elaboration builds a run-time check, after checking"),
     };
     if let Some(expected) = expected {
         require(typ.clone(), expected, expr)?;
+        accept_at_run_time(expr, &typ, expected, context);
     }
     if let Some(warnings) = context.warnings.as_deref_mut() {
         warnings.observe(expr, &typ);
@@ -2115,8 +2152,9 @@ fn check_generic_def_call(
         &function_type,
         call,
     )?;
-    for (actual, expected) in arguments.into_iter().zip(&parameter_types) {
-        require(actual, expected, call)?;
+    for ((node, actual), expected) in args.zip(arguments).zip(&parameter_types) {
+        require(actual.clone(), expected, call)?;
+        accept_at_run_time(node, &actual, expected, context);
     }
     if let Some(expected) = expected {
         require(result.clone(), expected, call)?;
@@ -2194,18 +2232,20 @@ fn check_generic_argument(
     result
 }
 
-/// Check `argument` in a scratch context, keeping its warnings only if the
-/// check succeeds.
+/// Check `argument` in a scratch context, keeping its warnings and the
+/// run-time checks it recorded only if the check succeeds.
 fn check_attempt(
     argument: ExprRef<'_>,
     expected: Option<&TCType>,
     context: &mut TypeContext<'_>,
 ) -> Result<TCType, SemanticError> {
+    let recorded = context.runtime_checks.len();
     let mut warnings = WarningCollector::default();
     let mut attempt = TypeContext {
         environment: Cow::Borrowed(context.environment.as_ref()),
         local_bindings: context.local_bindings.clone(),
         expr_types: context.expr_types.take(),
+        runtime_checks: std::mem::take(&mut context.runtime_checks),
         owner: context.owner.clone(),
         strict_runtime_sources: context.strict_runtime_sources,
         dynamic_unhinted_parameters: context.dynamic_unhinted_parameters,
@@ -2214,10 +2254,13 @@ fn check_attempt(
     };
     let result = check(argument, expected, &mut attempt);
     context.expr_types = attempt.expr_types.take();
+    context.runtime_checks = std::mem::take(&mut attempt.runtime_checks);
     if result.is_ok() {
         if let Some(collector) = context.warnings.as_deref_mut() {
             collector.absorb(warnings);
         }
+    } else {
+        context.runtime_checks.truncate(recorded);
     }
     result
 }
@@ -2283,6 +2326,80 @@ fn require(actual: TCType, expected: &TCType, expr: ExprRef<'_>) -> Result<(), S
     unify(&actual, expected)
         .map(|_| ())
         .ok_or_else(|| mismatch(expr, expected, &actual))
+}
+
+/// Accept `node`, of type `actual`, where a value of `expected` is needed.
+/// Where `actual` is `Any` and `expected` says what its values are, the
+/// value is checked when it runs: the node is recorded with `expected`, and
+/// elaboration wraps it in a run-time check. Every place checking lets an
+/// `Any` stand for a concrete type comes through here, and only the pass
+/// whose types are kept records anything.
+fn accept_at_run_time(
+    node: ExprRef<'_>,
+    actual: &TCType,
+    expected: &TCType,
+    context: &mut TypeContext<'_>,
+) {
+    if *actual != TCType::Any || context.expr_types.is_none() || !is_checkable(expected) {
+        return;
+    }
+    let expected = expected
+        .to_stream_type()
+        .expect("a checkable type is a stream type");
+    context.runtime_checks.push((node.id(), expected));
+}
+
+/// Whether a value can be checked against `typ` when it runs: a scalar, or a
+/// list, map, tuple or struct of checkable types or `Any`. A function, a
+/// runtime-expression source, a union and an unresolved placeholder are not
+/// checked.
+fn is_checkable(typ: &TCType) -> bool {
+    let part = |typ: &TCType| *typ == TCType::Any || is_checkable(typ);
+    match typ {
+        TCType::Int | TCType::Float | TCType::Str | TCType::Bool | TCType::Unit => true,
+        TCType::List(inner) | TCType::Map(inner) => part(inner),
+        TCType::Tuple(items) => items.iter().all(part),
+        TCType::Struct(fields, _) => fields.iter().all(|(_, field)| part(field)),
+        _ => false,
+    }
+}
+
+/// The type a binary operator uses its operands at, where one of them is
+/// `Any`: `Bool` for a boolean operator and `Str` for concatenation whatever
+/// the other operand is, and otherwise the other operand's type. Two `Any`
+/// operands of another operator say nothing about each other.
+fn operand_type(operator: BinaryOperator, lhs: &TCType, rhs: &TCType) -> Option<TCType> {
+    match operator.kind() {
+        BinaryOperatorKind::Boolean(_) => Some(TCType::Bool),
+        BinaryOperatorKind::String => Some(TCType::Str),
+        _ => match (lhs, rhs) {
+            (TCType::Any, TCType::Any) => None,
+            (TCType::Any, other) | (other, TCType::Any) => Some(other.clone()),
+            _ => None,
+        },
+    }
+}
+
+/// The run-time checks `context` recorded, as annotations of the nodes of
+/// `nodes`, the storage they were recorded against.
+fn finish_runtime_checks<'arena>(
+    recorded: Vec<(ExprId, StreamType)>,
+    builder: contiguous_tree::SparseNodeAnnotationsBuilder<ExprArena, StreamType>,
+    nodes: impl IntoIterator<Item = ExprRef<'arena>>,
+) -> RuntimeChecks {
+    let mut builder = builder;
+    if !recorded.is_empty() {
+        // A node accepted more than once is checked at its latest type.
+        let recorded: BTreeMap<ExprId, StreamType> = recorded.into_iter().collect();
+        for node in nodes {
+            if let Some(expected) = recorded.get(&node.id()) {
+                builder
+                    .insert(node, expected.clone())
+                    .expect("a checked node belongs to the storage it was checked in");
+            }
+        }
+    }
+    builder.finish()
 }
 
 fn contains_unresolved_type(typ: &TCType) -> bool {

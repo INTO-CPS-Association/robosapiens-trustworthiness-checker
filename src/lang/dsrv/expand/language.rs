@@ -794,6 +794,7 @@ pub(crate) fn check_core_node(node: ExprRef<'_>) -> Result<(), LanguageError> {
         | ExprKind::BinOp(..)
         | ExprKind::Cast(..)
         | ExprKind::Ascribe(..)
+        | ExprKind::Check(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)

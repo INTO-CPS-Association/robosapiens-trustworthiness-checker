@@ -51,6 +51,27 @@ pub fn cast(input: LocalStream<Value>, target: crate::core::StreamType) -> Local
     )
 }
 
+/// Pass `input` through unchanged, stopping the monitor at the first data
+/// value that is not a `target`: a value checking typed `Any`, used where a
+/// `target` is needed. The untimed runtimes have no error path out of a
+/// stream, so the failure panics with the located message, as other failed
+/// evaluations do.
+pub fn check(
+    input: LocalStream<Value>,
+    target: crate::core::StreamType,
+    span: crate::lang::dsrv::span::Span,
+    location: crate::lang::dsrv::source_map::SourceLocation,
+) -> LocalStream<Value> {
+    Box::pin(input.map(move |value| {
+        if let Err(error) =
+            crate::lang::dsrv::type_checker::check_runtime_value(&value, &target, span, &location)
+        {
+            panic!("{error}");
+        }
+        value
+    }))
+}
+
 pub trait CloneFn1<T: StreamData, S: StreamData>: Fn(T) -> S + Clone + 'static {}
 impl<T, S: StreamData, R: StreamData> CloneFn1<S, R> for T where T: Fn(S) -> R + Clone + 'static {}
 

@@ -27,6 +27,7 @@ pub(super) fn requirement(node: ExprRef<'_>) -> Option<(RuntimeCapability, &'sta
         | ExprKind::BinOp(..)
         | ExprKind::Cast(..)
         | ExprKind::Ascribe(..)
+        | ExprKind::Check(..)
         | ExprKind::Var(..)
         | ExprKind::Dynamic(..)
         | ExprKind::Defer(..)

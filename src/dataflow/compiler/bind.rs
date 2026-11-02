@@ -349,6 +349,17 @@ fn bind_op(
             input: r!(input),
             target,
         },
+        UnboundOp::Check {
+            input,
+            target,
+            span,
+            location,
+        } => BoundOp::Check {
+            input: r!(input),
+            target,
+            span,
+            location,
+        },
         UnboundOp::Binary { op, lhs, rhs } => BoundOp::Binary {
             op,
             lhs: r!(lhs),

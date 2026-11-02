@@ -14,6 +14,7 @@ use crate::lang::dsrv::TypeCheckMode;
 use crate::lang::dsrv::source::{SourceContext, TypeName};
 use crate::lang::dsrv::source_map::{NodeOrigin, SourceArchive};
 use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::type_checker::RuntimeChecks;
 
 /// A declaration-level error in a forest-backed DSRV syntax tree.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -368,6 +369,10 @@ pub struct CheckedDsrvSpecification {
     pub(super) spec: DsrvSpecification,
     checked: AstShared<CheckedExpressionContext>,
     mode: TypeCheckMode,
+    /// What checking leaves for elaboration to check when the specification
+    /// runs. `None` after elaboration, which has placed those checks in the
+    /// tree, and for any rewrite of an elaborated tree.
+    runtime_checks: Option<AstShared<RuntimeChecks>>,
 }
 
 impl CheckedDsrvSpecification {
@@ -378,7 +383,21 @@ impl CheckedDsrvSpecification {
             spec,
             checked,
             mode,
+            runtime_checks: None,
         }
+    }
+
+    /// This specification as checking left it, with the run-time checks of
+    /// the `Any` values it accepted at a concrete type.
+    pub(crate) fn with_runtime_checks(mut self, runtime_checks: RuntimeChecks) -> Self {
+        self.runtime_checks = Some(AstShared::new(runtime_checks));
+        self
+    }
+
+    /// The run-time checks checking recorded, which elaboration places in
+    /// the tree; `None` once it has.
+    pub(crate) fn runtime_checks(&self) -> Option<&RuntimeChecks> {
+        self.runtime_checks.as_deref()
     }
 
     /// The policy this specification was checked with. Rewrites of a checked
@@ -428,6 +447,7 @@ impl CheckedDsrvSpecification {
             spec: self.spec,
             checked: AstShared::new(checked),
             mode: self.mode,
+            runtime_checks: self.runtime_checks,
         }
     }
 

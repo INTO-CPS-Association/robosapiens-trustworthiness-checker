@@ -1070,6 +1070,70 @@ fn run_catching_panics(
     }
 }
 
+/// The runtimes a run-time check of an `Any` value is tested in, each with
+/// the semantics the command line runs it with.
+fn any_check_runtimes() -> [RuntimeSpec; 3] {
+    [
+        RuntimeSpec::Dataflow(ExecutionPolicy::Buffered),
+        RuntimeSpec::SemiSync,
+        RuntimeSpec::Async,
+    ]
+}
+
+/// An `Any` value used where an `Int` is needed stops the monitor at the
+/// first value that is not an `Int`, with an error naming the type, the
+/// value and where it was used, in every runtime.
+#[test]
+fn test_a_wrongly_typed_any_value_stops_every_runtime_with_a_located_error() {
+    let input = BTreeMap::from([(
+        VarName::new("x"),
+        vec![Value::Int(1), Value::Float(1.5), Value::Int(3)],
+    )]);
+    for expression in ["x", "x + 1"] {
+        let spec = format!("in x\nout y: Int\ny = {expression}");
+        for runtime in any_check_runtimes() {
+            let error =
+                run_catching_panics(runtime, Semantics::GradualTypedUntimed, &spec, &input, "y")
+                    .expect_err("a Float where an Int is needed stops the monitor");
+            assert!(
+                error.contains("expected Int, got Float 1.5 at ")
+                    && error.contains(":3:5 (bytes ")
+                    && error.contains("`x`"),
+                "{runtime:?} on `y = {expression}`: {error}"
+            );
+        }
+    }
+}
+
+/// An `Any` value of the type it is used at, or no value at all, behaves as
+/// it does where the input is declared with that type.
+#[test]
+fn test_a_well_typed_or_absent_any_value_runs_as_a_typed_one() {
+    let input = BTreeMap::from([(
+        VarName::new("x"),
+        vec![Value::Int(2), Value::NoVal, Value::Int(5)],
+    )]);
+    for (expression, first) in [("x", 2), ("x + 1", 3)] {
+        let gradual = format!("in x\nout y: Int\ny = {expression}");
+        let typed = format!("in x: Int\nout y: Int\ny = {expression}");
+        for runtime in any_check_runtimes() {
+            let checked = run_catching_panics(
+                runtime,
+                Semantics::GradualTypedUntimed,
+                &gradual,
+                &input,
+                "y",
+            )
+            .unwrap_or_else(|error| panic!("{runtime:?} on `{expression}`: {error}"));
+            let declared =
+                run_catching_panics(runtime, Semantics::GradualTypedUntimed, &typed, &input, "y")
+                    .unwrap_or_else(|error| panic!("{runtime:?} on typed `{expression}`: {error}"));
+            assert_eq!(checked.first(), Some(&Value::Int(first)), "{runtime:?}");
+            assert_eq!(checked, declared, "{runtime:?} on `{expression}`");
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ScalarType {
     Int,

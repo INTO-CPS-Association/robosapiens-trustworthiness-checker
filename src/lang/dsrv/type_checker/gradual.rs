@@ -208,13 +208,12 @@ fn type_check_gradual_with(
     }
 
     spec.type_annotations = types.clone();
-    let expr_types =
+    let (expr_types, runtime_checks) =
         super::checker::check_gradual_expr_types(&spec, &root_types, &mut types, warnings)?;
-    Ok(CheckedDsrvSpecification::new(
-        spec,
-        expr_types,
-        crate::lang::dsrv::TypeCheckMode::Gradual,
-    ))
+    Ok(
+        CheckedDsrvSpecification::new(spec, expr_types, crate::lang::dsrv::TypeCheckMode::Gradual)
+            .with_runtime_checks(runtime_checks),
+    )
 }
 
 pub(crate) fn type_check_gradual(
@@ -907,5 +906,95 @@ mod tests {
         assert_eq!(typed.type_annotations().get(&a), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&b), Some(&StreamType::Any));
         assert_eq!(typed.type_annotations().get(&z), Some(&StreamType::Any));
+    }
+
+    /// The run-time checks a check recorded, as each node printed with the
+    /// type it is checked at.
+    fn recorded_checks(checked: &CheckedDsrvSpecification) -> Vec<(String, StreamType)> {
+        checked
+            .runtime_checks()
+            .expect("checking records run-time checks")
+            .iter()
+            .map(|(node, typ)| (node.to_string(), typ.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn an_any_value_accepted_at_a_concrete_type_is_recorded_with_that_type() {
+        let x = |typ: StreamType| vec![("x".to_owned(), typ)];
+        for (source, expected) in [
+            ("in x\nout y: Int\ny = x", x(StreamType::Int)),
+            ("in x\nout y: Int\ny = x + 1", x(StreamType::Int)),
+            ("in x\nout y\ny = x + 1", x(StreamType::Int)),
+            ("in x\nout y: Float\ny = x + 1", x(StreamType::Float)),
+            ("in x\nout y\ny = x * 2.5", x(StreamType::Float)),
+            ("in x\nout y\ny = x < 2", x(StreamType::Int)),
+            ("in x\nout y\ny = x == \"a\"", x(StreamType::Str)),
+            ("in x\nout y\ny = x && true", x(StreamType::Bool)),
+            ("in x\nin z\nout y\ny = x || z", {
+                let mut both = x(StreamType::Bool);
+                both.push(("z".to_owned(), StreamType::Bool));
+                both
+            }),
+            ("in x\nout y\ny = x ++ \"a\"", x(StreamType::Str)),
+            (
+                "in x\nout y: Int\ny = if x then 1 else 2",
+                x(StreamType::Bool),
+            ),
+            ("in x\nout y\ny = !x", x(StreamType::Bool)),
+            // `-x` is itself `Any`, so the root is what meets the declared type.
+            (
+                "in x\nout y: Int\ny = -x",
+                vec![("-x".to_owned(), StreamType::Int)],
+            ),
+            ("in x\nout y: Int\ny = default(x, 0)", x(StreamType::Int)),
+            ("in x\nout y\ny = List.get([1, 2], x)", x(StreamType::Int)),
+            (
+                "in x\nout y: List<Int>\ny = x",
+                x(StreamType::List(Box::new(StreamType::Int))),
+            ),
+        ] {
+            let checked = type_check_gradual(source.parse().unwrap())
+                .unwrap_or_else(|errors| panic!("{source} should check: {errors:?}"));
+            assert_eq!(recorded_checks(&checked), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn an_any_value_used_where_nothing_concrete_is_needed_is_not_recorded() {
+        for source in [
+            "in x\nout y\ny = x",
+            "in x\nin z\nout y\ny = x + z",
+            "in x\nout y\ny = -x",
+            "in x\nout y\ny = default(x, 0)",
+            "in x\nout y\ny = List.len(x)",
+        ] {
+            let checked = type_check_gradual(source.parse().unwrap())
+                .unwrap_or_else(|errors| panic!("{source} should check: {errors:?}"));
+            assert_eq!(recorded_checks(&checked), [], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_fully_typed_specification_records_no_run_time_check() {
+        let source = "in x: Int\nin f: Float\nin s: Str\nout y: Int\nout g: Float\n\
+            out b: Bool\ny = if x > 0 then x + 1 else -x\ng = f * 2\n\
+            b = (s ++ \"a\") == \"ba\" && !(g < 1.5)";
+        for checked in [
+            type_check(source.parse().unwrap()).expect("strict checking accepts it"),
+            type_check_gradual(source.parse().unwrap()).expect("gradual checking accepts it"),
+        ] {
+            assert_eq!(recorded_checks(&checked), []);
+        }
+    }
+
+    #[test]
+    fn strict_checking_records_a_declared_any_used_at_a_concrete_type() {
+        let checked = type_check("in x: Any\nout y: Int\ny = x * 2".parse().unwrap())
+            .expect("strict checking accepts a declared Any");
+        assert_eq!(
+            recorded_checks(&checked),
+            [("x".to_owned(), StreamType::Int)]
+        );
     }
 }

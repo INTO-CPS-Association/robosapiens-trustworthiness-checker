@@ -6,6 +6,8 @@ pub(super) use crate::lang::dsrv::IfPolicy;
 use crate::lang::dsrv::ast::ReconfigurableExprScope;
 use crate::lang::dsrv::patterns::MatchPattern;
 use crate::lang::dsrv::runtime_expression::RuntimeExpressionSite;
+use crate::lang::dsrv::source_map::SourceLocation;
+use crate::lang::dsrv::span::Span;
 
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -386,6 +388,7 @@ fn graph_has_reconfigurable_expressions(graph: &BoundEvaluationGraph) -> bool {
 fn graph_requires_fallible_evaluation(graph: &BoundEvaluationGraph) -> bool {
     graph.nodes.iter().any(|op| match op {
         BoundOp::Reconfigurable(_)
+        | BoundOp::Check { .. }
         | BoundOp::Apply { .. }
         | BoundOp::RecursiveCall { .. }
         | BoundOp::ListMap { .. }
@@ -573,6 +576,15 @@ fn append_op_descriptor(descriptor: &mut String, operation: &BoundOp, layout: &E
         }
         StreamOp::Ascribe { input, target } => {
             descriptor.push_str("ascribe:");
+            append_stream_type(descriptor, target);
+            descriptor.push('(');
+            append_ref_descriptor(descriptor, input, layout);
+            descriptor.push(')');
+        }
+        // Where a check was written changes only its message, so it is not
+        // part of what the program computes.
+        StreamOp::Check { input, target, .. } => {
+            descriptor.push_str("check:");
             append_stream_type(descriptor, target);
             descriptor.push('(');
             append_ref_descriptor(descriptor, input, layout);
@@ -1171,6 +1183,15 @@ pub(super) enum StreamOp<E: GraphReference> {
         input: DataRef<E>,
         target: StreamType,
     },
+    /// Pass `input` through, stopping the monitor at the first data value
+    /// that is not a `target`: a value checking typed `Any`, used where a
+    /// `target` is needed. `span` and `location` say where the use was written.
+    Check {
+        input: DataRef<E>,
+        target: StreamType,
+        span: Span,
+        location: SourceLocation,
+    },
     Binary {
         op: BinaryOperator,
         lhs: DataRef<E>,
@@ -1320,7 +1341,7 @@ impl<E: GraphReference> StreamOp<E> {
     pub(super) fn for_each_operand(&self, mut visit: impl FnMut(&DataRef<E>)) {
         match self {
             StreamOp::Unary { arg, .. } => visit(arg),
-            StreamOp::Ascribe { input, .. } => visit(input),
+            StreamOp::Ascribe { input, .. } | StreamOp::Check { input, .. } => visit(input),
             StreamOp::Binary { lhs, rhs, .. }
             | StreamOp::Default {
                 input: lhs,

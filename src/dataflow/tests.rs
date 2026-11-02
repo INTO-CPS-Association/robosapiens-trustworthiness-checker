@@ -4406,6 +4406,7 @@ enum LifecycleErrorSignature {
     MonitorFailed,
     MatchGuardNotBool(String),
     MatchUnmatched(String),
+    RuntimeType(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4463,6 +4464,9 @@ fn lifecycle_property_error(error: &DataflowEvaluationError) -> LifecycleErrorSi
         }
         DataflowEvaluationError::MatchUnmatched(value) => {
             LifecycleErrorSignature::MatchUnmatched(value.clone())
+        }
+        DataflowEvaluationError::RuntimeType(error) => {
+            LifecycleErrorSignature::RuntimeType(error.to_string())
         }
         DataflowEvaluationError::InputCountMismatch { expected, actual } => {
             LifecycleErrorSignature::InputCount {

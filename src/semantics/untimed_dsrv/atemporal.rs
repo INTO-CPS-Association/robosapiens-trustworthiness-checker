@@ -30,6 +30,7 @@ use crate::lang::dsrv::patterns::{
     ArmSelection, Bindings, GuardOutcome, MatchArm, MatchPattern, select_arm,
 };
 use crate::lang::dsrv::span::Span;
+use crate::lang::dsrv::type_checker::{RuntimeTypeError, check_runtime_value};
 
 /// What the names of an expression hold at the tick it is evaluated in.
 pub(crate) trait Environment {
@@ -69,6 +70,8 @@ pub(crate) enum AtemporalError {
     Unmatched { value: String, span: Span },
     #[error("{0}")]
     Operation(String),
+    #[error(transparent)]
+    RuntimeType(#[from] RuntimeTypeError),
 }
 
 type Evaluated = Result<Value, AtemporalError>;
@@ -170,6 +173,11 @@ pub(crate) fn eval_atemporal(node: ExprRef<'_>, environment: &dyn Environment) -
         Cast(value, target) | Ascribe(value, target) => lift1(child(value)?, |value| {
             operation(value_operations::cast(value, target))
         }),
+        Check(value, target, location) => {
+            let value = child(value)?;
+            check_runtime_value(&value, target, node.span(), location)?;
+            Ok(value)
+        }
         Not(value) => lift1(child(value)?, |value| {
             operation(value_operations::unary(UnaryOperator::Not, value))
         }),

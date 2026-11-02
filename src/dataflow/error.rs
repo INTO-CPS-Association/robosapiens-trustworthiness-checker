@@ -38,6 +38,8 @@ pub enum DataflowEvaluationError {
     MatchGuardNotBool(String),
     #[error("no match arm matched {0}")]
     MatchUnmatched(String),
+    #[error(transparent)]
+    RuntimeType(crate::lang::dsrv::type_checker::RuntimeTypeError),
 
     #[error("invalid dynamically compiled stream program: {0}")]
     InvalidDynamicProgram(StreamProgramError),

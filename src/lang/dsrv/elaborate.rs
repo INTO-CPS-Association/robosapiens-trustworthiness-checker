@@ -3,10 +3,19 @@
 //! Elaboration rewrites every equation of a checked specification with the
 //! contiguous-tree rewrite support, one destination subtree per checked node.
 //! Each node it emits keeps the span and source context of the node it came
-//! from and carries a type. For now the rewrite is the identity on node
-//! kinds, so every node's type is the one checking gave it; lowerings and
-//! type-directed rewrites extend it without any runtime seeing a node that
-//! exists only before elaboration.
+//! from and carries a type. Two rewrites change the tree:
+//!
+//! - an integer literal checking typed `Float` becomes a `Float` literal;
+//! - a node of type `Any` that checking accepted where a value of a concrete
+//!   type is needed (its run-time checks) is wrapped in a
+//!   [`Check`](super::ast::ExprKind::Check) of that type. The wrapper has the
+//!   span of the node it checks, the concrete type, and the files that
+//!   locate it, so a runtime can stop at a wrongly typed value with a
+//!   located error without the source archive.
+//!
+//! Every other node keeps the kind and type checking gave it. A fully typed
+//! specification has no run-time checks, so its elaborated tree has exactly
+//! the nodes of the checked one. No stage before elaboration sees a `Check`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
@@ -127,6 +136,7 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
     let node_count = spec.exprs.nodes().len();
     let mut builder = ExprBuilder::with_capacities(node_count, spec.exprs.len());
     let mut types: Vec<TCType> = Vec::with_capacity(node_count);
+    let runtime_checks = checked.runtime_checks().filter(|checks| !checks.is_empty());
     let roots = spec.exprs.keys().map(|name| {
         checked
             .var_expr_ref(name)
@@ -144,11 +154,24 @@ fn elaborate_tree(checked: &CheckedDsrvSpecification) -> CheckedDsrvSpecificatio
                 _ => source.kind().clone(),
             };
             let kind = node.source_node().rebuild(kind);
-            let id = node.alloc(kind, source.expr().metadata().clone())?;
+            let metadata = source.expr().metadata();
+            let id = node.alloc(kind, metadata.clone())?;
             types.push(source.typ().clone());
-            Ok::<_, contiguous_tree::BuildError<ExprId>>(id)
+            // An `Any` value checking accepted at a concrete type is checked
+            // as it runs: the node is wrapped in a check that has that type,
+            // and that carries the files that locate the node.
+            let Some(target) = runtime_checks.and_then(|checks| checks.get(source.expr())) else {
+                return Ok::<_, contiguous_tree::BuildError<ExprId>>(id);
+            };
+            let location = spec.sources.locate(metadata.origin, metadata.span);
+            let check = node.alloc(
+                ExprKind::Check(id, target.clone(), location),
+                metadata.clone(),
+            )?;
+            types.push(TCType::from_stream_type(target));
+            Ok(check)
         })
-        .expect("the identity rewrite keeps every node's children");
+        .expect("elaboration keeps every node's children");
     let forest = builder
         .finish_forest(roots)
         .expect("elaboration emits one complete tree per equation");
@@ -280,6 +303,52 @@ mod tests {
                 elaborated.checked().unchecked().source_context(),
                 checked.unchecked().source_context()
             ));
+        }
+    }
+
+    #[test]
+    fn an_any_value_accepted_at_a_concrete_type_is_wrapped_in_a_check() {
+        let source = "in x\nout y: Int\ny = x + 1";
+        let checked = crate::dsrv_fixtures::checked_with(source, TypeCheckOptions::GRADUAL);
+        let elaborated = checked.clone().elaborate();
+        let y = elaborated.var_expr_ref(&VarName::new("y")).unwrap();
+        let ExprView::BinOp(left, _, _) = y.view() else {
+            panic!("`x + 1` stays an addition");
+        };
+        let ExprView::Check(value, target, location) = left.view() else {
+            panic!("`x` is checked: {:?}", left.expr().kind());
+        };
+        assert!(matches!(value.view(), ExprView::Var(name) if *name == VarName::new("x")));
+        assert_eq!(target, &StreamType::Int);
+        assert_eq!(left.typ(), &TCType::Int);
+        assert_eq!(value.typ(), &TCType::Any);
+        assert_eq!(left.expr().span(), value.expr().span());
+        assert_eq!(
+            location.primary().and_then(|site| site.snippet()),
+            Some("x")
+        );
+        assert!(elaborated.checked().runtime_checks().is_none());
+        // A check prints as the value it checks.
+        assert_eq!(
+            y.expr().to_string(),
+            checked
+                .var_expr_ref(&VarName::new("y"))
+                .unwrap()
+                .expr()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn a_fully_typed_specification_gains_no_node() {
+        for options in [TypeCheckOptions::STRICT, TypeCheckOptions::GRADUAL] {
+            let source = SOURCE.replace("out z\n", "out z: List<Int>\n");
+            let checked = crate::dsrv_fixtures::checked_with(&source, options);
+            let elaborated = checked.clone().elaborate();
+            assert_eq!(
+                elaborated.checked().unchecked().nodes().count(),
+                checked.unchecked().nodes().count()
+            );
         }
     }
 

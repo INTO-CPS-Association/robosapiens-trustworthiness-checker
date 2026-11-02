@@ -35,6 +35,17 @@ map key, indexing a list or calling it as a function is accepted, and gives
 whose type is known is still checked in advance, so `List.len` of an `Int`
 is a type error.
 
+Where an `Any` value is used at a known type, as an operand of `+` beside an
+`Int` or the equation of a stream declared `Int`, each value is checked as it
+arrives. The first that does not have that type stops the monitor with an
+error naming the type, the value and where it was used:
+
+```text
+expected Int, got Float 1.5 at model.dsrv:3:5 (bytes 20..21): `x`
+```
+
+Text given to `dynamic` and `defer` is not checked this way.
+
 When two values merge, in the branches of an `if`, the arms of a `match`, the
 sides of `default`, `update` and `init`, or the elements of a list or map, and
 their types differ, the result is `Any`: `if c then 1 else "a"` is `Any`, and

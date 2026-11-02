@@ -66,6 +66,28 @@ pub fn cast<D: CausalDomain>(
     }))
 }
 
+/// Pass `input` through unchanged, stopping the monitor at the first data
+/// value that is not a `target`. A failed evaluation panics here, so this
+/// does too, with the located message.
+pub fn check<D: CausalDomain>(
+    input: LocalStream<CausalValue<D>>,
+    target: crate::core::StreamType,
+    span: crate::lang::dsrv::span::Span,
+    location: crate::lang::dsrv::source_map::SourceLocation,
+) -> LocalStream<CausalValue<D>> {
+    Box::pin(input.map(move |input| {
+        if let Err(error) = crate::lang::dsrv::type_checker::check_runtime_value(
+            &input.value,
+            &target,
+            span,
+            &location,
+        ) {
+            panic!("{error}");
+        }
+        input
+    }))
+}
+
 pub fn binary<D: CausalDomain>(
     operation: BinaryOperator,
     left: LocalStream<CausalValue<D>>,

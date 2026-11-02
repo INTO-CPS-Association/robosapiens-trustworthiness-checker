@@ -136,6 +136,15 @@ fn lower_expression(expr: CheckedExprRef<'_>, builder: &mut EvaluationGraphBuild
                 target: target.clone(),
             })
         }
+        Check(value, target, location) => {
+            let input = lower_expression(value, builder);
+            builder.push(UnboundOp::Check {
+                input,
+                target: target.clone(),
+                span: expr.expr().span(),
+                location: location.clone(),
+            })
+        }
         Not(arg) => lower_unary(builder, UnaryOperator::Not, arg, result_kind),
         Neg(arg) => lower_unary(builder, UnaryOperator::Negate, arg, result_kind),
         Sin(arg) => lower_unary(builder, UnaryOperator::Sin, arg, result_kind),

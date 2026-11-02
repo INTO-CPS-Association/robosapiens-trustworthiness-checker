@@ -185,6 +185,9 @@ where
         Cast(value, target) | Ascribe(value, target) => {
             combinators::cast(child(value), target.clone())
         }
+        Check(value, target, location) => {
+            combinators::check(child(value), target.clone(), node.span(), location.clone())
+        }
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
@@ -264,6 +267,12 @@ where
         Cast(value, target) | Ascribe(value, target) => {
             combinators::cast(child(value), target.clone())
         }
+        Check(value, target, location) => combinators::check(
+            child(value),
+            target.clone(),
+            node.expr().span(),
+            location.clone(),
+        ),
         BinOp(left, right, operator) => {
             let left = child(left);
             let right = child(right);
