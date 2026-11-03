@@ -2486,7 +2486,6 @@ fn error(expr: ExprRef<'_>, kind: TypeErrorKind, message: impl Into<String>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::DsrvSpecification;
     use crate::VarName;
     use crate::core::{BinaryOperator, StreamType};
